@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mindreon/orbit-control/internal/orch"
 	"github.com/mindreon/orbit-control/internal/worker"
 )
 
@@ -56,6 +57,7 @@ type Event map[string]any
 type App struct {
 	mu          sync.Mutex
 	Worker      *worker.Client
+	Orch        *orch.Client // optional Temporal; nil → direct worker HTTP
 	Rooms       map[string]*Room
 	Messages    map[string][]Message
 	Approvals   map[string]*Approval
@@ -64,8 +66,13 @@ type App struct {
 }
 
 func New(w *worker.Client) *App {
+	return NewWithOrch(w, nil)
+}
+
+func NewWithOrch(w *worker.Client, o *orch.Client) *App {
 	return &App{
 		Worker:      w,
+		Orch:        o,
 		Rooms:       map[string]*Room{},
 		Messages:    map[string][]Message{},
 		Approvals:   map[string]*Approval{},
@@ -91,6 +98,23 @@ func (a *App) CreateRoom(ctx context.Context, kind, title string) (*Room, error)
 	a.Rooms[room.ID] = room
 	a.Messages[room.ID] = nil
 	a.mu.Unlock()
+
+	if a.Orch != nil {
+		view, err := a.Orch.StartRoom(ctx, room.ID, kind)
+		if err != nil {
+			a.mu.Lock()
+			room.State = RoomClosed
+			a.mu.Unlock()
+			return room, fmt.Errorf("temporal StartRoom: %w", err)
+		}
+		a.mu.Lock()
+		room.SessionID = view.SessionID
+		room.State = RoomRunning
+		a.SessionRoom[view.SessionID] = room.ID
+		a.mu.Unlock()
+		a.Publish(room.ID, Event{"type": "session.status", "roomId": room.ID, "sessionId": view.SessionID, "status": "running"})
+		return room, nil
+	}
 
 	var out worker.OpenSessionOut
 	err := a.Worker.Call(ctx, "openSession", map[string]any{
@@ -164,6 +188,15 @@ func (a *App) PostMessage(ctx context.Context, roomID, text string) (*Room, *App
 	a.appendMessage(user)
 	a.mu.Unlock()
 	a.Publish(roomID, Event{"type": "assistant.message", "roomId": roomID, "role": "user", "text": text})
+
+	if a.Orch != nil {
+		turnID := id("tn_")
+		res, err := a.Orch.RunTurn(ctx, roomID, turnID, text)
+		if err != nil {
+			return nil, nil, err
+		}
+		return a.applyTurnResult(ctx, roomID, sessionID, runTurnFromOrch(res))
+	}
 
 	var out worker.RunTurnOut
 	err := a.Worker.Call(ctx, "runTurn", map[string]any{
@@ -258,6 +291,30 @@ func (a *App) Decide(ctx context.Context, approvalID, decision string) (*Approva
 	roomID := appr.RoomID
 	a.mu.Unlock()
 
+	if a.Orch != nil {
+		turnID := id("tn_")
+		res, err := a.Orch.Decide(ctx, roomID, turnID, reqID, decision, id("tn_"))
+		if err != nil {
+			return nil, err
+		}
+		a.mu.Lock()
+		appr.Status = "decided"
+		appr.Decision = decision
+		if decision == "reject" && room != nil {
+			room.State = RoomClosed
+		}
+		cp := *appr
+		a.mu.Unlock()
+		if decision == "reject" {
+			a.Publish(roomID, Event{"type": "session.status", "roomId": roomID, "status": "closed"})
+			return &cp, nil
+		}
+		if res.Turn != nil {
+			_, _, err = a.applyTurnResult(ctx, roomID, sessionID, runTurnFromOrch(*res.Turn))
+		}
+		return &cp, err
+	}
+
 	if decision == "reject" {
 		_ = a.Worker.Call(ctx, "abort", map[string]any{
 			"roomId": roomID, "sessionId": sessionID, "turnId": id("tn_"), "reason": "rejected",
@@ -286,11 +343,11 @@ func (a *App) Decide(ctx context.Context, approvalID, decision string) (*Approva
 	}
 	var turn worker.RunTurnOut
 	if err := a.Worker.Call(ctx, "runTurn", map[string]any{
-		"roomId":              roomID,
-		"sessionId":           sessionID,
-		"turnId":              id("tn_"),
-		"message":             "",
-		"resumeAfterApproval": true,
+		"roomId":               roomID,
+		"sessionId":            sessionID,
+		"turnId":               id("tn_"),
+		"message":              "",
+		"resumeAfterApproval":  true,
 	}, &turn); err != nil {
 		return nil, err
 	}
@@ -325,7 +382,11 @@ func (a *App) AbortRoom(ctx context.Context, roomID string) error {
 	}
 	sessionID := room.SessionID
 	a.mu.Unlock()
-	_ = a.Worker.Call(ctx, "abort", map[string]any{"roomId": roomID, "sessionId": sessionID, "turnId": id("tn_")}, &worker.AbortedOut{})
+	if a.Orch != nil {
+		_ = a.Orch.Abort(ctx, roomID, id("tn_"), "abort")
+	} else {
+		_ = a.Worker.Call(ctx, "abort", map[string]any{"roomId": roomID, "sessionId": sessionID, "turnId": id("tn_")}, &worker.AbortedOut{})
+	}
 	a.mu.Lock()
 	room.State = RoomClosed
 	a.mu.Unlock()
@@ -378,4 +439,17 @@ func (a *App) Publish(roomID string, ev Event) {
 		default:
 		}
 	}
+}
+
+func runTurnFromOrch(res orch.RunTurnResult) worker.RunTurnOut {
+	out := worker.RunTurnOut{Status: res.Status, Texts: res.Texts}
+	if res.Approval != nil {
+		out.Approval = &worker.Ask{
+			ApprovalRequestID: res.Approval.ApprovalRequestID,
+			ToolName:          res.Approval.ToolName,
+			CallID:            res.Approval.CallID,
+			Reason:            res.Approval.Reason,
+		}
+	}
+	return out
 }

@@ -70,3 +70,13 @@ Default listen address is `:8080` (override with `PORT`).
 - LLM calls or dsh in this process (those live on orbit-worker)
 - Temporal client or workflow workers
 - Decrypting or storing tenant secrets outside this service (and not even here yet)
+
+## Temporal (optional)
+
+When `TEMPORAL_ADDRESS` is set (e.g. `127.0.0.1:7233`), control starts
+`RoomWorkflow` on task queue `orbit` (override with `TEMPORAL_TASK_QUEUE`)
+instead of calling worker HTTP for session lifecycle. orbit-orch must run a
+workflow worker and orbit-worker must run an activity worker on the same queue.
+
+Without Temporal, control keeps the W1 direct-HTTP path to orbit-worker.
+

@@ -10,7 +10,7 @@ import (
 
 func main() {
 	addr := listenAddr()
-	log.Printf("orbit-control listening on %s (W1 rooms + HITL via orbit-worker)", addr)
+	log.Printf("orbit-control listening on %s (rooms + HITL; TEMPORAL_ADDRESS enables RoomWorkflow)", addr)
 	if err := http.ListenAndServe(addr, httpapi.Handler()); err != nil {
 		log.Fatal(err)
 	}

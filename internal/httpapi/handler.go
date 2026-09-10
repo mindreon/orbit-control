@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/mindreon/orbit-control/internal/app"
+	"github.com/mindreon/orbit-control/internal/orch"
 	"github.com/mindreon/orbit-control/internal/worker"
 )
 
@@ -46,13 +47,23 @@ func cors(next http.Handler) http.Handler {
 	})
 }
 
-// Handler is the default process mux. Worker URL comes from ORBIT_WORKER_URL.
+// Handler is the default process mux.
+// Worker URL: ORBIT_WORKER_URL (default http://127.0.0.1:8090).
+// When TEMPORAL_ADDRESS is set, rooms are driven through RoomWorkflow.
 func Handler() http.Handler {
 	base := os.Getenv("ORBIT_WORKER_URL")
 	if base == "" {
 		base = "http://127.0.0.1:8090"
 	}
-	return HandlerWith(app.New(worker.New(base)))
+	w := worker.New(base)
+	if addr := os.Getenv("TEMPORAL_ADDRESS"); addr != "" {
+		oc, err := orch.Dial(addr, os.Getenv("TEMPORAL_NAMESPACE"), os.Getenv("TEMPORAL_TASK_QUEUE"))
+		if err != nil {
+			panic("temporal dial: " + err.Error())
+		}
+		return HandlerWith(app.NewWithOrch(w, oc))
+	}
+	return HandlerWith(app.New(w))
 }
 
 func HandlerWith(runtime *app.App) http.Handler {

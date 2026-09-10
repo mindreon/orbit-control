@@ -12,7 +12,8 @@ The agent loop is **dsh on orbit-worker**, not this process. Do not add dsh, Pi,
 
 ## W1 rules
 
-- In-memory rooms, messages, HITL, and SSE are allowed. Still no OAuth, DB, or Temporal.
+- In-memory rooms, messages, HITL, and SSE are allowed. Still no OAuth or DB.
+- Temporal is optional: set `TEMPORAL_ADDRESS` to drive `RoomWorkflow` (orbit-orch); otherwise control calls orbit-worker over HTTP.
 - **No tenant secret plaintext** in logs, fixtures, or OpenAPI examples.
 - Do not import dsh, Pi, or LLM SDKs here.
 
