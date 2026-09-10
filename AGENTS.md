@@ -4,9 +4,11 @@ One-pager for humans and coding agents contributing here.
 
 ## What this repo is
 
-Sole **public HTTP/WS API** for Orbit: tenants, accounts, personas, rooms, approvals, secrets, billing.
+Sole **public HTTP/WS API** for Orbit: tenants, accounts, personas, rooms, approvals, secrets, billing, cloud-agent jobs.
 
 Read [README.md](./README.md) and [ARCHITECTURE.md](./ARCHITECTURE.md) before adding files.
+
+The agent loop is **dsh on orbit-worker**, not this process. Do not add dsh, Pi, or LLM SDKs here.
 
 ## W0 rules (still in force until a later wave removes them)
 
@@ -31,7 +33,7 @@ Read [README.md](./README.md) and [ARCHITECTURE.md](./ARCHITECTURE.md) before ad
 1. Mark new public paths `501` / unimplemented until a later wave implements them.
 2. Keep `401` / `403` stub schemas stable — Sentinel will assert them.
 3. `go test ./...` must stay dependency-free (stdlib only).
-4. Do not add `go.mod` requires for Temporal, LLM SDKs, or database drivers in W0.
+4. Do not add `go.mod` requires for Temporal, dsh, Pi, LLM SDKs, or database drivers in W0.
 
 ## Cross-links
 

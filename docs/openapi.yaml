@@ -6,6 +6,15 @@ info:
     W0 **stub**. This document is the public HTTP/WS contract for orbit-control,
     the sole public API surface.
 
+    Product surfaces (implemented in later waves, still 501 here):
+
+    - **Super single-agent** — rooms `kind=solo`, messages, personas, WS events
+    - **Multi-agent** — rooms `kind=collab`, per-room agent catalog
+    - **Cloud Agent** — `/v1/cloud-agents` jobs with the same HITL approvals
+
+    The agent loop is hosted on orbit-worker as `dsh --profile acp`. This API
+    never exposes dsh, Temporal, or worker URLs.
+
     Every path is **unimplemented**. The W0 process returns HTTP 501 with
     `ErrorBody.code = NOT_IMPLEMENTED`. Do not treat 200 examples as live.
 
@@ -31,7 +40,7 @@ tags:
   - name: secrets
     description: Tenant secrets metadata only (unimplemented; plaintext never in API)
   - name: cloud-agents
-    description: Cloud agent runs (unimplemented)
+    description: Cloud agent jobs (unimplemented)
   - name: websocket
     description: Public WebSocket upgrade (unimplemented)
 paths:
@@ -66,13 +75,16 @@ paths:
       tags: [rooms]
       operationId: createRoom
       summary: Create a room (unimplemented)
+      description: |
+        `kind=solo` is the super single-agent room. `kind=collab` is the
+        multi-agent room (one parent session; children are projected on WS).
       x-unimplemented: true
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/PlaceholderObject"
+              $ref: "#/components/schemas/CreateRoomRequest"
       responses:
         "501":
           $ref: "#/components/responses/NotImplemented"
@@ -114,6 +126,7 @@ paths:
       tags: [messages]
       operationId: createRoomMessage
       summary: Post a message to a room (unimplemented)
+      description: Human turn text. Control starts/signals the Room workflow `runTurn`.
       x-unimplemented: true
       parameters:
         - $ref: "#/components/parameters/RoomId"
@@ -122,7 +135,69 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/PlaceholderObject"
+              $ref: "#/components/schemas/CreateRoomMessageRequest"
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/rooms/{roomId}/steer:
+    post:
+      tags: [rooms]
+      operationId: steerRoom
+      summary: Steer a running room (unimplemented)
+      description: Maps to Temporal Signal `steer`. Legal only while the room is running.
+      x-unimplemented: true
+      parameters:
+        - $ref: "#/components/parameters/RoomId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SteerRequest"
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/rooms/{roomId}/abort:
+    post:
+      tags: [rooms]
+      operationId: abortRoom
+      summary: Abort a room (unimplemented)
+      description: Maps to Temporal Signal `abort`. Legal from running or awaiting_approval.
+      x-unimplemented: true
+      parameters:
+        - $ref: "#/components/parameters/RoomId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AbortRequest"
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/rooms/{roomId}/agents:
+    get:
+      tags: [rooms]
+      operationId: listRoomAgents
+      summary: List agents in a room (unimplemented)
+      description: |
+        Parent session plus projected subagent catalog. Used by collab rooms
+        and by solo rooms that spawned children.
+      x-unimplemented: true
+      parameters:
+        - $ref: "#/components/parameters/RoomId"
       responses:
         "501":
           $ref: "#/components/responses/NotImplemented"
@@ -163,6 +238,10 @@ paths:
       tags: [approvals]
       operationId: decideApproval
       summary: Approve or reject (unimplemented)
+      description: |
+        Public HITL verb. Control maps `allow` to Temporal Update `approve`
+        (worker `resolveApproval` with `allowed-once`) and `reject` to Signal
+        `abort` by default.
       x-unimplemented: true
       parameters:
         - $ref: "#/components/parameters/ApprovalId"
@@ -171,7 +250,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/PlaceholderObject"
+              $ref: "#/components/schemas/DecideApprovalRequest"
       responses:
         "501":
           $ref: "#/components/responses/NotImplemented"
@@ -196,13 +275,16 @@ paths:
       tags: [personas]
       operationId: createPersona
       summary: Create a persona (unimplemented)
+      description: |
+        Stored here. The worker renders it into a dsh agent preset at
+        openSession. This API never accepts secret plaintext inside a persona.
       x-unimplemented: true
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/PlaceholderObject"
+              $ref: "#/components/schemas/CreatePersonaRequest"
       responses:
         "501":
           $ref: "#/components/responses/NotImplemented"
@@ -293,7 +375,7 @@ paths:
     get:
       tags: [cloud-agents]
       operationId: listCloudAgents
-      summary: List cloud agents (unimplemented)
+      summary: List cloud agent jobs (unimplemented)
       x-unimplemented: true
       responses:
         "501":
@@ -305,14 +387,17 @@ paths:
     post:
       tags: [cloud-agents]
       operationId: createCloudAgent
-      summary: Start a cloud agent (unimplemented)
+      summary: Start a cloud agent job (unimplemented)
+      description: |
+        Control starts Temporal workflow `CloudAgentJob`. GitHub and other
+        webhooks also land here — not on dsh webhookRuntime.
       x-unimplemented: true
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/PlaceholderObject"
+              $ref: "#/components/schemas/CreateCloudAgentRequest"
       responses:
         "501":
           $ref: "#/components/responses/NotImplemented"
@@ -324,10 +409,32 @@ paths:
     get:
       tags: [cloud-agents]
       operationId: getCloudAgent
-      summary: Get a cloud agent (unimplemented)
+      summary: Get a cloud agent job (unimplemented)
       x-unimplemented: true
       parameters:
         - $ref: "#/components/parameters/AgentId"
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/cloud-agents/{agentId}/cancel:
+    post:
+      tags: [cloud-agents]
+      operationId: cancelCloudAgent
+      summary: Cancel a cloud agent job (unimplemented)
+      description: Maps to Temporal Signal `abort` on CloudAgentJob.
+      x-unimplemented: true
+      parameters:
+        - $ref: "#/components/parameters/AgentId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AbortRequest"
       responses:
         "501":
           $ref: "#/components/responses/NotImplemented"
@@ -342,7 +449,11 @@ paths:
       summary: Public WebSocket upgrade (unimplemented)
       description: |
         Placeholder for the public WS surface. orbit-web will subscribe here
-        only — never to orch or worker sockets.
+        only — never to orch, worker, or dsh sockets.
+
+        Later frames are `OrbitEvent` objects (session.status, assistant.message,
+        tool.call, tool.result, approval.asked, agent.started, agent.finished,
+        usage). Raw dsh/ACP payloads are not forwarded.
       x-unimplemented: true
       responses:
         "501":
@@ -406,6 +517,134 @@ components:
       type: object
       additionalProperties: true
       description: W0 request placeholder. No business fields yet.
+    RoomKind:
+      type: string
+      enum: [solo, collab]
+      description: solo = super single-agent; collab = multi-agent catalog in one room
+    PermissionPreset:
+      type: string
+      enum: [workspace-write, danger-full-access]
+      description: |
+        Maps to dsh permission presets on the worker. Default workspace-write
+        (sandbox workspace-write + approval ask). danger-full-access is explicit.
+    RoomState:
+      type: string
+      enum: [idle, running, awaiting_approval, closed]
+    CloudAgentJobState:
+      type: string
+      enum: [queued, running, awaiting_approval, succeeded, failed, cancelled]
+    CreateRoomRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        kind:
+          $ref: "#/components/schemas/RoomKind"
+        personaId:
+          type: string
+        permissionPreset:
+          $ref: "#/components/schemas/PermissionPreset"
+        title:
+          type: string
+    CreateRoomMessageRequest:
+      type: object
+      additionalProperties: false
+      required: [message]
+      properties:
+        message:
+          type: string
+        attachments:
+          type: array
+          items:
+            $ref: "#/components/schemas/TurnAttachment"
+    TurnAttachment:
+      type: object
+      additionalProperties: false
+      required: [name, contentType, urlOrBlobRef]
+      properties:
+        name:
+          type: string
+        contentType:
+          type: string
+        urlOrBlobRef:
+          type: string
+          description: Pointer only — not file bytes
+    SteerRequest:
+      type: object
+      additionalProperties: false
+      required: [instruction]
+      properties:
+        instruction:
+          type: string
+    AbortRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        reason:
+          type: string
+    DecideApprovalRequest:
+      type: object
+      additionalProperties: false
+      required: [decision]
+      properties:
+        decision:
+          type: string
+          enum: [allow, reject]
+          description: allow → allowed-once on the worker; reject → abort by default
+    CreatePersonaRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        instructions:
+          type: string
+          description: Rendered by the worker into a dsh persona prefix. No secrets.
+        mcpServerIds:
+          type: array
+          items:
+            type: string
+    CreateCloudAgentRequest:
+      type: object
+      additionalProperties: false
+      required: [repoUrl, prompt]
+      properties:
+        repoUrl:
+          type: string
+        branch:
+          type: string
+        prompt:
+          type: string
+        personaId:
+          type: string
+        permissionPreset:
+          $ref: "#/components/schemas/PermissionPreset"
+    OrbitEvent:
+      type: object
+      additionalProperties: true
+      required: [type]
+      description: |
+        Public WS envelope. Worker ingest must already be this shape — never
+        raw ACP session/update.
+      properties:
+        type:
+          type: string
+          enum:
+            - session.status
+            - assistant.message
+            - tool.call
+            - tool.result
+            - approval.asked
+            - agent.started
+            - agent.finished
+            - usage
+        roomId:
+          type: string
+        jobId:
+          type: string
+        sessionId:
+          type: string
+        turnId:
+          type: string
   responses:
     NotImplemented:
       description: W0 skeleton — path is not implemented.

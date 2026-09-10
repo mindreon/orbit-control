@@ -2,7 +2,7 @@
 
 Orbit **control plane**. This repository is the **sole public HTTP and WebSocket API** for Orbit.
 
-W0 status: skeleton only. No real auth, database, LLM, or Temporal client. Endpoints return `501 Not Implemented`.
+W0 status: skeleton only. No real auth, database, LLM, Temporal client, or dsh. Endpoints return `501 Not Implemented`.
 
 ## Role
 
@@ -12,14 +12,15 @@ W0 status: skeleton only. No real auth, database, LLM, or Temporal client. Endpo
 | --- | --- |
 | Tenants | Tenant lifecycle and isolation boundary |
 | Accounts | Human and service identities inside a tenant |
-| Personas | Agent persona definitions and assignment |
-| Rooms | Conversation / work rooms |
+| Personas | Agent persona definitions (rendered to dsh presets **on the worker**, not here) |
+| Rooms | Conversation / work rooms (`solo` super-agent, `collab` multi-agent) |
 | Approvals | Human-in-the-loop (HITL) approval records |
 | Secrets | Tenant secrets — **encrypted at rest only here** |
 | Billing | Plans, usage, and entitlements |
+| Cloud agents | Headless jobs (clone / turn / PR) — scheduled via orch, executed on worker |
 | HTTP + WS API | The only public API browsers and clients call |
 
-This repo does **not** run orchestration workflows, execute worker jobs, or render the web UI.
+This repo does **not** run orchestration workflows, execute worker jobs, host dsh, or render the web UI.
 
 ## Sibling repositories
 
@@ -27,9 +28,9 @@ This repo does **not** run orchestration workflows, execute worker jobs, or rend
 | --- | --- | --- |
 | [orbit-web](https://github.com/mindreon/orbit-web) | Browser UI. **Only** talks to this control API (HTTP + WS). | Yes (client) |
 | [orbit-orch](https://github.com/mindreon/orbit-orch) | Orchestration. Publishes **internal contracts** that control may call; never a public API. | Internal only |
-| [orbit-worker](https://github.com/mindreon/orbit-worker) | Job / sandbox execution. Never owns tenant secrets. | Internal only |
+| [orbit-worker](https://github.com/mindreon/orbit-worker) | Job / sandbox / **dsh ACP** execution. Never owns tenant secrets. | Internal only (grants + event ingest) |
 
-Trust and secret boundaries are in [ARCHITECTURE.md](./ARCHITECTURE.md). Contributor rules are in [AGENTS.md](./AGENTS.md).
+Trust and secret boundaries are in [ARCHITECTURE.md](./ARCHITECTURE.md). Contributor rules are in [AGENTS.md](./AGENTS.md). Agent runtime choice (dsh, not Pi) lives in [orbit-orch tech-selection](https://github.com/mindreon/orbit-orch/blob/main/docs/tech-selection.md).
 
 ## Public API contract
 
@@ -72,6 +73,6 @@ curl -i http://127.0.0.1:8080/health
 
 - Real OAuth / session auth
 - Database migrations or persisted data
-- LLM calls
+- LLM calls or dsh
 - Temporal client or workflow workers
 - Decrypting or storing tenant secrets outside this service (and not even here yet)
