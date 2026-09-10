@@ -1,0 +1,443 @@
+openapi: 3.0.3
+info:
+  title: Orbit Control API
+  version: 0.0.0-w0
+  description: |
+    W0 **stub**. This document is the public HTTP/WS contract for orbit-control,
+    the sole public API surface.
+
+    Every path is **unimplemented**. The W0 process returns HTTP 501 with
+    `ErrorBody.code = NOT_IMPLEMENTED`. Do not treat 200 examples as live.
+
+    `Unauthorized` (401) and `Forbidden` (403) are reserved shapes for later
+    Sentinel tests. They are not emitted by the W0 skeleton.
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+servers:
+  - url: http://127.0.0.1:8080
+    description: Local W0 stub (not implemented)
+tags:
+  - name: health
+    description: Liveness placeholder (unimplemented)
+  - name: rooms
+    description: Conversation / work rooms (unimplemented)
+  - name: messages
+    description: Room messages (unimplemented)
+  - name: approvals
+    description: Human-in-the-loop approvals (unimplemented)
+  - name: personas
+    description: Agent personas (unimplemented)
+  - name: secrets
+    description: Tenant secrets metadata only (unimplemented; plaintext never in API)
+  - name: cloud-agents
+    description: Cloud agent runs (unimplemented)
+  - name: websocket
+    description: Public WebSocket upgrade (unimplemented)
+paths:
+  /health:
+    get:
+      tags: [health]
+      operationId: getHealth
+      summary: Health check (unimplemented)
+      description: W0 stub. Returns 501. Later waves may return 200 without a database.
+      x-unimplemented: true
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/rooms:
+    get:
+      tags: [rooms]
+      operationId: listRooms
+      summary: List rooms (unimplemented)
+      x-unimplemented: true
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags: [rooms]
+      operationId: createRoom
+      summary: Create a room (unimplemented)
+      x-unimplemented: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlaceholderObject"
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/rooms/{roomId}:
+    get:
+      tags: [rooms]
+      operationId: getRoom
+      summary: Get a room (unimplemented)
+      x-unimplemented: true
+      parameters:
+        - $ref: "#/components/parameters/RoomId"
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/rooms/{roomId}/messages:
+    get:
+      tags: [messages]
+      operationId: listRoomMessages
+      summary: List messages in a room (unimplemented)
+      x-unimplemented: true
+      parameters:
+        - $ref: "#/components/parameters/RoomId"
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags: [messages]
+      operationId: createRoomMessage
+      summary: Post a message to a room (unimplemented)
+      x-unimplemented: true
+      parameters:
+        - $ref: "#/components/parameters/RoomId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlaceholderObject"
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/approvals:
+    get:
+      tags: [approvals]
+      operationId: listApprovals
+      summary: List approvals (unimplemented)
+      x-unimplemented: true
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/approvals/{approvalId}:
+    get:
+      tags: [approvals]
+      operationId: getApproval
+      summary: Get an approval (unimplemented)
+      x-unimplemented: true
+      parameters:
+        - $ref: "#/components/parameters/ApprovalId"
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/approvals/{approvalId}/decide:
+    post:
+      tags: [approvals]
+      operationId: decideApproval
+      summary: Approve or reject (unimplemented)
+      x-unimplemented: true
+      parameters:
+        - $ref: "#/components/parameters/ApprovalId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlaceholderObject"
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/personas:
+    get:
+      tags: [personas]
+      operationId: listPersonas
+      summary: List personas (unimplemented)
+      x-unimplemented: true
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags: [personas]
+      operationId: createPersona
+      summary: Create a persona (unimplemented)
+      x-unimplemented: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlaceholderObject"
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/personas/{personaId}:
+    get:
+      tags: [personas]
+      operationId: getPersona
+      summary: Get a persona (unimplemented)
+      x-unimplemented: true
+      parameters:
+        - $ref: "#/components/parameters/PersonaId"
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/secrets:
+    get:
+      tags: [secrets]
+      operationId: listSecrets
+      summary: List secret metadata (unimplemented)
+      description: |
+        Returns names and status only. Plaintext secret values are never
+        included in request or response examples.
+      x-unimplemented: true
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags: [secrets]
+      operationId: putSecret
+      summary: Store a secret (unimplemented)
+      description: Ciphertext is owned only by orbit-control. Body is a placeholder.
+      x-unimplemented: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlaceholderObject"
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/secrets/{secretId}:
+    get:
+      tags: [secrets]
+      operationId: getSecretMetadata
+      summary: Get secret metadata (unimplemented)
+      x-unimplemented: true
+      parameters:
+        - $ref: "#/components/parameters/SecretId"
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    delete:
+      tags: [secrets]
+      operationId: deleteSecret
+      summary: Delete a secret (unimplemented)
+      x-unimplemented: true
+      parameters:
+        - $ref: "#/components/parameters/SecretId"
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/cloud-agents:
+    get:
+      tags: [cloud-agents]
+      operationId: listCloudAgents
+      summary: List cloud agents (unimplemented)
+      x-unimplemented: true
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags: [cloud-agents]
+      operationId: createCloudAgent
+      summary: Start a cloud agent (unimplemented)
+      x-unimplemented: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlaceholderObject"
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/cloud-agents/{agentId}:
+    get:
+      tags: [cloud-agents]
+      operationId: getCloudAgent
+      summary: Get a cloud agent (unimplemented)
+      x-unimplemented: true
+      parameters:
+        - $ref: "#/components/parameters/AgentId"
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /ws:
+    get:
+      tags: [websocket]
+      operationId: upgradeWebSocket
+      summary: Public WebSocket upgrade (unimplemented)
+      description: |
+        Placeholder for the public WS surface. orbit-web will subscribe here
+        only — never to orch or worker sockets.
+      x-unimplemented: true
+      responses:
+        "501":
+          $ref: "#/components/responses/NotImplemented"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+components:
+  parameters:
+    RoomId:
+      name: roomId
+      in: path
+      required: true
+      schema:
+        type: string
+    ApprovalId:
+      name: approvalId
+      in: path
+      required: true
+      schema:
+        type: string
+    PersonaId:
+      name: personaId
+      in: path
+      required: true
+      schema:
+        type: string
+    SecretId:
+      name: secretId
+      in: path
+      required: true
+      schema:
+        type: string
+    AgentId:
+      name: agentId
+      in: path
+      required: true
+      schema:
+        type: string
+  schemas:
+    ErrorBody:
+      type: object
+      additionalProperties: false
+      required: [error, code, message]
+      properties:
+        error:
+          type: string
+          description: Stable machine-oriented slug
+        code:
+          type: string
+          description: Stable machine-oriented code (Sentinel asserts this)
+        message:
+          type: string
+          description: Human-readable explanation (not a secret)
+      example:
+        error: not implemented
+        code: NOT_IMPLEMENTED
+        message: "W0 skeleton: this endpoint is not implemented"
+    PlaceholderObject:
+      type: object
+      additionalProperties: true
+      description: W0 request placeholder. No business fields yet.
+  responses:
+    NotImplemented:
+      description: W0 skeleton — path is not implemented.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+          example:
+            error: not implemented
+            code: NOT_IMPLEMENTED
+            message: "W0 skeleton: this endpoint is not implemented"
+    Unauthorized:
+      description: |
+        Stub for later Sentinel tests. Missing or invalid credentials.
+        W0 does not emit this response.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+          example:
+            error: unauthorized
+            code: UNAUTHORIZED
+            message: missing or invalid credentials
+    Forbidden:
+      description: |
+        Stub for later Sentinel tests. Authenticated caller lacks permission.
+        W0 does not emit this response.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+          example:
+            error: forbidden
+            code: FORBIDDEN
+            message: insufficient permissions
