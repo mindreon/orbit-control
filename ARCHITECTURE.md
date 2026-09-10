@@ -1,6 +1,6 @@
 # Architecture — orbit-control
 
-W0 process is still a listen-and-`501` skeleton. This file is the **target** boundary map after the dsh runtime choice.
+W0 process is still a listen-and-`501` skeleton for most resource groups. **W1** implements in-memory rooms, messages, HITL decide, and SSE, calling orbit-worker over HTTP. This file is the **target** boundary map after the dsh runtime choice.
 
 ## What this service is
 
