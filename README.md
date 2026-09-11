@@ -2,7 +2,7 @@
 
 Orbit **control plane**. This repository is the **sole public HTTP and WebSocket API** for Orbit.
 
-W1 status: rooms, messages, HITL approvals, and SSE events are implemented in-memory and talk to orbit-worker over HTTP. No database, no OAuth, no Temporal client yet. Other resource groups still return empty lists.
+W1 status: rooms, messages, HITL approvals, and SSE events are implemented in-memory. Session lifecycle talks to orbit-worker over HTTP by default, or via Temporal `RoomWorkflow` when `TEMPORAL_ADDRESS` is set. No database, no OAuth. Other resource groups still return empty lists.
 
 ## Role
 
@@ -47,6 +47,7 @@ cmd/orbit-control/     HTTP process entrypoint
 internal/httpapi/      Mux (rooms, HITL, SSE, empty lists)
 internal/app/          In-memory Room FSM
 internal/worker/       HTTP client to orbit-worker activities
+internal/orch/         Optional Temporal client (RoomWorkflow Updates)
 docs/openapi.yaml      Public HTTP/WS contract
 ```
 
@@ -68,7 +69,7 @@ Default listen address is `:8080` (override with `PORT`).
 - Real OAuth / session auth
 - Database migrations or persisted data
 - LLM calls or dsh in this process (those live on orbit-worker)
-- Temporal client or workflow workers
+- Running Temporal workers here (orch hosts workflows; worker hosts activities)
 - Decrypting or storing tenant secrets outside this service (and not even here yet)
 
 ## Temporal (optional)
