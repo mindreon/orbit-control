@@ -8,6 +8,11 @@ and exposes its runtime snapshot. Session lifecycle talks to orbit-worker over
 HTTP by default, or via Temporal `RoomWorkflow` when `TEMPORAL_ADDRESS` is set.
 No database, no OAuth. Other resource groups still return empty lists.
 
+## Container image
+
+Pushes to `main` publish `ghcr.io/mindreon/orbit-control` (`main`, `latest`, short SHA).
+`orbit-infra` pulls that image by configurable `ORBIT_IMAGE_TAG`.
+
 ## Role
 
 `orbit-control` owns the product surface that other Orbit services must not expose:
