@@ -7,17 +7,21 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 )
 
 type Client struct {
 	BaseURL string
+	Token   string
 	HTTP    *http.Client
 }
 
 func New(baseURL string) *Client {
 	return &Client{
 		BaseURL: baseURL,
+		Token:   strings.TrimSpace(os.Getenv("ORBIT_INTERNAL_TOKEN")),
 		HTTP:    &http.Client{Timeout: 120 * time.Second},
 	}
 }
@@ -35,6 +39,9 @@ func (c *Client) Call(ctx context.Context, name string, payload any, out any) er
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
 	res, err := c.HTTP.Do(req)
 	if err != nil {
 		return err

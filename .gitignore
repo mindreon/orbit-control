@@ -28,3 +28,6 @@ coverage.html
 *.swp
 .DS_Store
 Thumbs.db
+
+.orbit-data/
+**/.orbit-data/

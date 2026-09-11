@@ -28,6 +28,14 @@ func TestHealthReturnsOK(t *testing.T) {
 	}
 }
 
+func internalReq(method, path, body string) *http.Request {
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	// httptest defaults RemoteAddr to TEST-NET; treat tests as loopback services.
+	req.RemoteAddr = "127.0.0.1:1"
+	return req
+}
+
 func TestRoomHITLAllowCompletesTurn(t *testing.T) {
 	turns := 0
 	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -80,11 +88,9 @@ func TestRoomHITLAllowCompletesTurn(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/internal/events", strings.NewReader(
+	req = internalReq(http.MethodPost, "/internal/events",
 		`{"eventId":"ev-worker-1","occurredAt":"2026-09-11T00:00:00Z","type":"tool.call","roomId":"`+
-			room.ID+`","sessionId":"`+room.SessionID+`","toolName":"bash","status":"pending"}`,
-	))
-	req.Header.Set("Content-Type", "application/json")
+			room.ID+`","sessionId":"`+room.SessionID+`","toolName":"bash","status":"pending"}`)
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("ingest %d %s", rec.Code, rec.Body.String())
@@ -208,8 +214,7 @@ func TestInternalEventsRejectRawOrUnknownPayloads(t *testing.T) {
 		`{"type":"tool.call","sessionId":"orphan"}`,
 	} {
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "/internal/events", strings.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
+		req := internalReq(http.MethodPost, "/internal/events", body)
 		h.ServeHTTP(rec, req)
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("body %s: status = %d, want %d", body, rec.Code, http.StatusBadRequest)

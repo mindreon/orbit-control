@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/mindreon/orbit-control/internal/app"
+	"github.com/mindreon/orbit-control/internal/internalauth"
 	"github.com/mindreon/orbit-control/internal/orch"
 	"github.com/mindreon/orbit-control/internal/worker"
 )
@@ -37,7 +38,7 @@ func writeErr(w http.ResponseWriter, status int, code, message string) {
 func cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Headers", "content-type")
+		w.Header().Set("Access-Control-Allow-Headers", "content-type, authorization")
 		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -79,6 +80,8 @@ func HandlerWith(runtime *app.App) http.Handler {
 			Kind             string `json:"kind"`
 			Title            string `json:"title"`
 			PermissionPreset string `json:"permissionPreset"`
+			PersonaID        string `json:"personaId"`
+			GrantID          string `json:"grantId"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "request body must be valid JSON")
@@ -88,6 +91,8 @@ func HandlerWith(runtime *app.App) http.Handler {
 			Kind:             body.Kind,
 			Title:            body.Title,
 			PermissionPreset: body.PermissionPreset,
+			PersonaID:        body.PersonaID,
+			GrantID:          body.GrantID,
 		})
 		if err != nil {
 			if room == nil {
@@ -195,6 +200,10 @@ func HandlerWith(runtime *app.App) http.Handler {
 		writeJSON(w, http.StatusOK, appr)
 	})
 	mux.HandleFunc("POST /internal/events", func(w http.ResponseWriter, r *http.Request) {
+		if !internalauth.Authorized(r) {
+			writeErr(w, http.StatusUnauthorized, "UNAUTHORIZED", "internal token required")
+			return
+		}
 		var ev app.Event
 		if err := json.NewDecoder(r.Body).Decode(&ev); err != nil {
 			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
@@ -207,13 +216,97 @@ func HandlerWith(runtime *app.App) http.Handler {
 		writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
 	})
 	mux.HandleFunc("GET /v1/personas", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"items": []any{}})
+		writeJSON(w, http.StatusOK, map[string]any{"items": runtime.ListPersonas()})
+	})
+	mux.HandleFunc("POST /v1/personas", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Name         string   `json:"name"`
+			Instructions string   `json:"instructions"`
+			McpIds       []string `json:"mcpConnectorIds"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "request body must be valid JSON")
+			return
+		}
+		persona, err := runtime.CreatePersona(body.Name, body.Instructions, body.McpIds)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, persona)
+	})
+	mux.HandleFunc("GET /v1/mcp-connectors", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"items": runtime.ListMcpConnectors()})
+	})
+	mux.HandleFunc("POST /v1/mcp-connectors", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Name     string   `json:"name"`
+			Command  string   `json:"command"`
+			Args     []string `json:"args"`
+			EnvRefs  []string `json:"envRefs"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "request body must be valid JSON")
+			return
+		}
+		connector, err := runtime.CreateMcpConnector(body.Name, body.Command, body.Args, body.EnvRefs)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, connector)
+	})
+	mux.HandleFunc("POST /v1/grants", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Env       map[string]string `json:"env"`
+			TTLSeconds int              `json:"ttlSeconds"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "request body must be valid JSON")
+			return
+		}
+		grant, err := runtime.MintGrant(body.Env, body.TTLSeconds)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+			return
+		}
+		// Public response never echoes secret values — only names + grant id.
+		writeJSON(w, http.StatusOK, map[string]any{
+			"id":        grant.ID,
+			"envNames":  grant.EnvNames,
+			"expiresAt": grant.ExpiresAt,
+		})
 	})
 	mux.HandleFunc("GET /v1/secrets", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"items": []any{}})
 	})
 	mux.HandleFunc("GET /v1/cloud-agents", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"items": []any{}})
+		writeJSON(w, http.StatusOK, map[string]any{"items": runtime.ListCloudAgents()})
+	})
+	mux.HandleFunc("POST /v1/cloud-agents", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			RepoURL          string `json:"repoUrl"`
+			Prompt           string `json:"prompt"`
+			Branch           string `json:"branch"`
+			PermissionPreset string `json:"permissionPreset"`
+			PersonaID        string `json:"personaId"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "request body must be valid JSON")
+			return
+		}
+		job, err := runtime.CreateCloudAgent(r.Context(), app.CreateCloudAgentInput{
+			RepoURL:          body.RepoURL,
+			Prompt:           body.Prompt,
+			Branch:           body.Branch,
+			PermissionPreset: body.PermissionPreset,
+			PersonaID:        body.PersonaID,
+		})
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, job)
 	})
 	mux.HandleFunc("GET /ws", func(w http.ResponseWriter, _ *http.Request) {
 		writeErr(w, http.StatusNotImplemented, "NOT_IMPLEMENTED", "use GET /v1/rooms/{roomId}/events (SSE) in W1")
