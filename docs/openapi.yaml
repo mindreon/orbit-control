@@ -25,6 +25,9 @@ info:
 servers:
   - url: http://127.0.0.1:8080
     description: Local W1 control (in-memory rooms + HITL)
+# W1 intentionally has no authentication. Later security schemes replace this
+# root-level declaration; the reserved 401/403 response bodies stay stable.
+security: []
 tags:
   - name: health
     description: Liveness
