@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mindreon/orbit-control/internal/orch"
+	"github.com/mindreon/orbit-control/internal/store"
 	"github.com/mindreon/orbit-control/internal/worker"
 )
 
@@ -93,19 +94,26 @@ type CreateRoomInput struct {
 	Kind             string
 	Title            string
 	PermissionPreset string
+	PersonaID        string
+	GrantID          string
 }
 
 type App struct {
-	mu          sync.Mutex
-	Worker      *worker.Client
-	Orch        *orch.Client // optional Temporal; nil → direct worker HTTP
-	Rooms       map[string]*Room
-	Messages    map[string][]Message
-	Approvals   map[string]*Approval
-	Activity    map[string][]ActivityEvent
-	SessionRoom map[string]string
-	sequences   map[string]uint64
-	subs        map[string]map[chan []byte]struct{}
+	mu            sync.Mutex
+	Worker        *worker.Client
+	Orch          *orch.Client // optional Temporal; nil → direct worker HTTP
+	Store         *store.FileStore
+	Rooms         map[string]*Room
+	Messages      map[string][]Message
+	Approvals     map[string]*Approval
+	Activity      map[string][]ActivityEvent
+	SessionRoom   map[string]string
+	Personas      map[string]*Persona
+	McpConnectors map[string]*McpConnector
+	CloudAgents   map[string]*CloudAgentJob
+	grants        map[string]*grantRecord
+	sequences     map[string]uint64
+	subs          map[string]map[chan []byte]struct{}
 }
 
 func New(w *worker.Client) *App {
@@ -113,17 +121,23 @@ func New(w *worker.Client) *App {
 }
 
 func NewWithOrch(w *worker.Client, o *orch.Client) *App {
-	return &App{
-		Worker:      w,
-		Orch:        o,
-		Rooms:       map[string]*Room{},
-		Messages:    map[string][]Message{},
-		Approvals:   map[string]*Approval{},
-		Activity:    map[string][]ActivityEvent{},
-		SessionRoom: map[string]string{},
-		sequences:   map[string]uint64{},
-		subs:        map[string]map[chan []byte]struct{}{},
+	a := &App{
+		Worker:        w,
+		Orch:          o,
+		Store:         store.New(""),
+		Rooms:         map[string]*Room{},
+		Messages:      map[string][]Message{},
+		Approvals:     map[string]*Approval{},
+		Activity:      map[string][]ActivityEvent{},
+		SessionRoom:   map[string]string{},
+		Personas:      map[string]*Persona{},
+		McpConnectors: map[string]*McpConnector{},
+		CloudAgents:   map[string]*CloudAgentJob{},
+		grants:        map[string]*grantRecord{},
+		sequences:     map[string]uint64{},
+		subs:          map[string]map[chan []byte]struct{}{},
 	}
+	return a
 }
 
 func id(prefix string) string {
@@ -185,13 +199,48 @@ func (a *App) CreateRoom(ctx context.Context, input CreateRoomInput) (*Room, err
 		return room, nil
 	}
 
-	var out worker.OpenSessionOut
-	err := a.Worker.Call(ctx, "openSession", map[string]any{
+	personaID := strings.TrimSpace(input.PersonaID)
+	grantID := strings.TrimSpace(input.GrantID)
+	persona, connectors, grantEnv, err := a.CompositionForRoom(personaID, grantID)
+	if err != nil {
+		a.mu.Lock()
+		room.State = RoomClosed
+		a.mu.Unlock()
+		return room, err
+	}
+	payload := map[string]any{
 		"roomId":           room.ID,
 		"turnId":           id("tn_"),
 		"kind":             kind,
 		"permissionPreset": permissionPreset,
-	}, &out)
+	}
+	if persona != nil {
+		payload["persona"] = map[string]any{
+			"id":           persona.ID,
+			"name":         persona.Name,
+			"instructions": persona.Instructions,
+			"mcpConnectorIds": persona.McpConnectorIDs,
+		}
+	}
+	if len(connectors) > 0 {
+		mcp := make([]map[string]any, 0, len(connectors))
+		for _, c := range connectors {
+			mcp = append(mcp, map[string]any{
+				"id": c.ID, "name": c.Name, "command": c.Command,
+				"args": c.Args, "envRefs": c.EnvRefs,
+			})
+		}
+		payload["mcpConnectors"] = mcp
+	}
+	if grantID != "" {
+		payload["grantId"] = grantID
+	}
+	if len(grantEnv) > 0 {
+		payload["grantEnv"] = grantEnv
+	}
+
+	var out worker.OpenSessionOut
+	err = a.Worker.Call(ctx, "openSession", payload, &out)
 	if err != nil {
 		a.mu.Lock()
 		room.State = RoomClosed
@@ -613,6 +662,8 @@ func (a *App) publish(roomID string, ev Event, source string) {
 	if len(history) > maxActivityPerRoom {
 		history = append([]ActivityEvent(nil), history[len(history)-maxActivityPerRoom:]...)
 	}
+	a.persistActivity(roomID, item)
+	a.persistRoom(room)
 	a.Activity[roomID] = history
 	raw, err := json.Marshal(item)
 	if err != nil {

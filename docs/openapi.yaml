@@ -38,7 +38,7 @@ tags:
   - name: approvals
     description: Human-in-the-loop approvals (W1 in-memory)
   - name: personas
-    description: Agent personas (unimplemented)
+    description: Agent personas (W2 in-memory catalog)
   - name: secrets
     description: Tenant secrets metadata only (unimplemented; plaintext never in API)
   - name: cloud-agents
@@ -377,8 +377,8 @@ paths:
     get:
       tags: [personas]
       operationId: listPersonas
-      summary: List personas (unimplemented)
-      x-unimplemented: true
+      summary: List personas
+      x-unimplemented: false
       responses:
         "501":
           $ref: "#/components/responses/NotImplemented"
@@ -393,7 +393,7 @@ paths:
       description: |
         Stored here. The worker renders it into a dsh agent preset at
         openSession. This API never accepts secret plaintext inside a persona.
-      x-unimplemented: true
+      x-unimplemented: false
       requestBody:
         required: true
         content:
