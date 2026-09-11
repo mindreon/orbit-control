@@ -48,7 +48,7 @@ paths:
       tags: [health]
       operationId: getHealth
       summary: Health check
-      description: W1 returns 200 `{status: ok}` without a database.
+      description: "W1 returns 200 `{status: ok}` without a database."
       x-unimplemented: false
       responses:
         "200":
