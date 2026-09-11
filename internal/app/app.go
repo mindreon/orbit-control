@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,15 +21,27 @@ const (
 	RoomRunning          RoomState = "running"
 	RoomAwaitingApproval RoomState = "awaiting_approval"
 	RoomClosed           RoomState = "closed"
+
+	PermissionWorkspaceWrite   = "workspace-write"
+	PermissionDangerFullAccess = "danger-full-access"
+	maxActivityPerRoom         = 500
 )
 
+type RuntimeSnapshot struct {
+	Kernel    string `json:"kernel"`
+	Protocol  string `json:"protocol"`
+	Isolation string `json:"isolation"`
+}
+
 type Room struct {
-	ID        string    `json:"id"`
-	Kind      string    `json:"kind"`
-	Title     string    `json:"title"`
-	State     RoomState `json:"state"`
-	SessionID string    `json:"sessionId,omitempty"`
-	CreatedAt string    `json:"createdAt"`
+	ID               string          `json:"id"`
+	Kind             string          `json:"kind"`
+	Title            string          `json:"title"`
+	State            RoomState       `json:"state"`
+	PermissionPreset string          `json:"permissionPreset"`
+	Runtime          RuntimeSnapshot `json:"runtime"`
+	SessionID        string          `json:"sessionId,omitempty"`
+	CreatedAt        string          `json:"createdAt"`
 }
 
 type Message struct {
@@ -54,6 +67,34 @@ type Approval struct {
 
 type Event map[string]any
 
+type ActivityEvent struct {
+	ID                string `json:"id"`
+	Sequence          uint64 `json:"sequence"`
+	Type              string `json:"type"`
+	RoomID            string `json:"roomId"`
+	SessionID         string `json:"sessionId,omitempty"`
+	TurnID            string `json:"turnId,omitempty"`
+	Source            string `json:"source"`
+	Runtime           string `json:"runtime,omitempty"`
+	Protocol          string `json:"protocol,omitempty"`
+	Role              string `json:"role,omitempty"`
+	Text              string `json:"text,omitempty"`
+	ToolName          string `json:"toolName,omitempty"`
+	CallID            string `json:"callId,omitempty"`
+	ApprovalID        string `json:"approvalId,omitempty"`
+	ApprovalRequestID string `json:"approvalRequestId,omitempty"`
+	Reason            string `json:"reason,omitempty"`
+	Status            string `json:"status,omitempty"`
+	PermissionPreset  string `json:"permissionPreset,omitempty"`
+	OccurredAt        string `json:"occurredAt"`
+}
+
+type CreateRoomInput struct {
+	Kind             string
+	Title            string
+	PermissionPreset string
+}
+
 type App struct {
 	mu          sync.Mutex
 	Worker      *worker.Client
@@ -61,7 +102,9 @@ type App struct {
 	Rooms       map[string]*Room
 	Messages    map[string][]Message
 	Approvals   map[string]*Approval
+	Activity    map[string][]ActivityEvent
 	SessionRoom map[string]string
+	sequences   map[string]uint64
 	subs        map[string]map[chan []byte]struct{}
 }
 
@@ -76,7 +119,9 @@ func NewWithOrch(w *worker.Client, o *orch.Client) *App {
 		Rooms:       map[string]*Room{},
 		Messages:    map[string][]Message{},
 		Approvals:   map[string]*Approval{},
+		Activity:    map[string][]ActivityEvent{},
 		SessionRoom: map[string]string{},
+		sequences:   map[string]uint64{},
 		subs:        map[string]map[chan []byte]struct{}{},
 	}
 }
@@ -89,18 +134,42 @@ func id(prefix string) string {
 
 func now() string { return time.Now().UTC().Format(time.RFC3339Nano) }
 
-func (a *App) CreateRoom(ctx context.Context, kind, title string) (*Room, error) {
+func (a *App) CreateRoom(ctx context.Context, input CreateRoomInput) (*Room, error) {
+	kind := strings.TrimSpace(input.Kind)
 	if kind == "" {
 		kind = "solo"
 	}
-	room := &Room{ID: id("rm_"), Kind: kind, Title: title, State: RoomIdle, CreatedAt: now()}
+	if kind != "solo" && kind != "collab" {
+		return nil, fmt.Errorf("kind must be solo or collab")
+	}
+	permissionPreset := strings.TrimSpace(input.PermissionPreset)
+	if permissionPreset == "" {
+		permissionPreset = PermissionWorkspaceWrite
+	}
+	if permissionPreset != PermissionWorkspaceWrite && permissionPreset != PermissionDangerFullAccess {
+		return nil, fmt.Errorf("permissionPreset must be workspace-write or danger-full-access")
+	}
+	room := &Room{
+		ID:               id("rm_"),
+		Kind:             kind,
+		Title:            strings.TrimSpace(input.Title),
+		State:            RoomIdle,
+		PermissionPreset: permissionPreset,
+		Runtime: RuntimeSnapshot{
+			Kernel:    "dsh",
+			Protocol:  "acp",
+			Isolation: "process",
+		},
+		CreatedAt: now(),
+	}
 	a.mu.Lock()
 	a.Rooms[room.ID] = room
 	a.Messages[room.ID] = nil
+	a.Activity[room.ID] = nil
 	a.mu.Unlock()
 
 	if a.Orch != nil {
-		view, err := a.Orch.StartRoom(ctx, room.ID, kind)
+		view, err := a.Orch.StartRoom(ctx, room.ID, kind, permissionPreset)
 		if err != nil {
 			a.mu.Lock()
 			room.State = RoomClosed
@@ -118,9 +187,10 @@ func (a *App) CreateRoom(ctx context.Context, kind, title string) (*Room, error)
 
 	var out worker.OpenSessionOut
 	err := a.Worker.Call(ctx, "openSession", map[string]any{
-		"roomId": room.ID,
-		"turnId": id("tn_"),
-		"kind":   kind,
+		"roomId":           room.ID,
+		"turnId":           id("tn_"),
+		"kind":             kind,
+		"permissionPreset": permissionPreset,
 	}, &out)
 	if err != nil {
 		a.mu.Lock()
@@ -164,6 +234,15 @@ func (a *App) ListMessages(roomID string) []Message {
 	defer a.mu.Unlock()
 	src := a.Messages[roomID]
 	out := make([]Message, len(src))
+	copy(out, src)
+	return out
+}
+
+func (a *App) ListActivity(roomID string) []ActivityEvent {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	src := a.Activity[roomID]
+	out := make([]ActivityEvent, len(src))
 	copy(out, src)
 	return out
 }
@@ -222,15 +301,6 @@ func (a *App) persistAssistantTexts(roomID string, texts []string) {
 	}
 }
 
-func (a *App) publishAssistantTexts(roomID string, texts []string) {
-	for _, text := range texts {
-		if text == "" {
-			continue
-		}
-		a.Publish(roomID, Event{"type": "assistant.message", "roomId": roomID, "role": "assistant", "text": text})
-	}
-}
-
 func (a *App) applyTurnResult(ctx context.Context, roomID, sessionID string, out worker.RunTurnOut) (*Room, *Approval, error) {
 	_ = ctx
 	a.mu.Lock()
@@ -240,7 +310,6 @@ func (a *App) applyTurnResult(ctx context.Context, roomID, sessionID string, out
 		return nil, nil, fmt.Errorf("room not found")
 	}
 	a.persistAssistantTexts(roomID, out.Texts)
-	texts := append([]string(nil), out.Texts...)
 
 	if out.Status == "needs_approval" {
 		room.State = RoomAwaitingApproval
@@ -261,7 +330,6 @@ func (a *App) applyTurnResult(ctx context.Context, roomID, sessionID string, out
 		cpRoom := *room
 		cpAppr := *appr
 		a.mu.Unlock()
-		a.publishAssistantTexts(roomID, texts)
 		a.Publish(roomID, Event{"type": "approval.asked", "roomId": roomID, "approvalId": appr.ID, "toolName": appr.ToolName, "reason": appr.Reason})
 		return &cpRoom, &cpAppr, nil
 	}
@@ -270,7 +338,6 @@ func (a *App) applyTurnResult(ctx context.Context, roomID, sessionID string, out
 	room.State = RoomRunning
 	cp := *room
 	a.mu.Unlock()
-	a.publishAssistantTexts(roomID, texts)
 	return &cp, nil, nil
 }
 
@@ -343,11 +410,11 @@ func (a *App) Decide(ctx context.Context, approvalID, decision string) (*Approva
 	}
 	var turn worker.RunTurnOut
 	if err := a.Worker.Call(ctx, "runTurn", map[string]any{
-		"roomId":               roomID,
-		"sessionId":            sessionID,
-		"turnId":               id("tn_"),
-		"message":              "",
-		"resumeAfterApproval":  true,
+		"roomId":              roomID,
+		"sessionId":           sessionID,
+		"turnId":              id("tn_"),
+		"message":             "",
+		"resumeAfterApproval": true,
 	}, &turn); err != nil {
 		return nil, err
 	}
@@ -394,20 +461,94 @@ func (a *App) AbortRoom(ctx context.Context, roomID string) error {
 	return nil
 }
 
-func (a *App) Ingest(ev Event) {
+func (a *App) SteerRoom(ctx context.Context, roomID, instruction string) (bool, error) {
+	instruction = strings.TrimSpace(instruction)
+	if instruction == "" {
+		return false, fmt.Errorf("instruction is required")
+	}
+	a.mu.Lock()
+	room, ok := a.Rooms[roomID]
+	if !ok {
+		a.mu.Unlock()
+		return false, fmt.Errorf("room not found")
+	}
+	if room.State != RoomRunning {
+		a.mu.Unlock()
+		return false, fmt.Errorf("room is %s", room.State)
+	}
+	sessionID := room.SessionID
+	a.mu.Unlock()
+
+	accepted := true
+	if a.Orch != nil {
+		if err := a.Orch.Steer(ctx, roomID, id("tn_"), instruction); err != nil {
+			return false, err
+		}
+	} else {
+		var out worker.AcceptedOut
+		if err := a.Worker.Call(ctx, "steer", map[string]any{
+			"roomId": roomID, "sessionId": sessionID, "turnId": id("tn_"), "instruction": instruction,
+		}, &out); err != nil {
+			return false, err
+		}
+		accepted = out.Accepted
+	}
+	if accepted {
+		a.Publish(roomID, Event{
+			"type": "room.steered", "roomId": roomID, "sessionId": sessionID, "text": instruction, "status": "accepted",
+		})
+	}
+	return accepted, nil
+}
+
+var workerEventTypes = map[string]struct{}{
+	"session.status":    {},
+	"assistant.message": {},
+	"tool.call":         {},
+	"tool.result":       {},
+	"approval.asked":    {},
+	"agent.started":     {},
+	"agent.finished":    {},
+	"usage":             {},
+}
+
+func eventString(ev Event, key string) string {
+	value, _ := ev[key].(string)
+	return value
+}
+
+func (a *App) Ingest(ev Event) error {
+	eventType := eventString(ev, "type")
+	if _, ok := workerEventTypes[eventType]; !ok {
+		return fmt.Errorf("unsupported Orbit event type %q", eventType)
+	}
+	if occurredAt := eventString(ev, "occurredAt"); occurredAt != "" {
+		if _, err := time.Parse(time.RFC3339Nano, occurredAt); err != nil {
+			return fmt.Errorf("occurredAt must be RFC3339")
+		}
+	}
 	sessionID, _ := ev["sessionId"].(string)
 	roomID, _ := ev["roomId"].(string)
 	a.mu.Lock()
+	mappedRoomID := ""
+	if sessionID != "" {
+		mappedRoomID = a.SessionRoom[sessionID]
+	}
 	if roomID == "" && sessionID != "" {
-		roomID = a.SessionRoom[sessionID]
-		ev["roomId"] = roomID
+		roomID = mappedRoomID
 	}
+	_, roomExists := a.Rooms[roomID]
 	a.mu.Unlock()
-	if roomID != "" {
-		// Assistant text is persisted from runTurn.texts to avoid duplicates
-		// when ingest is also enabled. SSE still fans the live event out.
-		a.Publish(roomID, ev)
+	if mappedRoomID != "" && roomID != mappedRoomID {
+		return fmt.Errorf("event roomId does not match its session")
 	}
+	if roomID == "" || !roomExists {
+		return fmt.Errorf("event is not associated with a known room")
+	}
+	// Assistant text is persisted from runTurn.texts to avoid duplicates when
+	// ingest is also enabled. Activity stores the normalized live projection.
+	a.publish(roomID, ev, "worker")
+	return nil
 }
 
 func (a *App) Subscribe(roomID string) (<-chan []byte, func()) {
@@ -427,18 +568,64 @@ func (a *App) Subscribe(roomID string) (<-chan []byte, func()) {
 }
 
 func (a *App) Publish(roomID string, ev Event) {
-	raw, err := json.Marshal(ev)
-	if err != nil {
+	a.publish(roomID, ev, "control")
+}
+
+func (a *App) publish(roomID string, ev Event, source string) {
+	occurredAt := eventString(ev, "occurredAt")
+	if occurredAt == "" {
+		occurredAt = now()
+	}
+	eventID := eventString(ev, "eventId")
+	if eventID == "" {
+		eventID = id("ev_")
+	}
+
+	a.mu.Lock()
+	room := a.Rooms[roomID]
+	if room == nil {
+		a.mu.Unlock()
 		return
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	a.sequences[roomID]++
+	item := ActivityEvent{
+		ID:                eventID,
+		Sequence:          a.sequences[roomID],
+		Type:              eventString(ev, "type"),
+		RoomID:            roomID,
+		SessionID:         eventString(ev, "sessionId"),
+		TurnID:            eventString(ev, "turnId"),
+		Source:            source,
+		Runtime:           "dsh",
+		Protocol:          "acp",
+		Role:              eventString(ev, "role"),
+		Text:              eventString(ev, "text"),
+		ToolName:          eventString(ev, "toolName"),
+		CallID:            eventString(ev, "callId"),
+		ApprovalID:        eventString(ev, "approvalId"),
+		ApprovalRequestID: eventString(ev, "approvalRequestId"),
+		Reason:            eventString(ev, "reason"),
+		Status:            eventString(ev, "status"),
+		PermissionPreset:  room.PermissionPreset,
+		OccurredAt:        occurredAt,
+	}
+	history := append(a.Activity[roomID], item)
+	if len(history) > maxActivityPerRoom {
+		history = append([]ActivityEvent(nil), history[len(history)-maxActivityPerRoom:]...)
+	}
+	a.Activity[roomID] = history
+	raw, err := json.Marshal(item)
+	if err != nil {
+		a.mu.Unlock()
+		return
+	}
 	for ch := range a.subs[roomID] {
 		select {
 		case ch <- raw:
 		default:
 		}
 	}
+	a.mu.Unlock()
 }
 
 func runTurnFromOrch(res orch.RunTurnResult) worker.RunTurnOut {

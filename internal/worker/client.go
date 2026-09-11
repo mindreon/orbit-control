@@ -74,6 +74,10 @@ type AppliedOut struct {
 	Applied bool `json:"applied"`
 }
 
+type AcceptedOut struct {
+	Accepted bool `json:"accepted"`
+}
+
 type AbortedOut struct {
 	Aborted bool `json:"aborted"`
 }

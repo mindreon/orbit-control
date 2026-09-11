@@ -1,11 +1,12 @@
 openapi: 3.0.3
 info:
   title: Orbit Control API
-  version: 0.1.0-w1
+  version: 0.2.0-w1
   description: |
-    W1 **live rooms**. Health, rooms, messages, approvals, and SSE events are
-    implemented in-memory. Control calls orbit-worker HTTP activities; it still
-    has no database, OAuth, or Temporal client.
+    W1 **live rooms**. Health, rooms, messages, approvals, room activity history,
+    steer, and SSE events are implemented in-memory. Control calls orbit-worker
+    HTTP activities directly, or RoomWorkflow when Temporal is configured. It
+    still has no database or OAuth.
 
     Product surfaces:
 
@@ -24,6 +25,9 @@ info:
 servers:
   - url: http://127.0.0.1:8080
     description: Local W1 control (in-memory rooms + HITL)
+# W1 intentionally has no authentication. Later security schemes replace this
+# root-level declaration; the reserved 401/403 response bodies stay stable.
+security: []
 tags:
   - name: health
     description: Liveness
@@ -47,7 +51,7 @@ paths:
       tags: [health]
       operationId: getHealth
       summary: Health check
-      description: W1 returns 200 `{status: ok}` without a database.
+      description: "W1 returns 200 `{status: ok}` without a database."
       x-unimplemented: false
       responses:
         "200":
@@ -89,8 +93,9 @@ paths:
       summary: Create a room
       description: |
         `kind=solo` is the super single-agent room. Opens an ACP session on
-        orbit-worker (mock ACP by default). `kind=collab` is accepted but
-        still one parent session in W1.
+        orbit-worker (mock ACP by default). `permissionPreset` is pinned into
+        the room runtime snapshot and passed to the dsh child. `kind=collab`
+        is accepted but still one parent session in W1.
       x-unimplemented: false
       requestBody:
         required: true
@@ -182,9 +187,11 @@ paths:
     post:
       tags: [rooms]
       operationId: steerRoom
-      summary: Steer a running room (unimplemented)
-      description: Maps to Temporal Signal `steer`. Legal only while the room is running.
-      x-unimplemented: true
+      summary: Steer a running room
+      description: |
+        Maps to Temporal Signal `steer`, or the worker Activity on the direct
+        W1 path. Legal only while the room is running.
+      x-unimplemented: false
       parameters:
         - $ref: "#/components/parameters/RoomId"
       requestBody:
@@ -194,7 +201,18 @@ paths:
             schema:
               $ref: "#/components/schemas/SteerRequest"
       responses:
-        "501":
+        "200":
+          description: Steer accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [accepted]
+                properties:
+                  accepted:
+                    type: boolean
+        "400":
           $ref: "#/components/responses/NotImplemented"
         "401":
           $ref: "#/components/responses/Unauthorized"
@@ -239,13 +257,37 @@ paths:
       summary: SSE room events
       description: |
         W1 stand-in for public WebSocket. orbit-web subscribes here only.
-        Frames are `OrbitEvent` JSON (not raw ACP).
+        Frames are normalized `ActivityEvent` JSON (not raw ACP).
       x-unimplemented: false
       parameters:
         - $ref: "#/components/parameters/RoomId"
       responses:
         "200":
-          description: text/event-stream of OrbitEvent JSON
+          description: text/event-stream of ActivityEvent JSON
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/rooms/{roomId}/activity:
+    get:
+      tags: [rooms]
+      operationId: listRoomActivity
+      summary: List the room execution timeline
+      description: |
+        Returns a bounded, ordered history of normalized Orbit events. The
+        response never contains raw dsh or ACP frames.
+      x-unimplemented: false
+      parameters:
+        - $ref: "#/components/parameters/RoomId"
+      responses:
+        "200":
+          description: Room activity, oldest first
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActivityEventList"
+        "404":
+          $ref: "#/components/responses/NotImplemented"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -606,7 +648,7 @@ components:
     Room:
       type: object
       additionalProperties: false
-      required: [id, kind, title, state, createdAt]
+      required: [id, kind, title, state, permissionPreset, runtime, createdAt]
       properties:
         id:
           type: string
@@ -616,10 +658,29 @@ components:
           type: string
         state:
           $ref: "#/components/schemas/RoomState"
+        permissionPreset:
+          $ref: "#/components/schemas/PermissionPreset"
+        runtime:
+          $ref: "#/components/schemas/RuntimeSnapshot"
         sessionId:
           type: string
         createdAt:
           type: string
+    RuntimeSnapshot:
+      type: object
+      additionalProperties: false
+      required: [kernel, protocol, isolation]
+      properties:
+        kernel:
+          type: string
+          enum: [dsh]
+        protocol:
+          type: string
+          enum: [acp]
+        isolation:
+          type: string
+          enum: [process]
+          description: One dsh ACP child process per Orbit session
     RoomList:
       type: object
       additionalProperties: false
@@ -687,6 +748,73 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Approval"
+    ActivityEvent:
+      type: object
+      additionalProperties: false
+      required: [id, sequence, type, roomId, source, occurredAt]
+      properties:
+        id:
+          type: string
+        sequence:
+          type: integer
+          format: int64
+        type:
+          type: string
+          enum:
+            - session.status
+            - assistant.message
+            - tool.call
+            - tool.result
+            - approval.asked
+            - agent.started
+            - agent.finished
+            - usage
+            - room.steered
+        roomId:
+          type: string
+        sessionId:
+          type: string
+        turnId:
+          type: string
+        source:
+          type: string
+          enum: [control, worker]
+        runtime:
+          type: string
+          enum: [dsh]
+        protocol:
+          type: string
+          enum: [acp]
+        role:
+          type: string
+        text:
+          type: string
+        toolName:
+          type: string
+        callId:
+          type: string
+        approvalId:
+          type: string
+        approvalRequestId:
+          type: string
+        reason:
+          type: string
+        status:
+          type: string
+        permissionPreset:
+          $ref: "#/components/schemas/PermissionPreset"
+        occurredAt:
+          type: string
+          format: date-time
+    ActivityEventList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ActivityEvent"
     PostMessageResponse:
       type: object
       additionalProperties: false
@@ -803,6 +931,7 @@ components:
             - agent.started
             - agent.finished
             - usage
+            - room.steered
         roomId:
           type: string
         jobId:
@@ -811,6 +940,19 @@ components:
           type: string
         turnId:
           type: string
+        eventId:
+          type: string
+        occurredAt:
+          type: string
+          format: date-time
+        runtime:
+          type: string
+          enum: [dsh]
+        protocol:
+          type: string
+          enum: [acp]
+        permissionPreset:
+          $ref: "#/components/schemas/PermissionPreset"
   responses:
     NotImplemented:
       description: W0 skeleton — path is not implemented.

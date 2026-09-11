@@ -76,12 +76,24 @@ func HandlerWith(runtime *app.App) http.Handler {
 	})
 	mux.HandleFunc("POST /v1/rooms", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Kind  string `json:"kind"`
-			Title string `json:"title"`
+			Kind             string `json:"kind"`
+			Title            string `json:"title"`
+			PermissionPreset string `json:"permissionPreset"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		room, err := runtime.CreateRoom(r.Context(), body.Kind, body.Title)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "request body must be valid JSON")
+			return
+		}
+		room, err := runtime.CreateRoom(r.Context(), app.CreateRoomInput{
+			Kind:             body.Kind,
+			Title:            body.Title,
+			PermissionPreset: body.PermissionPreset,
+		})
 		if err != nil {
+			if room == nil {
+				writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+				return
+			}
 			writeErr(w, http.StatusBadGateway, "WORKER_ERROR", err.Error())
 			return
 		}
@@ -116,6 +128,29 @@ func HandlerWith(runtime *app.App) http.Handler {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"aborted": true})
+	})
+	mux.HandleFunc("POST /v1/rooms/{roomId}/steer", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Instruction string `json:"instruction"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "request body must be valid JSON")
+			return
+		}
+		accepted, err := runtime.SteerRoom(r.Context(), r.PathValue("roomId"), body.Instruction)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"accepted": accepted})
+	})
+	mux.HandleFunc("GET /v1/rooms/{roomId}/activity", func(w http.ResponseWriter, r *http.Request) {
+		roomID := r.PathValue("roomId")
+		if _, ok := runtime.GetRoom(roomID); !ok {
+			writeErr(w, http.StatusNotFound, "NOT_FOUND", "room not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": runtime.ListActivity(roomID)})
 	})
 	mux.HandleFunc("GET /v1/rooms/{roomId}/events", func(w http.ResponseWriter, r *http.Request) {
 		roomID := r.PathValue("roomId")
@@ -165,7 +200,10 @@ func HandlerWith(runtime *app.App) http.Handler {
 			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
 			return
 		}
-		runtime.Ingest(ev)
+		if err := runtime.Ingest(ev); err != nil {
+			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+			return
+		}
 		writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
 	})
 	mux.HandleFunc("GET /v1/personas", func(w http.ResponseWriter, _ *http.Request) {

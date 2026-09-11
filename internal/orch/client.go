@@ -29,9 +29,9 @@ type RoomView struct {
 }
 
 type RunTurnResult struct {
-	Status   string         `json:"status"`
-	Approval *ApprovalAsk   `json:"approval,omitempty"`
-	Texts    []string       `json:"texts,omitempty"`
+	Status   string       `json:"status"`
+	Approval *ApprovalAsk `json:"approval,omitempty"`
+	Texts    []string     `json:"texts,omitempty"`
 }
 
 type ApprovalAsk struct {
@@ -76,17 +76,21 @@ func WorkflowID(roomID string) string {
 	return WorkflowRoomPrefix + roomID
 }
 
-func (c *Client) StartRoom(ctx context.Context, roomID, kind string) (RoomView, error) {
+func (c *Client) StartRoom(ctx context.Context, roomID, kind, permissionPreset string) (RoomView, error) {
 	if kind == "" {
 		kind = "solo"
+	}
+	if permissionPreset == "" {
+		permissionPreset = "workspace-write"
 	}
 	_, err := c.tc.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
 		ID:                       WorkflowID(roomID),
 		TaskQueue:                c.taskQueue,
 		WorkflowExecutionTimeout: 24 * time.Hour,
 	}, "RoomWorkflow", map[string]any{
-		"roomId": roomID,
-		"kind":   kind,
+		"roomId":           roomID,
+		"kind":             kind,
+		"permissionPreset": permissionPreset,
 	})
 	if err != nil {
 		return RoomView{}, err
@@ -144,10 +148,10 @@ func (c *Client) Decide(ctx context.Context, roomID, turnID, approvalRequestID, 
 		UpdateName:   "decide",
 		WaitForStage: client.WorkflowUpdateStageCompleted,
 		Args: []any{map[string]any{
-			"turnId":             turnID,
-			"approvalRequestId":  approvalRequestID,
-			"decision":           decision,
-			"resumeTurnId":       resumeTurnID,
+			"turnId":            turnID,
+			"approvalRequestId": approvalRequestID,
+			"decision":          decision,
+			"resumeTurnId":      resumeTurnID,
 		}},
 	})
 	if err != nil {
@@ -158,6 +162,13 @@ func (c *Client) Decide(ctx context.Context, roomID, turnID, approvalRequestID, 
 		return DecideResult{}, err
 	}
 	return out, nil
+}
+
+func (c *Client) Steer(ctx context.Context, roomID, turnID, instruction string) error {
+	return c.tc.SignalWorkflow(ctx, WorkflowID(roomID), "", "steer", map[string]any{
+		"turnId":      turnID,
+		"instruction": instruction,
+	})
 }
 
 func (c *Client) Abort(ctx context.Context, roomID, turnID, reason string) error {
