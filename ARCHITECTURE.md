@@ -1,6 +1,10 @@
 # Architecture — orbit-control
 
-W0 process is still a listen-and-`501` skeleton for most resource groups. **W1** implements in-memory rooms, messages, HITL decide, and SSE, calling orbit-worker over HTTP. This file is the **target** boundary map after the dsh runtime choice.
+Most resource groups remain stubs. **W1** implements in-memory rooms, messages,
+HITL decide, steer, bounded activity history, and SSE, calling orbit-worker
+directly or through Temporal. This file is the boundary map after the dsh
+runtime choice. The product-layer gap analysis and roadmap are in
+[`docs/dsh-workbench-blueprint.md`](docs/dsh-workbench-blueprint.md).
 
 ## What this service is
 
@@ -12,7 +16,7 @@ Browsers, CLIs, and third-party clients reach Orbit through this repo. Sibling s
 
 | Surface | Public objects | Not here |
 | --- | --- | --- |
-| **Super single-agent** | Room `kind=solo`, messages, personas, WS events, HITL approvals | Agent loop |
+| **Super single-agent** | Room `kind=solo`, messages, runtime snapshot, SSE events, HITL approvals, activity history | Agent loop |
 | **Multi-agent** | Room `kind=collab`, per-room agent catalog on WS | Temporal child per subagent (V1) |
 | **Cloud Agent** | `/v1/cloud-agents` jobs, cancel, approval reuse | Vendor compute SDKs; dsh webhooks |
 
@@ -80,7 +84,24 @@ W0 does not implement encryption. This rule is the contract for later waves.
 
 Token streams and tool lifecycle are too chatty for Temporal.
 
-A later wave adds an **internal** ingest (service auth, not listed as a public path in OpenAPI) that accepts **Orbit events** only (see OpenAPI `OrbitEvent`). Control persists what the UI needs and fans `/ws`. Raw ACP `session/update` frames are rejected.
+W1 has an **internal** ingest (service auth is still pending and it is not
+listed as a public path in OpenAPI) that accepts allowlisted **Orbit events**
+only (see OpenAPI `OrbitEvent`). Control keeps a bounded in-memory timeline and
+fans SSE. Raw ACP `session/update` frames and events not associated with a
+known Room are rejected.
+
+### 6. Permission selection is an execution snapshot
+
+- Public callers select one closed preset:
+  `workspace-write` (default) or explicit `danger-full-access`.
+- Control validates and stores the value with the Room; the direct and Temporal
+  paths both forward it to `openSession`.
+- The worker validates it again and launches that session's dsh child with a
+  process-local `DSH_PERMISSION_MODE`.
+- The value is visible in Room and activity responses so operators can audit
+  the effective starting policy.
+- This dsh permission is not a substitute for future tenant/workspace
+  authorization in control.
 
 ## Contract links
 
@@ -92,6 +113,8 @@ A later wave adds an **internal** ingest (service auth, not listed as a public p
 | Web client | [orbit-web](https://github.com/mindreon/orbit-web) | Generated or hand-written client of this OpenAPI only |
 | Worker execution | [orbit-worker](https://github.com/mindreon/orbit-worker) | Receives jobs + scoped grants; reports status + events inward |
 
-## W0 intentionally missing
+## Still intentionally missing
 
-No OAuth, no database, no LLM, no Temporal client, no KMS, no dsh. The process in `cmd/orbit-control` is a listen-and-`501` skeleton so the package layout and contract file exist.
+No OAuth, database, KMS, workspace membership policy, persona/skill catalog,
+credential grants, artifact store, or production service authentication.
+Model and dsh execution remain outside this process.

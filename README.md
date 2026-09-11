@@ -2,7 +2,11 @@
 
 Orbit **control plane**. This repository is the **sole public HTTP and WebSocket API** for Orbit.
 
-W1 status: rooms, messages, HITL approvals, and SSE events are implemented in-memory. Session lifecycle talks to orbit-worker over HTTP by default, or via Temporal `RoomWorkflow` when `TEMPORAL_ADDRESS` is set. No database, no OAuth. Other resource groups still return empty lists.
+W1 status: rooms, messages, HITL approvals, steer, bounded execution history,
+and SSE events are implemented in-memory. A Room pins a dsh permission preset
+and exposes its runtime snapshot. Session lifecycle talks to orbit-worker over
+HTTP by default, or via Temporal `RoomWorkflow` when `TEMPORAL_ADDRESS` is set.
+No database, no OAuth. Other resource groups still return empty lists.
 
 ## Role
 
@@ -30,7 +34,11 @@ This repo does **not** run orchestration workflows, execute worker jobs, host ds
 | [orbit-orch](https://github.com/mindreon/orbit-orch) | Orchestration. Publishes **internal contracts** that control may call; never a public API. | Internal only |
 | [orbit-worker](https://github.com/mindreon/orbit-worker) | Job / sandbox / **dsh ACP** execution. Never owns tenant secrets. | Internal only (grants + event ingest) |
 
-Trust and secret boundaries are in [ARCHITECTURE.md](./ARCHITECTURE.md). Contributor rules are in [AGENTS.md](./AGENTS.md). Agent runtime choice (dsh, not Pi) lives in [orbit-orch tech-selection](https://github.com/mindreon/orbit-orch/blob/main/docs/tech-selection.md).
+Trust and secret boundaries are in [ARCHITECTURE.md](./ARCHITECTURE.md).
+The enterprise-workbench capability analysis is in
+[docs/dsh-workbench-blueprint.md](./docs/dsh-workbench-blueprint.md).
+Contributor rules are in [AGENTS.md](./AGENTS.md). Agent runtime choice (dsh,
+not Pi) lives in [orbit-orch tech-selection](https://github.com/mindreon/orbit-orch/blob/main/docs/tech-selection.md).
 
 ## Public API contract
 
@@ -44,8 +52,8 @@ Stub groups: `health`, `rooms`, `messages`, `approvals`, `personas`, `secrets`, 
 
 ```
 cmd/orbit-control/     HTTP process entrypoint
-internal/httpapi/      Mux (rooms, HITL, SSE, empty lists)
-internal/app/          In-memory Room FSM
+internal/httpapi/      Mux (rooms, HITL, steer, activity, SSE, empty lists)
+internal/app/          In-memory Room FSM + bounded activity timeline
 internal/worker/       HTTP client to orbit-worker activities
 internal/orch/         Optional Temporal client (RoomWorkflow Updates)
 docs/openapi.yaml      Public HTTP/WS contract

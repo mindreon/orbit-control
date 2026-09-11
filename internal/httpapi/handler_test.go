@@ -45,6 +45,8 @@ func TestRoomHITLAllowCompletesTurn(t *testing.T) {
 			_, _ = io.WriteString(w, `{"status":"needs_approval","approval":{"approvalRequestId":"ask-1","toolName":"bash","reason":"ls"},"texts":["Orbit mock agent received: list files"]}`)
 		case strings.HasSuffix(r.URL.Path, "/resolveApproval"):
 			_, _ = io.WriteString(w, `{"applied":true}`)
+		case strings.HasSuffix(r.URL.Path, "/steer"):
+			_, _ = io.WriteString(w, `{"accepted":true}`)
 		case strings.HasSuffix(r.URL.Path, "/closeSession"):
 			_, _ = io.WriteString(w, `{"closed":true}`)
 		default:
@@ -69,6 +71,23 @@ func TestRoomHITLAllowCompletesTurn(t *testing.T) {
 	}
 	if room.State != app.RoomRunning {
 		t.Fatalf("state %s", room.State)
+	}
+	if room.PermissionPreset != app.PermissionWorkspaceWrite {
+		t.Fatalf("permission preset %q", room.PermissionPreset)
+	}
+	if room.Runtime.Kernel != "dsh" || room.Runtime.Protocol != "acp" || room.Runtime.Isolation != "process" {
+		t.Fatalf("runtime snapshot = %+v", room.Runtime)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/internal/events", strings.NewReader(
+		`{"eventId":"ev-worker-1","occurredAt":"2026-09-11T00:00:00Z","type":"tool.call","roomId":"`+
+			room.ID+`","sessionId":"`+room.SessionID+`","toolName":"bash","status":"pending"}`,
+	))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("ingest %d %s", rec.Code, rec.Body.String())
 	}
 
 	rec = httptest.NewRecorder()
@@ -128,5 +147,72 @@ func TestRoomHITLAllowCompletesTurn(t *testing.T) {
 	}
 	if !strings.Contains(joined, "Command allowed") {
 		t.Fatalf("missing resume assistant text in %q", joined)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/v1/rooms/"+room.ID+"/steer", strings.NewReader(`{"instruction":"focus on tests"}`))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("steer %d %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/v1/rooms/"+room.ID+"/activity", nil)
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("activity %d %s", rec.Code, rec.Body.String())
+	}
+	var activity struct {
+		Items []app.ActivityEvent `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&activity); err != nil {
+		t.Fatal(err)
+	}
+	if len(activity.Items) == 0 {
+		t.Fatal("expected activity history")
+	}
+	foundWorkerEvent := false
+	for _, item := range activity.Items {
+		if item.ID == "ev-worker-1" && item.Source == "worker" && item.ToolName == "bash" {
+			foundWorkerEvent = true
+		}
+	}
+	if !foundWorkerEvent {
+		t.Fatalf("missing normalized worker event: %+v", activity.Items)
+	}
+	last := activity.Items[len(activity.Items)-1]
+	if last.Type != "room.steered" || last.Source != "control" || last.PermissionPreset != app.PermissionWorkspaceWrite {
+		t.Fatalf("last activity = %+v", last)
+	}
+}
+
+func TestCreateRoomValidatesRuntimePolicy(t *testing.T) {
+	h := HandlerWith(app.New(worker.New("")))
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/rooms", strings.NewReader(
+		`{"kind":"solo","permissionPreset":"unconfined"}`,
+	))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+func TestInternalEventsRejectRawOrUnknownPayloads(t *testing.T) {
+	h := HandlerWith(app.New(worker.New("")))
+	for _, body := range []string{
+		`{"jsonrpc":"2.0","method":"session/update"}`,
+		`{"type":"session/update","sessionId":"sess-raw"}`,
+		`{"type":"tool.call","sessionId":"orphan"}`,
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/internal/events", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("body %s: status = %d, want %d", body, rec.Code, http.StatusBadRequest)
+		}
 	}
 }
