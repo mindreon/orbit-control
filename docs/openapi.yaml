@@ -1,40 +1,38 @@
 openapi: 3.0.3
 info:
   title: Orbit Control API
-  version: 0.0.0-w0
+  version: 0.1.0-w1
   description: |
-    W0 **stub**. This document is the public HTTP/WS contract for orbit-control,
-    the sole public API surface.
+    W1 **live rooms**. Health, rooms, messages, approvals, and SSE events are
+    implemented in-memory. Control calls orbit-worker HTTP activities; it still
+    has no database, OAuth, or Temporal client.
 
-    Product surfaces (implemented in later waves, still 501 here):
+    Product surfaces:
 
-    - **Super single-agent** — rooms `kind=solo`, messages, personas, WS events
-    - **Multi-agent** — rooms `kind=collab`, per-room agent catalog
-    - **Cloud Agent** — `/v1/cloud-agents` jobs with the same HITL approvals
+    - **Super single-agent** — rooms `kind=solo` (W1)
+    - **Multi-agent** — rooms `kind=collab`, per-room agent catalog (later)
+    - **Cloud Agent** — `/v1/cloud-agents` jobs (later)
 
-    The agent loop is hosted on orbit-worker as `dsh --profile acp`. This API
-    never exposes dsh, Temporal, or worker URLs.
-
-    Every path is **unimplemented**. The W0 process returns HTTP 501 with
-    `ErrorBody.code = NOT_IMPLEMENTED`. Do not treat 200 examples as live.
+    The agent loop is hosted on orbit-worker as ACP (`dsh --profile acp` or the
+    bundled mock ACP). This API never exposes dsh, Temporal, or worker URLs.
 
     `Unauthorized` (401) and `Forbidden` (403) are reserved shapes for later
-    Sentinel tests. They are not emitted by the W0 skeleton.
+    Sentinel tests. They are not emitted in W1.
   license:
     name: MIT
     url: https://opensource.org/licenses/MIT
 servers:
   - url: http://127.0.0.1:8080
-    description: Local W0 stub (not implemented)
+    description: Local W1 control (in-memory rooms + HITL)
 tags:
   - name: health
-    description: Liveness placeholder (unimplemented)
+    description: Liveness
   - name: rooms
-    description: Conversation / work rooms (unimplemented)
+    description: Conversation / work rooms (W1 in-memory)
   - name: messages
-    description: Room messages (unimplemented)
+    description: Room messages (W1 in-memory)
   - name: approvals
-    description: Human-in-the-loop approvals (unimplemented)
+    description: Human-in-the-loop approvals (W1 in-memory)
   - name: personas
     description: Agent personas (unimplemented)
   - name: secrets
@@ -48,12 +46,22 @@ paths:
     get:
       tags: [health]
       operationId: getHealth
-      summary: Health check (unimplemented)
-      description: W0 stub. Returns 501. Later waves may return 200 without a database.
-      x-unimplemented: true
+      summary: Health check
+      description: W1 returns 200 `{status: ok}` without a database.
+      x-unimplemented: false
       responses:
-        "501":
-          $ref: "#/components/responses/NotImplemented"
+        "200":
+          description: Process is up
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    example: ok
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -62,11 +70,15 @@ paths:
     get:
       tags: [rooms]
       operationId: listRooms
-      summary: List rooms (unimplemented)
-      x-unimplemented: true
+      summary: List rooms
+      x-unimplemented: false
       responses:
-        "501":
-          $ref: "#/components/responses/NotImplemented"
+        "200":
+          description: Room list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoomList"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -74,11 +86,12 @@ paths:
     post:
       tags: [rooms]
       operationId: createRoom
-      summary: Create a room (unimplemented)
+      summary: Create a room
       description: |
-        `kind=solo` is the super single-agent room. `kind=collab` is the
-        multi-agent room (one parent session; children are projected on WS).
-      x-unimplemented: true
+        `kind=solo` is the super single-agent room. Opens an ACP session on
+        orbit-worker (mock ACP by default). `kind=collab` is accepted but
+        still one parent session in W1.
+      x-unimplemented: false
       requestBody:
         required: true
         content:
@@ -86,7 +99,13 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateRoomRequest"
       responses:
-        "501":
+        "200":
+          description: Created room
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Room"
+        "502":
           $ref: "#/components/responses/NotImplemented"
         "401":
           $ref: "#/components/responses/Unauthorized"
@@ -96,12 +115,18 @@ paths:
     get:
       tags: [rooms]
       operationId: getRoom
-      summary: Get a room (unimplemented)
-      x-unimplemented: true
+      summary: Get a room
+      x-unimplemented: false
       parameters:
         - $ref: "#/components/parameters/RoomId"
       responses:
-        "501":
+        "200":
+          description: Room
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Room"
+        "404":
           $ref: "#/components/responses/NotImplemented"
         "401":
           $ref: "#/components/responses/Unauthorized"
@@ -111,13 +136,17 @@ paths:
     get:
       tags: [messages]
       operationId: listRoomMessages
-      summary: List messages in a room (unimplemented)
-      x-unimplemented: true
+      summary: List messages in a room
+      x-unimplemented: false
       parameters:
         - $ref: "#/components/parameters/RoomId"
       responses:
-        "501":
-          $ref: "#/components/responses/NotImplemented"
+        "200":
+          description: Messages
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageList"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -125,9 +154,9 @@ paths:
     post:
       tags: [messages]
       operationId: createRoomMessage
-      summary: Post a message to a room (unimplemented)
-      description: Human turn text. Control starts/signals the Room workflow `runTurn`.
-      x-unimplemented: true
+      summary: Post a message to a room
+      description: Human turn text. Control calls worker `runTurn` (W1 stand-in for Temporal).
+      x-unimplemented: false
       parameters:
         - $ref: "#/components/parameters/RoomId"
       requestBody:
@@ -137,7 +166,13 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateRoomMessageRequest"
       responses:
-        "501":
+        "200":
+          description: Room after the turn, plus a pending approval when parked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PostMessageResponse"
+        "400":
           $ref: "#/components/responses/NotImplemented"
         "401":
           $ref: "#/components/responses/Unauthorized"
@@ -169,9 +204,9 @@ paths:
     post:
       tags: [rooms]
       operationId: abortRoom
-      summary: Abort a room (unimplemented)
-      description: Maps to Temporal Signal `abort`. Legal from running or awaiting_approval.
-      x-unimplemented: true
+      summary: Abort a room
+      description: Calls worker `abort` (W1 stand-in for Temporal Signal `abort`).
+      x-unimplemented: false
       parameters:
         - $ref: "#/components/parameters/RoomId"
       requestBody:
@@ -181,8 +216,36 @@ paths:
             schema:
               $ref: "#/components/schemas/AbortRequest"
       responses:
-        "501":
+        "200":
+          description: Room aborted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [aborted]
+                properties:
+                  aborted:
+                    type: boolean
+        "400":
           $ref: "#/components/responses/NotImplemented"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/rooms/{roomId}/events:
+    get:
+      tags: [rooms]
+      operationId: streamRoomEvents
+      summary: SSE room events
+      description: |
+        W1 stand-in for public WebSocket. orbit-web subscribes here only.
+        Frames are `OrbitEvent` JSON (not raw ACP).
+      x-unimplemented: false
+      parameters:
+        - $ref: "#/components/parameters/RoomId"
+      responses:
+        "200":
+          description: text/event-stream of OrbitEvent JSON
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -209,11 +272,15 @@ paths:
     get:
       tags: [approvals]
       operationId: listApprovals
-      summary: List approvals (unimplemented)
-      x-unimplemented: true
+      summary: List approvals
+      x-unimplemented: false
       responses:
-        "501":
-          $ref: "#/components/responses/NotImplemented"
+        "200":
+          description: Approval list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApprovalList"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -237,12 +304,12 @@ paths:
     post:
       tags: [approvals]
       operationId: decideApproval
-      summary: Approve or reject (unimplemented)
+      summary: Approve or reject
       description: |
-        Public HITL verb. Control maps `allow` to Temporal Update `approve`
-        (worker `resolveApproval` with `allowed-once`) and `reject` to Signal
-        `abort` by default.
-      x-unimplemented: true
+        Public HITL verb. Control maps `allow` to worker `resolveApproval`
+        (`allowed-once`) then `runTurn` resume. `reject` maps to worker `abort`.
+        Temporal Update/Signal is the later stand-in target.
+      x-unimplemented: false
       parameters:
         - $ref: "#/components/parameters/ApprovalId"
       requestBody:
@@ -252,7 +319,13 @@ paths:
             schema:
               $ref: "#/components/schemas/DecideApprovalRequest"
       responses:
-        "501":
+        "200":
+          description: Updated approval
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Approval"
+        "400":
           $ref: "#/components/responses/NotImplemented"
         "401":
           $ref: "#/components/responses/Unauthorized"
@@ -530,6 +603,99 @@ components:
     RoomState:
       type: string
       enum: [idle, running, awaiting_approval, closed]
+    Room:
+      type: object
+      additionalProperties: false
+      required: [id, kind, title, state, createdAt]
+      properties:
+        id:
+          type: string
+        kind:
+          $ref: "#/components/schemas/RoomKind"
+        title:
+          type: string
+        state:
+          $ref: "#/components/schemas/RoomState"
+        sessionId:
+          type: string
+        createdAt:
+          type: string
+    RoomList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Room"
+    ChatMessage:
+      type: object
+      additionalProperties: false
+      required: [id, roomId, role, text, createdAt]
+      properties:
+        id:
+          type: string
+        roomId:
+          type: string
+        role:
+          type: string
+        type:
+          type: string
+        text:
+          type: string
+        createdAt:
+          type: string
+    MessageList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatMessage"
+    Approval:
+      type: object
+      additionalProperties: false
+      required: [id, roomId, status, createdAt]
+      properties:
+        id:
+          type: string
+        roomId:
+          type: string
+        sessionId:
+          type: string
+        approvalRequestId:
+          type: string
+        toolName:
+          type: string
+        reason:
+          type: string
+        status:
+          type: string
+        decision:
+          type: string
+        createdAt:
+          type: string
+    ApprovalList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Approval"
+    PostMessageResponse:
+      type: object
+      additionalProperties: false
+      required: [room]
+      properties:
+        room:
+          $ref: "#/components/schemas/Room"
+        approval:
+          $ref: "#/components/schemas/Approval"
     CloudAgentJobState:
       type: string
       enum: [queued, running, awaiting_approval, succeeded, failed, cancelled]

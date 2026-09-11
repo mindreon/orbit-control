@@ -10,12 +10,12 @@ Read [README.md](./README.md) and [ARCHITECTURE.md](./ARCHITECTURE.md) before ad
 
 The agent loop is **dsh on orbit-worker**, not this process. Do not add dsh, Pi, or LLM SDKs here.
 
-## W0 rules (still in force until a later wave removes them)
+## W1 rules
 
-- **Zero business logic.** Docs, contract stubs, and the `501` health mux only.
-- **No real auth, DB, LLM, or Temporal client.**
+- In-memory rooms, messages, HITL, and SSE are allowed. Still no OAuth or DB.
+- Temporal is optional: set `TEMPORAL_ADDRESS` to drive `RoomWorkflow` (orbit-orch); otherwise control calls orbit-worker over HTTP.
 - **No tenant secret plaintext** in logs, fixtures, or OpenAPI examples.
-- Do not implement OAuth, migrations-with-data, or encryption yet.
+- Do not import dsh, Pi, or LLM SDKs here.
 
 ## Where things go
 
