@@ -3,9 +3,11 @@ package httpapi
 import (
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/mindreon/orbit-control/internal/app"
 	"github.com/mindreon/orbit-control/internal/internalauth"
@@ -58,13 +60,27 @@ func Handler() http.Handler {
 	}
 	w := worker.New(base)
 	if addr := os.Getenv("TEMPORAL_ADDRESS"); addr != "" {
-		oc, err := orch.Dial(addr, os.Getenv("TEMPORAL_NAMESPACE"), os.Getenv("TEMPORAL_TASK_QUEUE"))
+		oc, err := dialOrch(addr, os.Getenv("TEMPORAL_NAMESPACE"), os.Getenv("TEMPORAL_TASK_QUEUE"))
 		if err != nil {
 			panic("temporal dial: " + err.Error())
 		}
 		return HandlerWith(app.NewWithOrch(w, oc))
 	}
 	return HandlerWith(app.New(w))
+}
+
+func dialOrch(addr, namespace, taskQueue string) (*orch.Client, error) {
+	var last error
+	for attempt := 1; attempt <= 30; attempt++ {
+		oc, err := orch.Dial(addr, namespace, taskQueue)
+		if err == nil {
+			return oc, nil
+		}
+		last = err
+		log.Printf("temporal not ready (%d/30): %v", attempt, err)
+		time.Sleep(time.Second)
+	}
+	return nil, last
 }
 
 func HandlerWith(runtime *app.App) http.Handler {
