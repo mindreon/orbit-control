@@ -83,14 +83,14 @@ func TestRoomHITLAllowCompletesTurn(t *testing.T) {
 	if room.PermissionPreset != app.PermissionWorkspaceWrite {
 		t.Fatalf("permission preset %q", room.PermissionPreset)
 	}
-	if room.Runtime.Kernel != "dsh" || room.Runtime.Protocol != "acp" || room.Runtime.Isolation != "process" {
+	if room.Runtime.Kernel != app.RuntimeKernel || room.Runtime.Protocol != "" || room.Runtime.Isolation != "process" {
 		t.Fatalf("runtime snapshot = %+v", room.Runtime)
 	}
 
 	rec = httptest.NewRecorder()
 	req = internalReq(http.MethodPost, "/internal/events",
 		`{"eventId":"ev-worker-1","occurredAt":"2026-09-11T00:00:00Z","type":"tool.call","roomId":"`+
-			room.ID+`","sessionId":"`+room.SessionID+`","toolName":"bash","status":"pending"}`)
+			room.ID+`","sessionId":"`+room.SessionID+`","toolName":"bash","status":"pending","runtime":"agentscope","protocol":"session"}`)
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("ingest %d %s", rec.Code, rec.Body.String())
@@ -182,6 +182,9 @@ func TestRoomHITLAllowCompletesTurn(t *testing.T) {
 	for _, item := range activity.Items {
 		if item.ID == "ev-worker-1" && item.Source == "worker" && item.ToolName == "bash" {
 			foundWorkerEvent = true
+			if item.Runtime != "agentscope" || item.Protocol != "session" {
+				t.Fatalf("worker event runtime = %+v", item)
+			}
 		}
 	}
 	if !foundWorkerEvent {
@@ -190,6 +193,9 @@ func TestRoomHITLAllowCompletesTurn(t *testing.T) {
 	last := activity.Items[len(activity.Items)-1]
 	if last.Type != "room.steered" || last.Source != "control" || last.PermissionPreset != app.PermissionWorkspaceWrite {
 		t.Fatalf("last activity = %+v", last)
+	}
+	if last.Runtime != app.RuntimeKernel || last.Protocol != "" {
+		t.Fatalf("control event still forces dsh/acp: %+v", last)
 	}
 }
 
@@ -203,6 +209,63 @@ func TestCreateRoomValidatesRuntimePolicy(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+func TestCreateRoomAcceptsReadOnly(t *testing.T) {
+	var opened string
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		raw, _ := io.ReadAll(r.Body)
+		opened = string(raw)
+		_, _ = io.WriteString(w, `{"sessionId":"sess-ro"}`)
+	}))
+	defer fake.Close()
+
+	h := HandlerWith(app.New(worker.New(fake.URL)))
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/rooms", strings.NewReader(
+		`{"kind":"solo","permissionPreset":"read-only"}`,
+	))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create room %d %s", rec.Code, rec.Body.String())
+	}
+	var room app.Room
+	if err := json.NewDecoder(rec.Body).Decode(&room); err != nil {
+		t.Fatal(err)
+	}
+	if room.PermissionPreset != app.PermissionReadOnly {
+		t.Fatalf("permission preset %q", room.PermissionPreset)
+	}
+	if room.Runtime.Kernel != app.RuntimeKernel || room.Runtime.Protocol == "acp" {
+		t.Fatalf("runtime snapshot = %+v", room.Runtime)
+	}
+	if !strings.Contains(opened, `"permissionPreset":"read-only"`) {
+		t.Fatalf("openSession payload = %s", opened)
+	}
+}
+
+func TestCreateCloudAgentAcceptsReadOnlyPerJob(t *testing.T) {
+	h := HandlerWith(app.New(worker.New("")))
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/cloud-agents", strings.NewReader(
+		`{"repoUrl":"https://example.test/repo.git","prompt":"look","permissionPreset":"read-only"}`,
+	))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create job %d %s", rec.Code, rec.Body.String())
+	}
+	var job struct {
+		PermissionPreset string `json:"permissionPreset"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&job); err != nil {
+		t.Fatal(err)
+	}
+	if job.PermissionPreset != app.PermissionReadOnly {
+		t.Fatalf("permission preset %q", job.PermissionPreset)
 	}
 }
 

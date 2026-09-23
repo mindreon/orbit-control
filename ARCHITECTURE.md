@@ -92,15 +92,17 @@ known Room are rejected.
 
 ### 6. Permission selection is an execution snapshot
 
-- Public callers select one closed preset:
-  `workspace-write` (default) or explicit `danger-full-access`.
+- Public callers select one closed preset on that room or cloud-agent job:
+  `workspace-write` (default), `read-only`, or explicit `danger-full-access`.
+  Full access is per room or job, not a global client switch.
 - Control validates and stores the value with the Room; the direct and Temporal
   paths both forward it to `openSession`.
-- The worker validates it again and launches that session's dsh child with a
-  process-local `DSH_PERMISSION_MODE`.
+- The worker validates it again and applies it to that AgentScope session.
+- The room snapshot records kernel `agentscope`. It does not require `dsh` or
+  protocol `acp`.
 - The value is visible in Room and activity responses so operators can audit
   the effective starting policy.
-- This dsh permission is not a substitute for future tenant/workspace
+- This permission preset is not a substitute for future tenant/workspace
   authorization in control.
 
 ## Contract links
