@@ -24,9 +24,25 @@ const (
 	RoomClosed           RoomState = "closed"
 
 	PermissionWorkspaceWrite   = "workspace-write"
+	PermissionReadOnly         = "read-only"
 	PermissionDangerFullAccess = "danger-full-access"
-	maxActivityPerRoom         = 500
+	// RuntimeKernel is the live worker. Rooms do not require dsh or ACP.
+	RuntimeKernel      = "agentscope"
+	maxActivityPerRoom = 500
 )
+
+func normalizePermissionPreset(raw string) (string, error) {
+	preset := strings.TrimSpace(raw)
+	if preset == "" {
+		preset = PermissionWorkspaceWrite
+	}
+	switch preset {
+	case PermissionWorkspaceWrite, PermissionReadOnly, PermissionDangerFullAccess:
+		return preset, nil
+	default:
+		return "", fmt.Errorf("permissionPreset must be workspace-write, read-only, or danger-full-access")
+	}
+}
 
 type RuntimeSnapshot struct {
 	Kernel    string `json:"kernel"`
@@ -156,12 +172,9 @@ func (a *App) CreateRoom(ctx context.Context, input CreateRoomInput) (*Room, err
 	if kind != "solo" && kind != "collab" {
 		return nil, fmt.Errorf("kind must be solo or collab")
 	}
-	permissionPreset := strings.TrimSpace(input.PermissionPreset)
-	if permissionPreset == "" {
-		permissionPreset = PermissionWorkspaceWrite
-	}
-	if permissionPreset != PermissionWorkspaceWrite && permissionPreset != PermissionDangerFullAccess {
-		return nil, fmt.Errorf("permissionPreset must be workspace-write or danger-full-access")
+	permissionPreset, err := normalizePermissionPreset(input.PermissionPreset)
+	if err != nil {
+		return nil, err
 	}
 	room := &Room{
 		ID:               id("rm_"),
@@ -170,8 +183,7 @@ func (a *App) CreateRoom(ctx context.Context, input CreateRoomInput) (*Room, err
 		State:            RoomIdle,
 		PermissionPreset: permissionPreset,
 		Runtime: RuntimeSnapshot{
-			Kernel:    "dsh",
-			Protocol:  "acp",
+			Kernel:    RuntimeKernel,
 			Isolation: "process",
 		},
 		CreatedAt: now(),
@@ -216,9 +228,9 @@ func (a *App) CreateRoom(ctx context.Context, input CreateRoomInput) (*Room, err
 	}
 	if persona != nil {
 		payload["persona"] = map[string]any{
-			"id":           persona.ID,
-			"name":         persona.Name,
-			"instructions": persona.Instructions,
+			"id":              persona.ID,
+			"name":            persona.Name,
+			"instructions":    persona.Instructions,
 			"mcpConnectorIds": persona.McpConnectorIDs,
 		}
 	}
@@ -637,6 +649,17 @@ func (a *App) publish(roomID string, ev Event, source string) {
 		return
 	}
 	a.sequences[roomID]++
+	runtimeName := eventString(ev, "runtime")
+	if runtimeName == "" {
+		runtimeName = room.Runtime.Kernel
+	}
+	if runtimeName == "" {
+		runtimeName = RuntimeKernel
+	}
+	protocol := eventString(ev, "protocol")
+	if protocol == "" {
+		protocol = room.Runtime.Protocol
+	}
 	item := ActivityEvent{
 		ID:                eventID,
 		Sequence:          a.sequences[roomID],
@@ -645,8 +668,8 @@ func (a *App) publish(roomID string, ev Event, source string) {
 		SessionID:         eventString(ev, "sessionId"),
 		TurnID:            eventString(ev, "turnId"),
 		Source:            source,
-		Runtime:           "dsh",
-		Protocol:          "acp",
+		Runtime:           runtimeName,
+		Protocol:          protocol,
 		Role:              eventString(ev, "role"),
 		Text:              eventString(ev, "text"),
 		ToolName:          eventString(ev, "toolName"),

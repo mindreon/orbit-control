@@ -14,8 +14,9 @@ info:
     - **Multi-agent** — rooms `kind=collab`, per-room agent catalog (later)
     - **Cloud Agent** — `/v1/cloud-agents` jobs (later)
 
-    The agent loop is hosted on orbit-worker as ACP (`dsh --profile acp` or the
-    bundled mock ACP). This API never exposes dsh, Temporal, or worker URLs.
+    The agent loop runs on orbit-worker as AgentScope. This API does not
+    require `kernel=dsh` or `protocol=acp`, and it never exposes Temporal
+    or worker URLs.
 
     `Unauthorized` (401) and `Forbidden` (403) are reserved shapes for later
     Sentinel tests. They are not emitted in W1.
@@ -92,10 +93,12 @@ paths:
       operationId: createRoom
       summary: Create a room
       description: |
-        `kind=solo` is the super single-agent room. Opens an ACP session on
-        orbit-worker (mock ACP by default). `permissionPreset` is pinned into
-        the room runtime snapshot and passed to the dsh child. `kind=collab`
-        is accepted but still one parent session in W1.
+        `kind=solo` is the super single-agent room. Opens a session on
+        orbit-worker. `permissionPreset` is pinned on that room and forwarded
+        with the session (`workspace-write`, `read-only`, or
+        `danger-full-access`). `danger-full-access` applies only to this
+        room, not as a global client switch. `kind=collab` is accepted but
+        still one parent session in W1.
       x-unimplemented: false
       requestBody:
         required: true
@@ -638,10 +641,12 @@ components:
       description: solo = super single-agent; collab = multi-agent catalog in one room
     PermissionPreset:
       type: string
-      enum: [workspace-write, danger-full-access]
+      enum: [workspace-write, read-only, danger-full-access]
       description: |
-        Maps to dsh permission presets on the worker. Default workspace-write
-        (sandbox workspace-write + approval ask). danger-full-access is explicit.
+        Closed presets the AgentScope worker already accepts. Default is
+        `workspace-write`. `read-only` is explore-only. `danger-full-access`
+        is explicit and applies only to the room or cloud-agent job that
+        sets it — not a global client switch.
     RoomState:
       type: string
       enum: [idle, running, awaiting_approval, closed]
@@ -673,14 +678,19 @@ components:
       properties:
         kernel:
           type: string
-          enum: [dsh]
+          description: |
+            Runtime identity on the room snapshot. The live worker is
+            `agentscope`. `dsh` is not required.
+          example: agentscope
         protocol:
           type: string
-          enum: [acp]
+          description: |
+            Session protocol when the runtime has one. `acp` is not required.
+            AgentScope rooms leave this empty; they do not speak ACP.
         isolation:
           type: string
           enum: [process]
-          description: One dsh ACP child process per Orbit session
+          description: Per-session process isolation recorded on the room snapshot.
     RoomList:
       type: object
       additionalProperties: false
@@ -781,10 +791,13 @@ components:
           enum: [control, worker]
         runtime:
           type: string
-          enum: [dsh]
+          description: |
+            Runtime that produced the event. The AgentScope worker sends
+            `agentscope`. `dsh` is not required.
+          example: agentscope
         protocol:
           type: string
-          enum: [acp]
+          description: Session protocol when present. `acp` is not required.
         role:
           type: string
         text:
@@ -947,10 +960,13 @@ components:
           format: date-time
         runtime:
           type: string
-          enum: [dsh]
+          description: |
+            Runtime that produced the event. The AgentScope worker sends
+            `agentscope`. `dsh` is not required.
+          example: agentscope
         protocol:
           type: string
-          enum: [acp]
+          description: Session protocol when present. `acp` is not required.
         permissionPreset:
           $ref: "#/components/schemas/PermissionPreset"
   responses:

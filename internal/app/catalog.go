@@ -201,12 +201,9 @@ func (a *App) CreateCloudAgent(ctx context.Context, input CreateCloudAgentInput)
 	if repo == "" || prompt == "" {
 		return nil, fmt.Errorf("repoUrl and prompt are required")
 	}
-	preset := strings.TrimSpace(input.PermissionPreset)
-	if preset == "" {
-		preset = PermissionWorkspaceWrite
-	}
-	if preset != PermissionWorkspaceWrite && preset != PermissionDangerFullAccess {
-		return nil, fmt.Errorf("permissionPreset must be workspace-write or danger-full-access")
+	preset, err := normalizePermissionPreset(input.PermissionPreset)
+	if err != nil {
+		return nil, err
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -231,7 +228,6 @@ func (a *App) CreateCloudAgent(ctx context.Context, input CreateCloudAgentInput)
 	cp := *job
 	return &cp, nil
 }
-
 
 func (a *App) CompositionForRoom(personaID, grantID string) (*Persona, []*McpConnector, map[string]string, error) {
 	a.mu.Lock()
