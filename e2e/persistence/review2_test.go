@@ -109,31 +109,68 @@ func decideWorker(t *testing.T) (*httptest.Server, *atomic.Int32, *atomic.Int32)
 	return srv, &resolves, &resumes
 }
 
-func concurrentDecides(t *testing.T, base, approvalID, u string) []int {
+const racers = 8
+
+// concurrentDecides fires racers decisions per approval, all released at
+// the same instant, and returns each approval's sorted status codes.
+func concurrentDecides(t *testing.T, base string, approvalIDs []string, u string) [][]int {
 	var wg sync.WaitGroup
 	start := make(chan struct{})
-	statuses := make([]int, 2)
-	for i := range statuses {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			<-start
-			req, _ := http.NewRequest(http.MethodPost, base+"/v1/approvals/"+approvalID+"/decide", strings.NewReader(`{"decision":"allow"}`))
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set(userHeader, u)
-			res, err := http.DefaultClient.Do(req)
-			if err != nil {
-				return
-			}
-			_, _ = io.Copy(io.Discard, res.Body)
-			res.Body.Close()
-			statuses[i] = res.StatusCode
-		}(i)
+	out := make([][]int, len(approvalIDs))
+	for a := range approvalIDs {
+		out[a] = make([]int, racers)
+	}
+	for a, approvalID := range approvalIDs {
+		for i := 0; i < racers; i++ {
+			wg.Add(1)
+			go func(a, i int, approvalID string) {
+				defer wg.Done()
+				<-start
+				req, _ := http.NewRequest(http.MethodPost, base+"/v1/approvals/"+approvalID+"/decide", strings.NewReader(`{"decision":"allow"}`))
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set(userHeader, u)
+				res, err := http.DefaultClient.Do(req)
+				if err != nil {
+					return
+				}
+				_, _ = io.Copy(io.Discard, res.Body)
+				res.Body.Close()
+				out[a][i] = res.StatusCode
+			}(a, i, approvalID)
+		}
 	}
 	close(start)
 	wg.Wait()
-	sort.Ints(statuses)
-	return statuses
+	for a := range out {
+		sort.Ints(out[a])
+	}
+	return out
+}
+
+func oneWinner(statuses [][]int) bool {
+	for _, s := range statuses {
+		if len(s) != racers || s[0] != 200 {
+			return false
+		}
+		for _, code := range s[1:] {
+			if code != 409 {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func expectedStatuses(n int) [][]int {
+	one := []int{200}
+	for i := 1; i < racers; i++ {
+		one = append(one, 409)
+	}
+	out := make([][]int, n)
+	for i := range out {
+		out[i] = one
+	}
+	return out
 }
 
 // Review M-d: two concurrent decisions → exactly one 2xx, one 409, and one
@@ -167,34 +204,54 @@ func TestReviewMdSingleWinnerDecide(t *testing.T) {
 	}
 
 	// Direct worker path: the stub worker is the outbound record.
+	const rounds = 5
 	wk, resolves, resumes := decideWorker(t)
-	srv := startServer(t, serverOpts{tenant: "t-md-worker", maxConns: 4, workerURL: wk.URL})
-	ap := park(srv, "t-md-worker", "u-md", "worker")
-	statuses := concurrentDecides(t, srv.base, ap, "u-md")
+	srv := startServer(t, serverOpts{tenant: "t-md-worker", maxConns: 16, workerURL: wk.URL})
+	var aps []string
+	for i := 0; i < rounds; i++ {
+		aps = append(aps, park(srv, "t-md-worker", "u-md", fmt.Sprintf("worker-%d", i)))
+	}
+	statuses := concurrentDecides(t, srv.base, aps, "u-md")
+	states := []string{}
+	for _, id := range aps {
+		states = append(states, approvalState(id))
+	}
+	allDecided := true
+	for _, st := range states {
+		allDecided = allDecided && st == "decided:allow"
+	}
 	record(t, caseInput{ID: "REVIEW-Md/worker/concurrent-decide", Contract: c,
-		Description: "two concurrent allow decisions: exactly one 2xx and one 409; the worker receives exactly one decision (stub worker counts resolveApproval and the resumed runTurn)",
-		Steps:       []string{"POST /v1/approvals/{id}/decide twice at the same instant as u-md", "count stub-worker resolveApproval and resume calls", "owner reads approvals.status"},
-		Request:     httpReq{Method: "POST", Path: "/v1/approvals/" + ap + "/decide", Headers: user("u-md"), Body: `{"decision":"allow"}`},
-		Expected:    map[string]any{"statusesSorted": []int{200, 409}, "workerResolveApproval": 1, "workerResume": 1, "approval": "decided:allow"},
-		Actual:      map[string]any{"statusesSorted": statuses, "workerResolveApproval": resolves.Load(), "workerResume": resumes.Load(), "approval": approvalState(ap)},
-		Pass:        len(statuses) == 2 && statuses[0] == 200 && statuses[1] == 409 && resolves.Load() == 1 && resumes.Load() == 1 && approvalState(ap) == "decided:allow"})
+		Description: fmt.Sprintf("%d approvals × %d concurrent allow decisions: per approval exactly one 2xx and the rest 409; the worker receives exactly one decision per approval (stub worker counts resolveApproval and the resumed runTurn)", rounds, racers),
+		Steps:       []string{fmt.Sprintf("release %d POST /v1/approvals/{id}/decide per approval at the same instant as u-md", racers), "count stub-worker resolveApproval and resume calls", "owner reads approvals.status"},
+		Request:     httpReq{Method: "POST", Path: "/v1/approvals/{id}/decide", Headers: user("u-md"), Body: `{"decision":"allow"}`},
+		Expected:    map[string]any{"statusesSortedPerApproval": expectedStatuses(rounds), "workerResolveApproval": rounds, "workerResume": rounds, "approvalsDecidedAllow": true},
+		Actual:      map[string]any{"statusesSortedPerApproval": statuses, "workerResolveApproval": resolves.Load(), "workerResume": resumes.Load(), "approvalsDecidedAllow": allDecided},
+		Pass:        oneWinner(statuses) && resolves.Load() == rounds && resumes.Load() == rounds && allDecided})
+	ap := aps[0]
 	srv.check(t, "REVIEW-Md/worker/decide-again", c, "a later decision on the decided approval → 409 APPROVAL_NOT_PENDING, nothing sent",
 		httpReq{Method: "POST", Path: "/v1/approvals/" + ap + "/decide", Headers: user("u-md"), Body: `{"decision":"reject"}`},
 		httpExp{Status: 409, BodyIncludes: []string{"APPROVAL_NOT_PENDING"}})
 	record(t, caseInput{ID: "REVIEW-Md/worker/no-extra-delivery", Contract: c, Description: "the rejected later decision reached neither resolveApproval nor resume",
-		Request: "stub worker counters", Expected: map[string]int32{"resolveApproval": 1, "resume": 1},
-		Actual: map[string]int32{"resolveApproval": resolves.Load(), "resume": resumes.Load()}, Pass: resolves.Load() == 1 && resumes.Load() == 1})
+		Request: "stub worker counters", Expected: map[string]int32{"resolveApproval": rounds, "resume": rounds},
+		Actual: map[string]int32{"resolveApproval": resolves.Load(), "resume": resumes.Load()}, Pass: resolves.Load() == rounds && resumes.Load() == rounds})
 
 	// Temporal path: the stub Orchestrator's Decide Update is the record.
 	so := &stubOrch{askApproval: true, decideDelay: 300 * time.Millisecond}
-	osrv := startServer(t, serverOpts{tenant: "t-md-orch", maxConns: 4, orch: so})
-	oap := park(osrv, "t-md-orch", "u-md-orch", "orch")
-	ostatuses := concurrentDecides(t, osrv.base, oap, "u-md-orch")
+	osrv := startServer(t, serverOpts{tenant: "t-md-orch", maxConns: 16, orch: so})
+	var oaps []string
+	for i := 0; i < rounds; i++ {
+		oaps = append(oaps, park(osrv, "t-md-orch", "u-md-orch", fmt.Sprintf("orch-%d", i)))
+	}
+	ostatuses := concurrentDecides(t, osrv.base, oaps, "u-md-orch")
+	odecided := true
+	for _, id := range oaps {
+		odecided = odecided && approvalState(id) == "decided:allow"
+	}
 	record(t, caseInput{ID: "REVIEW-Md/orch/concurrent-decide", Contract: c,
-		Description: "Temporal path: two concurrent allow decisions → one 2xx, one 409; exactly one decide Update is sent (stub Orchestrator counts Decide)",
-		Steps:       []string{"POST /v1/approvals/{id}/decide twice at the same instant as u-md-orch", "count stub Orchestrator Decide calls", "owner reads approvals.status"},
-		Request:     httpReq{Method: "POST", Path: "/v1/approvals/" + oap + "/decide", Headers: user("u-md-orch"), Body: `{"decision":"allow"}`},
-		Expected:    map[string]any{"statusesSorted": []int{200, 409}, "orchDecideUpdates": 1, "approval": "decided:allow"},
-		Actual:      map[string]any{"statusesSorted": ostatuses, "orchDecideUpdates": so.decides.Load(), "approval": approvalState(oap)},
-		Pass:        len(ostatuses) == 2 && ostatuses[0] == 200 && ostatuses[1] == 409 && so.decides.Load() == 1 && approvalState(oap) == "decided:allow"})
+		Description: fmt.Sprintf("Temporal path: %d approvals × %d concurrent allow decisions → one 2xx and the rest 409 per approval; exactly one decide Update per approval (stub Orchestrator counts Decide)", rounds, racers),
+		Steps:       []string{fmt.Sprintf("release %d POST /v1/approvals/{id}/decide per approval at the same instant as u-md-orch", racers), "count stub Orchestrator Decide calls", "owner reads approvals.status"},
+		Request:     httpReq{Method: "POST", Path: "/v1/approvals/{id}/decide", Headers: user("u-md-orch"), Body: `{"decision":"allow"}`},
+		Expected:    map[string]any{"statusesSortedPerApproval": expectedStatuses(rounds), "orchDecideUpdates": rounds, "approvalsDecidedAllow": true},
+		Actual:      map[string]any{"statusesSortedPerApproval": ostatuses, "orchDecideUpdates": so.decides.Load(), "approvalsDecidedAllow": odecided},
+		Pass:        oneWinner(ostatuses) && so.decides.Load() == rounds && odecided})
 }
