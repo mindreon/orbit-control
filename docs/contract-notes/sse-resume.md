@@ -68,9 +68,8 @@ Every message is a default SSE `message` event; clients switch on
   locks; reads filter by room.
 - Within a room ids strictly increase; they are not contiguous (other rooms'
   events take the ids in between).
-- The store sits behind `app.EventLog` (`MemoryEventLog` in W1). A later
-  persistence PR moves the sequence to a durable store behind the same
-  interface; the replay and reset rules below do not change.
+- The store sits behind `app.EventLog` (`MemoryEventLog` in W1). From §18 on,
+  ids are a per-task increasing `seq`; ids are not comparable across tasks.
 - **Restart.** The counter lives only in the control process. After a restart
   every previously issued id is `unknown` and yields `reset`. Rooms are in
   memory too, so today the room itself is usually gone after a restart and the

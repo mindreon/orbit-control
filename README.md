@@ -129,26 +129,23 @@ curl -N -H 'Last-Event-ID: 42' \
 ### End-to-end checks
 
 QA sign-off (E-LE-1 to E-LE-4) runs against the real stack: a Temporal dev
-server, `orbit-orch` and `orbit-worker` from an
-[orbit-runtime](https://github.com/mindreon/orbit-runtime) checkout, and two
-`orbit-control` processes built from this tree. It writes
-`artifacts/e2e-real-stack.json` (commit, component versions, per case id,
-steps, expected, actual, pass; no timestamps, ports, or random ids). The `e2e`
-workflow runs it twice on the PR head, requires identical reports, scans them
-for secrets, and uploads `artifacts/`.
+server, `orbit-orch` and `orbit-worker` as containers of the
+[orbit-runtime](https://github.com/mindreon/orbit-runtime) image published for
+a pinned runtime commit (run by digest), and two `orbit-control` processes
+built from this tree. It writes `artifacts/e2e-real-stack.json` (control
+commit, component versions including the runtime image digest, and per case
+id, steps, expected, actual, pass; no timestamps, ports, or random ids). The
+`e2e` workflow runs it twice on the PR head, requires byte-identical reports,
+scans the reports and all process logs for secrets, and uploads both.
+Requires Docker.
 
 ```bash
-# orbit-runtime at the commit pinned in .github/workflows/e2e.yml
-git clone https://github.com/mindreon/orbit-runtime ../orbit-runtime
-(cd ../orbit-runtime && cat uv.lock.parts/part-* > uv.lock && UV_PYTHON=3.11 uv sync --frozen --no-dev)
-go run ./e2e/realstack run -runtime ../orbit-runtime
-go run ./e2e/realstack scan artifacts/e2e-real-stack.json
+# runtime commit pinned as ORBIT_RUNTIME_REF in .github/workflows/e2e.yml
+go run ./e2e/realstack run -runtime-commit f8addbccc8f3ffc360ddccf3717f4d094c39f7ee
+go run ./e2e/realstack scan artifacts/e2e-real-stack.json e2e-logs/*.log
 ```
 
-`go run ./e2e/lasteventid` checks the rest of the SSE contract (resets for
-malformed, unknown, and expired ids, restart, headers, heartbeat) against the
-real binary with a stub worker. What each check covers, and what is
-isolation-tested instead, is in
+What each case covers, and which failure modes have no automated test, is in
 [docs/testing/last-event-id-failure-modes.md](./docs/testing/last-event-id-failure-modes.md).
 
 ## Non-goals (W1)
