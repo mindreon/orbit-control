@@ -80,8 +80,9 @@ Default listen address is `:8080` (override with `PORT`).
 ## Room events (SSE) and resume
 
 `GET /v1/rooms/{roomId}/events` streams the room's normalized events. Every
-message has `id: <roomId>:<sequence>`; `sequence` is the per-room
-`ActivityEvent.sequence`, persisted with the audit log.
+message has `id: <sequence>`: the event's id from one global sequence shared
+by all rooms (`ActivityEvent.sequence`, persisted with the audit log). Within
+a room ids strictly increase but are not contiguous.
 
 To resume after a disconnect, send the last id you received as the
 `Last-Event-ID` header (EventSource does this on auto-reconnect) or as
@@ -89,18 +90,24 @@ To resume after a disconnect, send the last id you received as the
 retained events after that id, in order, then continues live with no gaps or
 duplicates. Without a cursor the stream is live-only.
 
-A cursor that is malformed, belongs to another room, is beyond the room head,
-or is older than the retained window (last 500 events) gets a `reset` message
-instead (`{"type":"reset","reason":"malformed|unknown|expired","sequence":N}`):
+A cursor that is malformed, is not an event of this room, is beyond the global
+head, or is older than the retained window (last 500 events per room) gets a
+`reset` message instead
+(`{"type":"reset","reason":"malformed|unknown|expired","sequence":N}`):
 refetch the room, messages, and activity, then keep reading.
 
 `assistant.delta` drafts are live-only: never persisted, never replayed.
 Heartbeat comments are sent about every 15s. See
-[docs/openapi.yaml](./docs/openapi.yaml) and
-[docs/contract-notes/sse-resume.md](./docs/contract-notes/sse-resume.md).
+[docs/openapi.yaml](./docs/openapi.yaml),
+[docs/contract-notes/sse-resume.md](./docs/contract-notes/sse-resume.md), and
+the target Postgres table in [docs/schema/room_events.sql](./docs/schema/room_events.sql).
+
+P0 supports a single control instance only: the replay-to-live handoff uses
+this process's in-memory fan-out. For multiple replicas, live fan-out moves to
+Postgres LISTEN/NOTIFY or NATS, while replay logic stays unchanged.
 
 ```bash
-curl -N -H 'Last-Event-ID: rm_0123456789abcdef:42' \
+curl -N -H 'Last-Event-ID: 42' \
   http://127.0.0.1:8080/v1/rooms/rm_0123456789abcdef/events
 ```
 

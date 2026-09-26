@@ -20,26 +20,44 @@ Every message is a default SSE `message` event. Clients switch on `data.type`:
 
 ## Ids
 
-- `id: <roomId>:<sequence>` on every message.
-- `sequence` is `ActivityEvent.sequence`: per room, strictly increasing by 1
-  per durable event, persisted with each audit line and recovered from the
-  audit log when control first touches the room.
-- The room prefix scopes the id to one task. An id from task A sent to task B
-  is `unknown` and yields a `reset`; it is never read as a B sequence.
-- `assistant.delta` and `reset` repeat the id of the last durable event the
-  connection has delivered (for `reset`, the room head), so a browser's
-  `lastEventId` always names a durable event.
+- `id: <sequence>` on every message, where `sequence` is
+  `ActivityEvent.sequence`: the event's id from **one global sequence** shared
+  by all rooms. There are no per-room counters or per-room locks.
+- Global ids are monotonic, so within a room they strictly increase; they are
+  not contiguous (other rooms' events take the ids in between).
+- Durable table (target): `docs/schema/room_events.sql` —
+  `id bigint GENERATED ALWAYS AS IDENTITY`, `task_id`, and an index on
+  `(task_id, id)` for filtered replay. W1 control has no database driver; its
+  file store keeps the same shape (a global id recovered from the audit logs
+  at startup, and each room's events ordered by id).
+- `assistant.delta` and `reset` repeat the id of the last durable event of
+  this room the connection has delivered (for `reset`, the room's latest event
+  id), so a browser's `lastEventId` always names an event of this room.
 
 ## Resume
 
 1. Cursor: `Last-Event-ID` header, else `lastEventId` query parameter. The
    header wins because EventSource auto-reconnect updates the header but not
    the URL. An empty value means no cursor: live-only, same as before.
-2. Control subscribes to the live buffer, then reads retained history with
-   `sequence > cursor`, writes it in order, then drains the buffer skipping
-   `sequence <= last written`. If the live buffer ever overflows, the stream
-   re-reads history from its cursor, so there are no gaps.
-3. Only the requested room's events are read; nothing crosses rooms.
+2. The cursor must be `0` (before the room's first event) or the id of an event
+   of the requested room (`WHERE task_id = $room AND id = $cursor`). A valid
+   global id that belongs to another room is `unknown`, so task A's id can
+   never select task B's events.
+3. Handoff: subscribe to the live buffer, read this room's retained history
+   with `id > cursor` (`WHERE task_id = $room AND id > $cursor ORDER BY id`),
+   write it in order, then drain the buffer skipping `id <= last written`. If
+   the live buffer ever overflows, the stream re-reads history from its cursor
+   before delivering the next buffered frame, so there are no gaps.
+
+**Deployment constraint.** P0 supports a single control instance only; for
+multiple replicas, live fan-out moves to Postgres LISTEN/NOTIFY or NATS, while
+replay logic stays unchanged.
+
+**Postgres caveat.** Identity ids are allocated at insert but become visible
+at commit, so concurrent writers can commit id N+1 before N. When events move
+to Postgres, inserts must be serialized (or replay must stop below the oldest
+in-flight id); otherwise `id > cursor` can skip an event. W1 allocates,
+persists, and fans out under one lock, so ids are visible in order.
 
 ## `reset`
 
@@ -51,14 +69,14 @@ Sent as the first message when the cursor cannot be honoured:
 
 | `reason` | When |
 | --- | --- |
-| `malformed` | Not exactly `<roomId>:<canonical decimal>` (e.g. `42`, `rm_x:abc`, `rm_x:042`). |
-| `unknown` | Well-formed but another room's id, or `sequence` beyond this room's head. |
-| `expired` | Older than the earliest retained event (activity keeps the last 500 per room). |
+| `malformed` | Not a canonical decimal id (e.g. `abc`, `042`, `-1`, `rm_x:5`). |
+| `unknown` | Not an event of this room (e.g. another room's id), or beyond the global head. |
+| `expired` | An event of this room older than the earliest retained event (activity keeps the last 500 per room). |
 
-Client action: drop local room state, refetch `GET /v1/rooms/{roomId}`,
-`/messages`, and `/activity`, then keep reading the same connection. It
-continues live after `sequence`; dedupe the refetch against the stream by
-`sequence`.
+`sequence` is this room's latest event id (0 if none). Client action: drop
+local room state, refetch `GET /v1/rooms/{roomId}`, `/messages`, and
+`/activity`, then keep reading the same connection. It continues live after
+`sequence`; dedupe the refetch against the stream by `sequence`.
 
 ## `assistant.delta`
 

@@ -90,13 +90,19 @@ only (see OpenAPI `OrbitEvent`). Control keeps a bounded in-memory timeline and
 fans SSE. Raw ACP `session/update` frames and events not associated with a
 known Room are rejected.
 
-SSE resume (`Last-Event-ID`) is scoped per room: ids are
-`<roomId>:<sequence>`, and a stream only ever reads its own room's history.
-The handler subscribes to the live buffer before reading history, so the
-handoff has no gaps or duplicates; a cursor it cannot honour yields an explicit
-`reset`, never a silent skip. `assistant.delta` is live-only and never enters
-the timeline or audit log. When user auth (contract §17) lands, it runs in
-`authorizeRoomStream` — before the room lookup, stream headers, and replay.
+SSE ids come from one global event sequence (no per-room counters or locks);
+the future Postgres table is `docs/schema/room_events.sql`, with a
+`(task_id, id)` index for filtered replay. Resume is scoped per room: a cursor
+must be an event of the requested room, and a stream only reads that room's
+history. The handler subscribes to the live buffer before reading history, so
+the handoff has no gaps or duplicates; a cursor it cannot honour yields an
+explicit `reset`, never a silent skip. `assistant.delta` is live-only and never
+enters the timeline or audit log. When user auth (contract §17) lands, it runs
+in `authorizeRoomStream` — before the room lookup, stream headers, and replay.
+
+P0 supports a single control instance only; for multiple replicas, live
+fan-out moves to Postgres LISTEN/NOTIFY or NATS, while replay logic stays
+unchanged.
 
 ### 6. Permission selection is an execution snapshot
 

@@ -263,25 +263,25 @@ paths:
         Frames are normalized JSON (not raw ACP). Every frame is a default
         SSE `message`; switch on `data.type`.
 
-        **Event ids.** Every message carries `id: <roomId>:<sequence>`, where
-        `sequence` is the per-room `ActivityEvent.sequence` (persisted with
-        the audit log, strictly increasing by 1 per durable event). The room
-        prefix scopes ids per task: an id from room A is never interpreted
-        against room B.
+        **Event ids.** Every message carries `id: <sequence>`, where
+        `sequence` is `ActivityEvent.sequence`: the event's id from one
+        global, persisted sequence shared by all rooms. Within a room ids
+        strictly increase but are not contiguous.
 
         **Resume.** Send the last id you received as the `Last-Event-ID`
         header (browsers do this on EventSource auto-reconnect) or as the
         `lastEventId` query parameter. The header wins when both are present.
-        Control replays retained events of this room with a greater sequence,
-        in order, then switches to live with no duplicates and no gaps.
-        Without a cursor the stream is live-only, as before.
+        The cursor must be `0` or the id of an event of **this** room.
+        Control replays this room's retained events with a greater id, in
+        order, then switches to live with no duplicates and no gaps. Without
+        a cursor the stream is live-only, as before.
 
-        **Reset.** If the cursor is malformed, unknown (another room's id, or
-        beyond this room's head), or older than the earliest retained event
-        (activity keeps the last 500 per room), the first message is a
-        `StreamReset` whose `id:` is the room head. Refetch the room,
-        messages, and activity, then keep reading this stream; it continues
-        live after `sequence`.
+        **Reset.** If the cursor is malformed, unknown (not an event of this
+        room — e.g. another room's id — or beyond the global head), or older
+        than the earliest retained event (activity keeps the last 500 per
+        room), the first message is a `StreamReset` whose `id:` is this
+        room's latest event id. Refetch the room, messages, and activity,
+        then keep reading this stream; it continues live after `sequence`.
 
         **assistant.delta** frames are live-only: not persisted, never
         replayed. Their `id:` repeats the id of the last durable event
@@ -296,17 +296,17 @@ paths:
         - name: Last-Event-ID
           in: header
           required: false
-          description: Resume cursor, `<roomId>:<sequence>`, as last received.
+          description: Resume cursor, the last event id received (decimal).
           schema:
             type: string
-          example: rm_0123456789abcdef:42
+          example: "42"
         - name: lastEventId
           in: query
           required: false
           description: EventSource fallback for `Last-Event-ID`; ignored when the header is set.
           schema:
             type: string
-          example: rm_0123456789abcdef:42
+          example: "42"
       responses:
         "200":
           description: |
@@ -840,8 +840,9 @@ components:
           type: integer
           format: int64
           description: |
-            Per-room, strictly increasing by 1, persisted with the audit log.
-            The SSE `id:` of this event is `<roomId>:<sequence>`.
+            Event id from one global, persisted sequence shared by all rooms;
+            strictly increasing within a room, not contiguous. This is the
+            event's SSE `id:`.
         type:
           type: string
           enum:
@@ -942,7 +943,7 @@ components:
         Control never silently skips: refetch `GET /v1/rooms/{roomId}`,
         `/messages`, and `/activity`, then keep reading the same stream,
         which continues live after `sequence`. The frame's `id:` is
-        `<roomId>:<sequence>`.
+        `sequence`.
       properties:
         type:
           type: string
@@ -953,13 +954,15 @@ components:
           type: string
           enum: [malformed, unknown, expired]
           description: |
-            `malformed` — not `<roomId>:<sequence>`. `unknown` — another
-            room's id, or beyond this room's head. `expired` — older than the
-            earliest retained event.
+            `malformed` — not a canonical decimal id. `unknown` — not an event
+            of this room (e.g. another room's id), or beyond the global head.
+            `expired` — older than the earliest retained event.
         sequence:
           type: integer
           format: int64
-          description: Room head at reset time; the stream resumes after it.
+          description: |
+            This room's latest event id at reset time (0 if none); the stream
+            resumes after it.
         occurredAt:
           type: string
           format: date-time
