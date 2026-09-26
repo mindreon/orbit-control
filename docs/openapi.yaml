@@ -6,8 +6,9 @@ info:
     W1 **live rooms**. Health, rooms, messages, approvals, room activity history,
     steer, and SSE events are implemented. Rooms, messages, approvals and
     idempotency keys are stored in Postgres when `ORBIT_CONTROL_DB_URL` is set
-    (in-memory otherwise, dev/test only); activity and SSE are still
-    in-process. Control calls orbit-worker HTTP activities directly, or
+    (in-memory otherwise, dev/test only). Durable events use a per-task seq
+    in that database; live SSE fan-out stays in-process. Control calls
+    orbit-worker HTTP activities directly, or
     RoomWorkflow when Temporal is configured. It still has no OAuth.
 
     Product surfaces:
