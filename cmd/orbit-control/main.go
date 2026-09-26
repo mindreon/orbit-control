@@ -10,8 +10,13 @@ import (
 
 func main() {
 	addr := listenAddr()
+	h, closeStore, err := httpapi.Handler()
+	if err != nil {
+		log.Fatalf("orbit-control: %v", err)
+	}
+	defer closeStore()
 	log.Printf("orbit-control listening on %s (rooms + HITL; TEMPORAL_ADDRESS enables RoomWorkflow)", addr)
-	if err := http.ListenAndServe(addr, httpapi.Handler()); err != nil {
+	if err := http.ListenAndServe(addr, h); err != nil {
 		log.Fatal(err)
 	}
 }

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -38,12 +39,13 @@ func TestPersonaGrantCompositionAndAuditPersist(t *testing.T) {
 	if env["DOCS_TOKEN"] != "secret-value" {
 		t.Fatalf("grant env = %#v", env)
 	}
-	// Persist an audit line without a live worker session.
-	roomID := "rm_test"
-	a.mu.Lock()
-	a.Rooms[roomID] = &Room{ID: roomID, PermissionPreset: PermissionWorkspaceWrite, State: RoomIdle}
-	a.Activity[roomID] = nil
-	a.mu.Unlock()
+	// Persist an audit line without a live worker session: openSession fails
+	// (no worker URL) and the room is recorded as closed.
+	room, _, err := a.CreateRoom(context.Background(), Principal{TenantID: DefaultTenantID, UserID: "u-test"}, CreateRoomInput{})
+	if room == nil {
+		t.Fatalf("create room: %v", err)
+	}
+	roomID := room.ID
 	a.Publish(roomID, Event{"type": "session.status", "roomId": roomID, "status": "idle"})
 	auditPath := filepath.Join(dir, "audit", roomID+".jsonl")
 	raw, err := os.ReadFile(auditPath)

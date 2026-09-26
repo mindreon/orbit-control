@@ -3,15 +3,19 @@ package app
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/mindreon/orbit-control/internal/orch"
 	"github.com/mindreon/orbit-control/internal/store"
+	"github.com/mindreon/orbit-control/internal/store/memstore"
 	"github.com/mindreon/orbit-control/internal/worker"
 )
 
@@ -29,7 +33,26 @@ const (
 	// RuntimeKernel is the live worker. Rooms do not require dsh or ACP.
 	RuntimeKernel      = "agentscope"
 	maxActivityPerRoom = 500
+
+	DefaultTenantID      = "default"
+	LocalIssuer          = "orbit-local"
+	MaxIdempotencyKeyLen = 128
+	idempotencyTTL       = 24 * time.Hour
+	defaultAbortTimeout  = 5 * time.Second
 )
+
+// ErrInvalid marks caller errors (400).
+var ErrInvalid = errors.New("invalid request")
+
+// ErrNotFound and ErrIdempotencyKeyReused are the repository sentinels.
+var (
+	ErrNotFound             = store.ErrNotFound
+	ErrIdempotencyKeyReused = store.ErrIdempotencyKeyReused
+)
+
+func invalidf(format string, args ...any) error {
+	return fmt.Errorf("%w: %s", ErrInvalid, fmt.Sprintf(format, args...))
+}
 
 func normalizePermissionPreset(raw string) (string, error) {
 	preset := strings.TrimSpace(raw)
@@ -40,8 +63,25 @@ func normalizePermissionPreset(raw string) (string, error) {
 	case PermissionWorkspaceWrite, PermissionReadOnly, PermissionDangerFullAccess:
 		return preset, nil
 	default:
-		return "", fmt.Errorf("permissionPreset must be workspace-write, read-only, or danger-full-access")
+		return "", invalidf("permissionPreset must be workspace-write, read-only, or danger-full-access")
 	}
+}
+
+// Principal is the authenticated caller. TenantID and UserID come only from
+// the authenticator (session), never from request bodies (§17.5).
+type Principal struct {
+	TenantID string
+	UserID   string
+}
+
+// Orchestrator is the Temporal RoomWorkflow surface control drives.
+// *orch.Client implements it.
+type Orchestrator interface {
+	StartRoom(ctx context.Context, roomID, kind, permissionPreset string) (orch.RoomView, error)
+	RunTurn(ctx context.Context, roomID, turnID, message string) (orch.RunTurnResult, error)
+	Decide(ctx context.Context, roomID, turnID, approvalRequestID, decision, resumeTurnID string) (orch.DecideResult, error)
+	Steer(ctx context.Context, roomID, turnID, instruction string) error
+	Abort(ctx context.Context, roomID, turnID, reason string) error
 }
 
 type RuntimeSnapshot struct {
@@ -112,21 +152,45 @@ type CreateRoomInput struct {
 	PermissionPreset string
 	PersonaID        string
 	GrantID          string
+	// IdempotencyKey is the raw Idempotency-Key header; only its sha256 is
+	// stored.
+	IdempotencyKey string
+}
+
+// liveRoom is the per-process projection publish() needs. The repository is
+// the source of truth; this is refilled from it on every successful read.
+type liveRoom struct {
+	TenantID         string
+	Runtime          RuntimeSnapshot
+	PermissionPreset string
+}
+
+type Options struct {
+	Worker        *worker.Client
+	Orch          Orchestrator
+	Repo          store.Repository
+	Log           *log.Logger
+	DefaultTenant string
+	// AbortTimeout bounds the workflow abort sent before a soft delete.
+	AbortTimeout time.Duration
 }
 
 type App struct {
 	mu            sync.Mutex
 	Worker        *worker.Client
-	Orch          *orch.Client // optional Temporal; nil → direct worker HTTP
+	Orch          Orchestrator // optional Temporal; nil → direct worker HTTP
+	Repo          store.Repository
 	Store         *store.FileStore
-	Rooms         map[string]*Room
-	Messages      map[string][]Message
-	Approvals     map[string]*Approval
+	Log           *log.Logger
+	DefaultTenant string
+	AbortTimeout  time.Duration
 	Activity      map[string][]ActivityEvent
 	SessionRoom   map[string]string
 	Personas      map[string]*Persona
 	McpConnectors map[string]*McpConnector
 	CloudAgents   map[string]*CloudAgentJob
+	live          map[string]liveRoom
+	knownUsers    map[string]struct{}
 	grants        map[string]*grantRecord
 	sequences     map[string]uint64
 	subs          map[string]map[chan []byte]struct{}
@@ -137,23 +201,45 @@ func New(w *worker.Client) *App {
 }
 
 func NewWithOrch(w *worker.Client, o *orch.Client) *App {
-	a := &App{
-		Worker:        w,
-		Orch:          o,
+	opts := Options{Worker: w}
+	if o != nil {
+		opts.Orch = o
+	}
+	return NewWithOptions(opts)
+}
+
+func NewWithOptions(opts Options) *App {
+	if opts.Repo == nil {
+		opts.Repo = memstore.New()
+	}
+	if opts.Log == nil {
+		opts.Log = log.Default()
+	}
+	if opts.DefaultTenant == "" {
+		opts.DefaultTenant = DefaultTenantID
+	}
+	if opts.AbortTimeout <= 0 {
+		opts.AbortTimeout = defaultAbortTimeout
+	}
+	return &App{
+		Worker:        opts.Worker,
+		Orch:          opts.Orch,
+		Repo:          opts.Repo,
 		Store:         store.New(""),
-		Rooms:         map[string]*Room{},
-		Messages:      map[string][]Message{},
-		Approvals:     map[string]*Approval{},
+		Log:           opts.Log,
+		DefaultTenant: opts.DefaultTenant,
+		AbortTimeout:  opts.AbortTimeout,
 		Activity:      map[string][]ActivityEvent{},
 		SessionRoom:   map[string]string{},
 		Personas:      map[string]*Persona{},
 		McpConnectors: map[string]*McpConnector{},
 		CloudAgents:   map[string]*CloudAgentJob{},
+		live:          map[string]liveRoom{},
+		knownUsers:    map[string]struct{}{},
 		grants:        map[string]*grantRecord{},
 		sequences:     map[string]uint64{},
 		subs:          map[string]map[chan []byte]struct{}{},
 	}
-	return a
 }
 
 func id(prefix string) string {
@@ -164,61 +250,182 @@ func id(prefix string) string {
 
 func now() string { return time.Now().UTC().Format(time.RFC3339Nano) }
 
-func (a *App) CreateRoom(ctx context.Context, input CreateRoomInput) (*Room, error) {
+func stamp(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
+
+func roomFromRecord(rec store.RoomRecord) *Room {
+	room := &Room{
+		ID:               rec.ID,
+		Kind:             rec.Kind,
+		Title:            rec.Title,
+		State:            RoomState(rec.State),
+		PermissionPreset: rec.PermissionPreset,
+		SessionID:        rec.SessionID,
+		CreatedAt:        stamp(rec.CreatedAt),
+	}
+	_ = json.Unmarshal(rec.Runtime, &room.Runtime)
+	return room
+}
+
+func messageFromRecord(rec store.MessageRecord) Message {
+	return Message{ID: rec.ID, RoomID: rec.TaskID, Role: rec.Role, Type: rec.Type, Text: rec.Text, CreatedAt: stamp(rec.CreatedAt)}
+}
+
+func approvalFromRecord(rec store.ApprovalRecord) *Approval {
+	return &Approval{
+		ID:                rec.ID,
+		RoomID:            rec.TaskID,
+		SessionID:         rec.SessionID,
+		ApprovalRequestID: rec.ApprovalRequestID,
+		ToolName:          rec.ToolName,
+		Reason:            rec.Reason,
+		Status:            rec.Status,
+		Decision:          rec.Decision,
+		CreatedAt:         stamp(rec.CreatedAt),
+	}
+}
+
+// remember caches what publish() and internal ingest need about a live room.
+func (a *App) remember(rec store.RoomRecord) {
+	room := roomFromRecord(rec)
+	a.mu.Lock()
+	a.live[rec.ID] = liveRoom{TenantID: rec.TenantID, Runtime: room.Runtime, PermissionPreset: rec.PermissionPreset}
+	if rec.SessionID != "" {
+		a.SessionRoom[rec.SessionID] = rec.ID
+	}
+	a.mu.Unlock()
+}
+
+// forget drops the in-process projection of a deleted room. SessionRoom is
+// kept so late session-only worker events still resolve to the room and get
+// the same 404 as events that carry roomId.
+func (a *App) forget(roomID string) {
+	a.mu.Lock()
+	delete(a.live, roomID)
+	delete(a.Activity, roomID)
+	delete(a.sequences, roomID)
+	a.mu.Unlock()
+}
+
+func (a *App) ensureUser(ctx context.Context, p Principal) error {
+	key := p.TenantID + "\x00" + p.UserID
+	a.mu.Lock()
+	_, ok := a.knownUsers[key]
+	a.mu.Unlock()
+	if ok {
+		return nil
+	}
+	if err := a.Repo.UpsertUser(ctx, p.TenantID, store.UserRecord{ID: p.UserID, Issuer: LocalIssuer, Subject: p.UserID}); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	a.knownUsers[key] = struct{}{}
+	a.mu.Unlock()
+	return nil
+}
+
+func (a *App) getRoom(ctx context.Context, p Principal, roomID string) (store.RoomRecord, error) {
+	rec, err := a.Repo.GetRoom(ctx, p.TenantID, p.UserID, roomID)
+	if err != nil {
+		return store.RoomRecord{}, err
+	}
+	a.remember(rec)
+	return rec, nil
+}
+
+func (a *App) setRoomState(ctx context.Context, tenantID string, room *Room, state RoomState, sessionID string) error {
+	if err := a.Repo.UpdateRoomState(ctx, tenantID, room.ID, string(state), sessionID); err != nil {
+		return err
+	}
+	room.State = state
+	if sessionID != "" {
+		room.SessionID = sessionID
+		a.mu.Lock()
+		a.SessionRoom[sessionID] = room.ID
+		a.mu.Unlock()
+	}
+	a.persistRoom(room)
+	return nil
+}
+
+func createRequestHash(kind, title, preset, personaID, grantID string) []byte {
+	raw, _ := json.Marshal([]string{kind, title, preset, personaID, grantID})
+	sum := sha256.Sum256(raw)
+	return sum[:]
+}
+
+// CreateRoom returns replayed=true when the Idempotency-Key matched an
+// existing live room; no workflow is started in that case.
+func (a *App) CreateRoom(ctx context.Context, p Principal, input CreateRoomInput) (*Room, bool, error) {
 	kind := strings.TrimSpace(input.Kind)
 	if kind == "" {
 		kind = "solo"
 	}
 	if kind != "solo" && kind != "collab" {
-		return nil, fmt.Errorf("kind must be solo or collab")
+		return nil, false, invalidf("kind must be solo or collab")
 	}
 	permissionPreset, err := normalizePermissionPreset(input.PermissionPreset)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	room := &Room{
+	if len(input.IdempotencyKey) > MaxIdempotencyKeyLen {
+		return nil, false, invalidf("Idempotency-Key must be at most %d characters", MaxIdempotencyKeyLen)
+	}
+	if err := a.ensureUser(ctx, p); err != nil {
+		return nil, false, err
+	}
+	title := strings.TrimSpace(input.Title)
+	personaID := strings.TrimSpace(input.PersonaID)
+	grantID := strings.TrimSpace(input.GrantID)
+	runtime, _ := json.Marshal(RuntimeSnapshot{Kernel: RuntimeKernel, Isolation: "process"})
+	rec := store.RoomRecord{
 		ID:               id("rm_"),
+		CreatedBy:        p.UserID,
 		Kind:             kind,
-		Title:            strings.TrimSpace(input.Title),
-		State:            RoomIdle,
+		Title:            title,
+		State:            string(RoomIdle),
 		PermissionPreset: permissionPreset,
-		Runtime: RuntimeSnapshot{
-			Kernel:    RuntimeKernel,
-			Isolation: "process",
-		},
-		CreatedAt: now(),
+		Runtime:          runtime,
+		PersonaID:        personaID,
+		CreatedAt:        time.Now().UTC(),
 	}
-	a.mu.Lock()
-	a.Rooms[room.ID] = room
-	a.Messages[room.ID] = nil
-	a.Activity[room.ID] = nil
-	a.mu.Unlock()
+	var idem *store.IdempotencyRecord
+	if input.IdempotencyKey != "" {
+		keyHash := sha256.Sum256([]byte(input.IdempotencyKey))
+		idem = &store.IdempotencyRecord{
+			CreatedBy:   p.UserID,
+			KeyHash:     keyHash[:],
+			RequestHash: createRequestHash(kind, title, permissionPreset, personaID, grantID),
+			ExpiresAt:   time.Now().UTC().Add(idempotencyTTL),
+		}
+	}
+	saved, replayed, err := a.Repo.CreateRoom(ctx, p.TenantID, rec, idem)
+	if err != nil {
+		return nil, false, err
+	}
+	a.remember(saved)
+	room := roomFromRecord(saved)
+	if replayed {
+		return room, true, nil
+	}
+	a.persistRoom(room)
 
 	if a.Orch != nil {
 		view, err := a.Orch.StartRoom(ctx, room.ID, kind, permissionPreset)
 		if err != nil {
-			a.mu.Lock()
-			room.State = RoomClosed
-			a.mu.Unlock()
-			return room, fmt.Errorf("temporal StartRoom: %w", err)
+			_ = a.setRoomState(ctx, p.TenantID, room, RoomClosed, "")
+			return room, false, fmt.Errorf("temporal StartRoom: %w", err)
 		}
-		a.mu.Lock()
-		room.SessionID = view.SessionID
-		room.State = RoomRunning
-		a.SessionRoom[view.SessionID] = room.ID
-		a.mu.Unlock()
+		if err := a.setRoomState(ctx, p.TenantID, room, RoomRunning, view.SessionID); err != nil {
+			return room, false, err
+		}
 		a.Publish(room.ID, Event{"type": "session.status", "roomId": room.ID, "sessionId": view.SessionID, "status": "running"})
-		return room, nil
+		return room, false, nil
 	}
 
-	personaID := strings.TrimSpace(input.PersonaID)
-	grantID := strings.TrimSpace(input.GrantID)
 	persona, connectors, grantEnv, err := a.CompositionForRoom(personaID, grantID)
 	if err != nil {
-		a.mu.Lock()
-		room.State = RoomClosed
-		a.mu.Unlock()
-		return room, err
+		_ = a.setRoomState(ctx, p.TenantID, room, RoomClosed, "")
+		return room, false, err
 	}
 	payload := map[string]any{
 		"roomId":           room.ID,
@@ -254,79 +461,78 @@ func (a *App) CreateRoom(ctx context.Context, input CreateRoomInput) (*Room, err
 	var out worker.OpenSessionOut
 	err = a.Worker.Call(ctx, "openSession", payload, &out)
 	if err != nil {
-		a.mu.Lock()
-		room.State = RoomClosed
-		a.mu.Unlock()
-		return room, fmt.Errorf("openSession: %w", err)
+		_ = a.setRoomState(ctx, p.TenantID, room, RoomClosed, "")
+		return room, false, fmt.Errorf("openSession: %w", err)
 	}
-	a.mu.Lock()
-	room.SessionID = out.SessionID
-	room.State = RoomRunning
-	a.SessionRoom[out.SessionID] = room.ID
-	a.mu.Unlock()
+	if err := a.setRoomState(ctx, p.TenantID, room, RoomRunning, out.SessionID); err != nil {
+		return room, false, err
+	}
 	a.Publish(room.ID, Event{"type": "session.status", "roomId": room.ID, "sessionId": out.SessionID, "status": "running"})
-	return room, nil
+	return room, false, nil
 }
 
-func (a *App) ListRooms() []*Room {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	out := make([]*Room, 0, len(a.Rooms))
-	for _, r := range a.Rooms {
-		cp := *r
-		out = append(out, &cp)
+func (a *App) ListRooms(ctx context.Context, p Principal) ([]*Room, error) {
+	recs, err := a.Repo.ListRooms(ctx, p.TenantID, p.UserID)
+	if err != nil {
+		return nil, err
 	}
-	return out
-}
-
-func (a *App) GetRoom(id string) (*Room, bool) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	r, ok := a.Rooms[id]
-	if !ok {
-		return nil, false
+	out := make([]*Room, 0, len(recs))
+	for _, rec := range recs {
+		out = append(out, roomFromRecord(rec))
 	}
-	cp := *r
-	return &cp, true
+	return out, nil
 }
 
-func (a *App) ListMessages(roomID string) []Message {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	src := a.Messages[roomID]
-	out := make([]Message, len(src))
-	copy(out, src)
-	return out
+func (a *App) GetRoom(ctx context.Context, p Principal, roomID string) (*Room, error) {
+	rec, err := a.getRoom(ctx, p, roomID)
+	if err != nil {
+		return nil, err
+	}
+	return roomFromRecord(rec), nil
 }
 
-func (a *App) ListActivity(roomID string) []ActivityEvent {
+func (a *App) ListMessages(ctx context.Context, p Principal, roomID string) ([]Message, error) {
+	recs, err := a.Repo.ListMessages(ctx, p.TenantID, p.UserID, roomID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Message, 0, len(recs))
+	for _, rec := range recs {
+		out = append(out, messageFromRecord(rec))
+	}
+	return out, nil
+}
+
+func (a *App) ListActivity(ctx context.Context, p Principal, roomID string) ([]ActivityEvent, error) {
+	if _, err := a.getRoom(ctx, p, roomID); err != nil {
+		return nil, err
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	src := a.Activity[roomID]
 	out := make([]ActivityEvent, len(src))
 	copy(out, src)
-	return out
+	return out, nil
 }
 
-func (a *App) appendMessage(m Message) {
-	a.Messages[m.RoomID] = append(a.Messages[m.RoomID], m)
+func (a *App) appendMessage(ctx context.Context, tenantID, roomID, role, text string) error {
+	return a.Repo.AppendMessage(ctx, tenantID, store.MessageRecord{
+		ID: id("msg_"), TaskID: roomID, Role: role, Text: text, CreatedAt: time.Now().UTC(),
+	})
 }
 
-func (a *App) PostMessage(ctx context.Context, roomID, text string) (*Room, *Approval, error) {
-	a.mu.Lock()
-	room, ok := a.Rooms[roomID]
-	if !ok {
-		a.mu.Unlock()
-		return nil, nil, fmt.Errorf("room not found")
+func (a *App) PostMessage(ctx context.Context, p Principal, roomID, text string) (*Room, *Approval, error) {
+	rec, err := a.getRoom(ctx, p, roomID)
+	if err != nil {
+		return nil, nil, err
 	}
-	if room.State != RoomRunning {
-		a.mu.Unlock()
-		return nil, nil, fmt.Errorf("room is %s", room.State)
+	if RoomState(rec.State) != RoomRunning {
+		return nil, nil, invalidf("room is %s", rec.State)
 	}
-	sessionID := room.SessionID
-	user := Message{ID: id("msg_"), RoomID: roomID, Role: "user", Text: text, CreatedAt: now()}
-	a.appendMessage(user)
-	a.mu.Unlock()
+	sessionID := rec.SessionID
+	if err := a.appendMessage(ctx, p.TenantID, roomID, "user", text); err != nil {
+		return nil, nil, err
+	}
 	a.Publish(roomID, Event{"type": "assistant.message", "roomId": roomID, "role": "user", "text": text})
 
 	if a.Orch != nil {
@@ -335,11 +541,11 @@ func (a *App) PostMessage(ctx context.Context, roomID, text string) (*Room, *App
 		if err != nil {
 			return nil, nil, err
 		}
-		return a.applyTurnResult(ctx, roomID, sessionID, runTurnFromOrch(res))
+		return a.applyTurnResult(ctx, p.TenantID, roomID, runTurnFromOrch(res))
 	}
 
 	var out worker.RunTurnOut
-	err := a.Worker.Call(ctx, "runTurn", map[string]any{
+	err = a.Worker.Call(ctx, "runTurn", map[string]any{
 		"roomId":    roomID,
 		"sessionId": sessionID,
 		"turnId":    id("tn_"),
@@ -348,76 +554,84 @@ func (a *App) PostMessage(ctx context.Context, roomID, text string) (*Room, *App
 	if err != nil {
 		return nil, nil, err
 	}
-	return a.applyTurnResult(ctx, roomID, sessionID, out)
+	return a.applyTurnResult(ctx, p.TenantID, roomID, out)
 }
 
-func (a *App) persistAssistantTexts(roomID string, texts []string) {
+func (a *App) persistAssistantTexts(ctx context.Context, tenantID, roomID string, texts []string) error {
 	for _, text := range texts {
 		if text == "" {
 			continue
 		}
-		a.appendMessage(Message{
-			ID: id("msg_"), RoomID: roomID, Role: "assistant", Text: text, CreatedAt: now(),
-		})
+		if err := a.appendMessage(ctx, tenantID, roomID, "assistant", text); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
-func (a *App) applyTurnResult(ctx context.Context, roomID, sessionID string, out worker.RunTurnOut) (*Room, *Approval, error) {
-	_ = ctx
-	a.mu.Lock()
-	room := a.Rooms[roomID]
-	if room == nil {
-		a.mu.Unlock()
-		return nil, nil, fmt.Errorf("room not found")
+func (a *App) applyTurnResult(ctx context.Context, tenantID, roomID string, out worker.RunTurnOut) (*Room, *Approval, error) {
+	if err := a.persistAssistantTexts(ctx, tenantID, roomID, out.Texts); err != nil {
+		return nil, nil, err
 	}
-	a.persistAssistantTexts(roomID, out.Texts)
-
+	state := RoomRunning
+	var appr *store.ApprovalRecord
 	if out.Status == "needs_approval" {
-		room.State = RoomAwaitingApproval
-		ask := out.Approval
-		appr := &Approval{
-			ID:        id("ap_"),
-			RoomID:    roomID,
-			SessionID: sessionID,
-			Status:    "pending",
-			CreatedAt: now(),
-		}
-		if ask != nil {
+		state = RoomAwaitingApproval
+		appr = &store.ApprovalRecord{ID: id("ap_"), TaskID: roomID, Status: "pending", CreatedAt: time.Now().UTC()}
+		if ask := out.Approval; ask != nil {
 			appr.ApprovalRequestID = ask.ApprovalRequestID
+			appr.CallID = ask.CallID
 			appr.ToolName = ask.ToolName
 			appr.Reason = ask.Reason
 		}
-		a.Approvals[appr.ID] = appr
-		cpRoom := *room
-		cpAppr := *appr
-		a.mu.Unlock()
-		a.Publish(roomID, Event{"type": "approval.asked", "roomId": roomID, "approvalId": appr.ID, "toolName": appr.ToolName, "reason": appr.Reason})
-		return &cpRoom, &cpAppr, nil
+		if err := a.Repo.CreateApproval(ctx, tenantID, *appr); err != nil {
+			return nil, nil, err
+		}
 	}
-
-	// completed / continue: keep the ACP session open so the user can send again.
-	room.State = RoomRunning
-	cp := *room
-	a.mu.Unlock()
-	return &cp, nil, nil
+	if err := a.Repo.UpdateRoomState(ctx, tenantID, roomID, string(state), ""); err != nil {
+		return nil, nil, err
+	}
+	rec, err := a.Repo.GetRoomForWorker(ctx, tenantID, roomID)
+	if err != nil {
+		return nil, nil, err
+	}
+	room := roomFromRecord(rec)
+	a.persistRoom(room)
+	if appr == nil {
+		// completed / continue: keep the session open so the user can send again.
+		return room, nil, nil
+	}
+	appr.SessionID = rec.SessionID
+	a.Publish(roomID, Event{"type": "approval.asked", "roomId": roomID, "approvalId": appr.ID, "toolName": appr.ToolName, "reason": appr.Reason})
+	return room, approvalFromRecord(*appr), nil
 }
 
-func (a *App) Decide(ctx context.Context, approvalID, decision string) (*Approval, error) {
-	a.mu.Lock()
-	appr, ok := a.Approvals[approvalID]
-	if !ok {
-		a.mu.Unlock()
-		return nil, fmt.Errorf("approval not found")
+func (a *App) Decide(ctx context.Context, p Principal, approvalID, decision string) (*Approval, error) {
+	appr, err := a.Repo.GetApproval(ctx, p.TenantID, p.UserID, approvalID)
+	if err != nil {
+		return nil, err
 	}
 	if appr.Status != "pending" {
-		a.mu.Unlock()
-		return nil, fmt.Errorf("approval already decided")
+		return nil, invalidf("approval already decided")
 	}
-	room := a.Rooms[appr.RoomID]
 	sessionID := appr.SessionID
 	reqID := appr.ApprovalRequestID
-	roomID := appr.RoomID
-	a.mu.Unlock()
+	roomID := appr.TaskID
+	decided := func(value string) (*Approval, error) {
+		if err := a.Repo.DecideApproval(ctx, p.TenantID, approvalID, "decided", value); err != nil {
+			return nil, err
+		}
+		appr.Status = "decided"
+		appr.Decision = value
+		return approvalFromRecord(appr), nil
+	}
+	closeRoom := func() error {
+		if err := a.Repo.UpdateRoomState(ctx, p.TenantID, roomID, string(RoomClosed), ""); err != nil {
+			return err
+		}
+		a.Publish(roomID, Event{"type": "session.status", "roomId": roomID, "status": "closed"})
+		return nil
+	}
 
 	if a.Orch != nil {
 		turnID := id("tn_")
@@ -425,38 +639,28 @@ func (a *App) Decide(ctx context.Context, approvalID, decision string) (*Approva
 		if err != nil {
 			return nil, err
 		}
-		a.mu.Lock()
-		appr.Status = "decided"
-		appr.Decision = decision
-		if decision == "reject" && room != nil {
-			room.State = RoomClosed
+		out, err := decided(decision)
+		if err != nil {
+			return nil, err
 		}
-		cp := *appr
-		a.mu.Unlock()
 		if decision == "reject" {
-			a.Publish(roomID, Event{"type": "session.status", "roomId": roomID, "status": "closed"})
-			return &cp, nil
+			return out, closeRoom()
 		}
 		if res.Turn != nil {
-			_, _, err = a.applyTurnResult(ctx, roomID, sessionID, runTurnFromOrch(*res.Turn))
+			_, _, err = a.applyTurnResult(ctx, p.TenantID, roomID, runTurnFromOrch(*res.Turn))
 		}
-		return &cp, err
+		return out, err
 	}
 
 	if decision == "reject" {
 		_ = a.Worker.Call(ctx, "abort", map[string]any{
 			"roomId": roomID, "sessionId": sessionID, "turnId": id("tn_"), "reason": "rejected",
 		}, &worker.AbortedOut{})
-		a.mu.Lock()
-		appr.Status = "decided"
-		appr.Decision = "reject"
-		if room != nil {
-			room.State = RoomClosed
+		out, err := decided("reject")
+		if err != nil {
+			return nil, err
 		}
-		cp := *appr
-		a.mu.Unlock()
-		a.Publish(roomID, Event{"type": "session.status", "roomId": roomID, "status": "closed"})
-		return &cp, nil
+		return out, closeRoom()
 	}
 
 	var applied worker.AppliedOut
@@ -479,66 +683,95 @@ func (a *App) Decide(ctx context.Context, approvalID, decision string) (*Approva
 	}, &turn); err != nil {
 		return nil, err
 	}
-	a.mu.Lock()
-	appr.Status = "decided"
-	appr.Decision = "allow"
-	a.mu.Unlock()
-	_, _, err := a.applyTurnResult(ctx, roomID, sessionID, turn)
-	a.mu.Lock()
-	cp := *appr
-	a.mu.Unlock()
-	return &cp, err
+	out, err := decided("allow")
+	if err != nil {
+		return nil, err
+	}
+	_, _, err = a.applyTurnResult(ctx, p.TenantID, roomID, turn)
+	return out, err
 }
 
-func (a *App) ListApprovals() []*Approval {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	out := make([]*Approval, 0, len(a.Approvals))
-	for _, v := range a.Approvals {
-		cp := *v
-		out = append(out, &cp)
+func (a *App) ListApprovals(ctx context.Context, p Principal) ([]*Approval, error) {
+	recs, err := a.Repo.ListApprovals(ctx, p.TenantID, p.UserID)
+	if err != nil {
+		return nil, err
 	}
-	return out
+	out := make([]*Approval, 0, len(recs))
+	for _, rec := range recs {
+		out = append(out, approvalFromRecord(rec))
+	}
+	return out, nil
 }
 
-func (a *App) AbortRoom(ctx context.Context, roomID string) error {
-	a.mu.Lock()
-	room, ok := a.Rooms[roomID]
-	if !ok {
-		a.mu.Unlock()
-		return fmt.Errorf("room not found")
-	}
-	sessionID := room.SessionID
-	a.mu.Unlock()
+func (a *App) abortWorkflow(ctx context.Context, roomID, sessionID, reason string) error {
 	if a.Orch != nil {
-		_ = a.Orch.Abort(ctx, roomID, id("tn_"), "abort")
-	} else {
-		_ = a.Worker.Call(ctx, "abort", map[string]any{"roomId": roomID, "sessionId": sessionID, "turnId": id("tn_")}, &worker.AbortedOut{})
+		return a.Orch.Abort(ctx, roomID, id("tn_"), reason)
 	}
-	a.mu.Lock()
-	room.State = RoomClosed
-	a.mu.Unlock()
+	return a.Worker.Call(ctx, "abort", map[string]any{
+		"roomId": roomID, "sessionId": sessionID, "turnId": id("tn_"), "reason": reason,
+	}, &worker.AbortedOut{})
+}
+
+func (a *App) AbortRoom(ctx context.Context, p Principal, roomID string) error {
+	rec, err := a.getRoom(ctx, p, roomID)
+	if err != nil {
+		return err
+	}
+	_ = a.abortWorkflow(ctx, roomID, rec.SessionID, "abort")
+	if err := a.Repo.UpdateRoomState(ctx, p.TenantID, roomID, string(RoomClosed), ""); err != nil {
+		return err
+	}
 	a.Publish(roomID, Event{"type": "session.status", "roomId": roomID, "status": "closed"})
 	return nil
 }
 
-func (a *App) SteerRoom(ctx context.Context, roomID, instruction string) (bool, error) {
+// DeleteRoom soft-deletes a room created by p (§18.7a). The workflow abort is
+// sent first; if it fails or times out the delete still happens and a
+// warning is logged, because users must always be able to delete a task.
+// Live SSE connections for the room are closed afterwards.
+func (a *App) DeleteRoom(ctx context.Context, p Principal, roomID string) error {
+	rec, err := a.getRoom(ctx, p, roomID)
+	if err != nil {
+		return err
+	}
+	abortCtx, cancel := context.WithTimeout(ctx, a.AbortTimeout)
+	abortErr := a.abortWorkflow(abortCtx, roomID, rec.SessionID, "deleted")
+	timedOut := errors.Is(abortCtx.Err(), context.DeadlineExceeded)
+	cancel()
+	if abortErr != nil {
+		reason := "error"
+		if timedOut || errors.Is(abortErr, context.DeadlineExceeded) {
+			reason = "timeout"
+		}
+		// Only the task id and a fixed reason: worker/Temporal error text is
+		// not logged here because it may echo request payloads.
+		a.Log.Printf("WARN alert=room_delete_abort_failed task=%s reason=%s", roomID, reason)
+	}
+	n, err := a.Repo.SoftDeleteRoom(context.WithoutCancel(ctx), p.TenantID, p.UserID, roomID)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	a.forget(roomID)
+	a.closeSubscribers(roomID)
+	return nil
+}
+
+func (a *App) SteerRoom(ctx context.Context, p Principal, roomID, instruction string) (bool, error) {
 	instruction = strings.TrimSpace(instruction)
 	if instruction == "" {
-		return false, fmt.Errorf("instruction is required")
+		return false, invalidf("instruction is required")
 	}
-	a.mu.Lock()
-	room, ok := a.Rooms[roomID]
-	if !ok {
-		a.mu.Unlock()
-		return false, fmt.Errorf("room not found")
+	rec, err := a.getRoom(ctx, p, roomID)
+	if err != nil {
+		return false, err
 	}
-	if room.State != RoomRunning {
-		a.mu.Unlock()
-		return false, fmt.Errorf("room is %s", room.State)
+	if RoomState(rec.State) != RoomRunning {
+		return false, invalidf("room is %s", rec.State)
 	}
-	sessionID := room.SessionID
-	a.mu.Unlock()
+	sessionID := rec.SessionID
 
 	accepted := true
 	if a.Orch != nil {
@@ -578,14 +811,17 @@ func eventString(ev Event, key string) string {
 	return value
 }
 
-func (a *App) Ingest(ev Event) error {
+// Ingest accepts a worker event. The room (and its tenant) is resolved by
+// control, never taken from the event; a missing or soft-deleted room yields
+// ErrNotFound (404, non-retryable for the worker).
+func (a *App) Ingest(ctx context.Context, ev Event) error {
 	eventType := eventString(ev, "type")
 	if _, ok := workerEventTypes[eventType]; !ok {
-		return fmt.Errorf("unsupported Orbit event type %q", eventType)
+		return invalidf("unsupported Orbit event type %q", eventType)
 	}
 	if occurredAt := eventString(ev, "occurredAt"); occurredAt != "" {
 		if _, err := time.Parse(time.RFC3339Nano, occurredAt); err != nil {
-			return fmt.Errorf("occurredAt must be RFC3339")
+			return invalidf("occurredAt must be RFC3339")
 		}
 	}
 	sessionID, _ := ev["sessionId"].(string)
@@ -598,14 +834,22 @@ func (a *App) Ingest(ev Event) error {
 	if roomID == "" && sessionID != "" {
 		roomID = mappedRoomID
 	}
-	_, roomExists := a.Rooms[roomID]
+	tenantID := a.live[roomID].TenantID
 	a.mu.Unlock()
 	if mappedRoomID != "" && roomID != mappedRoomID {
-		return fmt.Errorf("event roomId does not match its session")
+		return invalidf("event roomId does not match its session")
 	}
-	if roomID == "" || !roomExists {
-		return fmt.Errorf("event is not associated with a known room")
+	if roomID == "" {
+		return invalidf("event is not associated with a known room")
 	}
+	if tenantID == "" {
+		tenantID = a.DefaultTenant
+	}
+	rec, err := a.Repo.GetRoomForWorker(ctx, tenantID, roomID)
+	if err != nil {
+		return err
+	}
+	a.remember(rec)
 	// Assistant text is persisted from runTurn.texts to avoid duplicates when
 	// ingest is also enabled. Activity stores the normalized live projection.
 	a.publish(roomID, ev, "worker")
@@ -622,10 +866,22 @@ func (a *App) Subscribe(roomID string) (<-chan []byte, func()) {
 	a.mu.Unlock()
 	return ch, func() {
 		a.mu.Lock()
-		delete(a.subs[roomID], ch)
+		if _, ok := a.subs[roomID][ch]; ok {
+			delete(a.subs[roomID], ch)
+			close(ch)
+		}
 		a.mu.Unlock()
+	}
+}
+
+// closeSubscribers ends every live SSE stream of a room.
+func (a *App) closeSubscribers(roomID string) {
+	a.mu.Lock()
+	for ch := range a.subs[roomID] {
 		close(ch)
 	}
+	delete(a.subs, roomID)
+	a.mu.Unlock()
 }
 
 func (a *App) Publish(roomID string, ev Event) {
@@ -643,8 +899,8 @@ func (a *App) publish(roomID string, ev Event, source string) {
 	}
 
 	a.mu.Lock()
-	room := a.Rooms[roomID]
-	if room == nil {
+	room, ok := a.live[roomID]
+	if !ok {
 		a.mu.Unlock()
 		return
 	}
@@ -686,7 +942,6 @@ func (a *App) publish(roomID string, ev Event, source string) {
 		history = append([]ActivityEvent(nil), history[len(history)-maxActivityPerRoom:]...)
 	}
 	a.persistActivity(roomID, item)
-	a.persistRoom(room)
 	a.Activity[roomID] = history
 	raw, err := json.Marshal(item)
 	if err != nil {
