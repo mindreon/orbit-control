@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -667,6 +668,12 @@ func (a *App) Publish(roomID string, ev Event) {
 }
 
 func (a *App) publishDurable(env Envelope) {
+	// Encoded before the lock without its id; env.ID is zero here, so the
+	// omitempty id field is absent and the id is spliced in once assigned.
+	body, err := EncodeEnvelope(env)
+	if err != nil || len(body) == 0 || body[0] != '{' {
+		return
+	}
 	a.mu.Lock()
 	room := a.Rooms[env.TaskID]
 	if room == nil {
@@ -674,16 +681,16 @@ func (a *App) publishDurable(env Envelope) {
 		return
 	}
 	// Append and broadcast under a.mu so SubscribeRoom's head snapshot sees
-	// every event either in the log or in its buffer.
-	env, err := a.Events.Append(env.TaskID, env)
+	// every event either in the log or in its buffer, and subscribers get a
+	// room's events in id order.
+	env, err = a.Events.Append(env.TaskID, env)
 	if err != nil {
 		a.mu.Unlock()
 		return
 	}
 	snapshot := *room
-	if raw, err := EncodeEnvelope(env); err == nil {
-		a.broadcastLocked(env.TaskID, StreamFrame{Seq: env.ID, Durable: true, Data: raw})
-	}
+	raw := append([]byte(`{"id":`+strconv.FormatUint(env.ID, 10)+`,`), body[1:]...)
+	a.broadcastLocked(env.TaskID, StreamFrame{Seq: env.ID, Durable: true, Data: raw})
 	a.mu.Unlock()
 	// Audit and room files are written outside a.mu; concurrent publishes may
 	// append audit lines out of id order, so readers sort by id.
