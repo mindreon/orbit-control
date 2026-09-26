@@ -96,14 +96,32 @@ func TestSDB10AssistantDeltaNotStored(t *testing.T) {
 	room := roomID(t, srv.check(t, "S-DB-10/setup/create", c, "create a live task",
 		httpReq{Method: "POST", Path: "/v1/rooms", Headers: user("u-sdb10"), Body: `{"kind":"solo"}`}, httpExp{Status: 200}))
 	alias(room, "<room-sdb10>")
-	insert := func(seq int, typ string) error {
+	var head int64
+	if err := asTenant(ctx, srv.appPool, "t-sdb10", func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT last_event_seq FROM rooms WHERE tenant_id = $1 AND id = $2`, "t-sdb10", room).Scan(&head)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	next := head + 1
+	insert := func(seq int64, typ string) error {
 		return asTenant(ctx, srv.appPool, "t-sdb10", func(tx pgx.Tx) error {
 			_, err := tx.Exec(ctx, `INSERT INTO events (tenant_id, task_id, seq, event_uid, type, source) VALUES ($1, $2, $3, $4, $5, 'worker')`,
 				"t-sdb10", room, seq, typ+"-uid", typ)
 			return err
 		})
 	}
-	got := map[string]string{"assistant.delta": sqlState(insert(1, "assistant.delta")), "tool.call": sqlState(insert(2, "tool.call"))}
+	got := map[string]string{"assistant.delta": sqlState(insert(next, "assistant.delta")), "tool.call": sqlState(insert(next, "tool.call"))}
+	if got["tool.call"] == "ok" {
+		if err := asTenant(ctx, srv.appPool, "t-sdb10", func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `
+				UPDATE rooms SET last_event_seq = $3
+				 WHERE tenant_id = $1 AND id = $2 AND last_event_seq < $3`,
+				"t-sdb10", room, next)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	iso(t, "S-DB-10/delta-rejected-by-schema", c, []string{"FM-38"}, "an events row of type assistant.delta is rejected; a tool.call row for the same task is accepted",
 		sqlReq{Role: "orbit_app", Tenant: "t-sdb10", SQL: "INSERT INTO events (..., type) VALUES (..., 'assistant.delta' | 'tool.call')"},
 		map[string]string{"assistant.delta": "23514", "tool.call": "ok"}, got,

@@ -51,12 +51,27 @@ func seedChildren(t *testing.T, pool *pgxpool.Pool, tenant, room, storageRef, di
 	t.Helper()
 	ctx := context.Background()
 	err := asTenant(ctx, pool, tenant, func(tx pgx.Tx) error {
+		// Room create already stored session.status at seq 1. Take the next
+		// seq and advance last_event_seq so a later ingest does not collide.
+		var seq int64
+		if err := tx.QueryRow(ctx, `
+			UPDATE rooms
+			   SET last_event_seq = last_event_seq + 1
+			 WHERE tenant_id = $1 AND id = $2
+			RETURNING last_event_seq`, tenant, room).Scan(&seq); err != nil {
+			return fmt.Errorf("advance last_event_seq: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO events (tenant_id, task_id, seq, event_uid, type, source)
+			VALUES ($1, $2, $3, $4, 'tool.call', 'worker')`,
+			tenant, room, seq, "ev_"+room); err != nil {
+			return fmt.Errorf("insert event: %w", err)
+		}
 		for _, s := range []struct {
 			sql  string
 			args []any
 		}{
 			{`INSERT INTO turns (id, tenant_id, task_id, kind, status) VALUES ($1, $2, $3, 'message', 'completed')`, []any{"tn_" + room, tenant, room}},
-			{`INSERT INTO events (tenant_id, task_id, seq, event_uid, type, source) VALUES ($1, $2, 1, $3, 'tool.call', 'worker')`, []any{tenant, room, "ev_" + room}},
 			{`INSERT INTO artifacts (id, tenant_id, task_id, title, latest_version) VALUES ($1, $2, $3, 'report', 1)`, []any{"art_" + room, tenant, room}},
 			{`INSERT INTO artifact_versions (artifact_id, tenant_id, version, mime_type, size_bytes, content_digest, previewable, storage_ref)
 			  VALUES ($1, $2, 1, 'text/plain', $3, $4, true, $5)`, []any{"art_" + room, tenant, size, digest, storageRef}},
