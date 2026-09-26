@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -82,6 +81,7 @@ var volatile = []struct {
 	{regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})`), "<ts>"},
 	{regexp.MustCompile(`\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}`), "<logts>"},
 	{regexp.MustCompile(`\b(rm|ap|msg|ev|tn|persona|mcp|caj|grant)_[0-9a-f]{16}\b`), "<$1_id>"},
+	{regexp.MustCompile(`(listening on |127\.0\.0\.1|localhost):\d+`), "$1:<port>"},
 }
 
 // normalize must be called with reportMu held.
@@ -243,16 +243,17 @@ func components() map[string]string {
 	if img := os.Getenv("ORBIT_E2E_POSTGRES_IMAGE"); img != "" {
 		out["postgresImage"] = img
 	}
-	if bi, ok := debug.ReadBuildInfo(); ok {
-		for _, d := range bi.Deps {
-			switch d.Path {
-			case "github.com/jackc/pgx/v5", "github.com/pressly/goose/v3", "go.temporal.io/sdk":
-				out[d.Path] = d.Version
+	if root, err := repoRoot(); err == nil {
+		if raw, err := os.ReadFile(filepath.Join(root, "go.mod")); err == nil {
+			for _, m := range reModuleVersion.FindAllStringSubmatch(string(raw), -1) {
+				out[m[1]] = m[2]
 			}
 		}
 	}
 	return out
 }
+
+var reModuleVersion = regexp.MustCompile(`(?m)^\s*(?:require\s+)?(github\.com/jackc/pgx/v5|github\.com/pressly/goose/v3|go\.temporal\.io/sdk)\s+(v\S+)`)
 
 // secretNeedles are values that must never appear in the report: DB URLs,
 // the DB users' passwords from the environment, and planted secrets.
