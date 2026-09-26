@@ -141,7 +141,7 @@ func TestReviewM2TenantsOpsOnly(t *testing.T) {
 	code := p1.waitExit(20 * time.Second)
 	out := p1.output.String()
 	rows := tenantRows()
-	record(t, caseInput{ID: "REVIEW-M2/startup-missing-tenant", Contract: c, Description: "control with a missing default tenant exits non-zero and does not create it",
+	record(t, caseInput{ID: "REVIEW-M2/startup-missing-tenant", Contract: c, FailureModes: []string{"FM-42"}, Description: "control with a missing default tenant exits non-zero and does not create it",
 		Request:  procReq{Binary: "orbit-control", Env: shownEnv(v1), Probe: "wait for exit (20s); owner counts tenants with that id"},
 		Expected: map[string]any{"exitedNonZero": true, "outputIncludes": `default tenant "` + tenant + `" does not exist`, "tenantRows": 0},
 		Actual:   map[string]any{"exitedNonZero": code > 0, "output": outputLines(out), "tenantRows": rows},
