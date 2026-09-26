@@ -235,6 +235,23 @@ func TestReviewMdSingleWinnerDecide(t *testing.T) {
 		Request: "stub worker counters", Expected: map[string]int32{"resolveApproval": rounds, "resume": rounds},
 		Actual: map[string]int32{"resolveApproval": resolves.Load(), "resume": resumes.Load()}, Pass: resolves.Load() == rounds && resumes.Load() == rounds})
 
+	// Low-1 (ISO-20): a decided approval is frozen, even for direct SQL as
+	// orbit_app (which holds UPDATE on status/decision/decided_at).
+	frozen := aps[1]
+	for _, tc := range []struct{ id, desc, sql string }{
+		{"reopen", "reopen a decided approval", `UPDATE approvals SET status = 'pending', decision = '', decided_at = NULL WHERE id = $1`},
+		{"flip", "flip a decided approval from allow to reject", `UPDATE approvals SET decision = 'reject' WHERE id = $1`},
+	} {
+		before := approvalState(frozen)
+		_, err := execAsApp(ctx, srv.appPool, "t-md-worker", tc.sql, frozen)
+		after := approvalState(frozen)
+		iso(t, "REVIEW-Low1/"+tc.id+"-rejected", c, []string{"FM-58"}, "orbit_app direct SQL cannot "+tc.desc+": the trigger raises and the value is unchanged",
+			sqlReq{Role: "orbit_app", Tenant: "t-md-worker", SQL: tc.sql},
+			map[string]string{"sqlstate": "P0001", "error": "approval is not pending", "approval": "decided:allow"},
+			map[string]string{"sqlstate": sqlState(err), "error": pgMessage(err), "approval": after},
+			sqlState(err) == "P0001" && pgMessage(err) == "approval is not pending" && before == "decided:allow" && after == before)
+	}
+
 	// Temporal path: the stub Orchestrator's Decide Update is the record.
 	so := &stubOrch{askApproval: true, decideDelay: 300 * time.Millisecond}
 	osrv := startServer(t, serverOpts{tenant: "t-md-orch", maxConns: 16, orch: so})
@@ -254,4 +271,13 @@ func TestReviewMdSingleWinnerDecide(t *testing.T) {
 		Expected:    map[string]any{"statusesSortedPerApproval": expectedStatuses(rounds), "orchDecideUpdates": rounds, "approvalsDecidedAllow": true},
 		Actual:      map[string]any{"statusesSortedPerApproval": ostatuses, "orchDecideUpdates": so.decides.Load(), "approvalsDecidedAllow": odecided},
 		Pass:        oneWinner(ostatuses) && so.decides.Load() == rounds && odecided})
+}
+
+// Review F2 (FM-59): documented, fixed in phase 2 with the real worker.
+func TestReviewF2DeliveredButTimeoutOnce(t *testing.T) {
+	blocked(t, "REVIEW-F2/delivered-but-timeout-once", "§18 review F2", "e2e",
+		"inject one decision that is delivered but whose response times out, then retry: the worker applies the decision exactly once",
+		"phase 2, together with the real worker: reopen only on errors that prove non-delivery and dedupe deliveries by approval id. Phase 1 has no reopen at all (Low-1 trigger), so no second delivery can happen today",
+		[]string{"real worker applies resolveApproval but its response is delayed past the control timeout", "retry POST /v1/approvals/{id}/decide", "count applied decisions in the worker"},
+		map[string]any{"workerAppliedDecisions": 1})
 }

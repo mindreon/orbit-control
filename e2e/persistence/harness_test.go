@@ -153,6 +153,15 @@ func sqlState(err error) string {
 	return "ok"
 }
 
+// pgMessage is the server message of a Postgres error ("" otherwise).
+func pgMessage(err error) string {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Message
+	}
+	return ""
+}
+
 // privilegeDenied tells a privilege error apart from other 42501 errors
 // (RLS "new row violates row-level security policy" shares the code).
 func privilegeDenied(err error) string {
