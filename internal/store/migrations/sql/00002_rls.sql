@@ -129,9 +129,10 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON
 TO orbit_app;
 
 -- rooms: UPDATE per column. id, tenant_id, created_by, created_at,
--- deleted_at and deleted_by are not updatable by the app. DELETE stays so
--- that a physical delete matches 0 rows under RLS (S-DB-13 i).
-GRANT SELECT, INSERT, DELETE ON rooms TO orbit_app;
+-- deleted_at and deleted_by are not updatable by the app. No DELETE
+-- privilege and no DELETE policy (C32 rev3); soft delete goes through
+-- orbit_soft_delete_room only.
+GRANT SELECT, INSERT ON rooms TO orbit_app;
 GRANT UPDATE (kind, title, state, permission_preset, runtime, session_id,
               persona_id, delegation, failure, last_event_seq, updated_at)
    ON rooms TO orbit_app;
