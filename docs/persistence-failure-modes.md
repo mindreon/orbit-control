@@ -667,11 +667,26 @@ How each phase handles it:
 - **Before Low-1.** `App.Decide` reopened the approval on any delivery error,
   including timeouts, so FM-59 was possible.
 - **Phase 1 now.** The Low-1 trigger forbids any update of a decided
-  approval, so the reopen path is removed. A failed or timed-out delivery
-  leaves the approval `decided` and the request returns an error (400).
-  A retry gets 409 `APPROVAL_NOT_PENDING`. There is no double delivery, but
-  a decision that truly was not delivered stays stuck until an operator
-  acts.
+  approval, so the reopen path is removed. When the delivery call fails
+  or exceeds the delivery timeout, the request returns **502** with this
+  fixed body:
+
+  ```json
+  {"error":"decision delivery failed","code":"DECISION_DELIVERY_FAILED","message":"the decision is recorded but its delivery to the workflow failed or timed out; it is not retried"}
+  ```
+
+  - The delivery call is `resolveApproval` on the direct path and the
+    `decide` Update on the Temporal path.
+  - The delivery timeout is `app.Options.DeliveryTimeout`, 30 s by default.
+  - The body never carries worker or Temporal error text.
+  - Control logs `WARN alert=decision_delivery_failed approval=<id> reason=timeout|error`.
+  - **The approval stays `decided`**, and every resubmit returns **409
+    `APPROVAL_NOT_PENDING`**.
+  - There is no double delivery: control delivers at most once. The cost is
+    that a decision which truly was not delivered stays stuck until an
+    operator acts.
+  - E2E: `REVIEW-F2/phase1-timeout-at-most-once`, direct worker path and
+    Temporal path.
 - **Phase 2**, together with the real worker. Reopen only on errors that
   prove non-delivery: a connection refused before the request was sent, or
   an explicit "not applied" response. Never reopen on a timeout or an
@@ -683,3 +698,54 @@ How each phase handles it:
 - **E2E, blocked until phase 2** (`REVIEW-F2/delivered-but-timeout-once`).
   Inject one "delivered but the response timed out", then retry, and assert
   the worker applied the decision exactly once.
+
+### Phase 2: relaxing the Low-1 trigger (documented only; no code in phase 1)
+
+When phase 2 adds the reopen path, the trigger is relaxed to allow
+**exactly one** transition on a decided approval:
+
+- `status = 'decided' AND delivery_state = 'not_delivered'` → `status = 'pending'`
+
+It is performed as **one conditional UPDATE**, and nothing else:
+
+```sql
+UPDATE approvals
+   SET status = 'pending', decision = '', decided_at = NULL, delivery_state = NULL
+ WHERE tenant_id = $1 AND id = $2
+   AND status = 'decided' AND delivery_state = 'not_delivered'
+```
+
+- `delivery_state` is a new column in phase 2. It is written only by
+  control's delivery code, from the classified outcome of the delivery
+  call: `delivered`, `not_delivered` or `unknown`.
+- 0 rows affected means no reopen, and the approval stays decided.
+- The trigger checks this exact shape: `OLD.status = 'decided'`,
+  `OLD.delivery_state = 'not_delivered'`, `NEW.status = 'pending'`, and
+  every other column except the four above unchanged. It raises
+  `P0001 approval is not pending` for everything else.
+
+Every other update of a decided approval keeps raising `P0001`. Each
+forbidden transition gets its own E2E case, as `orbit_app` with direct SQL,
+asserting `P0001` and the value unchanged:
+
+1. decided with `delivery_state = 'delivered'` → pending;
+2. decided with `delivery_state = 'unknown'` (timeout or ambiguous error)
+   → pending;
+3. decided with `delivery_state` NULL → pending;
+4. decided → decided with a different `decision` (allow ↔ reject);
+5. decided → any other status value;
+6. decided (`not_delivered`) → pending while also changing any other column
+   (`tool_name`, `approval_request_id`, `task_id`, …);
+7. `delivery_state` rewritten on a decided approval (for example
+   `unknown` → `not_delivered`, which would launder a timeout into a
+   reopen).
+
+The allowed transition gets its own E2E as well: exactly one row reopens,
+and a second identical UPDATE affects 0 rows.
+
+**Temporal Update validator rejections do not count as `not_delivered`.**
+Until **C1 in contract PR #18** is fixed, a rejection by the RoomWorkflow
+`decide` Update validator (an ApplicationError such as
+`APPROVAL_NOT_PENDING`) must be classified as `unknown`, not
+`not_delivered`. So it never reopens. The classification changes only
+after C1 is fixed, with a doc line here first.

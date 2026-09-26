@@ -412,7 +412,10 @@ paths:
         before anything is sent to the workflow, so concurrent decisions have
         exactly one winner and the workflow receives exactly one decision.
         Deciding an approval that is no longer pending returns **409**
-        `APPROVAL_NOT_PENDING` (contract §2.0; previously 400).
+        `APPROVAL_NOT_PENDING` (contract §2.0; previously 400). If delivering
+        the decision fails or times out, the response is **502**
+        `DECISION_DELIVERY_FAILED` and the approval stays decided (no
+        automatic retry, no reopen in phase 1).
       x-unimplemented: false
       parameters:
         - $ref: "#/components/parameters/ApprovalId"
@@ -431,9 +434,9 @@ paths:
                 $ref: "#/components/schemas/Approval"
         "400":
           description: |
-            The decision is recorded but could not be delivered to the
-            workflow. The approval stays decided (phase 1 has no reopen), so a
-            retry returns 409.
+            The decision was delivered, but resuming the turn afterwards
+            failed. The message carries the worker error. The approval stays
+            decided.
           content:
             application/json:
               schema:
@@ -441,7 +444,7 @@ paths:
               example:
                 error: bad request
                 code: BAD_REQUEST
-                message: "worker resolveApproval: HTTP 502"
+                message: "worker runTurn: HTTP 500"
         "404":
           description: Missing, not owned by the caller, in another tenant, or its task was deleted.
           content:
@@ -454,6 +457,8 @@ paths:
                 message: approval not found
         "409":
           $ref: "#/components/responses/ApprovalNotPending"
+        "502":
+          $ref: "#/components/responses/DecisionDeliveryFailed"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -1142,6 +1147,22 @@ components:
             error: approval not pending
             code: APPROVAL_NOT_PENDING
             message: approval is not pending
+    DecisionDeliveryFailed:
+      description: |
+        The decision is recorded, but delivering it to the workflow failed or
+        exceeded the delivery timeout. The delivery call is `resolveApproval`
+        on the direct worker path and the `decide` Update on the Temporal path.
+        The approval stays decided and is not re-delivered; a resubmit returns
+        409 `APPROVAL_NOT_PENDING`. The body is fixed and never includes
+        worker or Temporal error text.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+          example:
+            error: decision delivery failed
+            code: DECISION_DELIVERY_FAILED
+            message: the decision is recorded but its delivery to the workflow failed or timed out; it is not retried
     IdempotencyKeyReused:
       description: The `Idempotency-Key` was already used with a different body.
       content:
