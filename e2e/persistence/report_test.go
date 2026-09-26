@@ -20,7 +20,13 @@ import (
 	"time"
 )
 
-const contractSHA256 = "053a37bb093e06602a50f6412cd57eb3491161f039b567880ba6650ec6965229"
+const (
+	contractRevision = "§18 (C32 rev3)"
+	// Relayed abbreviated; replace with the full value once provided.
+	contractSHA256 = "113aebd8…f90b"
+	// Previous signed version (C32 rev2).
+	previousContractSHA256 = "053a37bb093e06602a50f6412cd57eb3491161f039b567880ba6650ec6965229"
+)
 
 // Case is one row of the report. Kind is "e2e", "isolated" (must cite FM ids
 // from docs/persistence-failure-modes.md), "static" or "process". Status is
@@ -336,7 +342,7 @@ func writeReport() (string, bool, error) {
 	sum := sha256.Sum256(normCases)
 	report := map[string]any{
 		"suite":      "e2e-persistence",
-		"contract":   map[string]string{"document": "orbit-contract-draft-v2.md", "section": "§18 (C32 rev2)", "sha256": contractSHA256},
+		"contract":   map[string]string{"document": "orbit-contract-draft-v2.md", "section": contractRevision, "sha256": contractSHA256, "sha256Note": "abbreviated as relayed; full value pending", "previousSha256": previousContractSHA256},
 		"gitSha":     gitSHA(root),
 		"components": components(),
 		"harness": map[string]string{

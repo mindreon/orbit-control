@@ -50,7 +50,7 @@ func TestReviewM1HistoryNotDeletable(t *testing.T) {
 		return n
 	}
 	for _, tbl := range []struct{ name, col string }{
-		{"events", "tenant_id"}, {"messages", "tenant_id"}, {"turns", "tenant_id"}, {"approvals", "tenant_id"},
+		{"rooms", "tenant_id"}, {"events", "tenant_id"}, {"messages", "tenant_id"}, {"turns", "tenant_id"}, {"approvals", "tenant_id"},
 		{"artifacts", "tenant_id"}, {"artifact_versions", "tenant_id"}, {"users", "tenant_id"}, {"personas", "tenant_id"},
 		{"mcp_connectors", "tenant_id"}, {"cloud_agent_jobs", "tenant_id"}, {"tenants", "id"},
 	} {

@@ -392,6 +392,7 @@ func checkSoftDeleteFunction(t *testing.T, ownerPool, appPool *pgxpool.Pool, ten
 		aclSet && !publicExec && appExec && len(acl) == 1 && acl[0] == "orbit_app=X/orbit_definer")
 
 	// Any role other than orbit_app must get a permission error.
+	opsPool := newPool(t, opsURL, 1)
 	call := func(pool *pgxpool.Pool, setRole string) error {
 		return pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
 			if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenant); err != nil {
@@ -406,10 +407,15 @@ func checkSoftDeleteFunction(t *testing.T, ownerPool, appPool *pgxpool.Pool, ten
 			return tx.QueryRow(ctx, `SELECT public.orbit_soft_delete_room($1, $2)`, roomB, owner).Scan(&n)
 		})
 	}
-	for _, role := range []string{"orbit_owner", "orbit_definer"} {
-		err := call(ownerPool, role)
-		iso(t, "S-DB-13(i)/execute-denied-"+role, c, []string{"FM-18", "FM-19"}, "calling the function as "+role+" fails with insufficient_privilege",
-			sqlReq{Role: role, Tenant: tenant, SQL: "SELECT public.orbit_soft_delete_room($1, $2)", Args: []any{roomB, owner}}, "permission denied", privilegeDenied(err), privilegeDenied(err) == "permission denied")
+	for _, role := range []string{"orbit_owner", "orbit_definer", "orbit_ops"} {
+		pool := ownerPool
+		if role == "orbit_ops" {
+			pool = opsPool
+		}
+		err := call(pool, role)
+		iso(t, "S-DB-13(i)/execute-denied-"+role, c, []string{"FM-18", "FM-19"}, "calling the function as "+role+" (any role other than orbit_app) fails with 42501 permission denied",
+			sqlReq{Role: role, Tenant: tenant, SQL: "SELECT public.orbit_soft_delete_room($1, $2)", Args: []any{roomB, owner}}, map[string]string{"sqlstate": "42501", "error": "permission denied"}, map[string]string{"sqlstate": sqlState(err), "error": privilegeDenied(err)},
+			sqlState(err) == "42501" && privilegeDenied(err) == "permission denied")
 	}
 
 	fn := func(tenantID, room, u string) (int, error) {
@@ -431,18 +437,23 @@ func checkSoftDeleteFunction(t *testing.T, ownerPool, appPool *pgxpool.Pool, ten
 			map[string]any{"rows": 0, "sqlstate": "ok"}, map[string]any{"rows": n, "sqlstate": sqlState(err)}, err == nil && n == 0)
 	}
 
+	roomCount := func() int {
+		return ownerScalar[int](t, ownerPool, `SELECT count(*) FROM rooms WHERE tenant_id = $1`, tenant)
+	}
+	roomsBefore := roomCount()
 	var affected int64
 	delErr := asTenant(ctx, appPool, tenant, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `DELETE FROM rooms`)
 		affected = tag.RowsAffected()
 		return err
 	})
+	roomsAfter := roomCount()
 	bLive := ownerScalar[bool](t, ownerPool, `SELECT deleted_at IS NULL FROM rooms WHERE id = $1`, roomB)
-	iso(t, "S-DB-13(i)/app-physical-delete-noop", c, []string{"FM-22"}, "orbit_app DELETE FROM rooms affects 0 rows; B stays live",
+	iso(t, "S-DB-13(i)/app-physical-delete-denied", c, []string{"FM-22"}, "orbit_app DELETE FROM rooms fails with 42501 permission denied (C32 rev3); room count unchanged; B stays live",
 		sqlReq{Role: "orbit_app", Tenant: tenant, SQL: "DELETE FROM rooms"},
-		map[string]any{"rowsAffected": 0, "sqlstate": "ok", "roomBLive": true},
-		map[string]any{"rowsAffected": affected, "sqlstate": sqlState(delErr), "roomBLive": bLive},
-		delErr == nil && affected == 0 && bLive)
+		map[string]any{"sqlstate": "42501", "error": "permission denied", "roomCountUnchanged": true, "roomBLive": true},
+		map[string]any{"sqlstate": sqlState(delErr), "error": privilegeDenied(delErr), "rowsAffected": affected, "roomsBefore": roomsBefore, "roomsAfter": roomsAfter, "roomBLive": bLive},
+		sqlState(delErr) == "42501" && privilegeDenied(delErr) == "permission denied" && roomsAfter == roomsBefore && roomsBefore >= 2 && bLive)
 
 	var appBypass, appOwnsRooms, rls, force bool
 	roleSQL := `SELECT r.rolbypassrls, c.relowner = r.oid, c.relrowsecurity, c.relforcerowsecurity
