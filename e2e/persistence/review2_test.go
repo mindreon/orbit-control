@@ -275,13 +275,28 @@ func TestReviewMdSingleWinnerDecide(t *testing.T) {
 		Pass:        oneWinner(ostatuses) && so.decides.Load() == rounds && odecided})
 }
 
-// Review F2 (FM-59): documented, fixed in phase 2 with the real worker.
+// Review F2: the e2e fault delivers once, returns Unknown, then the retry of
+// the same UpdateID succeeds. The workflow is called once.
 func TestReviewF2DeliveredButTimeoutOnce(t *testing.T) {
-	blocked(t, "REVIEW-F2/delivered-but-timeout-once", "§18 review F2", "e2e",
-		"inject one decision that is delivered but whose response times out, then retry: the worker applies the decision exactly once",
-		"depends on the orbit-runtime section 2.4 PR (the RoomWorkflow decide Update handler dedupes by updateId and records decided_approvals) and on contract PR orbit-control#18 (phase-2 retry and delivery-state semantics); stays blocked until both merge. Phase 1 has no reopen at all (Low-1 trigger), so no second delivery can happen today",
-		[]string{"real worker applies resolveApproval but its response is delayed past the control timeout", "retry POST /v1/approvals/{id}/decide", "count applied decisions in the worker"},
-		map[string]any{"workerAppliedDecisions": 1})
+	const c = "§18 review F2"
+	app.SetE2EFault("unknown-once")
+	t.Cleanup(func() { app.SetE2EFault("") })
+	so := &stubOrch{askApproval: true, resumeText: "resumed-f2"}
+	srv := startServer(t, serverOpts{tenant: "t-f2-once", maxConns: 4, orch: so})
+	u := "u-f2-once"
+	ap, room := parkQuiet(t, srv, u)
+	decideReq := httpReq{Method: "POST", Path: "/v1/approvals/" + ap + "/decide", Headers: user(u), Body: `{"decision":"allow"}`}
+	first := sendTo(t, srv.base, decideReq)
+	second := sendTo(t, srv.base, decideReq)
+	state := approvalTuple(t, ap)
+	_, sameUpdate := so.updateIDs.Load("ask-orch-1")
+	record(t, caseInput{ID: "REVIEW-F2/delivered-but-timeout-once", Contract: c, Kind: "e2e", FailureModes: []string{"FM-75"},
+		Description: "unknown-once calls the workflow once, the retry of that UpdateID is accepted, and a later decide is not delivered again",
+		Steps:       []string{"set ORBIT_E2E_FAULTS=unknown-once", "POST decide allow", "POST the same decision again", "count Decide calls and read the approval"},
+		Request:     decideReq,
+		Expected:    map[string]any{"firstStatus": 200, "secondStatus": 200, "state": "decided:allow:delivered:1", "decideCalls": 1, "sameUpdateID": true, "room": room != ""},
+		Actual:      map[string]any{"firstStatus": first.Status, "secondStatus": second.Status, "state": state, "decideCalls": so.decides.Load(), "sameUpdateID": sameUpdate, "firstBody": first.Body, "secondBody": second.Body},
+		Pass:        first.Status == 200 && second.Status == 200 && state == "decided:allow:delivered:1" && so.decides.Load() == 1 && sameUpdate})
 }
 
 // Review F2: a timed-out delivery is C34 unknown (202). The approval stays
@@ -501,5 +516,14 @@ func TestReviewN1AcceptedThenSlowTurn(t *testing.T) {
 			},
 			Pass: before == "awaiting_approval" && res.Status == 200 && decided.Status == "decided" && decided.Decision == "allow" &&
 				outlasted && resumedPersisted && after == "running" && deliveredOnce && noAlert})
+		if path.label == "orch" {
+			record(t, caseInput{ID: "S-ID-13/resume-slower-than-delivery-timeout", Contract: "S-ID-13", Kind: "e2e", FailureModes: []string{"FM-60"},
+				Description: "a resumed turn that outlasts ORBIT_DECISION_DELIVERY_TIMEOUT still returns 200 and is stored",
+				Steps:       []string{"DeliveryTimeout is 200ms", "the resumed turn takes 1s", "POST decide allow"},
+				Request:     decideReq,
+				Expected:    map[string]any{"status": 200, "roomAfter": "running", "resumedTextPersisted": true, "notDeliveryFailed": true},
+				Actual:      map[string]any{"status": res.Status, "roomAfter": after, "resumedTextPersisted": resumedPersisted, "outlasted": outlasted},
+				Pass:        res.Status == 200 && outlasted && resumedPersisted && after == "running" && noAlert})
+		}
 	}
 }
