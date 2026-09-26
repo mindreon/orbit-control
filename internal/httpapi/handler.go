@@ -47,6 +47,8 @@ func writeAppErr(lg *log.Logger, w http.ResponseWriter, err error, notFound stri
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		writeErr(w, http.StatusNotFound, "NOT_FOUND", notFound)
+	case errors.Is(err, store.ErrApprovalNotPending):
+		writeErr(w, http.StatusConflict, "APPROVAL_NOT_PENDING", "approval is not pending")
 	case errors.Is(err, store.ErrIdempotencyKeyReused):
 		writeErr(w, http.StatusConflict, "IDEMPOTENCY_KEY_REUSED", "Idempotency-Key was already used with a different request body")
 	case errors.Is(err, store.ErrStorage):

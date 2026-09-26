@@ -27,7 +27,7 @@ $$;
 -- +goose StatementEnd
 
 CREATE TABLE tenants (
-  id         TEXT PRIMARY KEY,
+  id         TEXT PRIMARY KEY CONSTRAINT tenants_id_not_empty CHECK (id <> ''),
   name       TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

@@ -143,13 +143,27 @@ func (s *Store) DecideApproval(ctx context.Context, tenantID, approvalID, status
 		tag, err := tx.Exec(ctx, `
 			UPDATE approvals
 			   SET status = $3, decision = $4, decided_at = now()
-			 WHERE tenant_id = $1 AND id = $2`,
+			 WHERE tenant_id = $1 AND id = $2 AND status = 'pending'`,
 			tenantID, approvalID, status, decision)
 		if err != nil {
 			return childWriteErr("decide approval", err)
 		}
 		if tag.RowsAffected() == 0 {
-			return store.ErrNotFound
+			return store.ErrApprovalNotPending
+		}
+		return nil
+	})
+}
+
+func (s *Store) ReopenApproval(ctx context.Context, tenantID, approvalID, decision string) error {
+	return s.inTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			UPDATE approvals
+			   SET status = 'pending', decision = '', decided_at = NULL
+			 WHERE tenant_id = $1 AND id = $2 AND status = 'decided' AND decision = $3`,
+			tenantID, approvalID, decision)
+		if err != nil {
+			return childWriteErr("reopen approval", err)
 		}
 		return nil
 	})

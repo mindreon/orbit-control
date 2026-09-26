@@ -115,27 +115,25 @@ CREATE POLICY tenant_live_room_rule ON approval_rules FOR ALL
 -- docs/persistence-failure-modes.md ("Privilege decisions").
 -- Tenants are created by orbit_ops (deploy/postgres/ensure-tenant.sql).
 GRANT SELECT ON tenants TO orbit_app;
-GRANT SELECT, INSERT, UPDATE ON tenants TO orbit_ops;
+GRANT SELECT, INSERT ON tenants TO orbit_ops;
 
--- History and catalog rows: never deleted by the app in P0.
-GRANT SELECT, INSERT, UPDATE ON
-  users, turns, events, messages, approvals, artifacts, artifact_versions,
-  personas, mcp_connectors, cloud_agent_jobs
+-- Reads and appends. UPDATE is granted per column below, and only where a
+-- code path writes it; events, messages and artifact_versions are
+-- immutable (no UPDATE at all).
+GRANT SELECT, INSERT ON
+  users, rooms, turns, events, messages, approvals, artifacts, artifact_versions,
+  personas, mcp_connectors, cloud_agent_jobs, approval_rules, idempotency_keys,
+  sessions, oidc_login_state
 TO orbit_app;
 
 -- Cleanup / revocation tables.
-GRANT SELECT, INSERT, UPDATE, DELETE ON
-  approval_rules, idempotency_keys, sessions, oidc_login_state
-TO orbit_app;
+GRANT DELETE ON approval_rules, idempotency_keys, sessions, oidc_login_state TO orbit_app;
 
--- rooms: UPDATE per column. id, tenant_id, created_by, created_at,
--- deleted_at and deleted_by are not updatable by the app. No DELETE
--- privilege and no DELETE policy (C32 rev3); soft delete goes through
--- orbit_soft_delete_room only.
-GRANT SELECT, INSERT ON rooms TO orbit_app;
-GRANT UPDATE (kind, title, state, permission_preset, runtime, session_id,
-              persona_id, delegation, failure, last_event_seq, updated_at)
-   ON rooms TO orbit_app;
+-- Column-scoped UPDATE: pgstore.UpdateRoomState, pgstore.DecideApproval /
+-- ReopenApproval, auth.Sessions.Lookup. rooms has no DELETE (C32 rev3).
+GRANT UPDATE (state, session_id, updated_at) ON rooms TO orbit_app;
+GRANT UPDATE (status, decision, decided_at) ON approvals TO orbit_app;
+GRANT UPDATE (last_seen_at) ON sessions TO orbit_app;
 
 GRANT USAGE, SELECT ON SEQUENCE events_id_seq TO orbit_app;
 

@@ -15,6 +15,11 @@ var ErrNotFound = errors.New("not found")
 // request body (§9, 409 IDEMPOTENCY_KEY_REUSED).
 var ErrIdempotencyKeyReused = errors.New("idempotency key reused with a different request")
 
+// ErrApprovalNotPending means the approval was already decided (409). The
+// decision UPDATE is conditional on status = 'pending', so concurrent
+// decisions produce exactly one winner.
+var ErrApprovalNotPending = errors.New("approval is not pending")
+
 // ErrStorage wraps unexpected database failures. Its text is for server logs
 // only and must not be echoed to clients.
 var ErrStorage = errors.New("storage error")
@@ -55,7 +60,12 @@ type Repository interface {
 	CreateApproval(ctx context.Context, tenantID string, a ApprovalRecord) error
 	GetApproval(ctx context.Context, tenantID, userID, approvalID string) (ApprovalRecord, error)
 	ListApprovals(ctx context.Context, tenantID, userID string) ([]ApprovalRecord, error)
+	// DecideApproval moves a pending approval to status/decision; if it is no
+	// longer pending it returns ErrApprovalNotPending.
 	DecideApproval(ctx context.Context, tenantID, approvalID, status, decision string) error
+	// ReopenApproval undoes DecideApproval when the decision could not be
+	// delivered to the workflow.
+	ReopenApproval(ctx context.Context, tenantID, approvalID, decision string) error
 
 	Close()
 }
