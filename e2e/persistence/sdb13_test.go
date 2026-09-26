@@ -32,7 +32,7 @@ type sqlReq struct {
 
 func iso(t *testing.T, id, contract string, fms []string, desc string, req any, expected, actual any, pass bool) bool {
 	t.Helper()
-	return record(t, Case{ID: id, Contract: contract, Kind: "isolated", FailureModes: fms,
+	return record(t, caseInput{ID: id, Contract: contract, Kind: "isolated", FailureModes: fms,
 		Description: desc, Request: req, Expected: expected, Actual: actual, Pass: pass})
 }
 
@@ -122,10 +122,12 @@ func TestSDB13SoftDelete(t *testing.T) {
 	const idemKey = "e2e-sdb13-create-A"
 	createA := httpReq{Method: "POST", Path: "/v1/rooms", Headers: withHeader(user(owner), "Idempotency-Key", idemKey), Body: createBody}
 	roomA = roomID(t, srv.check(t, "S-DB-13/setup/create-A", s13, "create the task to delete with an Idempotency-Key", createA, httpExp{Status: 200}))
+	alias(roomA, "<room-A>")
 	srv.check(t, "S-DB-13/setup/replay-A-live", s13, "same key + body replays the live task",
 		createA, httpExp{Status: 200, BodyIncludes: []string{roomA}, Headers: map[string]string{"Idempotent-Replayed": "true"}})
 	roomB := roomID(t, srv.check(t, "S-DB-13/setup/create-B", s13, "create the surviving task",
 		httpReq{Method: "POST", Path: "/v1/rooms", Headers: user(owner), Body: `{"kind":"solo","title":"survivor"}`}, httpExp{Status: 200}))
+	alias(roomB, "<room-B>")
 
 	posted := srv.check(t, "S-DB-13/setup/message-A", s13, "message on A parks an approval",
 		httpReq{Method: "POST", Path: "/v1/rooms/" + roomA + "/messages", Headers: user(owner), Body: `{"message":"list files"}`},
@@ -138,6 +140,7 @@ func TestSDB13SoftDelete(t *testing.T) {
 		t.Fatalf("no approval on A: %s", posted.Body)
 	}
 	approvalA := postedBody.Approval.ID
+	alias(approvalA, "<approval-A>")
 	srv.check(t, "S-DB-13/setup/message-B", s13, "message on B",
 		httpReq{Method: "POST", Path: "/v1/rooms/" + roomB + "/messages", Headers: user(owner), Body: `{"message":"hello"}`}, httpExp{Status: 200})
 	srv.check(t, "S-DB-13/setup/worker-event-A", s13, "worker event on the live task is accepted",
@@ -182,7 +185,7 @@ func TestSDB13SoftDelete(t *testing.T) {
 	t.Cleanup(func() { sseRes.Body.Close() })
 	sseReader := bufio.NewReader(sseRes.Body)
 	preface, _ := sseReader.ReadString('\n')
-	record(t, Case{ID: "S-DB-13/setup/sse-open", Contract: s13, Description: "SSE stream on A is open before the delete",
+	record(t, caseInput{ID: "S-DB-13/setup/sse-open", Contract: s13, Description: "SSE stream on A is open before the delete",
 		Request:  httpReq{Method: "GET", Path: "/v1/rooms/" + roomA + "/events", Headers: user(owner)},
 		Expected: map[string]any{"status": 200, "firstLine": ": connected"},
 		Actual:   map[string]any{"status": sseRes.StatusCode, "firstLine": strings.TrimSpace(preface)},
@@ -213,7 +216,7 @@ func TestSDB13SoftDelete(t *testing.T) {
 		del(map[string]string{userHeader: owner, "Origin": "https://evil.test", "X-Orbit-Request": "1"}, ""), httpExp{Status: 403, BodyIncludes: []string{"CSRF_REJECTED"}})
 	srv.check(t, "S-DB-13/order/404-not-creator", "§18.7a", "another user of the same tenant → same 404 as a missing room",
 		del(userCSRF(other), ""), httpExp{Status: 404, BodyEquals: notFound})
-	record(t, Case{ID: "S-DB-13/order/no-abort-when-rejected", Contract: "§18.7a",
+	record(t, caseInput{ID: "S-DB-13/order/no-abort-when-rejected", Contract: "§18.7a",
 		Description: "rejected deletes never reach the workflow abort", Request: "the four rejected DELETEs above",
 		Expected: 0, Actual: abortCalls.Load(), Pass: abortCalls.Load() == 0})
 
@@ -272,7 +275,7 @@ func TestSDB13SoftDelete(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		closedAfter = "still open after 5s"
 	}
-	record(t, Case{ID: "S-DB-13(c)/sse-closed", Contract: "S-DB-13 (c)", Description: "the SSE stream opened before the delete is closed by control",
+	record(t, caseInput{ID: "S-DB-13(c)/sse-closed", Contract: "S-DB-13 (c)", Description: "the SSE stream opened before the delete is closed by control",
 		Request: "stream from S-DB-13/setup/sse-open", Expected: "closed", Actual: closedAfter, Pass: closedAfter == "closed"})
 	srv.check(t, "S-DB-13(c)/reconnect-last-event-id", "S-DB-13 (c)", "reconnect with Last-Event-ID → 404 JSON, no stream, no replay",
 		httpReq{Method: "GET", Path: "/v1/rooms/" + roomA + "/events", Headers: withHeader(user(owner), "Last-Event-ID", "1")},
@@ -343,7 +346,7 @@ func TestSDB13SoftDelete(t *testing.T) {
 	iso(t, "S-DB-13(j)/no-new-task", "S-DB-13 (j)", []string{"FM-23"}, "replays after delete created no task",
 		sqlReq{Role: "orbit_owner", SQL: "SELECT count(*) FROM rooms WHERE tenant_id = <tenant>"}, roomsBefore, roomsAfter, roomsAfter == roomsBefore)
 
-	record(t, Case{ID: "S-DB-13/no-abort-warning", Contract: "§18.7a", Description: "a successful abort logs no warning",
+	record(t, caseInput{ID: "S-DB-13/no-abort-warning", Contract: "§18.7a", Description: "a successful abort logs no warning",
 		Request: "server log", Expected: "no room_delete_abort_failed", Actual: logLines(srv.logs.String()),
 		Pass: !strings.Contains(srv.logs.String(), "room_delete_abort_failed")})
 }
@@ -470,6 +473,7 @@ func TestSDB13kAbortFailureStillSoftDeletes(t *testing.T) {
 			id := "S-DB-13(k)/" + mode
 			room := roomID(t, srv.check(t, id+"/create", "S-DB-13 (k)", "create through the (stubbed) Temporal path",
 				httpReq{Method: "POST", Path: "/v1/rooms", Headers: user(owner), Body: `{"kind":"solo"}`}, httpExp{Status: 200}))
+			alias(room, "<room-k-"+mode+">")
 			start := time.Now()
 			srv.check(t, id+"/delete", "S-DB-13 (k)", "DELETE still returns 204 when the workflow abort "+map[string]string{"timeout": "times out", "error": "fails"}[mode],
 				httpReq{Method: "DELETE", Path: "/v1/rooms/" + room, Headers: userCSRF(owner)}, httpExp{Status: 204})
@@ -480,11 +484,11 @@ func TestSDB13kAbortFailureStillSoftDeletes(t *testing.T) {
 			_ = ownerPool.QueryRow(ctx, `SELECT deleted_by FROM rooms WHERE id = $1 AND deleted_at IS NOT NULL`, room).Scan(&deletedBy)
 			iso(t, id+"/soft-deleted", "S-DB-13 (k)", []string{"FM-12", "FM-24"}, "abort was attempted on the live room, then the room was soft-deleted anyway",
 				sqlReq{Role: "orbit_owner", SQL: "SELECT deleted_by FROM rooms WHERE id = <room> AND deleted_at IS NOT NULL"},
-				map[string]any{"aborts": 1, "liveAtAbort": true, "deletedBy": owner, "boundedWait": "< 5s"},
-				map[string]any{"aborts": so.aborts.Load(), "liveAtAbort": liveAtAbort.Load(), "deletedBy": deletedBy, "boundedWait": elapsed.String()},
+				map[string]any{"aborts": 1, "liveAtAbort": true, "deletedBy": owner, "returnedWithin5s": true},
+				map[string]any{"aborts": so.aborts.Load(), "liveAtAbort": liveAtAbort.Load(), "deletedBy": deletedBy, "returnedWithin5s": elapsed < 5*time.Second},
 				so.aborts.Load() == 1 && liveAtAbort.Load() && deletedBy != nil && *deletedBy == owner && elapsed < 5*time.Second)
 			logs := srv.logs.String()
-			record(t, Case{ID: id + "/warning-logged", Contract: "S-DB-13 (k)", Description: "server log has a warning with the task id and no secret material",
+			record(t, caseInput{ID: id + "/warning-logged", Contract: "S-DB-13 (k)", Description: "server log has a warning with the task id and no secret material",
 				Request:  "server log",
 				Expected: map[string]any{"includes": []string{"WARN", "task=" + room, "reason=" + mode}, "excludes": []string{planted, "token="}},
 				Actual:   logLines(logs),

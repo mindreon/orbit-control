@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,7 +27,6 @@ import (
 	"github.com/mindreon/orbit-control/internal/app"
 	"github.com/mindreon/orbit-control/internal/httpapi"
 	"github.com/mindreon/orbit-control/internal/orch"
-	"github.com/mindreon/orbit-control/internal/store/migrations"
 	"github.com/mindreon/orbit-control/internal/store/pgstore"
 	"github.com/mindreon/orbit-control/internal/worker"
 )
@@ -42,13 +42,18 @@ const (
 )
 
 func TestMain(m *testing.M) {
+	alias(planted, "<planted-secret>")
+	alias(plantedDBPassword, "<planted-db-password>")
 	code := run(m)
-	path, err := writeReport()
+	path, gateOK, err := writeReport()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "write e2e report: %v\n", err)
 		code = 1
 	} else {
 		fmt.Fprintf(os.Stderr, "e2e report: %s\n", path)
+	}
+	if !gateOK {
+		code = 1
 	}
 	os.Exit(code)
 }
@@ -61,24 +66,21 @@ func run(m *testing.M) int {
 		return 1
 	}
 	ctx := context.Background()
-	// §18.2: up → down → up, starting from whatever state the database is in.
-	for _, step := range []struct {
-		name string
-		run  func(context.Context, string) error
-	}{{"up", migrations.Up}, {"down", migrations.Reset}, {"up", migrations.Up}} {
-		if err := step.run(ctx, ownerURL); err != nil {
-			msg := fmt.Sprintf("migrations %s: %v", step.name, err)
-			fatalSetup(msg)
-			fmt.Fprintln(os.Stderr, msg)
-			return 1
-		}
-	}
 	if conn, err := pgx.Connect(ctx, ownerURL); err == nil {
-		var v string
-		_ = conn.QueryRow(ctx, `SHOW server_version`).Scan(&v)
-		report.Postgres = v
+		_ = conn.QueryRow(ctx, `SHOW server_version`).Scan(&postgresVer)
 		_ = conn.Close(ctx)
 	}
+	if !runSDB06Migrations(ctx) {
+		fmt.Fprintln(os.Stderr, "S-DB-6 migration sequence failed; see report")
+		return 1
+	}
+	if err := buildBinary(); err != nil {
+		msg := "build orbit-control: " + err.Error()
+		fatalSetup(msg)
+		fmt.Fprintln(os.Stderr, msg)
+		return 1
+	}
+	defer os.RemoveAll(filepath.Dir(binaryPath))
 	return m.Run()
 }
 
@@ -214,9 +216,9 @@ type httpAct struct {
 	Body    string            `json:"body"`
 }
 
-func (s *server) send(t *testing.T, req httpReq) httpAct {
+func sendTo(t *testing.T, base string, req httpReq) httpAct {
 	t.Helper()
-	r, err := http.NewRequest(req.Method, s.base+req.Path, strings.NewReader(req.Body))
+	r, err := http.NewRequest(req.Method, base+req.Path, strings.NewReader(req.Body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,8 +274,8 @@ func (e httpExp) matches(a httpAct) bool {
 // check sends req, compares with exp and records an e2e case.
 func (s *server) check(t *testing.T, id, contract, desc string, req httpReq, exp httpExp) httpAct {
 	t.Helper()
-	act := s.send(t, req)
-	record(t, Case{ID: id, Contract: contract, Kind: "e2e", Description: desc, Request: req, Expected: exp, Actual: act, Pass: exp.matches(act)})
+	act := sendTo(t, s.base, req)
+	record(t, caseInput{ID: id, Contract: contract, Kind: "e2e", Description: desc, Request: req, Expected: exp, Actual: act, Pass: exp.matches(act)})
 	return act
 }
 
@@ -315,6 +317,8 @@ func stubWorker(t *testing.T, onAbort func(roomID string)) *httptest.Server {
 			fmt.Fprintf(w, `{"sessionId":"sess-%d"}`, i)
 		case strings.HasSuffix(r.URL.Path, "/runTurn"):
 			fmt.Fprintf(w, `{"status":"needs_approval","approval":{"approvalRequestId":"ask-%d","toolName":"bash","reason":"ls"},"texts":["stub reply"]}`, i)
+		case strings.HasSuffix(r.URL.Path, "/resolveApproval"):
+			_, _ = io.WriteString(w, `{"applied":true}`)
 		case strings.HasSuffix(r.URL.Path, "/abort"):
 			if onAbort != nil {
 				id, _ := in["roomId"].(string)
