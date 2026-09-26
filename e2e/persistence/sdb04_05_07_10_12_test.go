@@ -129,12 +129,13 @@ func TestSDB07ConcurrentWritersAndReplay(t *testing.T) {
 
 func TestSDB12ArtifactBlobs(t *testing.T) {
 	const by = "phase 2: /internal/artifact-blobs and the internal listener (§18.7); owner instruction: not in this PR"
-	for _, b := range []struct{ id, desc string }{
-		{"a-forged-tenant", "a forged tenant in the request is ignored; the file lands under the task's real tenant"},
-		{"b-digest-mismatch", "X-Content-Digest mismatch → 422, no file left; ../x or file names in the header do not affect the path"},
-		{"c-size-limit", "body of limit+1 bytes → 413, RSS stays far below the body size, no temp file left"},
-		{"d-public-listener", "/internal/artifact-blobs and /internal/events on the public listener → 404 (today /internal/events is still on the public listener)"},
+	for _, b := range []struct{ id, desc, by string }{
+		{"a-forged-tenant", "a forged tenant in the request is ignored; the file lands under the task's real tenant", by},
+		{"b-digest-mismatch", "X-Content-Digest mismatch → 422, no file left; ../x or file names in the header do not affect the path", by},
+		{"c-size-limit", "body of limit+1 bytes → 413, RSS stays far below the body size, no temp file left", by},
+		{"d-public-listener", "/internal/artifact-blobs and /internal/events on the public listener → 404 (today /internal/events is still on the public listener)",
+			"phase 2: becomes real after #15 (E-LE-4)"},
 	} {
-		blocked(t, "S-DB-12/"+b.id, "S-DB-12", "e2e", b.desc, by, nil, "per §18.8 S-DB-12")
+		blocked(t, "S-DB-12/"+b.id, "S-DB-12", "e2e", b.desc, b.by, nil, "per §18.8 S-DB-12")
 	}
 }

@@ -372,6 +372,11 @@ type stubOrch struct {
 	aborts  atomic.Int32
 	onAbort func(roomID string)
 	seq     atomic.Int64
+	// askApproval makes RunTurn park an approval; decides counts the
+	// Update calls that deliver a decision (review M-d).
+	askApproval bool
+	decideDelay time.Duration
+	decides     atomic.Int32
 }
 
 const planted = "sk-live-E2E-PLANTED-SECRET"
@@ -380,10 +385,15 @@ func (f *stubOrch) StartRoom(_ context.Context, roomID, kind, _ string) (orch.Ro
 	return orch.RoomView{RoomID: roomID, State: "running", Kind: kind, SessionID: fmt.Sprintf("sess-k-%d", f.seq.Add(1))}, nil
 }
 func (f *stubOrch) RunTurn(context.Context, string, string, string) (orch.RunTurnResult, error) {
+	if f.askApproval {
+		return orch.RunTurnResult{Status: "needs_approval", Approval: &orch.ApprovalAsk{ApprovalRequestID: "ask-orch-1", ToolName: "bash"}}, nil
+	}
 	return orch.RunTurnResult{Status: "completed"}, nil
 }
-func (f *stubOrch) Decide(context.Context, string, string, string, string, string) (orch.DecideResult, error) {
-	return orch.DecideResult{}, nil
+func (f *stubOrch) Decide(_ context.Context, _, _, _, decision, _ string) (orch.DecideResult, error) {
+	f.decides.Add(1)
+	time.Sleep(f.decideDelay)
+	return orch.DecideResult{Decision: decision}, nil
 }
 func (f *stubOrch) Steer(context.Context, string, string, string) error { return nil }
 func (f *stubOrch) Abort(ctx context.Context, roomID, _, _ string) error {

@@ -107,6 +107,15 @@ func TestReviewM2TenantsOpsOnly(t *testing.T) {
 		iso(t, "REVIEW-M2/app-tenants-"+p.id+"-denied", c, []string{"FM-41"}, "orbit_app cannot "+p.id+" tenants",
 			sqlReq{Role: "orbit_app", SQL: p.sql}, "permission denied", privilegeDenied(err), privilegeDenied(err) == "permission denied")
 	}
+	_, opsUpdErr := opsPool.Exec(ctx, `UPDATE tenants SET name = 'renamed-by-ops' WHERE id = 't-m1'`)
+	iso(t, "REVIEW-La/ops-tenants-update-denied", c, []string{"FM-56"}, "orbit_ops cannot rename tenants (SELECT, INSERT only)",
+		sqlReq{Role: "orbit_ops", SQL: "UPDATE tenants SET name = 'renamed-by-ops' WHERE id = 't-m1'"},
+		map[string]string{"sqlstate": "42501", "error": "permission denied"}, map[string]string{"sqlstate": sqlState(opsUpdErr), "error": privilegeDenied(opsUpdErr)},
+		sqlState(opsUpdErr) == "42501" && privilegeDenied(opsUpdErr) == "permission denied")
+	_, emptyErr := opsPool.Exec(ctx, `INSERT INTO tenants (id, name) VALUES ('', 'empty')`)
+	iso(t, "REVIEW-La/empty-tenant-id-rejected", c, []string{"FM-57"}, "a tenant with an empty id is rejected by CHECK (id <> '')",
+		sqlReq{Role: "orbit_ops", SQL: "INSERT INTO tenants (id, name) VALUES ('', 'empty')"}, "23514", sqlState(emptyErr), sqlState(emptyErr) == "23514")
+
 	err := sel(appPool, `SELECT count(*) FROM tenants`)
 	iso(t, "REVIEW-M2/app-tenants-select", c, []string{"FM-41"}, "orbit_app can read tenants (startup check)",
 		sqlReq{Role: "orbit_app", SQL: "SELECT count(*) FROM tenants"}, "ok", sqlState(err), err == nil)
