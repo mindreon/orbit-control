@@ -514,6 +514,11 @@ paths:
         The approval is claimed with a conditional update (`status = pending`)
         before anything is sent to the workflow, so concurrent decisions have
         exactly one winner and the workflow receives exactly one decision.
+        The Temporal decide Update uses `UpdateID = approvalRequestId` and
+        does not send `resumeTurnId` (C35). A transition that matches 0 rows
+        is re-read and answered from that row; it is never 500. A room that
+        is already `failed` returns **409** `ROOM_FAILED`. `room.failed`
+        carries `failure: {code, message}` with the §10.2 sentence.
         Deciding an approval that is already `delivered`, `unresolved`, or
         `cancelled` returns **409** `APPROVAL_NOT_PENDING` (contract §2.0).
         While `deliveryState` is `in_flight` or `unknown`, the same decision

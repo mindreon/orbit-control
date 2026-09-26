@@ -12,6 +12,23 @@ import (
 
 const sqlstateRaiseException = "P0001"
 
+func deliveryTransition(from, to string) string {
+	switch {
+	case from == "in_flight" && to == "delivered":
+		return "t2"
+	case from == "in_flight" && to == "unknown":
+		return "t3"
+	case from == "in_flight" && to == "unresolved":
+		return "t5"
+	case from == "delivered" && to == "unresolved":
+		return "t11"
+	default:
+		return ""
+	}
+}
+
+var errLostRace = errors.New("lost delivery race")
+
 func raiseOr(op string, err error) error {
 	if code, _ := pgCode(err); code == sqlstateRaiseException {
 		return store.ErrApprovalNotPending
@@ -46,6 +63,9 @@ func (s *Store) ClaimDecision(ctx context.Context, tenantID, approvalID, decisio
 }
 
 func (s *Store) SetDeliveryState(ctx context.Context, tenantID, approvalID, from, to string, attempt int) (bool, error) {
+	if err := noteDeliveryFault(deliveryTransition(from, to)); err != nil {
+		return false, err
+	}
 	ok := false
 	err := s.inTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `
@@ -81,6 +101,9 @@ func (s *Store) ReopenUndelivered(ctx context.Context, tenantID, approvalID stri
 		}
 		if tag.RowsAffected() != 1 {
 			return nil
+		}
+		if err := abortBeforeCommit("t4"); err != nil {
+			return err
 		}
 		tag, err = tx.Exec(ctx, `
 			UPDATE approvals

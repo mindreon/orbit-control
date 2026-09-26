@@ -38,12 +38,18 @@ const (
 	RuntimeKernel      = "agentscope"
 	maxActivityPerRoom = 500
 
-	DefaultTenantID        = "default"
-	LocalIssuer            = "orbit-local"
-	MaxIdempotencyKeyLen   = 128
-	idempotencyTTL         = 24 * time.Hour
-	defaultAbortTimeout    = 5 * time.Second
-	defaultDeliveryTimeout = 30 * time.Second
+	DefaultTenantID          = "default"
+	LocalIssuer              = "orbit-local"
+	MaxIdempotencyKeyLen     = 128
+	idempotencyTTL           = 24 * time.Hour
+	defaultAbortTimeout      = 5 * time.Second
+	defaultDeliveryTimeout   = 30 * time.Second
+	defaultReconcileInterval = 10 * time.Second
+	defaultUnknownTimeout    = 600 * time.Second
+	defaultTurnTimeout       = 2 * time.Minute
+	// stalledMargin is the extra wait after the delivery timeout before a
+	// reconciler treats in_flight as crashed (C35 T3).
+	stalledMargin = 30 * time.Second
 )
 
 // ErrInvalid marks caller errors (400).
@@ -54,8 +60,9 @@ var ErrInvalid = errors.New("invalid request")
 // error text.
 var ErrDecisionDeliveryFailed = errors.New("decision delivery failed")
 
-// ErrNotDelivered is a delivery the workflow provably never accepted (C34).
-// An error whose text contains NOT_DELIVERED is treated the same way.
+// ErrNotDelivered remains for callers that already return it. Classification
+// does not match its text. NotDelivered is ApplicationError type
+// APPROVAL_UNKNOWN inside the decideConfig window (FM-69).
 var ErrNotDelivered = errors.New("NOT_DELIVERED")
 
 // DeliveryUnknownError is HTTP 202: delivery is in_flight or unknown, and
@@ -111,7 +118,10 @@ type Principal struct {
 type Orchestrator interface {
 	StartRoom(ctx context.Context, roomID, kind, permissionPreset string) (orch.RoomView, error)
 	RunTurn(ctx context.Context, roomID, turnID, message string) (orch.RunTurnResult, error)
-	Decide(ctx context.Context, roomID, updateID, turnID, approvalRequestID, decision, resumeTurnID string) (orch.DecideUpdate, error)
+	Decide(ctx context.Context, roomID, approvalRequestID, turnID, decision string) (orch.DecideUpdate, error)
+	DecideConfig(ctx context.Context, roomID string) (orch.DecideConfig, error)
+	DecideOutcome(ctx context.Context, roomID, approvalRequestID string) (bool, orch.DecideOutcome, error)
+	ApprovalPending(ctx context.Context, roomID, approvalRequestID string) (bool, error)
 	Steer(ctx context.Context, roomID, turnID, instruction string) error
 	Abort(ctx context.Context, roomID, turnID, reason string) error
 }
@@ -196,7 +206,15 @@ type Options struct {
 	// AbortTimeout bounds the workflow abort sent before a soft delete.
 	AbortTimeout time.Duration
 	// DeliveryTimeout bounds delivering an approval decision to the workflow.
+	// Zero uses ORBIT_DECISION_DELIVERY_TIMEOUT's default (30s).
 	DeliveryTimeout time.Duration
+	// ReconcileInterval is ORBIT_DELIVERY_RECONCILE_INTERVAL_S. Zero uses 10s.
+	ReconcileInterval time.Duration
+	// UnknownTimeout is ORBIT_DELIVERY_UNKNOWN_TIMEOUT_S. Zero uses 600s.
+	UnknownTimeout time.Duration
+	// TurnTimeout bounds handle.Get and the result write. It is not the
+	// delivery timeout. Zero uses 2 minutes.
+	TurnTimeout time.Duration
 	// ArtifactDir is the content-addressed blob root ({dir}/{tenant}/{sha256}).
 	// Empty disables POST /internal/artifact-blobs.
 	ArtifactDir string
@@ -215,21 +233,25 @@ type App struct {
 	AbortTimeout  time.Duration
 	// DeliveryTimeout bounds resolveApproval / acceptance of the decide
 	// Update; never the resumed turn.
-	DeliveryTimeout  time.Duration
-	ArtifactDir      string
-	ArtifactMaxBytes int64
-	pendingWrites    sync.Map
-	skipResultWrite  atomic.Bool
-	Events           EventLog
-	SessionRoom      map[string]string
-	Personas         map[string]*Persona
-	McpConnectors    map[string]*McpConnector
-	CloudAgents      map[string]*CloudAgentJob
-	live             map[string]liveRoom
-	knownUsers       map[string]struct{}
-	grants           map[string]*grantRecord
-	subs             map[string]map[*subscriber]struct{}
-	clientStreams    map[string]int
+	DeliveryTimeout   time.Duration
+	ReconcileInterval time.Duration
+	UnknownTimeout    time.Duration
+	TurnTimeout       time.Duration
+	ArtifactDir       string
+	ArtifactMaxBytes  int64
+	skipResultWrite   atomic.Bool
+	reconcileStop     chan struct{}
+	reconcileOnce     sync.Once
+	Events            EventLog
+	SessionRoom       map[string]string
+	Personas          map[string]*Persona
+	McpConnectors     map[string]*McpConnector
+	CloudAgents       map[string]*CloudAgentJob
+	live              map[string]liveRoom
+	knownUsers        map[string]struct{}
+	grants            map[string]*grantRecord
+	subs              map[string]map[*subscriber]struct{}
+	clientStreams     map[string]int
 	// freedLogs are closed rooms whose event log was freed; later events for
 	// them are discarded so the log is not recreated.
 	freedLogs map[string]struct{}
@@ -264,29 +286,42 @@ func NewWithOptions(opts Options) *App {
 	if opts.DeliveryTimeout <= 0 {
 		opts.DeliveryTimeout = defaultDeliveryTimeout
 	}
+	if opts.ReconcileInterval <= 0 {
+		opts.ReconcileInterval = defaultReconcileInterval
+	}
+	if opts.UnknownTimeout <= 0 {
+		opts.UnknownTimeout = defaultUnknownTimeout
+	}
+	if opts.TurnTimeout <= 0 {
+		opts.TurnTimeout = defaultTurnTimeout
+	}
+	opts.Orch = wrapOrch(opts.Orch)
 	a := &App{
-		Worker:           opts.Worker,
-		Orch:             opts.Orch,
-		Repo:             opts.Repo,
-		Store:            store.New(""),
-		Log:              opts.Log,
-		DefaultTenant:    opts.DefaultTenant,
-		AbortTimeout:     opts.AbortTimeout,
-		DeliveryTimeout:  opts.DeliveryTimeout,
-		ArtifactDir:      opts.ArtifactDir,
-		ArtifactMaxBytes: opts.ArtifactMaxBytes,
-		Events:           NewMemoryEventLog(maxActivityPerRoom),
-		SessionRoom:      map[string]string{},
-		Personas:         map[string]*Persona{},
-		McpConnectors:    map[string]*McpConnector{},
-		CloudAgents:      map[string]*CloudAgentJob{},
-		live:             map[string]liveRoom{},
-		knownUsers:       map[string]struct{}{},
-		grants:           map[string]*grantRecord{},
-		subs:             map[string]map[*subscriber]struct{}{},
-		clientStreams:    map[string]int{},
-		freedLogs:        map[string]struct{}{},
-		Limits:           DefaultLimits(),
+		Worker:            opts.Worker,
+		Orch:              opts.Orch,
+		Repo:              opts.Repo,
+		Store:             store.New(""),
+		Log:               opts.Log,
+		DefaultTenant:     opts.DefaultTenant,
+		AbortTimeout:      opts.AbortTimeout,
+		DeliveryTimeout:   opts.DeliveryTimeout,
+		ReconcileInterval: opts.ReconcileInterval,
+		UnknownTimeout:    opts.UnknownTimeout,
+		TurnTimeout:       opts.TurnTimeout,
+		ArtifactDir:       opts.ArtifactDir,
+		ArtifactMaxBytes:  opts.ArtifactMaxBytes,
+		Events:            NewMemoryEventLog(maxActivityPerRoom),
+		SessionRoom:       map[string]string{},
+		Personas:          map[string]*Persona{},
+		McpConnectors:     map[string]*McpConnector{},
+		CloudAgents:       map[string]*CloudAgentJob{},
+		live:              map[string]liveRoom{},
+		knownUsers:        map[string]struct{}{},
+		grants:            map[string]*grantRecord{},
+		subs:              map[string]map[*subscriber]struct{}{},
+		clientStreams:     map[string]int{},
+		freedLogs:         map[string]struct{}{},
+		Limits:            DefaultLimits(),
 	}
 	if a.ArtifactMaxBytes <= 0 {
 		a.ArtifactMaxBytes = 32 << 20
@@ -717,7 +752,7 @@ func (a *App) decideLegacy(ctx context.Context, p Principal, approvalID, decisio
 		// Delivery is acceptance of the Update; the resumed turn that follows
 		// runs under the request context, not the delivery timeout (FM-60).
 		dctx, cancel := context.WithTimeout(ctx, a.DeliveryTimeout)
-		upd, err := a.Orch.Decide(dctx, roomID, approvalID, id("tn_"), reqID, decision, id("tn_"))
+		upd, err := a.Orch.Decide(dctx, roomID, reqID, id("tn_"), decision)
 		timedOut := errors.Is(dctx.Err(), context.DeadlineExceeded)
 		cancel()
 		if err != nil {
@@ -810,6 +845,11 @@ func (a *App) AbortRoom(ctx context.Context, p Principal, roomID string) error {
 		return err
 	}
 	_ = a.abortWorkflow(ctx, roomID, rec.SessionID, "abort")
+	if ds := a.delivery(); ds != nil {
+		if err := ds.CancelPending(ctx, p.TenantID, roomID); err != nil {
+			return err
+		}
+	}
 	if err := a.Repo.UpdateRoomState(ctx, p.TenantID, roomID, string(RoomClosed), ""); err != nil {
 		return err
 	}
@@ -905,6 +945,7 @@ var workerEventTypes = map[string]struct{}{
 	"agent.finished":       {},
 	"agent.spawn_rejected": {},
 	"turn.failed":          {},
+	"room.failed":          {},
 }
 
 // liveOnlyEventTypes are fanned out over SSE but never stored: they take no
@@ -974,6 +1015,9 @@ func (a *App) Ingest(ctx context.Context, raw []byte) error {
 	}
 	a.remember(rec)
 	env := Envelope{Type: eventType, TaskID: roomID, TS: ts, Source: "worker", Payload: payload.Bytes()}
+	if eventType == "room.failed" {
+		return a.ingestRoomFailed(ctx, rec, payload.Bytes())
+	}
 	if _, ok := liveOnlyEventTypes[eventType]; ok {
 		a.publishLive(env)
 		return nil

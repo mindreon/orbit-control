@@ -142,6 +142,21 @@ func runCmd(args []string) int {
 			id string
 			fn func(*stack) caseRow
 		}{{"E-LE-1", caseELE1}, {"E-LE-2", caseELE2}, {"E-LE-3", caseELE3}, {"E-LE-4", caseELE4}, {"E-LE-6", caseELE6}}
+		// Real Temporal decide cases stay out of the default report until
+		// orbit-runtime#11 has merged and ORBIT_RUNTIME_REF is that merge
+		// commit. ORBIT_RUNTIME_DECIDE_E2E is left unset.
+		if os.Getenv("ORBIT_RUNTIME_DECIDE_E2E") == "1" {
+			all = append(all,
+				struct {
+					id string
+					fn func(*stack) caseRow
+				}{"C3-decide", caseRealDecide},
+				struct {
+					id string
+					fn func(*stack) caseRow
+				}{"C3-fm60", caseRealFM60},
+			)
+		}
 		for _, c := range all {
 			if *only != "" && !strings.Contains(","+*only+",", ","+c.id+",") {
 				continue
@@ -594,6 +609,7 @@ func (c *control) rejectedWorkerPosts() int {
 type room struct {
 	ID        string `json:"id"`
 	SessionID string `json:"sessionId"`
+	State     string `json:"state"`
 }
 
 type envelope struct {

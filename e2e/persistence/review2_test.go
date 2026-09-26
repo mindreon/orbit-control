@@ -405,8 +405,9 @@ func TestReviewN1AcceptedThenSlowTurn(t *testing.T) {
 				so := &stubOrch{askApproval: true, completeDelay: time.Second, resumeText: "resumed-orch"}
 				srv := startServer(t, serverOpts{tenant: "t-n1-orch", maxConns: 4, orch: so, deliveryTimeout: 200 * time.Millisecond})
 				return srv, func(approvalID string) bool {
-					_, ok := so.updateIDs.Load(approvalID)
-					return ok && so.decides.Load() == 1
+					_, byApproval := so.updateIDs.Load(approvalID)
+					_, byRequest := so.updateIDs.Load("ask-orch-1")
+					return (byApproval || byRequest) && so.decides.Load() == 1
 				}
 			}},
 		{"worker",

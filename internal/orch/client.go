@@ -4,6 +4,7 @@ package orch
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -158,12 +159,29 @@ func (d decideUpdate) Result(ctx context.Context) (DecideResult, error) {
 	return out, nil
 }
 
+// DecideConfig is the decideConfig query. ttlS is the only TTL control uses
+// when it classifies NotDelivered.
+type DecideConfig struct {
+	TTLS       int `json:"ttlS"`
+	MaxDecided int `json:"maxDecided"`
+}
+
+// DecideOutcome is the small summary decideOutcome returns for a done id.
+type DecideOutcome struct {
+	Decision     string `json:"decision"`
+	AgentID      string `json:"agentId"`
+	ResumeTurnID string `json:"resumeTurnId"`
+	TurnStatus   string `json:"turnStatus"`
+	ErrorCode    string `json:"errorCode,omitempty"`
+}
+
 // Decide delivers a decision and returns as soon as RoomWorkflow has accepted
-// the decide Update; ctx bounds acceptance only. updateID is the approval id,
-// so repeated deliveries of one decision share an Update id.
-func (c *Client) Decide(ctx context.Context, roomID, updateID, turnID, approvalRequestID, decision, resumeTurnID string) (DecideUpdate, error) {
+// the decide Update; ctx bounds acceptance only. UpdateID is the
+// approvalRequestId (C35). The workflow derives resumeTurnId; the request
+// does not send it. Repeated deliveries of one decision share that Update id.
+func (c *Client) Decide(ctx context.Context, roomID, approvalRequestID, turnID, decision string) (DecideUpdate, error) {
 	handle, err := c.tc.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
-		UpdateID:     updateID,
+		UpdateID:     approvalRequestID,
 		WorkflowID:   WorkflowID(roomID),
 		UpdateName:   "decide",
 		WaitForStage: client.WorkflowUpdateStageAccepted,
@@ -171,13 +189,56 @@ func (c *Client) Decide(ctx context.Context, roomID, updateID, turnID, approvalR
 			"turnId":            turnID,
 			"approvalRequestId": approvalRequestID,
 			"decision":          decision,
-			"resumeTurnId":      resumeTurnID,
 		}},
 	})
 	if err != nil {
 		return nil, err
 	}
 	return decideUpdate{h: handle}, nil
+}
+
+func (c *Client) DecideConfig(ctx context.Context, roomID string) (DecideConfig, error) {
+	resp, err := c.tc.QueryWorkflow(ctx, WorkflowID(roomID), "", "decideConfig")
+	if err != nil {
+		return DecideConfig{}, err
+	}
+	var cfg DecideConfig
+	if err := resp.Get(&cfg); err != nil {
+		return DecideConfig{}, err
+	}
+	return cfg, nil
+}
+
+// DecideOutcome reports whether decideOutcome has a done entry for the id.
+// A query error is returned as-is so the caller can tell "not found" from
+// "the query failed".
+func (c *Client) DecideOutcome(ctx context.Context, roomID, approvalRequestID string) (bool, DecideOutcome, error) {
+	resp, err := c.tc.QueryWorkflow(ctx, WorkflowID(roomID), "", "decideOutcome", approvalRequestID)
+	if err != nil {
+		return false, DecideOutcome{}, err
+	}
+	var raw []byte
+	if err := resp.Get(&raw); err != nil {
+		return false, DecideOutcome{}, err
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return false, DecideOutcome{}, nil
+	}
+	var out DecideOutcome
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return false, DecideOutcome{}, err
+	}
+	return true, out, nil
+}
+
+// ApprovalPending reports whether getRoomView still lists this id as the
+// pending approval. A query error means the caller must not retry.
+func (c *Client) ApprovalPending(ctx context.Context, roomID, approvalRequestID string) (bool, error) {
+	view, err := c.GetView(ctx, roomID)
+	if err != nil {
+		return false, err
+	}
+	return approvalRequestID != "" && view.PendingApprovalRequestID == approvalRequestID, nil
 }
 
 func (c *Client) Steer(ctx context.Context, roomID, turnID, instruction string) error {

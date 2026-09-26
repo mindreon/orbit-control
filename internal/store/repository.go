@@ -61,8 +61,8 @@ type Repository interface {
 	GetApproval(ctx context.Context, tenantID, userID, approvalID string) (ApprovalRecord, error)
 	ListApprovals(ctx context.Context, tenantID, userID string) ([]ApprovalRecord, error)
 	// DecideApproval moves a pending approval to status/decision; if it is no
-	// longer pending it returns ErrApprovalNotPending. A decided approval is
-	// final (DB trigger); there is no reopen in phase 1.
+	// longer pending it returns ErrApprovalNotPending. Reopen is T9 only
+	// (not_delivered back to pending), and only through DeliveryStore.
 	DecideApproval(ctx context.Context, tenantID, approvalID, status, decision string) error
 
 	Close()
@@ -133,13 +133,13 @@ type EventRecord struct {
 // (FM-61). UpdateRoom is false when the workflow accepted the decision but
 // returned no turn, so the room state is left as it is.
 type DecideResultWrite struct {
-	ApprovalID string
-	Attempt    int
-	RoomID     string
-	RoomState  string
-	UpdateRoom bool
-	Texts      []string
-	Next       *ApprovalRecord
+	ApprovalID string          `json:"approvalId"`
+	Attempt    int             `json:"attempt"`
+	RoomID     string          `json:"roomId"`
+	RoomState  string          `json:"roomState"`
+	UpdateRoom bool            `json:"updateRoom"`
+	Texts      []string        `json:"texts"`
+	Next       *ApprovalRecord `json:"next,omitempty"`
 }
 
 // IdempotencyRecord carries only hashes; the raw Idempotency-Key is never

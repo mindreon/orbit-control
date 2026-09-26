@@ -213,9 +213,12 @@ type serverOpts struct {
 	orch         app.Orchestrator
 	abortTimeout time.Duration
 	// deliveryTimeout bounds resolveApproval / acceptance of the decide Update.
-	deliveryTimeout time.Duration
-	artifactDir     string
-	artifactMax     int64
+	deliveryTimeout   time.Duration
+	reconcileInterval time.Duration
+	unknownTimeout    time.Duration
+	turnTimeout       time.Duration
+	artifactDir       string
+	artifactMax       int64
 }
 
 func startServer(t *testing.T, o serverOpts) *server {
@@ -227,7 +230,9 @@ func startServer(t *testing.T, o serverOpts) *server {
 	runtime := app.NewWithOptions(app.Options{
 		Worker: worker.New(o.workerURL), Orch: o.orch, Repo: repo,
 		Log: log.New(logs, "", 0), DefaultTenant: o.tenant, AbortTimeout: o.abortTimeout,
-		DeliveryTimeout: o.deliveryTimeout, ArtifactDir: o.artifactDir, ArtifactMaxBytes: o.artifactMax,
+		DeliveryTimeout: o.deliveryTimeout, ReconcileInterval: o.reconcileInterval,
+		UnknownTimeout: o.unknownTimeout, TurnTimeout: o.turnTimeout,
+		ArtifactDir: o.artifactDir, ArtifactMaxBytes: o.artifactMax,
 	})
 	tenant := o.tenant
 	auth := httpapi.AuthenticatorFunc(func(r *http.Request) (app.Principal, bool) {
@@ -240,7 +245,10 @@ func startServer(t *testing.T, o serverOpts) *server {
 	srv := httptest.NewServer(httpapi.HandlerWithOptions(runtime, httpapi.Options{
 		Auth: auth, AllowedOrigins: []string{testOrigin},
 	}))
-	t.Cleanup(srv.Close)
+	t.Cleanup(func() {
+		srv.Close()
+		runtime.StopReconcile()
+	})
 	isrv := httptest.NewServer(httpapi.InternalHandler(runtime))
 	t.Cleanup(isrv.Close)
 	return &server{base: srv.URL, internal: isrv.URL, appPool: pool, logs: logs, runtime: runtime}
@@ -407,8 +415,15 @@ type stubOrch struct {
 	resumeText    string
 	decides       atomic.Int32
 	updateIDs     sync.Map
+	outcomes      sync.Map
 	// onDecide runs when the Update is received, before acceptDelay.
 	onDecide func()
+	// ttlS is decideConfig.ttlS. Zero means 86400.
+	ttlS       int
+	configErr  error
+	outcomeErr error
+	pending    bool
+	pendingErr error
 }
 
 const planted = "sk-live-E2E-PLANTED-SECRET"
@@ -425,18 +440,48 @@ func (f *stubOrch) RunTurn(context.Context, string, string, string) (orch.RunTur
 
 // Decide counts the Update as delivered on receipt, then reports acceptance
 // after acceptDelay unless the caller gives up first.
-func (f *stubOrch) Decide(ctx context.Context, _, updateID, _, _, decision, _ string) (orch.DecideUpdate, error) {
+func (f *stubOrch) Decide(ctx context.Context, _, approvalRequestID, _, decision string) (orch.DecideUpdate, error) {
 	f.decides.Add(1)
-	f.updateIDs.Store(updateID, true)
+	f.updateIDs.Store(approvalRequestID, true)
 	if f.onDecide != nil {
 		f.onDecide()
 	}
 	select {
 	case <-time.After(f.acceptDelay):
+		f.outcomes.Store(approvalRequestID, orch.DecideOutcome{Decision: decision, TurnStatus: "completed"})
 		return stubDecideUpdate{f: f, decision: decision}, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+func (f *stubOrch) DecideConfig(context.Context, string) (orch.DecideConfig, error) {
+	if f.configErr != nil {
+		return orch.DecideConfig{}, f.configErr
+	}
+	ttl := f.ttlS
+	if ttl == 0 {
+		ttl = 86400
+	}
+	return orch.DecideConfig{TTLS: ttl, MaxDecided: 1024}, nil
+}
+
+func (f *stubOrch) DecideOutcome(_ context.Context, _, approvalRequestID string) (bool, orch.DecideOutcome, error) {
+	if f.outcomeErr != nil {
+		return false, orch.DecideOutcome{}, f.outcomeErr
+	}
+	v, ok := f.outcomes.Load(approvalRequestID)
+	if !ok {
+		return false, orch.DecideOutcome{}, nil
+	}
+	return true, v.(orch.DecideOutcome), nil
+}
+
+func (f *stubOrch) ApprovalPending(context.Context, string, string) (bool, error) {
+	if f.pendingErr != nil {
+		return false, f.pendingErr
+	}
+	return f.pending, nil
 }
 
 type stubDecideUpdate struct {

@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash --noprofile --norc -eo pipefail {0}
+
 env:
   # orbit-runtime commit whose published image (ghcr.io/mindreon/orbit-runtime:<sha>)
   # runs orbit-orch and orbit-worker; the runner pins it by digest in the report.

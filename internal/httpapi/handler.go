@@ -84,6 +84,19 @@ func writeBlobErr(lg *log.Logger, w http.ResponseWriter, err error) {
 	}
 }
 
+func envSeconds(name string, def time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		log.Printf("ignoring %s=%q: want a positive integer number of seconds", name, raw)
+		return def
+	}
+	return time.Duration(n) * time.Second
+}
+
 func artifactDirFromEnv() string {
 	if dir := strings.TrimSpace(os.Getenv("ORBIT_ARTIFACT_DIR")); dir != "" {
 		return dir
@@ -123,8 +136,14 @@ func writeAppErr(lg *log.Logger, w http.ResponseWriter, err error, notFound stri
 		lg.Printf("storage error: %v", err)
 		writeErr(w, http.StatusInternalServerError, "INTERNAL", "internal error")
 	case errors.Is(err, app.ErrInvalid):
-		writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+		lg.Printf("bad request: %v", err)
+		writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "the request is invalid")
 	default:
+		if fallback == http.StatusBadRequest {
+			lg.Printf("bad request: %v", err)
+			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "the request is invalid")
+			return
+		}
 		writeErr(w, fallback, fallbackCode, err.Error())
 	}
 }
@@ -177,6 +196,9 @@ func Handlers() (public, internal http.Handler, closeStore func(), err error) {
 	opts := app.Options{
 		Worker: worker.New(base), Repo: repo, DefaultTenant: defaultTenant,
 		ArtifactDir: artifactDirFromEnv(), ArtifactMaxBytes: artifactMaxFromEnv(),
+		DeliveryTimeout:   envSeconds("ORBIT_DECISION_DELIVERY_TIMEOUT", 30*time.Second),
+		ReconcileInterval: envSeconds("ORBIT_DELIVERY_RECONCILE_INTERVAL_S", 10*time.Second),
+		UnknownTimeout:    envSeconds("ORBIT_DELIVERY_UNKNOWN_TIMEOUT_S", 600*time.Second),
 	}
 	if addr := os.Getenv("TEMPORAL_ADDRESS"); addr != "" {
 		oc, err := dialOrch(addr, os.Getenv("TEMPORAL_NAMESPACE"), os.Getenv("TEMPORAL_TASK_QUEUE"))
@@ -405,7 +427,8 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 		}
 		persona, err := runtime.CreatePersona(body.Name, body.Instructions, body.McpIds)
 		if err != nil {
-			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+			runtime.Log.Printf("bad request: %v", err)
+			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "the request is invalid")
 			return
 		}
 		writeJSON(w, http.StatusOK, persona)
@@ -426,7 +449,8 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 		}
 		connector, err := runtime.CreateMcpConnector(body.Name, body.Command, body.Args, body.EnvRefs)
 		if err != nil {
-			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+			runtime.Log.Printf("bad request: %v", err)
+			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "the request is invalid")
 			return
 		}
 		writeJSON(w, http.StatusOK, connector)
@@ -442,7 +466,8 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 		}
 		grant, err := runtime.MintGrant(body.Env, body.TTLSeconds)
 		if err != nil {
-			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+			runtime.Log.Printf("bad request: %v", err)
+			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "the request is invalid")
 			return
 		}
 		// Public response never echoes secret values — only names + grant id.
@@ -478,7 +503,8 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 			PersonaID:        body.PersonaID,
 		})
 		if err != nil {
-			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+			runtime.Log.Printf("bad request: %v", err)
+			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "the request is invalid")
 			return
 		}
 		writeJSON(w, http.StatusOK, job)
@@ -496,6 +522,7 @@ func InternalHandler(runtime *app.App) http.Handler {
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, HealthBody{Status: "ok"})
 	})
+	registerE2ERoutes(mux, runtime)
 	mux.HandleFunc("POST /internal/events", func(w http.ResponseWriter, r *http.Request) {
 		if !internalauth.Authorized(r) {
 			writeErr(w, http.StatusUnauthorized, "UNAUTHORIZED", "internal token required")
@@ -509,7 +536,8 @@ func InternalHandler(runtime *app.App) http.Handler {
 			return
 		}
 		if err != nil {
-			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+			runtime.Log.Printf("bad request: %v", err)
+			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "the request is invalid")
 			return
 		}
 		if err := runtime.Ingest(r.Context(), raw); err != nil {

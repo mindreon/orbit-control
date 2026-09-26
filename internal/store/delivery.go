@@ -1,6 +1,10 @@
 package store
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+	"time"
+)
 
 // DeliveryStore is the C34 approval delivery machine. Only the Postgres
 // repository implements it. The in-memory repository stays on DecideApproval.
@@ -24,6 +28,41 @@ type DeliveryStore interface {
 	ListUnwrittenDeliveries(ctx context.Context, tenantID string) ([]ApprovalRecord, error)
 	// FailRoom marks the room failed with failure {code, message}.
 	FailRoom(ctx context.Context, tenantID, roomID, code, message string) error
+	// FailUnresolved applies T5 or T11 and marks the room failed in one
+	// transaction (FM-65). false means the approval update matched 0 rows:
+	// the transaction rolled back and the room was not failed.
+	FailUnresolved(ctx context.Context, tenantID, approvalID, from string, attempt int, roomID string, failure json.RawMessage) (bool, error)
+	// CancelPending is T10 for every pending approval of the room (abort).
+	CancelPending(ctx context.Context, tenantID, roomID string) error
+	// ApplyRoomFailed stores failure verbatim and, on the first write, appends
+	// the event in the same transaction (FM-67). false means the room was
+	// already failed and nothing was written.
+	ApplyRoomFailed(ctx context.Context, tenantID, roomID string, failure json.RawMessage, ev EventRecord) (bool, error)
+	// ListTenantIDs returns every tenant. The reconciler compensates all of
+	// them (FM-71). tenants is not a tenant-scoped table.
+	ListTenantIDs(ctx context.Context) ([]string, error)
+	// ListReconcileRows returns the rows one reconcile pass may move.
+	ListReconcileRows(ctx context.Context, tenantID string) ([]ReconcileRow, error)
+	// SaveResultBody stashes the write-back while the row is delivered and
+	// result_attempt is still NULL (FM-71).
+	SaveResultBody(ctx context.Context, tenantID, approvalID string, attempt int, body json.RawMessage) (bool, error)
+	// LoadResultBody reads that stash. false means there is no body.
+	LoadResultBody(ctx context.Context, tenantID, approvalID string, attempt int) (DecideResultWrite, bool, error)
+	// TransitionAt is T3 for the reconciler: the WHERE matches the attempt
+	// and the delivery_updated_at that was read.
+	TransitionAt(ctx context.Context, tenantID, approvalID string, attempt int, updatedAt time.Time) (bool, error)
+	// ClaimRetry is T6. false means another pass already claimed it.
+	ClaimRetry(ctx context.Context, tenantID, approvalID string, attempt int) (int, bool, error)
+	// ReopenNotDelivered is T9 for a leftover not_delivered row.
+	ReopenNotDelivered(ctx context.Context, tenantID, approvalID string, attempt int) (bool, error)
+}
+
+// ReconcileRow is one approval the database-driven reconciler may move.
+type ReconcileRow struct {
+	Approval          ApprovalRecord
+	RoomState         string
+	DeliveryUpdatedAt time.Time
+	ResultBody        json.RawMessage
 }
 
 // EventStore is the durable per-task event log (contract §18.4).

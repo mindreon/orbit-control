@@ -7,6 +7,11 @@ title = "orbit-control"
 [extend]
 useDefault = true
 
+[[rules]]
+id = "generic-password-assignment"
+description = "Generic PASSWORD assignment, used as a positive control"
+regex = '''(?i)(?:^|[^A-Z0-9_])PASSWORD\s*=\s*['"][^'"]{8,}['"]'''
+
 [[allowlists]]
 description = "Planted fake secrets in the persistence E2E suite (current and historical paths)"
 condition = "AND"
