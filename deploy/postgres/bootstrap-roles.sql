@@ -7,7 +7,10 @@
 --        -v ops_password="$ORBIT_CONTROL_OPS_PASSWORD" \
 --        -f deploy/postgres/bootstrap-roles.sql "$SUPERUSER_URL"
 --
--- Passwords only ever arrive as psql variables; never commit them.
+-- Passwords only ever arrive as psql variables; never commit them. Prefer
+-- SCRAM-SHA-256 verifiers (deploy/postgres/scram-verifier.py): Postgres stores
+-- a value already in "SCRAM-SHA-256$..." form as-is, so the plaintext never
+-- reaches the server.
 --
 -- Roles:
 --   orbit_owner    LOGIN, owns orbit_control and every table; used only by
@@ -19,6 +22,12 @@
 --   orbit_ops      LOGIN, NOBYPASSRLS; creates tenants (ensure-tenant.sql).
 --                  Granted on tenants only; control never uses it.
 --   orbit_definer  NOLOGIN BYPASSRLS; owns orbit_soft_delete_room only.
+
+-- Keep CREATE ROLE ... PASSWORD out of the server log, even on error
+-- (session-local; needs the superuser this script runs as).
+SET log_statement = 'none';
+SET log_min_error_statement = 'panic';
+SET log_min_duration_statement = -1;
 
 SELECT format(
   'CREATE ROLE orbit_owner LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE BYPASSRLS PASSWORD %L',
