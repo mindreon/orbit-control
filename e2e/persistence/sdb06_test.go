@@ -131,14 +131,14 @@ func runSDB06Migrations(ctx context.Context) bool {
 	step("S-DB-6/up-on-empty", "up on an empty database succeeds and applies every migration",
 		[]string{"goose up", "read version", "snapshot schema"},
 		map[string]any{"applied": 4, "version": 4, "error": ""}, first,
-		first.Error == "" && first.Applied == 3 && first.Version == 3 && first.Schema.Fingerprint != "")
+		first.Error == "" && first.Applied == 4 && first.Version == 4 && first.Schema.Fingerprint != "")
 
 	second := up()
 	step("S-DB-6/up-again-noop", "up on an already migrated database succeeds and changes nothing",
 		[]string{"goose up", "read version", "snapshot schema", "compare with the previous snapshot"},
 		map[string]any{"applied": 0, "version": 4, "error": "", "schemaFingerprint": first.Schema.Fingerprint},
 		map[string]any{"applied": second.Applied, "version": second.Version, "error": second.Error, "schemaFingerprint": second.Schema.Fingerprint},
-		second.Error == "" && second.Applied == 0 && second.Version == 3 && second.Schema.Fingerprint == first.Schema.Fingerprint)
+		second.Error == "" && second.Applied == 0 && second.Version == 4 && second.Schema.Fingerprint == first.Schema.Fingerprint)
 
 	downErr := migrations.Reset(ctx, ownerURL)
 	down, derr := snapshot(ctx)
@@ -153,7 +153,7 @@ func runSDB06Migrations(ctx context.Context) bool {
 		[]string{"goose up", "snapshot schema", "compare with the fresh-up snapshot"},
 		map[string]any{"applied": 4, "version": 4, "error": "", "schemaFingerprint": first.Schema.Fingerprint},
 		map[string]any{"applied": third.Applied, "version": third.Version, "error": third.Error, "schemaFingerprint": third.Schema.Fingerprint},
-		third.Error == "" && third.Applied == 3 && third.Version == 3 && third.Schema.Fingerprint == first.Schema.Fingerprint)
+		third.Error == "" && third.Applied == 4 && third.Version == 4 && third.Schema.Fingerprint == first.Schema.Fingerprint)
 	return ok
 }
 
