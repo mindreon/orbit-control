@@ -90,6 +90,15 @@ below has a written reason; a new grant needs a new line here first.
 | `sessions` | SELECT, INSERT, UPDATE, DELETE | Logout destroys the server session (§17.3), and expired sessions are cleaned up by `expires_at`. |
 | `oidc_login_state` | SELECT, INSERT, UPDATE, DELETE | One-time use: the callback consumes the row with `DELETE … RETURNING` (§18.3), and expired rows are cleaned up. |
 
+**No TRUNCATE, REFERENCES or TRIGGER for `orbit_app` on any table.** The
+migration revokes them explicitly from `orbit_app` and `PUBLIC`. The
+reasons:
+
+- TRUNCATE is not subject to RLS, so one statement would remove every
+  tenant's rows.
+- TRIGGER would let the app attach code that runs on every tenant's writes.
+- REFERENCES is never needed by the app.
+
 **Decision: `sessions` and `oidc_login_state` have no RLS.** A session is
 looked up before the tenant is known, and login state belongs to no tenant
 (§18.5). This is acceptable only because both tables hold hashes, never
@@ -222,6 +231,9 @@ Move this to E2E when that route lands.
   tenant, a non-creator user, or an already-deleted room.
 - As `orbit_app`, `DELETE FROM rooms` fails with `42501 permission denied`
   (C32 rev3), and the owner's room count is unchanged.
+- As `orbit_app`, `TRUNCATE rooms` fails with `42501 permission denied`,
+  and the owner's room count is unchanged. TRUNCATE bypasses RLS, so only
+  the privilege protects the table (FM-52).
 - Soft delete through the function keeps working: `S-DB-13/delete` returns
   204 and `S-DB-13(k)/*` pass.
 
@@ -482,6 +494,8 @@ Connected **as `orbit_app`** (the credentials control runs with), query
 - `orbit_app` is not a member of any role that owns a `public` table or has
   BYPASSRLS / SUPERUSER. Role attributes are not inherited, but `SET ROLE`
   to such a role would bypass RLS all the same.
+- `has_table_privilege(orbit_app, <table>, 'TRUNCATE' | 'REFERENCES' |
+  'TRIGGER')` is false for every table in `public`.
 
 Failure modes:
 
@@ -496,6 +510,12 @@ Failure modes:
   app role is not the owner.
 - **FM-51.** `orbit_app` is granted membership in the owner, definer or a
   superuser role, which gives the same bypass through `SET ROLE`.
+- **FM-52.** TRUNCATE is granted on a table. TRUNCATE ignores RLS: one
+  statement removes every tenant's rows. With CASCADE and the privilege on
+  the children, it removes whole task histories too.
+- **FM-53.** REFERENCES or TRIGGER is granted on a table. TRIGGER lets the
+  app role attach code that runs on every tenant's writes, and REFERENCES is
+  a privilege the app never needs.
 
 Why HTTP cannot catch these: every API response looks identical until
 someone exploits the bypass. The check deliberately runs as `orbit_app`, so
