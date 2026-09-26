@@ -47,6 +47,8 @@ func writeAppErr(lg *log.Logger, w http.ResponseWriter, err error, notFound stri
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		writeErr(w, http.StatusNotFound, "NOT_FOUND", notFound)
+	case errors.Is(err, app.ErrDecisionDeliveryFailed):
+		writeErr(w, http.StatusBadGateway, "DECISION_DELIVERY_FAILED", "the decision is recorded but its delivery to the workflow failed or timed out; it is not retried")
 	case errors.Is(err, store.ErrApprovalNotPending):
 		writeErr(w, http.StatusConflict, "APPROVAL_NOT_PENDING", "approval is not pending")
 	case errors.Is(err, store.ErrIdempotencyKeyReused):

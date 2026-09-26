@@ -34,15 +34,21 @@ const (
 	RuntimeKernel      = "agentscope"
 	maxActivityPerRoom = 500
 
-	DefaultTenantID      = "default"
-	LocalIssuer          = "orbit-local"
-	MaxIdempotencyKeyLen = 128
-	idempotencyTTL       = 24 * time.Hour
-	defaultAbortTimeout  = 5 * time.Second
+	DefaultTenantID        = "default"
+	LocalIssuer            = "orbit-local"
+	MaxIdempotencyKeyLen   = 128
+	idempotencyTTL         = 24 * time.Hour
+	defaultAbortTimeout    = 5 * time.Second
+	defaultDeliveryTimeout = 30 * time.Second
 )
 
 // ErrInvalid marks caller errors (400).
 var ErrInvalid = errors.New("invalid request")
+
+// ErrDecisionDeliveryFailed means a decision was recorded but delivering it
+// to the workflow failed or timed out (502). It never carries the upstream
+// error text.
+var ErrDecisionDeliveryFailed = errors.New("decision delivery failed")
 
 // ErrNotFound and ErrIdempotencyKeyReused are the repository sentinels.
 var (
@@ -173,6 +179,8 @@ type Options struct {
 	DefaultTenant string
 	// AbortTimeout bounds the workflow abort sent before a soft delete.
 	AbortTimeout time.Duration
+	// DeliveryTimeout bounds delivering an approval decision to the workflow.
+	DeliveryTimeout time.Duration
 }
 
 type App struct {
@@ -184,16 +192,18 @@ type App struct {
 	Log           *log.Logger
 	DefaultTenant string
 	AbortTimeout  time.Duration
-	Activity      map[string][]ActivityEvent
-	SessionRoom   map[string]string
-	Personas      map[string]*Persona
-	McpConnectors map[string]*McpConnector
-	CloudAgents   map[string]*CloudAgentJob
-	live          map[string]liveRoom
-	knownUsers    map[string]struct{}
-	grants        map[string]*grantRecord
-	sequences     map[string]uint64
-	subs          map[string]map[chan []byte]struct{}
+	// DeliveryTimeout bounds resolveApproval / the decide Update.
+	DeliveryTimeout time.Duration
+	Activity        map[string][]ActivityEvent
+	SessionRoom     map[string]string
+	Personas        map[string]*Persona
+	McpConnectors   map[string]*McpConnector
+	CloudAgents     map[string]*CloudAgentJob
+	live            map[string]liveRoom
+	knownUsers      map[string]struct{}
+	grants          map[string]*grantRecord
+	sequences       map[string]uint64
+	subs            map[string]map[chan []byte]struct{}
 }
 
 func New(w *worker.Client) *App {
@@ -221,24 +231,28 @@ func NewWithOptions(opts Options) *App {
 	if opts.AbortTimeout <= 0 {
 		opts.AbortTimeout = defaultAbortTimeout
 	}
+	if opts.DeliveryTimeout <= 0 {
+		opts.DeliveryTimeout = defaultDeliveryTimeout
+	}
 	return &App{
-		Worker:        opts.Worker,
-		Orch:          opts.Orch,
-		Repo:          opts.Repo,
-		Store:         store.New(""),
-		Log:           opts.Log,
-		DefaultTenant: opts.DefaultTenant,
-		AbortTimeout:  opts.AbortTimeout,
-		Activity:      map[string][]ActivityEvent{},
-		SessionRoom:   map[string]string{},
-		Personas:      map[string]*Persona{},
-		McpConnectors: map[string]*McpConnector{},
-		CloudAgents:   map[string]*CloudAgentJob{},
-		live:          map[string]liveRoom{},
-		knownUsers:    map[string]struct{}{},
-		grants:        map[string]*grantRecord{},
-		sequences:     map[string]uint64{},
-		subs:          map[string]map[chan []byte]struct{}{},
+		Worker:          opts.Worker,
+		Orch:            opts.Orch,
+		Repo:            opts.Repo,
+		Store:           store.New(""),
+		Log:             opts.Log,
+		DefaultTenant:   opts.DefaultTenant,
+		AbortTimeout:    opts.AbortTimeout,
+		DeliveryTimeout: opts.DeliveryTimeout,
+		Activity:        map[string][]ActivityEvent{},
+		SessionRoom:     map[string]string{},
+		Personas:        map[string]*Persona{},
+		McpConnectors:   map[string]*McpConnector{},
+		CloudAgents:     map[string]*CloudAgentJob{},
+		live:            map[string]liveRoom{},
+		knownUsers:      map[string]struct{}{},
+		grants:          map[string]*grantRecord{},
+		sequences:       map[string]uint64{},
+		subs:            map[string]map[chan []byte]struct{}{},
 	}
 }
 
@@ -638,9 +652,12 @@ func (a *App) Decide(ctx context.Context, p Principal, approvalID, decision stri
 	}
 
 	if a.Orch != nil {
-		res, err := a.Orch.Decide(ctx, roomID, id("tn_"), reqID, decision, id("tn_"))
+		dctx, cancel := context.WithTimeout(ctx, a.DeliveryTimeout)
+		res, err := a.Orch.Decide(dctx, roomID, id("tn_"), reqID, decision, id("tn_"))
+		timedOut := errors.Is(dctx.Err(), context.DeadlineExceeded)
+		cancel()
 		if err != nil {
-			return nil, err
+			return nil, a.deliveryFailed(approvalID, timedOut)
 		}
 		if decision == "reject" {
 			return out, closeRoom()
@@ -659,14 +676,18 @@ func (a *App) Decide(ctx context.Context, p Principal, approvalID, decision stri
 	}
 
 	var applied worker.AppliedOut
-	if err := a.Worker.Call(ctx, "resolveApproval", map[string]any{
+	dctx, cancel := context.WithTimeout(ctx, a.DeliveryTimeout)
+	err = a.Worker.Call(dctx, "resolveApproval", map[string]any{
 		"roomId":            roomID,
 		"sessionId":         sessionID,
 		"turnId":            id("tn_"),
 		"approvalRequestId": reqID,
 		"outcome":           "allowed-once",
-	}, &applied); err != nil {
-		return nil, err
+	}, &applied)
+	timedOut := errors.Is(dctx.Err(), context.DeadlineExceeded)
+	cancel()
+	if err != nil {
+		return nil, a.deliveryFailed(approvalID, timedOut)
 	}
 	var turn worker.RunTurnOut
 	if err := a.Worker.Call(ctx, "runTurn", map[string]any{
@@ -680,6 +701,18 @@ func (a *App) Decide(ctx context.Context, p Principal, approvalID, decision stri
 	}
 	_, _, err = a.applyTurnResult(ctx, p.TenantID, roomID, turn)
 	return out, err
+}
+
+// deliveryFailed logs a failed decision delivery and returns
+// ErrDecisionDeliveryFailed. The approval stays decided: a timed-out delivery
+// may already have been applied, so it is never re-delivered (FM-59).
+func (a *App) deliveryFailed(approvalID string, timedOut bool) error {
+	reason := "error"
+	if timedOut {
+		reason = "timeout"
+	}
+	a.Log.Printf("WARN alert=decision_delivery_failed approval=%s reason=%s", approvalID, reason)
+	return ErrDecisionDeliveryFailed
 }
 
 func (a *App) ListApprovals(ctx context.Context, p Principal) ([]*Approval, error) {
