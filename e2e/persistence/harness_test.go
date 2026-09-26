@@ -203,6 +203,7 @@ type server struct {
 	internal string
 	appPool  *pgxpool.Pool
 	logs     *syncBuffer
+	runtime  *app.App
 }
 
 type serverOpts struct {
@@ -213,6 +214,8 @@ type serverOpts struct {
 	abortTimeout time.Duration
 	// deliveryTimeout bounds resolveApproval / acceptance of the decide Update.
 	deliveryTimeout time.Duration
+	artifactDir     string
+	artifactMax     int64
 }
 
 func startServer(t *testing.T, o serverOpts) *server {
@@ -224,7 +227,7 @@ func startServer(t *testing.T, o serverOpts) *server {
 	runtime := app.NewWithOptions(app.Options{
 		Worker: worker.New(o.workerURL), Orch: o.orch, Repo: repo,
 		Log: log.New(logs, "", 0), DefaultTenant: o.tenant, AbortTimeout: o.abortTimeout,
-		DeliveryTimeout: o.deliveryTimeout,
+		DeliveryTimeout: o.deliveryTimeout, ArtifactDir: o.artifactDir, ArtifactMaxBytes: o.artifactMax,
 	})
 	tenant := o.tenant
 	auth := httpapi.AuthenticatorFunc(func(r *http.Request) (app.Principal, bool) {
@@ -240,7 +243,7 @@ func startServer(t *testing.T, o serverOpts) *server {
 	t.Cleanup(srv.Close)
 	isrv := httptest.NewServer(httpapi.InternalHandler(runtime))
 	t.Cleanup(isrv.Close)
-	return &server{base: srv.URL, internal: isrv.URL, appPool: pool, logs: logs}
+	return &server{base: srv.URL, internal: isrv.URL, appPool: pool, logs: logs, runtime: runtime}
 }
 
 type httpReq struct {
@@ -404,6 +407,8 @@ type stubOrch struct {
 	resumeText    string
 	decides       atomic.Int32
 	updateIDs     sync.Map
+	// onDecide runs when the Update is received, before acceptDelay.
+	onDecide func()
 }
 
 const planted = "sk-live-E2E-PLANTED-SECRET"
@@ -423,6 +428,9 @@ func (f *stubOrch) RunTurn(context.Context, string, string, string) (orch.RunTur
 func (f *stubOrch) Decide(ctx context.Context, _, updateID, _, _, decision, _ string) (orch.DecideUpdate, error) {
 	f.decides.Add(1)
 	f.updateIDs.Store(updateID, true)
+	if f.onDecide != nil {
+		f.onDecide()
+	}
 	select {
 	case <-time.After(f.acceptDelay):
 		return stubDecideUpdate{f: f, decision: decision}, nil

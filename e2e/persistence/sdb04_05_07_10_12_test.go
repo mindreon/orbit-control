@@ -108,9 +108,41 @@ func TestSDB10AssistantDeltaNotStored(t *testing.T) {
 		sqlReq{Role: "orbit_app", Tenant: "t-sdb10", SQL: "INSERT INTO events (..., type) VALUES (..., 'assistant.delta' | 'tool.call')"},
 		map[string]string{"assistant.delta": "23514", "tool.call": "ok"}, got,
 		got["assistant.delta"] == "23514" && got["tool.call"] == "ok")
-	blocked(t, "S-DB-10/streamed-turn", c, "e2e", "after a streamed turn the turn's events are persisted but none of type assistant.delta",
-		"phase 2: control persists events per task (§18.4) after Last-Event-ID PR #15 (which adds delta pass-through, C33)",
-		[]string{"stream a turn with assistant.delta events", "SELECT type FROM events WHERE task_id = <task>"}, "no assistant.delta rows, other turn events present")
+	delta := srv.check(t, "S-DB-10/setup/delta", c, "assistant.delta is accepted on the live stream and not stored",
+		httpReq{Method: "POST", Path: "/internal/events", Body: `{"type":"assistant.delta","roomId":"` + room + `","text":"hi","occurredAt":"2026-09-26T00:00:00Z"}`},
+		httpExp{Status: 202})
+	_ = delta
+	srv.check(t, "S-DB-10/setup/tool-call", c, "tool.call is a durable event",
+		httpReq{Method: "POST", Path: "/internal/events", Body: `{"type":"tool.call","roomId":"` + room + `","toolName":"bash","occurredAt":"2026-09-26T00:00:01Z"}`},
+		httpExp{Status: 202})
+	ownerPool := newPool(t, ownerURL, 2)
+	var types []string
+	rows, err := ownerPool.Query(ctx, `SELECT type FROM events WHERE task_id = $1 ORDER BY seq`, room)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var typ string
+		_ = rows.Scan(&typ)
+		types = append(types, typ)
+	}
+	rows.Close()
+	hasDelta, hasTool := false, false
+	for _, typ := range types {
+		if typ == "assistant.delta" {
+			hasDelta = true
+		}
+		if typ == "tool.call" {
+			hasTool = true
+		}
+	}
+	record(t, caseInput{ID: "S-DB-10/streamed-turn", Contract: c, Kind: "e2e", FailureModes: []string{"FM-62"},
+		Description: "after a streamed turn the turn's events are persisted but none of type assistant.delta",
+		Steps:       []string{"POST assistant.delta", "POST tool.call", "SELECT type FROM events WHERE task_id = <task>"},
+		Request:     map[string]string{"room": room},
+		Expected:    map[string]any{"assistant.delta": false, "tool.call": true},
+		Actual:      map[string]any{"types": types, "assistant.delta": hasDelta, "tool.call": hasTool},
+		Pass:        !hasDelta && hasTool})
 }
 
 func TestSDB05ArtifactVersionIdempotency(t *testing.T) {
@@ -120,22 +152,11 @@ func TestSDB05ArtifactVersionIdempotency(t *testing.T) {
 }
 
 func TestSDB07ConcurrentWritersAndReplay(t *testing.T) {
-	blocked(t, "S-DB-7/32-writers-1000-events", "S-DB-7", "e2e", "32 writers, 1000 events on one task; a reader reconnects with Last-Event-ID mid-way; seq 1..1000 contiguous, no loss or duplicate",
-		"phase 2: per-task seq + SubscribeAndReplay (§18.4); owner instruction: after Last-Event-ID PR #15 merges",
-		[]string{"32 concurrent POST /internal/events", "SSE reader reconnect with Last-Event-ID", "compare received seqs"}, "contiguous 1..1000, strictly increasing, no duplicates")
+	testSDB07Writers(t)
 	blocked(t, "S-DB-7/injected-writes", "S-DB-7", "e2e", "writes injected between query and subscribe, and between subscribe and query: no loss, no duplicate (Postgres and memory store)",
-		"phase 2: per-task seq + SubscribeAndReplay (§18.4); owner instruction: after Last-Event-ID PR #15 merges", nil, "no loss, no duplicate in both stores")
+		"handoff injection hooks are not exposed on the public or internal API", nil, "no loss, no duplicate in both stores")
 }
 
 func TestSDB12ArtifactBlobs(t *testing.T) {
-	const by = "phase 2: /internal/artifact-blobs and the internal listener (§18.7); owner instruction: not in this PR"
-	for _, b := range []struct{ id, desc, by string }{
-		{"a-forged-tenant", "a forged tenant in the request is ignored; the file lands under the task's real tenant", by},
-		{"b-digest-mismatch", "X-Content-Digest mismatch → 422, no file left; ../x or file names in the header do not affect the path", by},
-		{"c-size-limit", "body of limit+1 bytes → 413, RSS stays far below the body size, no temp file left", by},
-		{"d-public-listener", "/internal/artifact-blobs and /internal/events on the public listener → 404 (today /internal/events is still on the public listener)",
-			"phase 2: becomes real after #15 (E-LE-4)"},
-	} {
-		blocked(t, "S-DB-12/"+b.id, "S-DB-12", "e2e", b.desc, b.by, nil, "per §18.8 S-DB-12")
-	}
+	testSDB12Blobs(t)
 }

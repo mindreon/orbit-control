@@ -155,7 +155,7 @@ func oneWinner(statuses [][]int) bool {
 			return false
 		}
 		for _, code := range s[1:] {
-			if code != 409 {
+			if code != 202 {
 				return false
 			}
 		}
@@ -166,7 +166,7 @@ func oneWinner(statuses [][]int) bool {
 func expectedStatuses(n int) [][]int {
 	one := []int{200}
 	for i := 1; i < racers; i++ {
-		one = append(one, 409)
+		one = append(one, 202)
 	}
 	out := make([][]int, n)
 	for i := range out {
@@ -223,7 +223,7 @@ func TestReviewMdSingleWinnerDecide(t *testing.T) {
 		allDecided = allDecided && st == "decided:allow"
 	}
 	record(t, caseInput{ID: "REVIEW-Md/worker/concurrent-decide", Contract: c,
-		Description: fmt.Sprintf("%d approvals × %d concurrent allow decisions: per approval exactly one 2xx and the rest 409; the worker receives exactly one decision per approval (stub worker counts resolveApproval and the resumed runTurn)", rounds, racers),
+		Description: fmt.Sprintf("%d approvals × %d concurrent allow decisions: per approval exactly one 200 and the rest 202 (same decision while in_flight); the worker receives exactly one decision per approval (stub worker counts resolveApproval and the resumed runTurn)", rounds, racers),
 		Steps:       []string{fmt.Sprintf("release %d POST /v1/approvals/{id}/decide per approval at the same instant as u-md", racers), "count stub-worker resolveApproval and resume calls", "owner reads approvals.status"},
 		Request:     httpReq{Method: "POST", Path: "/v1/approvals/{id}/decide", Headers: user("u-md"), Body: `{"decision":"allow"}`},
 		Expected:    map[string]any{"statusesSortedPerApproval": expectedStatuses(rounds), "workerResolveApproval": rounds, "workerResume": rounds, "approvalsDecidedAllow": true},
@@ -267,7 +267,7 @@ func TestReviewMdSingleWinnerDecide(t *testing.T) {
 		odecided = odecided && approvalState(id) == "decided:allow"
 	}
 	record(t, caseInput{ID: "REVIEW-Md/orch/concurrent-decide", Contract: c,
-		Description: fmt.Sprintf("Temporal path: %d approvals × %d concurrent allow decisions → one 2xx and the rest 409 per approval; exactly one decide Update per approval (stub Orchestrator counts Decide)", rounds, racers),
+		Description: fmt.Sprintf("Temporal path: %d approvals × %d concurrent allow decisions → one 200 and the rest 202 per approval; exactly one decide Update per approval (stub Orchestrator counts Decide)", rounds, racers),
 		Steps:       []string{fmt.Sprintf("release %d POST /v1/approvals/{id}/decide per approval at the same instant as u-md-orch", racers), "count stub Orchestrator Decide calls", "owner reads approvals.status"},
 		Request:     httpReq{Method: "POST", Path: "/v1/approvals/{id}/decide", Headers: user("u-md-orch"), Body: `{"decision":"allow"}`},
 		Expected:    map[string]any{"statusesSortedPerApproval": expectedStatuses(rounds), "orchDecideUpdates": rounds, "approvalsDecidedAllow": true},
@@ -284,12 +284,9 @@ func TestReviewF2DeliveredButTimeoutOnce(t *testing.T) {
 		map[string]any{"workerAppliedDecisions": 1})
 }
 
-const deliveryFailedBody = `{"error":"decision delivery failed","code":"DECISION_DELIVERY_FAILED","message":"the decision is recorded but its delivery to the workflow failed or timed out; it is not retried"}` + "\n"
-const notPendingBody = `{"error":"approval not pending","code":"APPROVAL_NOT_PENDING","message":"approval is not pending"}` + "\n"
-
-// Review F2, phase 1: a timed-out delivery returns the documented 502, the
-// approval stays decided, a resubmit gets 409, and the workflow side
-// receives the decision at most once.
+// Review F2: a timed-out delivery is C34 unknown (202). The approval stays
+// decided, the same decision again is 202 and is not re-delivered, and the
+// workflow side receives the decision once.
 func TestReviewF2Phase1TimeoutAtMostOnce(t *testing.T) {
 	const c = "§18 review F2 (phase 1)"
 	ctx := context.Background()
@@ -349,38 +346,46 @@ func TestReviewF2Phase1TimeoutAtMostOnce(t *testing.T) {
 		time.Sleep(1200 * time.Millisecond)
 		n := deliveries()
 		logs := srv.logs.String()
-		wantLog := "WARN alert=decision_delivery_failed approval=" + ap + " reason=timeout"
-		record(t, caseInput{ID: id, Contract: c, Description: "delivery timeout → documented 502 body; approval stays decided; resubmit → 409; the workflow side receives the decision at most once. " + path.simulated,
+		wantLog := "WARN alert=decision_delivery_unknown approval=" + ap + " reason=timeout"
+		var deliveryState string
+		_ = ownerPool.QueryRow(ctx, `SELECT COALESCE(delivery_state, '') FROM approvals WHERE id = $1`, ap).Scan(&deliveryState)
+		firstOK := first.Status == 202 && strings.Contains(first.Body, `"deliveryState":"unknown"`)
+		secondOK := second.Status == 202 && strings.Contains(second.Body, `"deliveryState":"unknown"`)
+		record(t, caseInput{ID: id, Contract: c, FailureModes: []string{"FM-64"}, Description: "delivery timeout → 202 deliveryState unknown; approval stays decided; the same decision again is 202 and is not re-delivered. " + path.simulated,
 			Steps: []string{
 				"POST /v1/approvals/{id}/decide (allow) while the fake workflow endpoint holds the delivery past DeliveryTimeout",
-				"owner reads approvals.status after the first call",
+				"owner reads approvals.status and delivery_state after the first call",
 				"POST the same decision again",
-				"owner reads approvals.status again; count decisions received at the fake workflow endpoint; read the server log",
+				"count decisions received at the fake workflow endpoint; read the server log",
 			},
 			Request: decideReq,
 			Expected: map[string]any{
-				"first":                 map[string]any{"status": 502, "body": deliveryFailedBody},
-				"approvalAfterFirst":    "decided:allow",
-				"resubmit":              map[string]any{"status": 409, "body": notPendingBody},
-				"approvalAfterResubmit": "decided:allow",
-				"deliveriesAtMostOnce":  true,
-				"deliveriesReceived":    1,
-				"resumedTurns":          0,
-				"warningLogged":         true,
+				"firstStatus":            202,
+				"firstDeliveryUnknown":   true,
+				"approvalAfterFirst":     "decided:allow",
+				"deliveryState":          "unknown",
+				"resubmitStatus":         202,
+				"resubmitNotRedelivered": true,
+				"approvalAfterResubmit":  "decided:allow",
+				"deliveriesReceived":     1,
+				"resumedTurns":           0,
+				"warningLogged":          true,
 			},
 			Actual: map[string]any{
-				"first":                 map[string]any{"status": first.Status, "body": first.Body},
-				"approvalAfterFirst":    afterFirst,
-				"resubmit":              map[string]any{"status": second.Status, "body": second.Body},
-				"approvalAfterResubmit": afterSecond,
-				"deliveriesAtMostOnce":  n <= 1,
-				"deliveriesReceived":    n,
-				"resumedTurns":          resumes(),
-				"warningLogged":         strings.Contains(logs, wantLog),
+				"firstStatus":            first.Status,
+				"firstDeliveryUnknown":   firstOK,
+				"approvalAfterFirst":     afterFirst,
+				"deliveryState":          deliveryState,
+				"resubmitStatus":         second.Status,
+				"resubmitNotRedelivered": secondOK,
+				"approvalAfterResubmit":  afterSecond,
+				"deliveriesReceived":     n,
+				"resumedTurns":           resumes(),
+				"warningLogged":          strings.Contains(logs, wantLog),
 			},
-			Pass: first.Status == 502 && first.Body == deliveryFailedBody && afterFirst == "decided:allow" &&
-				second.Status == 409 && second.Body == notPendingBody && afterSecond == "decided:allow" &&
-				n <= 1 && n == 1 && resumes() == 0 && strings.Contains(logs, wantLog)})
+			Pass: firstOK && afterFirst == "decided:allow" && deliveryState == "unknown" &&
+				secondOK && afterSecond == "decided:allow" &&
+				n == 1 && resumes() == 0 && strings.Contains(logs, wantLog)})
 	}
 }
 

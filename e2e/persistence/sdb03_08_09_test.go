@@ -32,16 +32,20 @@ func TestSDB03RestartKeepsData(t *testing.T) {
 	const tenant = "t-sdb3"
 	opsEnsureTenant(t, tenant)
 	wk := stubWorker(t, nil)
-	vars := func() []envVar {
-		return []envVar{
+	ownerPool := newPool(t, ownerURL, 2)
+	boot := func() (vars []envVar, internalBase string) {
+		internal := freePort(t)
+		vars = []envVar{
 			appDBVar(),
 			{Name: "ORBIT_DEFAULT_TENANT", Value: tenant},
 			{Name: "ORBIT_WORKER_URL", Value: wk.URL, Display: "<stub worker>"},
 			{Name: "ORBIT_DATA_DIR", Value: t.TempDir(), Display: "<temp dir>"},
 			{Name: "PORT", Value: freePort(t)},
+			{Name: "ORBIT_INTERNAL_ADDR", Value: "127.0.0.1:" + internal, Display: "127.0.0.1:<port>"},
 		}
+		return vars, "http://127.0.0.1:" + internal
 	}
-	v1 := vars()
+	v1, internal1 := boot()
 	p1 := startBinary(t, v1)
 	healthy := p1.waitHealthy(15 * time.Second)
 	record(t, caseInput{ID: "S-DB-3/start-1", Contract: c, Description: "orbit-control binary starts against Postgres",
@@ -68,8 +72,13 @@ func TestSDB03RestartKeepsData(t *testing.T) {
 	}
 	alias(pb.Approval.ID, "<approval-sdb3>")
 
+	evBody := `{"type":"tool.call","roomId":"` + room + `","toolName":"bash","occurredAt":"2026-09-26T00:00:00Z"}`
+	checkAt(t, internal1, "S-DB-3/ingest-before-restart", c, "a worker event is stored under the task's own seq",
+		httpReq{Method: "POST", Path: "/internal/events", Body: evBody}, httpExp{Status: 202})
+	seqBefore := ownerScalar[int64](t, ownerPool, `SELECT last_event_seq FROM rooms WHERE id = $1`, room)
+
 	p1.stop()
-	v2 := vars()
+	v2, internal2 := boot()
 	p2 := startBinary(t, v2)
 	healthy = p2.waitHealthy(15 * time.Second)
 	record(t, caseInput{ID: "S-DB-3/restart", Contract: c, Description: "kill the process and start a fresh one on the same database",
@@ -95,12 +104,21 @@ func TestSDB03RestartKeepsData(t *testing.T) {
 	checkAt(t, p2.base, "S-DB-3/decide-after-restart", c, "the approval can be decided after restart",
 		httpReq{Method: "POST", Path: "/v1/approvals/" + pb.Approval.ID + "/decide", Body: `{"decision":"allow"}`},
 		httpExp{Status: 200, BodyIncludes: []string{`"status":"decided"`, `"decision":"allow"`}})
+	checkAt(t, p2.base, "S-DB-3/events-after-restart", c, "events written before the restart are replayed from Postgres after it",
+		httpReq{Method: "GET", Path: "/v1/rooms/" + room + "/activity"},
+		httpExp{Status: 200, BodyIncludes: []string{`"type":"tool.call"`}, BodyExcludes: []string{`"type":"assistant.delta"`}})
+	checkAt(t, internal2, "S-DB-3/ingest-after-restart", c, "another worker event is accepted after restart",
+		httpReq{Method: "POST", Path: "/internal/events", Body: `{"type":"tool.result","roomId":"` + room + `","toolName":"bash","occurredAt":"2026-09-26T00:00:01Z"}`},
+		httpExp{Status: 202})
+	seqAfter := ownerScalar[int64](t, ownerPool, `SELECT last_event_seq FROM rooms WHERE id = $1`, room)
+	record(t, caseInput{ID: "S-DB-3/last-event-seq-continues", Contract: c, Kind: "e2e", FailureModes: []string{"FM-62"},
+		Description: "last_event_seq keeps increasing across the restart",
+		Steps:       []string{"read last_event_seq before restart", "restart", "ingest one more event", "read last_event_seq"},
+		Request:     map[string]string{"sql": "SELECT last_event_seq FROM rooms WHERE id = <room>"},
+		Expected:    map[string]any{"increased": true},
+		Actual:      map[string]any{"before": seqBefore, "after": seqAfter},
+		Pass:        seqAfter > seqBefore})
 
-	const phase2 = "phase 2 (§18.4 per-task seq in one transaction); owner instruction: after Last-Event-ID PR #15 merges"
-	blocked(t, "S-DB-3/events-after-restart", c, "e2e", "events written before the restart are replayed from Postgres after it", phase2,
-		[]string{"ingest worker events", "restart", "GET /v1/rooms/{id}/activity"}, "events present after restart")
-	blocked(t, "S-DB-3/last-event-seq-continues", c, "e2e", "last_event_seq keeps increasing across the restart", phase2,
-		[]string{"ingest N events", "restart", "ingest one more", "read seq"}, "seq N+1")
 	blocked(t, "S-DB-3/artifacts-after-restart", c, "e2e", "artifacts written before the restart are readable after it",
 		"§16 control artifact PR (ingest + read API) and phase 2 /internal/artifact-blobs",
 		[]string{"ingest artifact.created", "restart", "GET /v1/artifacts/{id}"}, "artifact metadata and content present")

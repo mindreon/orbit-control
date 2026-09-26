@@ -25,6 +25,8 @@ var tenantParamAllowlist = map[string]bool{
 	"auth.Create": true,
 	"auth.Lookup": true,
 	"auth.Delete": true,
+	// Artifact ingest learns the tenant from the room, then filters by it.
+	"pgstore.FindRoomTenant": true,
 }
 
 var rePreLoginTableSQL = regexp.MustCompile(`(?i)\b(FROM|INTO|UPDATE|JOIN)\s+(public\.)?(sessions|oidc_login_state)\b`)
