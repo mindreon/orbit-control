@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -193,12 +194,12 @@ func HandlerWith(runtime *app.App) http.Handler {
 			writeErr(w, http.StatusUnauthorized, "UNAUTHORIZED", "internal token required")
 			return
 		}
-		var ev app.Event
-		if err := json.NewDecoder(r.Body).Decode(&ev); err != nil {
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
 			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
 			return
 		}
-		if err := runtime.Ingest(ev); err != nil {
+		if err := runtime.Ingest(raw); err != nil {
 			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
 			return
 		}

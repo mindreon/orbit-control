@@ -23,14 +23,12 @@ type streamHooks struct {
 
 var testHooks atomic.Pointer[streamHooks]
 
-// StreamReset tells the client its resume cursor cannot be honoured and it
-// must refetch room state (room, messages, activity) before trusting the stream.
-type StreamReset struct {
-	Type       string          `json:"type"`
-	RoomID     string          `json:"roomId"`
-	Reason     app.ResetReason `json:"reason"`
-	Sequence   uint64          `json:"sequence"`
-	OccurredAt string          `json:"occurredAt"`
+// ResetPayload is the payload of a `reset` envelope: the resume cursor cannot
+// be honoured and the client must refetch room state (room, messages,
+// activity) before trusting the stream, which continues after LastID.
+type ResetPayload struct {
+	Reason app.ResetReason `json:"reason"`
+	LastID uint64          `json:"lastId"`
 }
 
 // authorizeRoomStream is the §17 (C31) hook. Authentication (401) and room
@@ -209,12 +207,16 @@ func (s *sseStream) resetFor(err error, head uint64) error {
 	if !errors.As(err, &cursorErr) {
 		return err
 	}
-	raw, err := json.Marshal(StreamReset{
-		Type:       "reset",
-		RoomID:     s.roomID,
-		Reason:     cursorErr.Reason,
-		Sequence:   head,
-		OccurredAt: time.Now().UTC().Format(time.RFC3339Nano),
+	payload, err := json.Marshal(ResetPayload{Reason: cursorErr.Reason, LastID: head})
+	if err != nil {
+		return err
+	}
+	raw, err := json.Marshal(app.Envelope{
+		Type:    "reset",
+		TaskID:  s.roomID,
+		TS:      time.Now().UTC().Format(time.RFC3339Nano),
+		Source:  "control",
+		Payload: payload,
 	})
 	if err != nil {
 		return err

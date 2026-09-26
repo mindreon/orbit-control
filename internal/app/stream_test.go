@@ -31,7 +31,7 @@ func TestEventIDsAreGlobalAndUnknownAfterRestart(t *testing.T) {
 	publish := func(a *App, roomID string) uint64 {
 		a.Publish(roomID, Event{"type": "room.steered", "roomId": roomID})
 		items := a.ListActivity(roomID)
-		return items[len(items)-1].Sequence
+		return items[len(items)-1].ID
 	}
 
 	first := boot()
@@ -60,12 +60,12 @@ func TestEventIDsAreGlobalAndUnknownAfterRestart(t *testing.T) {
 func TestMemoryEventLogEvictsPerTaskFromOneSequence(t *testing.T) {
 	log := NewMemoryEventLog(2)
 	for _, task := range []string{"a", "b", "a", "a", "b"} {
-		if _, err := log.Append(task, ActivityEvent{RoomID: task}); err != nil {
+		if _, err := log.Append(task, Envelope{TaskID: task}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	events, _ := log.After("a", 0)
-	if len(events) != 2 || events[0].Sequence != 3 || events[1].Sequence != 4 {
+	if len(events) != 2 || events[0].ID != 3 || events[1].ID != 4 {
 		t.Fatalf("task a retained %+v, want ids 3,4", events)
 	}
 	if through, _ := log.EvictedThrough("a"); through != 1 {

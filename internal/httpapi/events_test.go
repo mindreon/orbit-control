@@ -29,13 +29,19 @@ type sseFrame struct {
 	Comment string
 }
 
+// sseData is an SSE data envelope with the payload fields tests read.
 type sseData struct {
-	Type     string `json:"type"`
-	RoomID   string `json:"roomId"`
-	Sequence uint64 `json:"sequence"`
-	Text     string `json:"text"`
-	Reason   string `json:"reason"`
-	Delta    string `json:"delta"`
+	ID      uint64 `json:"id"`
+	Type    string `json:"type"`
+	TaskID  string `json:"taskId"`
+	TS      string `json:"ts"`
+	Source  string `json:"source"`
+	Payload struct {
+		Text   string `json:"text"`
+		Delta  string `json:"delta"`
+		Reason string `json:"reason"`
+		LastID uint64 `json:"lastId"`
+	} `json:"payload"`
 }
 
 func (f sseFrame) decode(t *testing.T) sseData {
@@ -84,6 +90,28 @@ func (e *eventsEnv) createRoom(t *testing.T) *app.Room {
 		t.Fatal(err)
 	}
 	return &room
+}
+
+// ingest POSTs body to the internal worker ingest and asserts the status.
+func (e *eventsEnv) ingest(t *testing.T, wantStatus int, body any) []byte {
+	t.Helper()
+	raw, ok := body.([]byte)
+	if !ok {
+		var err error
+		if raw, err = json.Marshal(body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resp, err := http.Post(e.srv.URL+"/internal/events", "application/json", strings.NewReader(string(raw)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != wantStatus {
+		msg, _ := io.ReadAll(resp.Body)
+		t.Fatalf("ingest %s: status %d, want %d: %s", raw, resp.StatusCode, wantStatus, msg)
+	}
+	return raw
 }
 
 func (e *eventsEnv) publish(roomID, text string) {
@@ -178,8 +206,8 @@ func (c *sseConn) expectIDs(t *testing.T, roomID string, want ...uint64) {
 	for _, id := range want {
 		f := c.next(t)
 		d := f.decode(t)
-		if d.Sequence != id || d.RoomID != roomID || f.ID != app.FormatEventID(id) {
-			t.Fatalf("got frame id=%q room=%s sequence=%d type=%s, want id %d in %s", f.ID, d.RoomID, d.Sequence, d.Type, id, roomID)
+		if d.ID != id || d.TaskID != roomID || f.ID != app.FormatEventID(id) {
+			t.Fatalf("got frame id=%q room=%s sequence=%d type=%s, want id %d in %s", f.ID, d.TaskID, d.ID, d.Type, id, roomID)
 		}
 	}
 }
@@ -188,8 +216,8 @@ func (c *sseConn) expectIDs(t *testing.T, roomID string, want ...uint64) {
 func (e *eventsEnv) idsAfter(roomID string, after uint64) []uint64 {
 	var out []uint64
 	for _, item := range e.runtime.ListActivity(roomID) {
-		if item.Sequence > after {
-			out = append(out, item.Sequence)
+		if item.ID > after {
+			out = append(out, item.ID)
 		}
 	}
 	return out
@@ -239,10 +267,10 @@ func TestEventsResumeReplaysThenGoesLiveWithoutGapsOrDuplicates(t *testing.T) {
 	for i := 0; i < replayed+duringHandoff; i++ {
 		f := c.next(t)
 		d := f.decode(t)
-		if d.RoomID != a.ID || f.ID != app.FormatEventID(d.Sequence) {
-			t.Fatalf("frame %d: id=%q room=%s", i, f.ID, d.RoomID)
+		if d.TaskID != a.ID || f.ID != app.FormatEventID(d.ID) {
+			t.Fatalf("frame %d: id=%q room=%s", i, f.ID, d.TaskID)
 		}
-		got = append(got, d.Sequence)
+		got = append(got, d.ID)
 	}
 	if want := env.idsAfter(a.ID, resumeFrom); fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("delivered %v, want exactly %v", got, want)
@@ -287,8 +315,8 @@ func TestEventsResumeReplaysThenGoesLiveWithoutGapsOrDuplicates(t *testing.T) {
 						return
 					}
 					var d sseData
-					if err := json.Unmarshal([]byte(f.Data), &d); err != nil || d.Sequence != want || d.RoomID != room.ID || f.ID != app.FormatEventID(want) {
-						t.Errorf("client from %d: got id %q (room %s), want %d", cursor, f.ID, d.RoomID, want)
+					if err := json.Unmarshal([]byte(f.Data), &d); err != nil || d.ID != want || d.TaskID != room.ID || f.ID != app.FormatEventID(want) {
+						t.Errorf("client from %d: got id %q (room %s), want %d", cursor, f.ID, d.TaskID, want)
 						return
 					}
 				}
@@ -352,7 +380,7 @@ func TestEventsEverySSEMessageCarriesMonotonicID(t *testing.T) {
 		if err != nil {
 			t.Fatalf("id %q: %v", f.ID, err)
 		}
-		if id <= last || f.decode(t).Sequence != id {
+		if id <= last || f.decode(t).ID != id {
 			t.Fatalf("id %q after %d", f.ID, last)
 		}
 		sawGap = sawGap || id > last+1
@@ -397,7 +425,7 @@ func TestEventsInvalidCursorSendsReset(t *testing.T) {
 			c := env.connect(t, tc.roomID, tc.header, tc.query)
 			f := c.next(t)
 			d := f.decode(t)
-			if d.Type != "reset" || d.Reason != tc.reason || d.RoomID != tc.roomID || d.Sequence != head {
+			if d.Type != "reset" || d.Payload.Reason != tc.reason || d.TaskID != tc.roomID || d.Payload.LastID != head {
 				t.Fatalf("first message = %s, want reset reason=%s sequence=%d", f.Data, tc.reason, head)
 			}
 			if f.ID != app.FormatEventID(head) {
@@ -434,12 +462,10 @@ func TestEventsAssistantDeltaIsLiveOnlyAndNeverReplayed(t *testing.T) {
 	ids := env.idsAfter(room.ID, 0)
 	base := ids[len(ids)-1]
 	delta := func(text string) {
-		if err := env.runtime.Ingest(app.Event{
+		env.ingest(t, http.StatusAccepted, map[string]any{
 			"type": "assistant.delta", "roomId": room.ID, "sessionId": room.SessionID,
-			"turnId": "tn_1", "blockId": "b1", "seq": float64(1), "delta": text, "activityAttempt": float64(1),
-		}); err != nil {
-			t.Fatal(err)
-		}
+			"turnId": "tn_1", "blockId": "b1", "seq": 1, "delta": text, "activityAttempt": 1,
+		})
 	}
 
 	live := env.connect(t, room.ID, "", "")
@@ -449,12 +475,12 @@ func TestEventsAssistantDeltaIsLiveOnlyAndNeverReplayed(t *testing.T) {
 	durable := env.idsAfter(room.ID, base)[0]
 
 	f := live.next(t)
-	if d := f.decode(t); d.Type != "assistant.delta" || d.Delta != "Hel" || f.ID != app.FormatEventID(base) {
+	if d := f.decode(t); d.Type != "assistant.delta" || d.Payload.Delta != "Hel" || f.ID != app.FormatEventID(base) {
 		t.Fatalf("first live frame = id %q %s", f.ID, f.Data)
 	}
 	live.expectIDs(t, room.ID, durable)
 	f = live.next(t)
-	if d := f.decode(t); d.Type != "assistant.delta" || d.Delta != "lo" || f.ID != app.FormatEventID(durable) {
+	if d := f.decode(t); d.Type != "assistant.delta" || d.Payload.Delta != "lo" || f.ID != app.FormatEventID(durable) {
 		t.Fatalf("third live frame = id %q %s", f.ID, f.Data)
 	}
 
@@ -493,7 +519,7 @@ func TestEventsCursorIsScopedPerRoom(t *testing.T) {
 	// A's id lies inside B's id range; it must not select B's later events.
 	onB := env.connect(t, b.ID, app.FormatEventID(aCursor), "")
 	f := onB.next(t)
-	if d := f.decode(t); d.Type != "reset" || d.Reason != "unknown" || d.RoomID != b.ID {
+	if d := f.decode(t); d.Type != "reset" || d.Payload.Reason != "unknown" || d.TaskID != b.ID {
 		t.Fatalf("B with A's cursor = %s", f.Data)
 	}
 	bHead := env.idsAfter(b.ID, 0)
