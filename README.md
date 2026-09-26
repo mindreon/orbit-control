@@ -109,6 +109,17 @@ a real auth check.
 
 ## Resource limits
 
+All limits are env vars read at startup; invalid values keep the default.
+**P0 supports a single control instance**, so these per-process limits bound
+the whole deployment and are the inputs for capacity planning: concurrent SSE
+connections are at most `ORBIT_SSE_MAX_STREAMS_PER_ROOM` × open rooms, and at
+most `ORBIT_SSE_MAX_STREAMS_PER_CLIENT` from any one IP (behind a proxy that
+does not preserve client IPs, every browser shares the proxy's IP, so size
+the per-client cap for the proxy). Each stream holds a 256-event live buffer.
+The real-stack E2E (E-LE-6) runs one control with small values
+(`ORBIT_SSE_MAX_STREAMS_PER_ROOM=2`, `ORBIT_SSE_MAX_STREAMS_PER_CLIENT=4`,
+`ORBIT_INGEST_MAX_BYTES=65536`) to exercise the 429 and 413 paths.
+
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `ORBIT_SSE_MAX_STREAMS_PER_ROOM` | `32` | Further SSE connections to that room get `429 STREAM_LIMIT_ROOM` before any stream opens. |
