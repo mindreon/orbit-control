@@ -86,9 +86,12 @@ Token streams and tool lifecycle are too chatty for Temporal.
 
 W1 has an **internal** ingest (service auth is still pending and it is not
 listed as a public path in OpenAPI) that accepts allowlisted **Orbit events**
-only (see OpenAPI `OrbitEvent`). Control keeps a bounded in-memory timeline and
-fans SSE. Raw ACP `session/update` frames and events not associated with a
-known Room are rejected.
+only (see OpenAPI `OrbitEvent`, the orbit-runtime A1 types). Control validates
+the routing fields (`type`, `roomId`/`sessionId`, `occurredAt`) and keeps the
+body unchanged as the payload of a typed `EventEnvelope`; it does not
+re-shape worker events. Control keeps a bounded in-memory timeline and fans
+SSE. Raw ACP `session/update` frames, unknown types, and events not associated
+with a known Room are rejected.
 
 SSE ids come from one process-global counter in the in-memory event store
 (`app.EventLog`, implemented by `MemoryEventLog`); there are no per-room
@@ -98,8 +101,9 @@ changing them. Until then a restart forgets every id. Resume is scoped per room:
 must be an event of the requested room, and a stream only reads that room's
 history. The handler subscribes to the live buffer before reading history, so
 the handoff has no gaps or duplicates; a cursor it cannot honour yields an
-explicit `reset`, never a silent skip. `assistant.delta` is live-only and never
-enters the timeline or audit log. When user auth (contract §17) lands, it runs
+explicit `reset`, never a silent skip. `assistant.delta` is live-only: it never
+enters the timeline or audit log and takes no slot in the 500-event window.
+When user auth (contract §17) lands, it runs
 in `authorizeRoomStream` — before the room lookup, stream headers, and replay.
 
 P0 supports a single control instance only; for multiple replicas, live
@@ -116,8 +120,9 @@ unchanged.
 - The worker validates it again and applies it to that AgentScope session.
 - The room snapshot records kernel `agentscope`. It does not require `dsh` or
   protocol `acp`.
-- The value is visible in Room and activity responses so operators can audit
-  the effective starting policy.
+- The value is visible in Room responses and in the payload of every
+  control-originated activity event (worker events carry the worker's own
+  value) so operators can audit the effective starting policy.
 - This permission preset is not a substitute for future tenant/workspace
   authorization in control.
 

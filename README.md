@@ -79,11 +79,18 @@ Default listen address is `:8080` (override with `PORT`).
 
 ## Room events (SSE) and resume
 
-`GET /v1/rooms/{roomId}/events` streams the room's normalized events. Every
-message has `id: <sequence>`: the event's id (`ActivityEvent.sequence`) from
-one process-global counter in the in-memory event store (`app.EventLog`),
-shared by all rooms. Within a room ids strictly increase but are not
-contiguous. The counter restarts with control.
+`GET /v1/rooms/{roomId}/events` streams the room's events; `GET
+/v1/rooms/{roomId}/activity` lists the retained ones. Both use one shape, an
+`EventEnvelope`: `{id, type, taskId, ts, source, payload}`. Worker events
+(`/internal/events`, orbit-runtime A1 `OrbitEvent`, all 15 types) are passed
+through unchanged as `payload`, so camelCase fields like `delta`, `blockId`,
+`argsPreview`, `toolState`, `truncated`, `agentPath`, and `failure` reach
+clients; unknown types are rejected with 400.
+
+Every SSE message has `id: <id>`: the event's id from one process-global
+counter in the in-memory event store (`app.EventLog`), shared by all rooms.
+Within a room ids strictly increase but are not contiguous. The counter
+restarts with control.
 
 To resume after a disconnect, send the last id you received as the
 `Last-Event-ID` header (EventSource does this on auto-reconnect) or as
@@ -93,11 +100,13 @@ duplicates. Without a cursor the stream is live-only.
 
 A cursor that is malformed, is not an event of this room (including any id
 issued before a control restart), or is older than the retained window (last
-500 events per room) gets a `reset` message instead
-(`{"type":"reset","reason":"malformed|unknown|expired","sequence":N}`):
+500 events per room) gets a `reset` envelope instead
+(`{"type":"reset",…,"payload":{"reason":"malformed|unknown|expired","lastId":N}}`):
 refetch the room, messages, and activity, then keep reading.
 
-`assistant.delta` drafts are live-only: never stored, never replayed.
+`assistant.delta` drafts are live-only: never stored, never replayed, and
+never counted against the 500-event window, so they cannot evict tool or
+approval records.
 Heartbeat comments are sent about every 15s. See
 [docs/openapi.yaml](./docs/openapi.yaml) and
 [docs/contract-notes/sse-resume.md](./docs/contract-notes/sse-resume.md).
