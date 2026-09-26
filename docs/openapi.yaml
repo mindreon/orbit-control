@@ -415,7 +415,9 @@ paths:
         `APPROVAL_NOT_PENDING` (contract §2.0; previously 400). If delivering
         the decision fails or times out, the response is **502**
         `DECISION_DELIVERY_FAILED` and the approval stays decided (no
-        automatic retry, no reopen in phase 1).
+        automatic retry, no reopen in phase 1). Delivery ends when the
+        decision is accepted; waiting for the resumed turn is not bounded by
+        the delivery timeout, so a slow resumed turn never produces the 502.
       x-unimplemented: false
       parameters:
         - $ref: "#/components/parameters/ApprovalId"
@@ -435,8 +437,9 @@ paths:
         "400":
           description: |
             The decision was delivered, but resuming the turn afterwards
-            failed. The message carries the worker error. The approval stays
-            decided.
+            failed: the worker `runTurn` resume on the direct path, or waiting
+            for the result of the accepted `decide` Update on the Temporal
+            path. The message carries the error. The approval stays decided.
           content:
             application/json:
               schema:
@@ -1151,7 +1154,9 @@ components:
       description: |
         The decision is recorded, but delivering it to the workflow failed or
         exceeded the delivery timeout. The delivery call is `resolveApproval`
-        on the direct worker path and the `decide` Update on the Temporal path.
+        on the direct worker path and the acceptance of the `decide` Update
+        (`UpdateID` = approval id) on the Temporal path; the resumed turn that
+        follows is not part of delivery.
         The approval stays decided and is not re-delivered; a resubmit returns
         409 `APPROVAL_NOT_PENDING`. The body is fixed and never includes
         worker or Temporal error text.

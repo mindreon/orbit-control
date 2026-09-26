@@ -676,7 +676,8 @@ How each phase handles it:
   ```
 
   - The delivery call is `resolveApproval` on the direct path and the
-    `decide` Update on the Temporal path.
+    **acceptance** of the `decide` Update on the Temporal path (N1 below:
+    the resumed turn is not part of delivery).
   - The delivery timeout is `app.Options.DeliveryTimeout`, 30 s by default.
   - The body never carries worker or Temporal error text.
   - Control logs `WARN alert=decision_delivery_failed approval=<id> reason=timeout|error`.
@@ -699,7 +700,66 @@ How each phase handles it:
   its own FM entry first.
 - **E2E, blocked until phase 2** (`REVIEW-F2/delivered-but-timeout-once`).
   Inject one "delivered but the response timed out", then retry, and assert
-  the worker applied the decision exactly once.
+  the worker applied the decision exactly once. It depends on two external
+  changes, and stays blocked until both have merged:
+  - the **orbit-runtime section 2.4 PR**: the RoomWorkflow `decide` Update
+    handler dedupes by `updateId` and records `decided_approvals`, so a
+    repeated decision for the same approval is applied at most once;
+  - **contract PR orbit-control#18**, which defines the phase-2 retry and
+    delivery-state semantics this case asserts.
+
+### N1 — Temporal decide: the delivery timeout bounds acceptance only
+
+- **FM-60.** On the Temporal path, `DeliveryTimeout` (30 s) wrapped the
+  whole `decide` Update: `UpdateWorkflow` with `WaitForStage: Completed`
+  and then `handle.Get`. The Update completes only after the resumed turn
+  finishes. So a resumed turn longer than `DeliveryTimeout` made the decide
+  request return **502 `DECISION_DELIVERY_FAILED`** although the workflow
+  had accepted the decision, and `applyTurnResult` was skipped: the turn's
+  assistant texts were not persisted, a follow-up approval the turn asked
+  for was not created, and the room stayed `awaiting_approval`.
+
+The fix splits delivery from waiting for the turn result:
+
+1. **Delivery = acceptance.** Control calls `UpdateWorkflow` with
+   `WaitForStage: Accepted` and **`UpdateID` = the approval id**, under a
+   context bounded by `DeliveryTimeout`. Only this step is delivery. If it
+   fails or times out, the response is the phase-1 502 above: the WARN log,
+   the approval stays decided, and resubmits get 409. Nothing else changes
+   for F2.
+2. **Turn result under the request context.** After acceptance, control
+   calls `handle.Get` under the request context, with no delivery timeout,
+   and then applies the turn result with `applyTurnResult` as before.
+3. **A failure after acceptance is not a delivery failure.** If
+   `handle.Get` fails, the decision was delivered; the response is the
+   documented **400** of the decide route ("the decision was delivered, but
+   resuming the turn afterwards failed"), the same as a failed resume
+   `runTurn` on the direct path. It is never 502.
+4. **`UpdateID` = approval id.** Temporal deduplicates Updates with the
+   same id on a workflow run, and the phase-2 `decide` handler dedupe
+   (orbit-runtime section 2.4) keys on the same `updateId`. Passing it
+   explicitly now means phase 2 does not change the delivery call.
+
+Known gap, unchanged by this fix: if the client disconnects while control
+waits for the turn result, the request context is cancelled and this
+request does not apply the result. The direct path's resume has the same
+gap. It is tracked for phase 2, together with late worker events.
+
+**Direct worker path.** N1 does not apply there. `DeliveryTimeout` bounds
+only `resolveApproval`; the resume `runTurn` already runs under the request
+context and is followed by `applyTurnResult`. No code change, but it gets
+the same E2E so a regression on either path fails.
+
+E2E (`REVIEW-N1/accepted-then-slow-turn/orch` and `/worker`):
+`DeliveryTimeout` 200 ms; the stub accepts the decision at once (the
+`decide` Update, or `resolveApproval`) and returns the resumed turn only
+after 1 s. Expected: **200** with the approval `decided:allow`, no
+`decision_delivery_failed` log, the resumed turn's assistant text in
+`GET /v1/rooms/{id}/messages`, and the room `running`, not
+`awaiting_approval`. `REVIEW-F2/phase1-timeout-at-most-once/orch` now holds
+the stub's **acceptance** past `DeliveryTimeout`, and still expects the
+502, 409 on resubmit, and at most one delivery. The reverse check (restore
+the whole-call timeout) makes the `/orch` case fail with 502.
 
 ### Phase 2: delivery-state response (documented only; no code in phase 1)
 
