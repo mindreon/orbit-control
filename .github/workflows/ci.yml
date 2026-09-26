@@ -53,6 +53,7 @@ jobs:
           # Throwaway CI-only credentials for the service container above.
           ORBIT_TEST_DB_URL: postgres://orbit_app:ci-app@127.0.0.1:5432/orbit_control?sslmode=disable
           ORBIT_TEST_MIGRATE_DB_URL: postgres://orbit_owner:ci-owner@127.0.0.1:5432/orbit_control?sslmode=disable
+          ORBIT_E2E_GIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: go test -tags e2e -race -count=1 -v ./e2e/...
 
       - name: Upload E2E report

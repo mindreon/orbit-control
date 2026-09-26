@@ -103,9 +103,13 @@ func repoRoot() (string, error) {
 	}
 }
 
+// gitSHA prefers ORBIT_E2E_GIT_SHA: on pull_request runs GITHUB_SHA and the
+// checkout are the synthetic merge commit, not the head that gets signed off.
 func gitSHA(root string) string {
-	if sha := os.Getenv("GITHUB_SHA"); sha != "" {
-		return sha
+	for _, env := range []string{"ORBIT_E2E_GIT_SHA", "GITHUB_SHA"} {
+		if sha := os.Getenv(env); sha != "" {
+			return sha
+		}
 	}
 	out, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
 	if err != nil {
