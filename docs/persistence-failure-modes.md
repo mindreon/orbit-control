@@ -5,28 +5,69 @@ Signed contract: `orbit-contract-draft-v2.md` §18, sha256
 
 ## How persistence is verified
 
-1. **E2E first.** Every S-DB-13 scenario that a client can observe is driven
-   through the HTTP API (`/v1/*`, `/internal/events`) against a real
-   Postgres 16, with the production mux, `app` and `pgstore`. The suite lives
-   in `e2e/persistence` (build tag `e2e`) and writes
-   `artifacts/e2e-persistence-report.json`. For every case the report records
-   the id, request, expected result, actual result and pass/fail. CI uploads
-   the report.
-2. **Isolated checks only where HTTP cannot see the property.** They are
-   listed below, each with the failure modes it exists to catch. An isolated
-   check without an entry here must not be added. Report cases of kind
-   `isolated` point at an `FM-*` id from this file.
+1. **E2E first.** Every S-DB scenario that a client or operator can observe
+   is driven through the real interfaces against a real Postgres 16:
+   - the HTTP API (`/v1/*`, `/internal/events`) using the production mux,
+     `app` and `pgstore` over TCP;
+   - the built `orbit-control` binary as a separate process, for the
+     start, restart and refusal cases (S-DB-3, S-DB-8, S-DB-9).
+
+   The suite lives in `e2e/persistence` (build tag `e2e`).
+2. **Isolated checks only where the property is not observable through those
+   interfaces.** They are listed below, each with the failure modes it exists
+   to catch. An isolated check without an entry here must not be added, and
+   the entry must be committed **before** the check's code. The suite's
+   `process/commit-order/*` cases verify this from git history: every `FM-*`
+   id that the checks reference must have been added to this file in a
+   commit that is a strict ancestor of the commit that first used the id in
+   `e2e/`.
+3. **Static checks.** S-DB-1 and S-DB-11 (a) stay static (ISO-9, ISO-1).
+4. **Blocked cases.** A contract case whose feature is outside this PR by
+   contract ordering or owner instruction is still written to the report,
+   with `status: "blocked"`, `pass: false` and `blockedBy`. The report's
+   top-level `gate` is `pass` only when there are no failed and no blocked
+   cases.
+5. **Report.** `artifacts/e2e-persistence-report.json` holds, per case:
+   id, contract clause, kind, steps, request, expected, actual, status and
+   pass. It also records the commit SHA, component versions and a
+   fingerprint of the normalized cases.
+   - Volatile values are replaced with stable placeholders before recording:
+     generated ids, timestamps, the planted secrets. Two runs on the same
+     commit must therefore produce identical `cases`, and CI runs the suite
+     twice and diffs them.
+   - The report is secret-scanned before it is written, and again by CI
+     before upload. It must contain no DB URL, no DB user/password from the
+     environment and no planted secret.
 
 What the E2E suite stubs, and why:
 
-- **Session authenticator.** It reads `X-E2E-User`, because the §17 OIDC
-  session does not exist yet. The tenant is fixed per scenario and never read
-  from the request.
+- **Session authenticator (in-process HTTP only).** It reads `X-E2E-User`,
+  because the §17 OIDC session does not exist yet. The tenant is fixed per
+  scenario and never read from the request. The binary runs in its real
+  local mode.
 - **orbit-worker activities.** A stub HTTP server stands in for the worker.
 - **Temporal, for S-DB-13 (k) only.** The contract says to stub Temporal
   there.
 
 No unit tests are added for persistence.
+
+## Coverage of S-DB-1 … S-DB-13
+
+| Case | How | Blocked parts (reported as `blocked`) |
+|---|---|---|
+| S-DB-1 | static, ISO-9 | — |
+| S-DB-2 | E2E cross-tenant over HTTP, plus ISO-10 | — |
+| S-DB-3 | E2E through the binary: create, restart, read back | events persisted with `last_event_seq` continuing, and artifacts: phase 2 (per-task `seq`, §18.4) and §16 control artifact PR |
+| S-DB-4 | ISO-11 (schema) | a real login's `sessions` row holds only the hash: auth PR (§17, after this PR per §17.9) |
+| S-DB-5 | — | artifact version ingest (200/200/200/409/409): §16 control artifact PR |
+| S-DB-6 | ISO-12 (migrations) | — |
+| S-DB-7 | — | per-task `seq`, SubscribeAndReplay: phase 2, after Last-Event-ID PR #15 |
+| S-DB-8 | E2E through the binary | — |
+| S-DB-9 | E2E through the binary (DB connect and migrate failures) and over HTTP (runtime storage failure) | session and OIDC error paths: auth PR |
+| S-DB-10 | ISO-13 (DB constraint) | streamed turn not persisting deltas: phase 2 (events are not persisted yet) |
+| S-DB-11 | (a) static ISO-1; (b) E2E + ISO-2 | — |
+| S-DB-12 | — | `/internal/artifact-blobs` and the internal listener: phase 2 |
+| S-DB-13 | E2E + ISO-3…8 | none at the storage level; see ISO-6 for routes control does not have yet |
 
 ## Isolated checks and the failures they catch
 
@@ -190,3 +231,112 @@ Failure modes:
 
 Why HTTP cannot catch these: the sequence counter and the relative order of
 the abort and the delete are not exposed by any response.
+
+### ISO-9 — S-DB-1: every repository method is tenant-scoped (static)
+
+The check parses `internal/store` with the Go AST.
+
+- The `store.Repository` interface and every exported method of
+  `pgstore.Store` and `memstore.Store` must take a `tenantID` parameter and
+  use it in the body.
+- Every SQL literal in `pgstore` that reads or writes a [T] table must
+  contain `tenant_id`.
+- The allowlist is `Close` only (lifecycle, touches no table). The auth-only
+  methods for `sessions` / `oidc_login_state` join it with the auth PR.
+  Allowlist changes need Sentinel review.
+
+Failure modes:
+
+- **FM-25.** A repository method without a tenant parameter becomes a
+  cross-tenant read or write path. RLS only saves it if the GUC happens to
+  be unset.
+- **FM-26.** A method takes `tenantID` but never uses it, for example because
+  it passes a constant or another tenant to `set_config`.
+- **FM-27.** A query against a [T] table omits `tenant_id` and relies on
+  RLS alone. That breaks the two-layer rule of §18.5.
+
+Why it must be static: correct code and missing-predicate code return the
+same rows while RLS is intact, so no runtime observation separates them.
+
+### ISO-10 — S-DB-2: RLS on every [T] table, role attributes
+
+Every [T] table is seeded for tenants A and B (as `orbit_app`, each under its
+own tenant). Then:
+
+- as the owner (BYPASSRLS), the rows of both tenants are visible;
+- as `orbit_app` with no GUC, and with the GUC set to `''` or an unknown
+  tenant, every [T] table returns 0 rows;
+- with the GUC set to A, only A's rows are visible, and likewise for B;
+- in `pg_roles` / `pg_class`, `orbit_app` is not SUPERUSER, not BYPASSRLS
+  and owns no [T] table, and every [T] table has RLS enabled and forced with
+  at least one policy.
+
+Failure modes:
+
+- **FM-28.** A [T] table has no RLS, has RLS without FORCE, or has no
+  policy.
+- **FM-29.** A policy compares the wrong column, adds an `OR`, or matches
+  NULL/'' tenant values, so tenant A sees B's rows.
+- **FM-30.** The app role is an owner or BYPASSRLS, for example because
+  migrations ran as the app role or the bootstrap granted the attribute.
+  RLS then silently does nothing.
+- **FM-31.** An unset or empty GUC matches rows, because the policy is
+  written without `missing_ok`, or with `coalesce(..., tenant_id)`, or
+  similar.
+
+Why HTTP cannot catch these: the HTTP layer always sets a valid tenant and
+filters by it. The cross-tenant E2E cases prove the query layer; only raw
+SQL proves the RLS layer underneath it.
+
+### ISO-11 — S-DB-4: no raw session ids or IdP tokens can be stored (schema)
+
+- No column in `public` has a name matching token, secret, password,
+  refresh, access, cookie, credential or api_key.
+- `sessions.id_hash` and `oidc_login_state.pre_session_hash` accept only
+  32-byte values (sha256). A 16-byte value fails with `23514`.
+- `sessions` and `oidc_login_state` have no RLS (pre-login, §18.5).
+
+Failure modes:
+
+- **FM-32.** A column for IdP tokens (refresh/access/id token) or secrets is
+  added. P0 must not store them.
+- **FM-33.** The raw session id, or any non-sha256 value, is stored in
+  `sessions.id_hash`. Anyone with DB read access could then hijack the
+  session.
+- **FM-34.** RLS is enabled on the pre-login tables. Session lookup happens
+  before the tenant is known, so it would fail or tempt a bypass.
+
+Why HTTP cannot catch these: no code path writes sessions until the auth
+PR. The schema is the guard until then.
+
+### ISO-12 — S-DB-6: migrations are idempotent and reversible
+
+The owner role runs, in order:
+
+1. down to 0 and drop the goose version table (a truly empty schema);
+2. up;
+3. up again (0 applied, same version, identical schema fingerprint);
+4. down to 0 (no tables, policies or functions left);
+5. up (identical schema fingerprint).
+
+Failure modes:
+
+- **FM-35.** Up is not idempotent: a re-run fails, or it changes the schema.
+- **FM-36.** Down leaves objects behind (policies, functions, grants), and
+  they break or skew the next up.
+- **FM-37.** Up → down → up yields a different schema from a fresh up
+  (drift between the up and down sections).
+
+Why HTTP cannot catch these: migration tooling has no HTTP surface.
+
+### ISO-13 — S-DB-10: `assistant.delta` cannot be persisted (constraint)
+
+As `orbit_app`, inserting an `events` row with `type = 'assistant.delta'`
+for a live task fails with `23514`. A `tool.call` row for the same task is
+accepted.
+
+- **FM-38.** Streaming deltas get persisted. That bloats `events` and makes
+  replay resend token fragments.
+
+Why HTTP cannot catch this yet: control does not persist events until
+phase 2. The constraint is the storage-level guarantee in the meantime.
