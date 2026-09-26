@@ -4,28 +4,28 @@
 -- policies when the UPDATE's WHERE reads table columns. This SECURITY DEFINER
 -- function is therefore the only soft-delete path. It is owned by the
 -- NOLOGIN BYPASSRLS role orbit_definer, re-checks tenant/creator/liveness
--- itself, and returns the affected row count (0 → 404).
+-- itself, and returns the affected row count (0 → 404). Only orbit_app may
+-- execute it (docs/persistence-failure-modes.md FM-18, FM-19).
 --
--- It is the single entry in the S-DB-11 SECURITY DEFINER allowlist
--- (internal/store/pgstore/sdb11_static_test.go).
+-- It is the single entry in the S-DB-11 SECURITY DEFINER allowlist.
 
 -- +goose Up
 
 -- +goose StatementBegin
-CREATE FUNCTION orbit_soft_delete_room(p_id text, p_user text) RETURNS integer
+CREATE FUNCTION public.orbit_soft_delete_room(p_id text, p_user text) RETURNS integer
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, public
 AS $$
 DECLARE
-  v_tenant text := current_setting('app.tenant_id', true);
+  v_tenant text := pg_catalog.current_setting('app.tenant_id', true);
   v_count  integer;
 BEGIN
   IF v_tenant IS NULL OR v_tenant = '' OR p_user IS NULL OR p_user = '' THEN
     RETURN 0;
   END IF;
   UPDATE public.rooms
-     SET deleted_at = now(), deleted_by = p_user, updated_at = now()
+     SET deleted_at = pg_catalog.now(), deleted_by = p_user, updated_at = pg_catalog.now()
    WHERE id = p_id
      AND tenant_id = v_tenant
      AND created_by = p_user
@@ -39,16 +39,19 @@ $$;
 -- ALTER ... OWNER requires the new owner to hold CREATE on the schema; grant
 -- it only for the ownership transfer.
 GRANT CREATE ON SCHEMA public TO orbit_definer;
-ALTER FUNCTION orbit_soft_delete_room(text, text) OWNER TO orbit_definer;
+ALTER FUNCTION public.orbit_soft_delete_room(text, text) OWNER TO orbit_definer;
 REVOKE CREATE ON SCHEMA public FROM orbit_definer;
 
 GRANT SELECT (id, tenant_id, created_by, deleted_at),
       UPDATE (deleted_at, deleted_by, updated_at)
-   ON rooms TO orbit_definer;
+   ON public.rooms TO orbit_definer;
 
-REVOKE ALL ON FUNCTION orbit_soft_delete_room(text, text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION orbit_soft_delete_room(text, text) TO orbit_app;
+-- CREATE FUNCTION grants EXECUTE to PUBLIC by default, and the owner holds it
+-- implicitly. After this block orbit_app is the only role that may call it.
+REVOKE EXECUTE ON FUNCTION public.orbit_soft_delete_room(text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.orbit_soft_delete_room(text, text) TO orbit_app;
+REVOKE EXECUTE ON FUNCTION public.orbit_soft_delete_room(text, text) FROM orbit_definer;
 
 -- +goose Down
-DROP FUNCTION orbit_soft_delete_room(text, text);
-REVOKE ALL ON rooms FROM orbit_definer;
+DROP FUNCTION public.orbit_soft_delete_room(text, text);
+REVOKE ALL ON public.rooms FROM orbit_definer;
