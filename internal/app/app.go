@@ -114,7 +114,7 @@ type App struct {
 	// freedLogs are closed rooms whose event log was freed; later events for
 	// them are discarded so the log is not recreated.
 	freedLogs map[string]struct{}
-	Limits        Limits
+	Limits    Limits
 }
 
 func New(w *worker.Client) *App {
