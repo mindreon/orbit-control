@@ -258,8 +258,8 @@ var reModuleVersion = regexp.MustCompile(`(?m)^\s*(?:require\s+)?(github\.com/ja
 // secretNeedles are values that must never appear in the report: DB URLs,
 // the DB users' passwords from the environment, and planted secrets.
 func secretNeedles() []string {
-	needles := []string{"postgres://", "postgresql://", planted, plantedDBPassword, "PGPASSWORD", "-----BEGIN"}
-	for _, raw := range []string{appURL, ownerURL} {
+	needles := []string{"postgres://", "postgresql://", planted, plantedDBPassword, plantedIdemKey, plantedSessionID, "PGPASSWORD", "-----BEGIN"}
+	for _, raw := range []string{appURL, ownerURL, opsURL} {
 		if u, err := url.Parse(raw); err == nil && u.User != nil {
 			if pw, ok := u.User.Password(); ok && pw != "" {
 				needles = append(needles, pw)

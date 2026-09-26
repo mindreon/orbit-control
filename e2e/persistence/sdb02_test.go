@@ -5,6 +5,7 @@ package persistence
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -22,14 +23,14 @@ type tenantFixture struct {
 	tenant, user, room, approval string
 }
 
-func seedTenant(t *testing.T, srv *server, tenant, u, idemKey, label string) tenantFixture {
+func seedTenant(t *testing.T, srv *server, prefix, tenant, u, idemKey, label string) tenantFixture {
 	t.Helper()
 	ctx := context.Background()
-	room := roomID(t, srv.check(t, "S-DB-2/setup/create-"+label, "S-DB-2", "create a task in tenant "+label,
+	room := roomID(t, srv.check(t, prefix+"/setup/create-"+label, strings.SplitN(prefix, "/", 2)[0], "create a task in tenant "+label,
 		httpReq{Method: "POST", Path: "/v1/rooms", Headers: withHeader(user(u), "Idempotency-Key", idemKey), Body: `{"kind":"solo","title":"tenant task"}`},
 		httpExp{Status: 200}))
 	alias(room, "<room-"+label+">")
-	posted := srv.check(t, "S-DB-2/setup/message-"+label, "S-DB-2", "message parks an approval in tenant "+label,
+	posted := srv.check(t, prefix+"/setup/message-"+label, strings.SplitN(prefix, "/", 2)[0], "message parks an approval in tenant "+label,
 		httpReq{Method: "POST", Path: "/v1/rooms/" + room + "/messages", Headers: user(u), Body: `{"message":"list files"}`},
 		httpExp{Status: 200, BodyIncludes: []string{`"approval":{`}})
 	var body struct {
@@ -65,8 +66,8 @@ func TestSDB02TenantIsolation(t *testing.T) {
 	wk := stubWorker(t, nil)
 	sa := startServer(t, serverOpts{tenant: "t-sdb2-a", maxConns: 4, workerURL: wk.URL})
 	sb := startServer(t, serverOpts{tenant: "t-sdb2-b", maxConns: 4, workerURL: wk.URL})
-	a := seedTenant(t, sa, "t-sdb2-a", "u-sdb2-a", "e2e-sdb2-shared-key", "A")
-	b := seedTenant(t, sb, "t-sdb2-b", "u-sdb2-b", "e2e-sdb2-shared-key", "B")
+	a := seedTenant(t, sa, "S-DB-2", "t-sdb2-a", "u-sdb2-a", "e2e-sdb2-shared-key", "A")
+	b := seedTenant(t, sb, "S-DB-2", "t-sdb2-b", "u-sdb2-b", "e2e-sdb2-shared-key", "B")
 
 	// E2E: tenant B's user cannot reach tenant A's task through any route.
 	missing := sb.check(t, "S-DB-2/setup/missing-room", c, "baseline 404 body in tenant B",

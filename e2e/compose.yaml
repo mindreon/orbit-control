@@ -3,6 +3,7 @@
 #   docker compose -f e2e/compose.yaml up -d --wait
 #   ORBIT_TEST_DB_URL=postgres://orbit_app:e2e-app@127.0.0.1:55432/orbit_control?sslmode=disable \
 #   ORBIT_TEST_MIGRATE_DB_URL=postgres://orbit_owner:e2e-owner@127.0.0.1:55432/orbit_control?sslmode=disable \
+#   ORBIT_TEST_OPS_DB_URL=postgres://orbit_ops:e2e-ops@127.0.0.1:55432/orbit_control?sslmode=disable \
 #   go test -tags e2e -count=1 ./e2e/...
 #
 # Passwords here are throwaway local values for this container only.
@@ -14,6 +15,7 @@ services:
       POSTGRES_PASSWORD: e2e-superuser
       ORBIT_OWNER_PASSWORD: e2e-owner
       ORBIT_APP_PASSWORD: e2e-app
+      ORBIT_OPS_PASSWORD: e2e-ops
     ports:
       - "55432:5432"
     volumes:

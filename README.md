@@ -71,8 +71,11 @@ docs/openapi.yaml      Public HTTP/WS contract
 ## Postgres (optional in dev)
 
 ```bash
-psql -v ON_ERROR_STOP=1 -v owner_password=... -v app_password=... \
+psql -v ON_ERROR_STOP=1 -v owner_password=... -v app_password=... -v ops_password=... \
   -f deploy/postgres/bootstrap-roles.sql "$SUPERUSER_URL"
+ORBIT_CONTROL_MIGRATE_DB_URL=... go run ./cmd/orbit-control   # once, with ORBIT_CONTROL_MIGRATE_ON_START=1
+psql -v ON_ERROR_STOP=1 -v tenant_id=default \
+  -f deploy/postgres/ensure-tenant.sql "$ORBIT_CONTROL_OPS_DB_URL"   # tenants are created by orbit_ops only
 ORBIT_CONTROL_DB_URL=postgres://orbit_app:...@127.0.0.1:5432/orbit_control \
 ORBIT_CONTROL_MIGRATE_DB_URL=postgres://orbit_owner:...@127.0.0.1:5432/orbit_control \
 ORBIT_CONTROL_MIGRATE_ON_START=1 go run ./cmd/orbit-control
@@ -93,6 +96,7 @@ and static checks are limited to those listed in
 docker compose -f e2e/compose.yaml up -d --wait
 ORBIT_TEST_DB_URL=postgres://orbit_app:e2e-app@127.0.0.1:55432/orbit_control?sslmode=disable \
 ORBIT_TEST_MIGRATE_DB_URL=postgres://orbit_owner:e2e-owner@127.0.0.1:55432/orbit_control?sslmode=disable \
+ORBIT_TEST_OPS_DB_URL=postgres://orbit_ops:e2e-ops@127.0.0.1:55432/orbit_control?sslmode=disable \
 go test -tags e2e -count=1 ./e2e/...
 ```
 

@@ -30,6 +30,7 @@ func appDBVar() envVar {
 func TestSDB03RestartKeepsData(t *testing.T) {
 	const c = "S-DB-3"
 	const tenant = "t-sdb3"
+	opsEnsureTenant(t, tenant)
 	wk := stubWorker(t, nil)
 	vars := func() []envVar {
 		return []envVar{
@@ -138,6 +139,8 @@ func TestSDB09NoSecretsInLogsOrErrors(t *testing.T) {
 	const c = "S-DB-9"
 	u, _ := url.Parse(appURL)
 	ou, _ := url.Parse(ownerURL)
+	pu, _ := url.Parse(opsURL)
+	opsPW, _ := pu.User.Password()
 	hostPort := u.Host
 	appUser, ownerUser := u.User.Username(), ou.User.Username()
 	appPW, _ := u.User.Password()
@@ -145,7 +148,7 @@ func TestSDB09NoSecretsInLogsOrErrors(t *testing.T) {
 	closed := freePort(t)
 
 	forbidden := func(extra ...string) []string {
-		return append([]string{"postgres://", "postgresql://", hostPort, net.JoinHostPort(u.Hostname(), closed), appUser, ownerUser, appPW, ownerPW, plantedDBPassword, "password authentication"}, extra...)
+		return append([]string{"postgres://", "postgresql://", hostPort, net.JoinHostPort(u.Hostname(), closed), appUser, ownerUser, appPW, ownerPW, opsPW, plantedDBPassword, "password authentication"}, extra...)
 	}
 	shownForbidden := []string{"<postgres URL scheme>", "<db host:port>", "<orbit_app user>", "<orbit_owner user>", "<env passwords>", "<planted-db-password>", "password authentication"}
 	clean := func(out string) bool {

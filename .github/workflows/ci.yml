@@ -30,6 +30,7 @@ jobs:
       # Throwaway CI-only credentials for the service container above.
       ORBIT_TEST_DB_URL: postgres://orbit_app:ci-app@127.0.0.1:5432/orbit_control?sslmode=disable
       ORBIT_TEST_MIGRATE_DB_URL: postgres://orbit_owner:ci-owner@127.0.0.1:5432/orbit_control?sslmode=disable
+      ORBIT_TEST_OPS_DB_URL: postgres://orbit_ops:ci-ops@127.0.0.1:5432/orbit_control?sslmode=disable
       ORBIT_E2E_GIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       ORBIT_E2E_POSTGRES_IMAGE: postgres:16-alpine
     steps:
@@ -51,7 +52,7 @@ jobs:
           PGPASSWORD: ci-superuser
         run: |
           psql -v ON_ERROR_STOP=1 \
-            -v owner_password=ci-owner -v app_password=ci-app \
+            -v owner_password=ci-owner -v app_password=ci-app -v ops_password=ci-ops \
             -h 127.0.0.1 -U postgres -d postgres \
             -f deploy/postgres/bootstrap-roles.sql
 
@@ -79,7 +80,7 @@ jobs:
       - name: Secret-scan reports
         if: always()
         run: |
-          if grep -nE 'postgres(ql)?://|ci-owner|ci-app|ci-superuser|e2e-planted|sk-live|BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16}' artifacts/*.json; then
+          if grep -nE 'postgres(ql)?://|ci-owner|ci-app|ci-ops|ci-superuser|e2e-planted|sk-live|BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16}' artifacts/*.json; then
             echo "::error::secret-like value found in the E2E report"
             exit 1
           fi

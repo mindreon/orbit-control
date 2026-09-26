@@ -36,9 +36,7 @@ func TestSDB04SessionsHoldOnlyHashes(t *testing.T) {
 		sqlReq{Role: "orbit_owner", SQL: colSQL}, []string{}, hits, len(hits) == 0)
 
 	const tenant, u = "t-sdb4", "u-sdb4"
-	if _, err := ownerPool.Exec(ctx, `INSERT INTO tenants (id, name) VALUES ($1, $1) ON CONFLICT DO NOTHING`, tenant); err != nil {
-		t.Fatal(err)
-	}
+	opsEnsureTenant(t, tenant)
 	if err := asTenant(ctx, appPool, tenant, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `INSERT INTO users (id, tenant_id, iss, sub) VALUES ($1, $2, 'orbit-local', $1)`, u, tenant)
 		return err

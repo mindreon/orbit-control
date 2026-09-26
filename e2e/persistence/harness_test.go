@@ -34,6 +34,7 @@ import (
 var (
 	appURL   = os.Getenv("ORBIT_TEST_DB_URL")
 	ownerURL = os.Getenv("ORBIT_TEST_MIGRATE_DB_URL")
+	opsURL   = os.Getenv("ORBIT_TEST_OPS_DB_URL")
 )
 
 const (
@@ -44,6 +45,8 @@ const (
 func TestMain(m *testing.M) {
 	alias(planted, "<planted-secret>")
 	alias(plantedDBPassword, "<planted-db-password>")
+	alias(plantedIdemKey, "<planted-idempotency-key>")
+	alias(plantedSessionID, "<planted-session-id>")
 	code := run(m)
 	path, gateOK, err := writeReport()
 	if err != nil {
@@ -59,8 +62,8 @@ func TestMain(m *testing.M) {
 }
 
 func run(m *testing.M) int {
-	if appURL == "" || ownerURL == "" {
-		msg := "ORBIT_TEST_DB_URL (orbit_app) and ORBIT_TEST_MIGRATE_DB_URL (orbit_owner) are required"
+	if appURL == "" || ownerURL == "" || opsURL == "" {
+		msg := "ORBIT_TEST_DB_URL (orbit_app), ORBIT_TEST_MIGRATE_DB_URL (orbit_owner) and ORBIT_TEST_OPS_DB_URL (orbit_ops) are required"
 		fatalSetup(msg)
 		fmt.Fprintln(os.Stderr, msg)
 		return 1
@@ -82,6 +85,21 @@ func run(m *testing.M) int {
 	}
 	defer os.RemoveAll(filepath.Dir(binaryPath))
 	return m.Run()
+}
+
+// opsEnsureTenant creates a tenant the way ops does: as orbit_ops, never as
+// orbit_app (review M2).
+func opsEnsureTenant(t *testing.T, tenant string) {
+	t.Helper()
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, opsURL)
+	if err != nil {
+		t.Fatalf("ops connect: %v", sqlState(err))
+	}
+	defer conn.Close(ctx)
+	if _, err := conn.Exec(ctx, `INSERT INTO tenants (id, name) VALUES ($1, $1) ON CONFLICT (id) DO NOTHING`, tenant); err != nil {
+		t.Fatalf("ops ensure tenant: %v", err)
+	}
 }
 
 func newPool(t *testing.T, url string, maxConns int32) *pgxpool.Pool {
@@ -169,11 +187,9 @@ type serverOpts struct {
 
 func startServer(t *testing.T, o serverOpts) *server {
 	t.Helper()
+	opsEnsureTenant(t, o.tenant)
 	pool := newPool(t, appURL, o.maxConns)
 	repo := pgstore.New(pool)
-	if err := repo.EnsureTenant(context.Background(), o.tenant, o.tenant); err != nil {
-		t.Fatalf("ensure tenant: %v", err)
-	}
 	logs := &syncBuffer{}
 	runtime := app.NewWithOptions(app.Options{
 		Worker: worker.New(o.workerURL), Orch: o.orch, Repo: repo,

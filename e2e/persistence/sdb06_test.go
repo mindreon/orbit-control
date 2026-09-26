@@ -35,7 +35,7 @@ SELECT coalesce(string_agg(x, E'\n' ORDER BY x), '') FROM (
     FROM information_schema.role_table_grants WHERE table_schema = 'public' AND table_name <> 'goose_db_version'
   UNION ALL
   SELECT 'colgrant:' || table_name || '.' || column_name || ':' || grantee || ':' || privilege_type
-    FROM information_schema.column_privileges WHERE table_schema = 'public' AND grantee = 'orbit_definer'
+    FROM information_schema.column_privileges WHERE table_schema = 'public' AND grantee IN ('orbit_definer', 'orbit_app', 'orbit_ops')
 ) s`
 
 const objectCountSQL = `
