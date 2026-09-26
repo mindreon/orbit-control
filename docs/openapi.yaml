@@ -407,6 +407,12 @@ paths:
         Public HITL verb. Control maps `allow` to worker `resolveApproval`
         (`allowed-once`) then `runTurn` resume. `reject` maps to worker `abort`.
         Temporal Update/Signal is the later stand-in target.
+
+        The approval is claimed with a conditional update (`status = pending`)
+        before anything is sent to the workflow, so concurrent decisions have
+        exactly one winner and the workflow receives exactly one decision.
+        Deciding an approval that is no longer pending returns **409**
+        `APPROVAL_NOT_PENDING` (contract §2.0; previously 400).
       x-unimplemented: false
       parameters:
         - $ref: "#/components/parameters/ApprovalId"
@@ -424,7 +430,27 @@ paths:
               schema:
                 $ref: "#/components/schemas/Approval"
         "400":
-          $ref: "#/components/responses/NotImplemented"
+          description: The decision could not be delivered to the workflow (the approval is reopened).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+              example:
+                error: bad request
+                code: BAD_REQUEST
+                message: "worker resolveApproval: HTTP 502"
+        "404":
+          description: Missing, not owned by the caller, in another tenant, or its task was deleted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+              example:
+                error: not found
+                code: NOT_FOUND
+                message: approval not found
+        "409":
+          $ref: "#/components/responses/ApprovalNotPending"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -1103,6 +1129,16 @@ components:
             error: not found
             code: NOT_FOUND
             message: room not found
+    ApprovalNotPending:
+      description: The approval was already decided (or lost a concurrent decision).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+          example:
+            error: approval not pending
+            code: APPROVAL_NOT_PENDING
+            message: approval is not pending
     IdempotencyKeyReused:
       description: The `Idempotency-Key` was already used with a different body.
       content:

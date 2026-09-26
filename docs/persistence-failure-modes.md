@@ -2,8 +2,10 @@
 
 Contract: `orbit-contract-draft-v2.md` §18.
 
-- **C32 rev3** (Celestial: rooms DELETE revoked from `orbit_app`). sha256
-  relayed as `113aebd8…f90b`; the full value is pending.
+- **C32 rev3** (Celestial: rooms DELETE revoked from `orbit_app`). The
+  contract of record is `docs/contracts/orbit-contract-v2.md`: 986 lines,
+  sha256 `113aebd89914a1008d1c57457572ef38e5de35c74e88ce2f8b8410997f9af90b`.
+  `process/contract-file-sha256` asserts this value on every run.
 - Previous signed version (C32 rev2): sha256
   `053a37bb093e06602a50f6412cd57eb3491161f039b567880ba6650ec6965229`.
 
