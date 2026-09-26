@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"encoding/json"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -173,33 +172,7 @@ func HandlerWith(runtime *app.App) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"items": runtime.ListActivity(roomID)})
 	})
-	mux.HandleFunc("GET /v1/rooms/{roomId}/events", func(w http.ResponseWriter, r *http.Request) {
-		roomID := r.PathValue("roomId")
-		flusher, ok := w.(http.Flusher)
-		if !ok {
-			writeErr(w, http.StatusInternalServerError, "SSE_UNSUPPORTED", "streaming unsupported")
-			return
-		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-		ch, cancel := runtime.Subscribe(roomID)
-		defer cancel()
-		_, _ = io.WriteString(w, ": connected\n\n")
-		flusher.Flush()
-		for {
-			select {
-			case <-r.Context().Done():
-				return
-			case raw, ok := <-ch:
-				if !ok {
-					return
-				}
-				_, _ = io.WriteString(w, "data: "+string(raw)+"\n\n")
-				flusher.Flush()
-			}
-		}
-	})
+	mux.HandleFunc("GET /v1/rooms/{roomId}/events", streamRoomEvents(runtime))
 	mux.HandleFunc("GET /v1/approvals", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"items": runtime.ListApprovals()})
 	})

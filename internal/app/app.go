@@ -129,7 +129,7 @@ type App struct {
 	CloudAgents   map[string]*CloudAgentJob
 	grants        map[string]*grantRecord
 	sequences     map[string]uint64
-	subs          map[string]map[chan []byte]struct{}
+	subs          map[string]map[*subscriber]struct{}
 }
 
 func New(w *worker.Client) *App {
@@ -151,7 +151,7 @@ func NewWithOrch(w *worker.Client, o *orch.Client) *App {
 		CloudAgents:   map[string]*CloudAgentJob{},
 		grants:        map[string]*grantRecord{},
 		sequences:     map[string]uint64{},
-		subs:          map[string]map[chan []byte]struct{}{},
+		subs:          map[string]map[*subscriber]struct{}{},
 	}
 	return a
 }
@@ -565,6 +565,7 @@ func (a *App) SteerRoom(ctx context.Context, roomID, instruction string) (bool, 
 var workerEventTypes = map[string]struct{}{
 	"session.status":    {},
 	"assistant.message": {},
+	"assistant.delta":   {},
 	"tool.call":         {},
 	"tool.result":       {},
 	"approval.asked":    {},
@@ -606,26 +607,16 @@ func (a *App) Ingest(ev Event) error {
 	if roomID == "" || !roomExists {
 		return fmt.Errorf("event is not associated with a known room")
 	}
+	// Streaming drafts would evict durable history from the bounded window, so
+	// they are fanned out live only and never get a sequence (contract §2.1).
+	if eventType == "assistant.delta" {
+		a.publishEphemeral(roomID, ev, "worker")
+		return nil
+	}
 	// Assistant text is persisted from runTurn.texts to avoid duplicates when
 	// ingest is also enabled. Activity stores the normalized live projection.
 	a.publish(roomID, ev, "worker")
 	return nil
-}
-
-func (a *App) Subscribe(roomID string) (<-chan []byte, func()) {
-	ch := make(chan []byte, 32)
-	a.mu.Lock()
-	if a.subs[roomID] == nil {
-		a.subs[roomID] = map[chan []byte]struct{}{}
-	}
-	a.subs[roomID][ch] = struct{}{}
-	a.mu.Unlock()
-	return ch, func() {
-		a.mu.Lock()
-		delete(a.subs[roomID], ch)
-		a.mu.Unlock()
-		close(ch)
-	}
 }
 
 func (a *App) Publish(roomID string, ev Event) {
@@ -648,7 +639,8 @@ func (a *App) publish(roomID string, ev Event, source string) {
 		a.mu.Unlock()
 		return
 	}
-	a.sequences[roomID]++
+	seq := a.sequenceLocked(roomID) + 1
+	a.sequences[roomID] = seq
 	runtimeName := eventString(ev, "runtime")
 	if runtimeName == "" {
 		runtimeName = room.Runtime.Kernel
@@ -662,7 +654,7 @@ func (a *App) publish(roomID string, ev Event, source string) {
 	}
 	item := ActivityEvent{
 		ID:                eventID,
-		Sequence:          a.sequences[roomID],
+		Sequence:          seq,
 		Type:              eventString(ev, "type"),
 		RoomID:            roomID,
 		SessionID:         eventString(ev, "sessionId"),
@@ -693,12 +685,7 @@ func (a *App) publish(roomID string, ev Event, source string) {
 		a.mu.Unlock()
 		return
 	}
-	for ch := range a.subs[roomID] {
-		select {
-		case ch <- raw:
-		default:
-		}
-	}
+	a.broadcastLocked(roomID, StreamFrame{Seq: seq, Durable: true, Data: raw})
 	a.mu.Unlock()
 }
 
