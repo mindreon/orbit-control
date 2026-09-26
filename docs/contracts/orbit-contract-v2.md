@@ -226,7 +226,7 @@
 +     externals: list[ExternalCall] = Field(default_factory=list)  # v2.1：完整的待执行 external 集合
 +     usage_summary: dict[str, int] = Field(default_factory=dict)  # v2.1：本轮 token 汇总（明细走 usage 事件）
 +     todos: list[TodoItem] | None = None        # 本轮最后一次 todo_write 的完整列表；None = 本轮没写
-+     error_code: ToolErrorCode | TurnErrorCode | None = None   # C34：status=="failed" 时取 TurnErrorCode 的值
++     error_code: TurnErrorCode | None = None   # C34：只在 status=="failed" 时有值；工具错误码只出现在 tool 事件的 error_code（ToolErrorCode）上，不进 TurnResult（与 orbit-runtime main 的实现一致）
 
   class RoomWorkflowInput(BaseModel):            # camelCase 别名沿用
       room_id; permission_preset; kind
