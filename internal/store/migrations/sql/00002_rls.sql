@@ -139,6 +139,9 @@ GRANT UPDATE (kind, title, state, permission_preset, runtime, session_id,
 
 GRANT USAGE, SELECT ON SEQUENCE events_id_seq TO orbit_app;
 
+-- TRUNCATE bypasses RLS; REFERENCES and TRIGGER are never needed by the app.
+REVOKE TRUNCATE, REFERENCES, TRIGGER ON ALL TABLES IN SCHEMA public FROM orbit_app, PUBLIC;
+
 -- +goose Down
 REVOKE ALL ON tenants FROM orbit_ops;
 REVOKE ALL ON SEQUENCE events_id_seq FROM orbit_app;
