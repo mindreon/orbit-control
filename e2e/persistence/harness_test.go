@@ -418,6 +418,9 @@ type stubOrch struct {
 	outcomes      sync.Map
 	// onDecide runs when the Update is received, before acceptDelay.
 	onDecide func()
+	// acceptErr, when set, fails acceptance immediately so in-request
+	// retries run until DeliveryTimeout.
+	acceptErr error
 	// ttlS is decideConfig.ttlS. Zero means 86400.
 	ttlS       int
 	configErr  error
@@ -445,6 +448,9 @@ func (f *stubOrch) Decide(ctx context.Context, _, approvalRequestID, _, decision
 	f.updateIDs.Store(approvalRequestID, true)
 	if f.onDecide != nil {
 		f.onDecide()
+	}
+	if f.acceptErr != nil {
+		return nil, f.acceptErr
 	}
 	select {
 	case <-time.After(f.acceptDelay):

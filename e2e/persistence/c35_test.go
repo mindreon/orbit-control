@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -1169,8 +1170,90 @@ func TestFM74TriggerPrivilege(t *testing.T) {
 		Pass:        sqlState(dropErr) == "42501" && left == 1})
 }
 
+func TestFM71LeftoverNotDelivered(t *testing.T) {
+	const tenant = "t-fm71-nd"
+	srv := startServer(t, serverOpts{tenant: tenant, maxConns: 4, orch: &stubOrch{askApproval: true}, reconcileInterval: time.Hour})
+	ap, room := parkQuiet(t, srv, "u-fm71-nd")
+	ctx := context.Background()
+	if _, err := execAsApp(ctx, srv.appPool, tenant, `
+		UPDATE approvals
+		   SET status = 'decided', decision = 'allow', decided_at = now(),
+		       delivery_state = 'in_flight', delivery_attempt = delivery_attempt + 1
+		 WHERE tenant_id = $1 AND id = $2 AND status = 'pending' AND delivery_state IS NULL`, tenant, ap); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := execAsApp(ctx, srv.appPool, tenant, `
+		UPDATE approvals SET delivery_state = 'not_delivered'
+		 WHERE tenant_id = $1 AND id = $2 AND delivery_state = 'in_flight' AND delivery_attempt = 1`, tenant, ap); err != nil {
+		t.Fatal(err)
+	}
+	before := approvalTuple(t, ap)
+	beforeEvents := reopenEvents(t, room)
+	code := reconcile(t, srv)
+	after := approvalTuple(t, ap)
+	var decidedNull bool
+	if err := ownerConn(t).QueryRow(ctx, `SELECT decided_at IS NULL FROM approvals WHERE id = $1`, ap).Scan(&decidedNull); err != nil {
+		t.Fatal(err)
+	}
+	events := reopenEvents(t, room)
+	record(t, caseInput{ID: "FM-71/leftover-not-delivered-t9", Contract: "FM-71", Kind: "e2e", FailureModes: []string{"FM-71"},
+		Description: "the reconciler scans a leftover not_delivered row and runs T9",
+		Steps:       []string{"leave the row at not_delivered without T9", "POST /internal/e2e/reconcile", "read the row and the reopen event"},
+		Request:     map[string]string{"approval": ap},
+		Expected:    map[string]any{"before": "decided:allow:not_delivered:1", "after": "pending:::1", "decidedAtNull": true, "reopenEvents": 1},
+		Actual:      map[string]any{"before": before, "beforeEvents": beforeEvents, "reconcile": code, "after": after, "decidedAtNull": decidedNull, "reopenEvents": events},
+		Pass:        before == "decided:allow:not_delivered:1" && beforeEvents == 0 && code == 200 && after == "pending:::1" && decidedNull && events == 1})
+}
+
+func reopenEvents(t *testing.T, room string) int {
+	t.Helper()
+	var n int
+	err := ownerConn(t).QueryRow(context.Background(), `
+		SELECT count(*) FROM events
+		 WHERE task_id = $1 AND type = 'approval.delivery_updated'
+		   AND payload->>'status' = 'pending'
+		   AND COALESCE(payload->>'decision', '') = ''
+		   AND COALESCE(payload->>'deliveryState', '') = ''`, room).Scan(&n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestFM76BoundedRetry(t *testing.T) {
+	const timeout = 450 * time.Millisecond
+	so := &stubOrch{askApproval: true, acceptErr: errors.New("unavailable")}
+	srv := startServer(t, serverOpts{tenant: "t-fm76", maxConns: 4, orch: so, deliveryTimeout: timeout, reconcileInterval: time.Hour})
+	ap, _ := parkQuiet(t, srv, "u-fm76")
+	ctx, cancel := context.WithTimeout(context.Background(), timeout+3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.base+"/v1/approvals/"+ap+"/decide", strings.NewReader(`{"decision":"allow"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(userHeader, "u-fm76")
+	start := time.Now()
+	res, err := http.DefaultClient.Do(req)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(res.Body, 64<<10))
+	state := approvalTuple(t, ap)
+	calls := so.decides.Load()
+	within := elapsed <= timeout+time.Second
+	record(t, caseInput{ID: "FM-76/retry-bounded-by-delivery-timeout", Contract: "FM-76", Kind: "e2e", FailureModes: []string{"FM-76"},
+		Description: "in-request Unknown retries use capped backoff and finish within ORBIT_DECISION_DELIVERY_TIMEOUT",
+		Steps:       []string{"DeliveryTimeout is 450ms", "each accept fails at once", "POST decide allow", "count accepts and measure elapsed time"},
+		Request:     map[string]any{"decision": "allow", "deliveryTimeoutMs": timeout.Milliseconds()},
+		Expected:    map[string]any{"status": 202, "stateHasUnknown": true, "decideCallsMin": 2, "decideCallsMax": 40, "withinTimeout": true},
+		Actual:      map[string]any{"status": res.StatusCode, "body": string(raw), "state": state, "decideCalls": calls, "elapsedMs": elapsed.Milliseconds()},
+		Pass:        res.StatusCode == 202 && strings.Contains(state, ":unknown:") && calls >= 2 && calls <= 40 && within})
+}
+
 func TestFM75ProductionBinary(t *testing.T) {
-	prod := nmContains(t, binaryPath, "orbitE2EFaults")
 	root, err := repoRoot()
 	if err != nil {
 		t.Fatal(err)
@@ -1182,14 +1265,24 @@ func TestFM75ProductionBinary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("e2e build: %v %s", err, out)
 	}
-	injected := nmContains(t, e2eBin, "orbitE2EFaults")
+	prodFault := nmContains(t, binaryPath, "orbitE2EFaults")
+	e2eFault := nmContains(t, e2eBin, "orbitE2EFaults")
 	record(t, caseInput{ID: "FM-75/production-binary-has-no-fault-symbol", Contract: "FM-75", Kind: "process", FailureModes: []string{"FM-75"},
 		Description: "the production binary has no orbitE2EFaults symbol; the e2e-tagged binary does",
 		Steps:       []string{"go tool nm the production binary", "go build -tags e2e", "go tool nm that binary"},
 		Request:     map[string]string{"symbol": "orbitE2EFaults"},
 		Expected:    map[string]any{"production": false, "e2e": true},
-		Actual:      map[string]any{"production": prod, "e2e": injected},
-		Pass:        !prod && injected})
+		Actual:      map[string]any{"production": prodFault, "e2e": e2eFault},
+		Pass:        !prodFault && e2eFault})
+	prodAgain := nmContains(t, binaryPath, "WriteResultAgain")
+	e2eAgain := nmContains(t, e2eBin, "WriteResultAgain")
+	record(t, caseInput{ID: "FM-75/production-binary-has-no-write-result-again", Contract: "FM-75", Kind: "process", FailureModes: []string{"FM-75"},
+		Description: "WriteResultAgain is absent from the production binary and present in the e2e-tagged binary",
+		Steps:       []string{"go tool nm the production binary for WriteResultAgain", "go tool nm the e2e binary"},
+		Request:     map[string]string{"symbol": "WriteResultAgain"},
+		Expected:    map[string]any{"production": false, "e2e": true},
+		Actual:      map[string]any{"production": prodAgain, "e2e": e2eAgain},
+		Pass:        !prodAgain && e2eAgain})
 }
 
 func nmContains(t *testing.T, bin, sym string) bool {

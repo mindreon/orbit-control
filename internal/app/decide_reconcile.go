@@ -247,24 +247,3 @@ func (a *App) retryDelivery(ctx context.Context, tenantID string, appr store.App
 		}
 	}
 }
-
-// WriteResultAgain repeats the write-back for one delivery_attempt using the
-// body stored in the database. A second call inserts nothing and returns false.
-func (a *App) WriteResultAgain(ctx context.Context, tenantID, approvalID string, attempt int) (bool, error) {
-	ds := a.delivery()
-	if ds == nil {
-		return false, nil
-	}
-	w, ok, err := ds.LoadResultBody(ctx, tenantID, approvalID, attempt)
-	if err != nil || !ok {
-		return false, err
-	}
-	wrote, err := ds.ApplyDecideResult(ctx, tenantID, w)
-	if err != nil {
-		return false, err
-	}
-	if wrote {
-		a.publishResult(w)
-	}
-	return wrote, nil
-}

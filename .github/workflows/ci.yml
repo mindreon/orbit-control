@@ -80,15 +80,17 @@ jobs:
       - name: Production build has no e2e fault injection
         run: |
           go build -o /tmp/orbit-control ./cmd/orbit-control
-          if go tool nm /tmp/orbit-control | grep -F orbitE2EFaults; then
-            echo "::error::production binary contains orbitE2EFaults"
-            exit 1
-          fi
           go build -tags e2e -o /tmp/orbit-control-e2e ./cmd/orbit-control
-          if ! go tool nm /tmp/orbit-control-e2e | grep -F orbitE2EFaults >/dev/null; then
-            echo "::error::e2e binary is missing orbitE2EFaults"
-            exit 1
-          fi
+          for sym in orbitE2EFaults WriteResultAgain; do
+            if go tool nm /tmp/orbit-control | grep -F "$sym"; then
+              echo "::error::production binary contains $sym"
+              exit 1
+            fi
+            if ! go tool nm /tmp/orbit-control-e2e | grep -F "$sym" >/dev/null; then
+              echo "::error::e2e binary is missing $sym"
+              exit 1
+            fi
+          done
 
       - run: go vet ./... 2>&1 | tee artifacts/logs/vet.log
       - run: go vet -tags e2e ./... 2>&1 | tee -a artifacts/logs/vet.log

@@ -37,6 +37,28 @@ func e2eFault() string {
 	return s
 }
 
+// WriteResultAgain repeats the write-back for one delivery_attempt using the
+// body stored in the database. A second call inserts nothing and returns false.
+// It is compiled only with -tags e2e. The production binary does not export it.
+func (a *App) WriteResultAgain(ctx context.Context, tenantID, approvalID string, attempt int) (bool, error) {
+	ds := a.delivery()
+	if ds == nil {
+		return false, nil
+	}
+	w, ok, err := ds.LoadResultBody(ctx, tenantID, approvalID, attempt)
+	if err != nil || !ok {
+		return false, err
+	}
+	wrote, err := ds.ApplyDecideResult(ctx, tenantID, w)
+	if err != nil {
+		return false, err
+	}
+	if wrote {
+		a.publishResult(w)
+	}
+	return wrote, nil
+}
+
 // SetSkipResultWrite marks the approval delivered and stores the result
 // without applying it. The reconciler applies that stored body.
 func (a *App) SetSkipResultWrite(skip bool) { a.skipResultWrite.Store(skip) }
