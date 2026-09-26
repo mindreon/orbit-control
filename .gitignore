@@ -31,3 +31,6 @@ Thumbs.db
 
 .orbit-data/
 **/.orbit-data/
+
+# E2E artifacts are produced by CI (e2e.yml)
+/artifacts/

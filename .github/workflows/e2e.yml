@@ -1,0 +1,31 @@
+name: e2e
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  last-event-id:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: SSE Last-Event-ID end-to-end (real orbit-control binary)
+        run: go run ./e2e/lasteventid -out artifacts/e2e-last-event-id.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-last-event-id
+          path: artifacts/e2e-last-event-id.json
+          if-no-files-found: error
