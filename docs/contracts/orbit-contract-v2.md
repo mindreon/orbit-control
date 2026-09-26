@@ -50,7 +50,7 @@
 | C32 rev | §18 按 Sentinel 评审修订（方向已同意，**尚未签字**）：(HIGH 1) 重放与实时流的交接顺序改成"先订阅并缓冲 → 查库补发 → 冲刷缓冲时丢掉 seq ≤ 已补发最大值的事件"，内存存储接口也按这个顺序，S-DB-7 增加两个写入注入点；(HIGH 2) 租户 GUC 一律用 `SELECT set_config('app.tenant_id', $1, true)`，禁止会话级 `SET` 和字符串拼接的 SET，新增 S-DB-11；(MEDIUM 3) `/internal/artifact-blobs` 的边界：租户和任务由 control 查库得出，路径只用 control 自己算的 sha256，边读边计数、超限 413、临时文件加 fsync 加原子 rename，只绑定在内部监听地址上，新增 S-DB-12；(LOW a) `idempotency_keys` 主键改成 (tenant_id, created_by, key_hash)；(LOW b) 删除任务时硬删除并 `ON DELETE CASCADE`，blob 文件不删，孤儿 GC 放到 P1，新增 S-DB-13 | §18 | Sentinel 评审（C32 未签字） |
 | C32 rev2 | §18 任务删除从硬删除改成**软删除**（Nexus 产品决定，Sentinel 同意）：`rooms` 增加 `deleted_at/deleted_by`；rooms 的 RLS 增加 `deleted_at IS NULL`，子表 RLS 增加 `EXISTS(未删除的 room)`（单一真相来源，不在子表冗余 deleted_at）；子表外键改成 `ON DELETE RESTRICT`；`DELETE /v1/rooms/{id}` 保留，改成软删除（先 abort，204，重复删除或不存在返回 404；abort 失败也照常删除）；rooms 的 RLS 按命令分开写，软删除 UPDATE 不带 RETURNING（Sentinel 复审 H1）；删除后迟到的 worker 事件和 Idempotency-Key 重放都返回 404（M1）；删除时断开这个任务的 SSE，之后用 Last-Event-ID 重连返回 404；Idempotency-Key 重放遇到已删除的任务返回 404；P0 不提供恢复和彻底清除；S-DB-13 重写 | §18.3、§18.5、§18.7a、§18.8 | Nexus（产品决定）、Sentinel 同意、Celestial（子表用 EXISTS 方案）；C32 仍未签字 |
 | C33 | 对齐 orbit-runtime#4（A1）：§2.1 把 `toolState/argsPreview/blockId/delta/seq/activityAttempt` 和 usage 字段从 `TurnFailure` 挪回 `OrbitEvent`（v2.1 文档笔误），`TurnFailure` 只保留原来的 5 个字段；`OrbitEvent.model_mode` 改成 `Literal["mock","real"]`，没有空串默认值；`tool.result` 的 text 截断到 4KB 并带 `truncated:true`；argsPreview 脱敏并且不超过 256 字符；新增 S-M-4（流式脱敏）；control 要原样透传校验通过的 worker 事件，`assistant.delta` 不占用 500 条活动历史的名额（在 Last-Event-ID 的 control PR 里交付） | §2.1、§10.4、§16.3 | orbit-runtime#4（A1） |
-| C34 | (a) 新增 `TurnErrorCode = ModelErrorCode ∪ {"state_unreadable"}`（orbit-runtime#6）。TurnResult 和 TurnFailure 的 errorCode 改用它；§10.2 的固定文案表和 retryable 表都加上这个值；§10.3 写明语义：closeSession 和 abort 按幂等成功处理，openSession 和 runTurn 返回失败。(b) 新增 §2.4 decide 投递幂等（orbit-control#16 复审 F2，rev1 按 Sentinel 对 #18 的复审修订）：validator 先查 `decided_approvals`；`UpdateID = approvalRequestId`；续跑 turn id 由 workflow 推导，`DecideRequest.resume_turn_id` 删除（**BREAKING**）；orch 客户端把结果归成四类，不确定的一律按 Unknown 处理；`delivery_state` 转换表 T1 到 T10，其余转换由触发器拒绝；对账任务和终态 `unresolved`；202、503、409 的响应形状；新事件 `approval.delivery_updated` 和 `room.failed`；达到 1024 上限时 workflow 以 Failed 结束。新增 S-ID-2 到 S-ID-13、S-SU-1 到 S-SU-6。openapi 和数据库迁移由 #16 第二阶段修改，本 PR 不改 | §2、§2.0、§2.1、§2.3、§2.4、§9、§10.2、§10.3、§10.4、§13、§18.3 | Sentinel（F2 和 #18 复审）、orbit-runtime#6、orbit-control#16 N1/N2 |
+| C34 | (a) 新增 `TurnErrorCode = ModelErrorCode ∪ {"state_unreadable"}`（orbit-runtime#6）。TurnResult 和 TurnFailure 的 errorCode 改用它；§10.2 的固定文案表和 retryable 表都加上这个值；§10.3 写明语义：closeSession 和 abort 按幂等成功处理，openSession 和 runTurn 返回失败。(b) 新增 §2.4 decide 投递幂等（orbit-control#16 复审 F2，rev1 按 Sentinel 对 #18 的复审修订）：validator 先查 `decided_approvals`；`UpdateID = approvalRequestId`；续跑 turn id 由 workflow 推导，`DecideRequest.resume_turn_id` 删除（**BREAKING**）；orch 客户端把结果归成四类，不确定的一律按 Unknown 处理；`delivery_state` 转换表 T1 到 T12（含 `delivery_attempt` 防抢占），其余转换由触发器拒绝；新 query `decideOutcome`、`decidedApprovalIds`、`decideConfig`；`state_unreadable` 采用 Nexus 定稿文案，适用 4 个活动；对账任务和终态 `unresolved`；202、503、409 的响应形状；新事件 `approval.delivery_updated` 和 `room.failed`；达到 1024 上限时 workflow 以 Failed 结束。新增 S-ID-2 到 S-ID-13、S-SU-1 到 S-SU-6。openapi 和数据库迁移由 #16 第二阶段修改，本 PR 不改 | §2、§2.0、§2.1、§2.3、§2.4、§9、§10.2、§10.3、§10.4、§13、§18.3 | Sentinel（F2 和 #18 复审）、orbit-runtime#6、orbit-control#16 N1/N2 |
 
 ---
 
@@ -235,6 +235,12 @@
 +     max_active_agents: int = Field(default=8, alias="maxActiveAgents")
 +     model: str = ""
 +     persona_id: str = Field(default="", alias="personaId")
++     carry_over: RoomCarryOver | None = Field(default=None, alias="carryOver")   # C34：continue-as-new 时带入（§2.3）；e2e 也用它预置 decided_approvals（S-ID-8、S-ID-10）
+
++ class DecidedApproval(BaseModel):              # C34 §2.4.1
++     approval_request_id: str; decided_at: datetime   # workflow.now()
++     state: Literal["running", "done"]           # handler 开头写 running，结束写 done（N9）
++     outcome: DecideOutcome | None = None        # state=="done" 时必有
 
 ~ class RoomCommand(BaseModel):
 ~     kind: Literal["open", "message", "approve", "abort", "steer", "answer"]
@@ -369,13 +375,13 @@ control 侧的变更：`workerEventTypes`（`app.go:565-574`）加入 5 个新�
 
 #### 2.4.1 workflow 端（orbit-runtime，§2.4 runtime PR）
 1. **update id**：control 调 decide Update 时显式传 `UpdateID = approvalRequestId`。
-2. **续跑 turn id 由 workflow 推导**：`resumeTurnId = "t-" + hashlib.sha256(("decide:" + approvalRequestId).encode("utf-8")).hexdigest()[:24]`（hexdigest 是小写）。`DecideRequest` 删掉 `resume_turn_id` 字段（**BREAKING**，不保留旧字段）。
+2. **续跑 turn id 由 workflow 推导**：`resumeTurnId = "t-" + hashlib.sha256(("decide:" + approvalRequestId).encode("utf-8")).hexdigest()[:24]`（hexdigest 是小写）。`DecideRequest` 删掉 `resume_turn_id` 字段（**BREAKING**，不保留旧字段；模型保持 `extra="forbid"`，多余字段报错）。runtime §2.4 PR 同步改掉 orbit-runtime#6 的 `e2e_state_key.py` 里发送 `resumeTurnId` 的地方。
 3. **validator 的判断顺序**（修 Sentinel C1）：
    1. id 在 `decided_approvals` 里：接受，由 handler 返回第一次的结果；
    2. id 在 `pending_approvals` 里：接受；
    3. 两处都没有：拒绝，`ApplicationError(type="APPROVAL_UNKNOWN")`。
    validator 不修改状态。§2.0 里“只接受 pending 列表里的 id”这条规则相应改成上面的顺序。
-4. **handler**：先查 `decided_approvals`，命中就直接返回存下的 `DecideOutcome`，不重新执行。没命中就正常执行，结束时把结果（成功或失败都算）连同 `decided_at = workflow.now()` 写进 `decided_approvals`。`DecideOutcome = {decision, agentId, resumeTurnId, turnStatus, errorCode?}`，只放小摘要，不放 AgentState 或回复正文。
+4. **handler**：先查 `decided_approvals`。命中且 `state=="done"` 就直接返回存下的 `DecideOutcome`；命中且 `state=="running"`（第一次还在续跑）就 `wait_condition` 等它变成 done 再返回同一个结果，绝不再执行。没命中时，**在 handler 开头**（任何 await 之前）写入 `{state:"running", decided_at: workflow.now()}` 并从 `pending_approvals` 移除，然后执行；结束时（成功或失败都算）写 `state="done"` 和 outcome（修 Sentinel N9）。`DecideOutcome = {decision, agentId, resumeTurnId, turnStatus, errorCode?}`，只放小摘要，不放 AgentState 或回复正文。
 5. **过期和上限**：
    - 条目的 TTL 是 `ORBIT_DECIDED_APPROVAL_TTL_S`（默认 86400），用 `workflow.now()` 计算。
    - 每次 handler 在检查上限**之前**先清掉过期条目；continue-as-new 时也清一次。
@@ -384,37 +390,41 @@ control 侧的变更：`workerEventTypes`（`app.go:565-574`）加入 5 个新�
    - 把 `self._fatal = "DECIDED_APPROVALS_LIMIT"` 置位，然后让这次 Update 失败，错误是 `ApplicationError(type="DECIDED_APPROVALS_LIMIT", non_retryable=True)`。
    - workflow 主循环用 `wait_condition` 看到 `_fatal` 后，先发一条事件 `room.failed {failure:{code:"DECIDED_APPROVALS_LIMIT", message:"这个任务的审批次数超过上限，已停止。"}}`（OrbitEvent 新增这个类型），再按 §6.3 取消所有子 Agent，最后在 `run` 里抛出同一个 `ApplicationError`。这时 workflow execution 的状态是 **Failed**。
    - 已有的 1024 个 id 可以通过 query `decidedApprovalIds` 读到。Temporal 在保留期内允许对已关闭的 workflow 发 query。
-7. **continue-as-new**：`RoomCarryOver` 增加 `decided_approvals`（§2.3），只带没过期的条目。
+7. **continue-as-new**：`RoomCarryOver` 增加 `decided_approvals: list[DecidedApproval]`（§2.3），只带没过期的条目；只在 `all_handlers_finished()` 时发生，所以不会带 running 条目。
+9. **新增 query**（Temporal 接口，§12 的 orch 列表同步）：`decideOutcome(approvalRequestId) -> DecideOutcome | None`（只返回 done 的条目）；`decidedApprovalIds() -> list[str]`；`decideConfig() -> {ttlS:int, maxDecided:int}`，control 判断 NotDelivered 时用的 TTL **只从这个 query 读**（修 Sentinel N3）。
+10. **`room.failed` 的发出**：和其他 room 事件一样，通过 ingest activity 发出（§5），在抛出 ApplicationError 之前等这个 activity 完成；activity 失败按它自己的重试策略处理，重试用完后照样让 workflow 失败。
 8. **子 Agent**：room 先查 `decided_approvals`，命中就不再 signal 子工作流。子工作流的 `resolve` 另外维护一份已处理的 approvalRequestId 集合（TTL 和上限规则同上），重复的 signal 忽略并记 warning。
 
 #### 2.4.2 control 端（orbit-control，#16 第二阶段）
-**approvals 表新增列**：`delivery_state TEXT NULL`（取值 NULL、`in_flight`、`delivered`、`unknown`、`not_delivered`、`unresolved`），以及 `delivery_updated_at TIMESTAMPTZ NULL`，见 §18.3。
+**approvals 表新增列**：`delivery_state TEXT NULL`（取值 NULL、`in_flight`、`delivered`、`unknown`、`not_delivered`、`unresolved`）、`delivery_updated_at TIMESTAMPTZ NULL`、`delivery_attempt INT NOT NULL DEFAULT 0`，见 §18.3。触发器在**每次**转换时把 `delivery_updated_at` 设为 `now()`，调用方写的值被覆盖（修 Sentinel N4）。
 
 **orch 客户端返回值**：control 的 orch 客户端把一次投递的结果归成四类：`Delivered(outcome)`、`NotDelivered`、`Unknown`、`Fatal(code)`。和真实 Temporal 的对应关系：
 - Update 被接受：`Delivered`。
-- validator 返回 `APPROVAL_UNKNOWN`，并且 `now() - decided_at < TTL/2`：`NotDelivered`。在这个时间窗内 workflow 一定还记得已经处理过的 id，所以这个拒绝只能说明它从来没收到过。
+- validator 返回 `APPROVAL_UNKNOWN`，并且 `now() - decided_at < ttlS/2`：`NotDelivered`。`ttlS` 只从同一个 workflow 的 `decideConfig` query 读取；query 失败就不做判断，按 `Unknown` 处理。部署要求 control 和 worker 的时钟偏差小于 `ttlS/2`（`ttlS` 的下限是 60，e2e 以外不允许更小）。在这个时间窗内 workflow 一定还记得已经处理过的 id，所以这个拒绝只能说明它从来没收到过。
 - `DECIDED_APPROVALS_LIMIT`：`Fatal`。
 - 其余**所有**情况都归为 `Unknown`（修 Sentinel H6），包括超时、`Unavailable`、`DeadlineExceeded`、workflow already completed、`NotFound`、history 读不到或者超过保留期，以及超出上述时间窗的 `APPROVAL_UNKNOWN`。control 不去扫 history 判断有没有送达。
 
-**转换表**（修 Sentinel H2）：审批的一行记为 (status, decision, delivery_state)。每次转换都是**一条**带条件的 `UPDATE … WHERE id=$1 AND status=… AND delivery_state IS NOT DISTINCT FROM …`。影响 0 行就说明输掉了并发，不再做后续动作。除了下表列出的转换，BEFORE UPDATE 触发器对其他转换一律报 `P0001`，对所有角色都生效。
+**转换表**（修 Sentinel H2）：审批的一行记为 (status, decision, delivery_state)。每次转换都是**一条**带条件的 `UPDATE … WHERE id=$1 AND status=… AND delivery_state IS NOT DISTINCT FROM …`。T1 和 T6 把 `delivery_attempt` 加一，发起投递的一方记住这个值；T2、T3、T4、T5、T11 的 WHERE 里必须带 `delivery_attempt = $attempt`，所以旧请求迟到的结果落不到更新的 in_flight 上（N4）。影响 0 行就说明输掉了并发，不再做后续动作。除了下表列出的转换，BEFORE UPDATE 触发器对其他转换一律报 `P0001`，对所有角色都生效。
 
 | # | 从 | 到 | 谁、什么时候 | 其他字段 |
 |---|---|---|---|---|
 | T1 | pending, NULL | allowed 或 rejected, `in_flight` | decide 请求认领审批 | 同时写 decision 和 decided_at |
-| T2 | `in_flight` | `delivered` | orch 客户端返回 `Delivered` | 其他字段不变 |
-| T3 | `in_flight` | `unknown` | 请求内的重试用完仍是 `Unknown`；或者对账任务发现 `delivery_updated_at` 超过 60 秒的 `in_flight` 行（control 在投递途中崩溃） | 不变 |
-| T4 | `in_flight` | `not_delivered` | orch 客户端返回 `NotDelivered` | 不变 |
+| T2 | `in_flight` | `delivered` | orch 客户端返回 `Delivered`（Update 被接受） | 其他字段不变 |
+| T3 | `in_flight` | `unknown` | 请求内的重试用完仍是 `Unknown`；或者对账任务发现 `delivery_updated_at` 超过 `ORBIT_DECISION_DELIVERY_TIMEOUT` 加 30 秒的 `in_flight` 行（control 在投递途中崩溃）。对账任务走 T3 时 WHERE 带它读到的 attempt 和 `delivery_updated_at` | 不变 |
+| T4 | `in_flight` | `not_delivered` | orch 客户端返回 `NotDelivered`。T4 和 T9 在**同一个事务**里执行（N5） | 不变 |
 | T5 | `in_flight` | `unresolved` | orch 客户端返回 `Fatal(DECIDED_APPROVALS_LIMIT)` | 不变 |
 | T6 | `unknown` | `in_flight` | 对账任务认领一次重试 | 不变 |
 | T7 | `unknown` | `delivered` | 对账任务 query `decideOutcome(approvalRequestId)` 查到了结果 | 不变 |
 | T8 | `unknown` | `unresolved` | `now() - decided_at > ORBIT_DELIVERY_UNKNOWN_TIMEOUT_S`（默认 600） | 不变 |
-| T9 | allowed 或 rejected, `not_delivered` | pending, NULL | 重开：control 在 T4 之后立即执行 | 要求 `NEW.decision=''`、`NEW.decided_at IS NULL`、`NEW.delivery_state IS NULL` |
+| T11 | `delivered` | `unresolved` | **只在** 送达后 `handle.Get` 返回 `DECIDED_APPROVALS_LIMIT` 时（修 Sentinel N1）。WHERE 带 attempt | 不变 |
+| T12 | `unresolved`（仅 T8 来的） | `delivered` | 对账任务事后 query `decideOutcome` 查到了结果（N6）。T5、T11 来的 `unresolved` 不适用：room 已经 failed | 不变 |
+| T9 | allowed 或 rejected, `not_delivered` | pending, NULL | 重开：和 T4 同一个事务；对账任务也会对任何残留的 `not_delivered` 行执行 T9（N5） | 要求 `NEW.decision=''`、`NEW.decided_at IS NULL`、`NEW.delivery_state IS NULL` |
 | T10 | pending, NULL | cancelled, NULL | abort（§6.3） | 同时写 decided_at |
 
-- `delivery_state` 的每个值都只由上表的一个或几个转换写入；T2、T5 写入的 `delivered`、`unresolved` 是终态。
+- `delivery_state` 的每个值都只由上表的一个或几个转换写入。终态：`delivered`（只有 T11 例外）、T5 和 T11 写入的 `unresolved`。T8 写入的 `unresolved` 只允许 T12。为了区分来源，T5、T11 同时把 room 标成 failed，T12 的 WHERE 要求 room 不是 failed。
 - 投递时同一个审批一直用同一个 `UpdateID`，包括请求内重试和对账重试。请求内重试用有界退避，总时长不超过 `ORBIT_DECISION_DELIVERY_TIMEOUT`（默认 30s，可以配置）。
 - **锁**（修 Sentinel M4）：只在每条转换 UPDATE 的事务里持有行锁。调 Temporal 的 RPC、重试和等待时都**不持锁**。互斥靠 `in_flight` 这个状态和 UPDATE 的条件保证。
-- **对账任务**：每 `ORBIT_DELIVERY_RECONCILE_INTERVAL_S`（默认 10）秒扫一遍 `unknown` 的行，以及超过 60 秒的 `in_flight` 的行（先走 T3）。
+- **对账任务**：每 `ORBIT_DELIVERY_RECONCILE_INTERVAL_S`（默认 10）秒扫一遍：`unknown` 的行；停滞的 `in_flight` 行（先走 T3）；残留的 `not_delivered` 行（走 T9）；`decided_at` 在 24 小时内、来自 T8 的 `unresolved` 行（能查到结果就走 T12）。
   - query 到结果就走 T7。
   - workflow 还在运行、query 结果显示这个 id 还在 pending，就走 T6 重试。
   - 其余情况保持 `unknown`，直到超时走 T8。
@@ -424,13 +434,16 @@ control 侧的变更：`workerEventTypes`（`app.go:565-574`）加入 5 个新�
 | 情况 | 响应 |
 |---|---|
 | 送达，续跑取回成功 | 200 `Approval` |
-| 送达，续跑取回失败 | 502 `{error:{code:"WORKER_ERROR"}, approval}`，文本固定 |
-| `Unknown`（T3） | 202 `{approval, deliveryState:"unknown"}` |
-| `NotDelivered`（T4 后接 T9） | 503 `{error:{code:"APPROVAL_NOT_DELIVERED"}, approval}`，这时 approval 已经回到 pending，用户可以再决定一次 |
-| `Fatal`（T5） | 409 `{error:{code:"ROOM_FAILED"}, approval}`，room 变成 `RoomState=failed`、`failure.code="DECIDED_APPROVALS_LIMIT"`（§9 的 failure.code 枚举加上这个值） |
+| 送达，`handle.Get` 返回 `DECIDED_APPROVALS_LIMIT`（T11） | 409 `ROOM_FAILED`，room 变成 failed，`failure.code="DECIDED_APPROVALS_LIMIT"` |
+| 送达，续跑取回的其他失败 | 502 `WORKER_ERROR`，文本固定 |
+| `Unknown`（T3） | 202 `{approval, deliveryState:"unknown"}`（成功体，不是 ErrorBody） |
+| `NotDelivered`（T4 和 T9） | 503 `APPROVAL_NOT_DELIVERED`，这时 approval 已经回到 pending，用户可以再决定一次 |
+| `Fatal`（T5，validator 阶段就拒绝的情况，目前的实现走不到，保留防御） | 409 `ROOM_FAILED`，room 变成 `RoomState=failed`、`failure.code="DECIDED_APPROVALS_LIMIT"`（§9 的 failure.code 枚举加上这个值） |
 | delivery_state 是 `in_flight` 或 `unknown` 时，用户重复 decide，决定和原来相同 | 202 `{approval, deliveryState}`，不重新投递 |
-| 同上，但决定和原来不同 | 409 `APPROVAL_DELIVERY_PENDING` |
+| 同上，但决定和原来不同 | 409 `APPROVAL_DELIVERY_PENDING`，响应体带 `approval`（当前决定和 deliveryState） |
 | `delivered`、`unresolved`、cancelled 之后再 decide | 409 `APPROVAL_NOT_PENDING`（不变） |
+
+错误响应一律用现有的扁平 `ErrorBody`（`{code, message, roomId?}`），schema 里再加一个可选字段 `approval: Approval`，上表带 approval 的 4xx/5xx 都填这个字段（修 Sentinel N7）。「重复 decide 返回 202」的判断在 §7 的保存规则（allow-always 生成规则）**之前**执行，重复提交不会再生成一条规则（N8）。
 
 **事件**：delivery_state 每次变化，control 都发 `approval.delivery_updated {approvalRequestId, status, decision, deliveryState}`，这个事件入库并占用 seq（可以用 Last-Event-ID 补发）。orbit-web 的显示规则：
 - `unknown` 显示“正在确认结果”；
@@ -453,11 +466,11 @@ control 侧的变更：`workerEventTypes`（`app.go:565-574`）加入 5 个新�
 | **S-ID-5** 已送达但超时，之后 workflow 结束 | #16 第二阶段 | 真实投递成功后，注入层让所有重试都返回 `Unknown`，然后终止 workflow。审批一直保持 allowed，delivery_state 只会是 `unknown`、`delivered` 或 `unresolved`，从来不会出现 `not_delivered` 或 pending；worker 只收到一次 |
 | **S-ID-6** 重试和重开并发 | #16 第二阶段 | 把行置成 `unknown`。通过 e2e 构建里的 `POST /internal/e2e/reconcile` 并发触发 4 次对账重试，同时用 orbit_app 直接执行 4 次 T9 的 SQL。最终 (status, delivery_state) 唯一；T9 全部影响 0 行或者报 P0001；worker 最多收到一次；没有 500 |
 | **S-ID-7** continue-as-new 之后重复投递 | runtime §2.4 PR | e2e 设置 `ORBIT_CAN_TURN_THRESHOLD=1`，decide 一次后触发 continue-as-new，再用同一个 update id 投递。返回第一次的结果，worker 只处理一次 |
-| **S-ID-8** 第 1025 个 id | runtime §2.4 PR 加 #16 第二阶段 | e2e 启动脚本用 `RoomWorkflowInput.carry_over` 预置 1024 个没过期的条目，再决定第 1025 个。runtime 部分：这次 Update 以 `DECIDED_APPROVALS_LIMIT` 失败；有一条 `room.failed` 事件；workflow execution 是 Failed；query `decidedApprovalIds` 读回 1024 个 id，一个不少；第 1025 个审批对应的工具执行 0 次。control 部分：响应 409 `ROOM_FAILED`，第 1025 个审批是 allowed/`unresolved`，room 是 failed，`failure.code=DECIDED_APPROVALS_LIMIT` |
+| **S-ID-8** 第 1025 个 id | runtime §2.4 PR 加 #16 第二阶段 | e2e 启动脚本用 `RoomWorkflowInput.carry_over` 预置 1024 个没过期的条目，再决定第 1025 个。runtime 部分：这次 Update 以 `DECIDED_APPROVALS_LIMIT` 失败；有一条 `room.failed` 事件；workflow execution 是 Failed；query `decidedApprovalIds` 读回 1024 个 id，一个不少；第 1025 个审批对应的工具执行 0 次。control 部分：validator 接受后先走 T2，`handle.Get` 返回 `DECIDED_APPROVALS_LIMIT` 后走 T11；响应 409 `ROOM_FAILED`，第 1025 个审批是 allowed/`unresolved`，room 是 failed，`failure.code=DECIDED_APPROVALS_LIMIT` |
 | **S-ID-9** 202 之后收敛 | #16 第二阶段 | (a) 真实投递成功，注入层让请求内所有尝试都返回 `Unknown`：响应 202 `{approval, deliveryState:"unknown"}`；在对账间隔加 5 秒内，SSE 收到 `approval.delivery_updated{deliveryState:"delivered"}`，行也是 `delivered`。(b) `unknown` 期间用相同的决定再 decide，返回 202，不重新投递；用不同的决定，返回 409 `APPROVAL_DELIVERY_PENDING`。(c) 设 `ORBIT_DELIVERY_UNKNOWN_TIMEOUT_S=5`，让 workflow 一直不可达：超时后变成 `unresolved`，并发出对应事件 |
 | **S-ID-10** 过期 id 的清理 | runtime §2.4 PR | 设 `ORBIT_DECIDED_APPROVAL_TTL_S=5`，预置 1024 个 `decided_at` 已经超过 5 秒的条目，再决定一个新 id：先清掉过期条目，这次决定成功，不触发上限。continue-as-new 之后 carry-over 里只剩没过期的条目 |
 | **S-ID-11** 子 Agent 重复 resolve | runtime §2.4 PR（依赖 A3） | 直接对子工作流 signal 两次同一个 approvalRequestId 的 `resolve`，工具只执行一次，有一条 warning |
-| **S-ID-12** 转换表 | #16 第二阶段 | T1 到 T10 每个允许的转换各一条 E2E，都成功。用 orbit_app 尝试这几种禁止的转换，每种一条 E2E，都报 P0001：`delivered` 改成别的值、`unresolved` 改成别的值、T9 带非空 decision、跳过 `in_flight` 直接写 `delivered`、pending 直接写 `unknown`、cancelled 改回 pending |
+| **S-ID-12** 转换表 | #16 第二阶段 | T1 到 T12 每个允许的转换各一条 E2E，都成功；另有一条：带旧 attempt 的 T2 影响 0 行；一条：T4 之后 control 崩溃（e2e 注入点在 T4 和提交之间），事务回滚，行仍是 in_flight，之后由对账收敛。用 orbit_app 尝试这几种禁止的转换，每种一条 E2E，都报 P0001：`delivered` 改成别的值、`unresolved` 改成别的值、T9 带非空 decision、跳过 `in_flight` 直接写 `delivered`、pending 直接写 `unknown`、cancelled 改回 pending、T8 以外来源的 `unresolved` 改成 `delivered` |
 | **S-ID-13** 续跑慢但送达成功 | #16 | 桩的 decide 被接受后，续跑超过 `ORBIT_DECISION_DELIVERY_TIMEOUT` 才完成。不返回 502，turn 结果已保存，room 离开 awaiting_approval（对应 #16 N1） |
 
 **产品影响，待 Nexus 确认（Sentinel M7）**：一个 room 在 24 小时内决定超过 1024 个审批，就会以 `DECIDED_APPROVALS_LIMIT` 永久失败，用户只能新建任务。见 §13 第 10 条。
@@ -662,7 +675,7 @@ control 侧的变更：`workerEventTypes`（`app.go:565-574`）加入 5 个新�
 | `provider_error` | 模型服务暂时出错，这一轮没跑完。 | 重试 |
 | `auth` | 模型配置有问题，请联系管理员。 | 无 |
 | `config` | 模型配置有问题，请联系管理员。 | 无 |
-| `state_unreadable` | 这个任务的会话记录无法读取，请新建任务继续。 | 无（C34；文案待 Nexus 确认） |
+| `state_unreadable` | 此任务的运行状态已失效，无法继续。你可以查看记录，或新建任务继续工作。 | 无（C34；Nexus 定稿，逐字一致；两种触发原因不向用户区分） |
 
 
 | errorCode | 触发条件 | retryable |
@@ -686,14 +699,14 @@ control 侧的变更：`workerEventTypes`（`app.go:565-574`）加入 5 个新�
 - **上线顺序**：PR-B 让 control 认识 `failed` 和 `turn.failed` 之前，**real 模式只用于 dev 环境**。
 
 ### 10.3 其他
-- **`state_unreadable`（C34，orbit-runtime#6）**：worker 读不出会话保存的 AgentState 时使用，包括生产环境里的明文 blob，以及当前 `ORBIT_STATE_KEY` 解不开的 blob。`runTurn` 遇到它时，本轮 `status=failed`、`errorCode=state_unreadable`、`retryable=false`，不改 blob。`openSession` 遇到它时抛出不可重试的 `ApplicationError(type="state_unreadable")`（和 orbit-runtime#6 的 README 一致），不改 blob。`closeSession` 和 `abort` 遇到它时按**幂等成功**处理，让用户始终能停止和关闭任务。只有 `StateUnreadableError` 走这条路径；数据库连接和认证错误照常抛出，交给 Temporal 重试。blob 解密成功但模型校验失败（`ValidationError`）时，也算 `state_unreadable`，但要单独记 ERROR 日志，和密钥问题区分开。P0 不做密钥轮换，密钥丢失会让所有已有会话变成 `state_unreadable`。orbit-web 从生成的类型导入这个值，不能手写字符串。
+- **`state_unreadable`（C34，orbit-runtime#6）**：worker 读不出会话保存的 AgentState 时使用，包括生产环境里的明文 blob，以及当前 `ORBIT_STATE_KEY` 解不开的 blob。适用于读取 AgentState 的这 4 个活动：`runTurn`、`resolveApproval`（decide 续跑）、`deliverToolResult`、`steer`。它们遇到时，本轮 `status=failed`、`errorCode=state_unreadable`、`retryable=false`，不改 blob。`openSession` 遇到它时抛出不可重试的 `ApplicationError(type="state_unreadable")`（和 orbit-runtime#6 的 README 一致），不改 blob。`closeSession` 和 `abort` 遇到它时按**幂等成功**处理，让用户始终能停止和关闭任务。只有 `StateUnreadableError` 走这条路径；数据库连接和认证错误照常抛出，交给 Temporal 重试。blob 解密成功但模型校验失败（`ValidationError`）时，也算 `state_unreadable`，但要单独记 ERROR 日志，和密钥问题区分开。P0 不做密钥轮换，密钥丢失会让所有已有会话变成 `state_unreadable`。orbit-web 从生成的类型导入这个值，不能手写字符串。
 - 顺带修正：`grantEnv` 明文目前在直连 worker 模式下会进 HTTP payload（`app.go:250-252`），和"secrets 不进 payload"相冲突。这条路径对当前 runtime 已经失效（§1.9），建议 PR-B 直接删掉。Temporal 模式下 grant 下发只传 `grantId` 引用，放到 P1。
 
 ### 10.4 验收
 - S-M-1：用一个假 key（形如 `sk-test…`）启动 real 模式，跑完一轮后，用 `temporal workflow show` 导出 history，对它、control 的 `.orbit-data/audit/*.jsonl` 和各容器日志执行 `grep -r "sk-test"`，都没有结果。
 - S-M-2：mock 模式下，SSE 事件和 Update 返回都带 `modelMode=mock`；worker 启动日志里有 WARNING `chat model: mock`。
 - S-M-3（C28）：real 模式下去掉 `ORBIT_MODEL_API_KEY`，worker 非 0 退出，输出里有变量名，没有任何变量值。（不变）
-- **S-SU-1（C34）**：用密钥 A 写入会话，换成密钥 B 重启 worker 后发一轮消息，得到 `turn.failed{errorCode:state_unreadable, retryable:false}`，文案和固定文案表一致，blob 不变。**S-SU-2**：同样的场景下调 `closeSession` 和 `abort`，都返回成功，重复调用也成功，room 变为 `closed`。**S-SU-3**：打桩让数据库连接失败，activity 抛错并被 Temporal 重试，不会变成 `state_unreadable`。 **S-SU-4**：blob 能解密，但模型校验失败（`ValidationError`）时，结果是 `state_unreadable`，并且有一条单独的 ERROR 日志 `state_invalid_after_decrypt`，和密钥错误的日志区分开。**S-SU-5**：生产模式下读到明文 blob，结果是 `state_unreadable`。**S-SU-6**：对读不出的会话调 `openSession`，返回失败，并且和 README 里写的错误一致；数据库**认证**错误照常抛出，由 Temporal 重试，不会变成 `state_unreadable`。**由谁证明**：S-SU-1 到 S-SU-3 对应 orbit-runtime#6（`9dcab92`）已经有的 E-SK 用例，对应关系由 Sentinel 确认；S-SU-4 到 S-SU-6 随 rename PR 交付，和 runtime#6 复审的 L3 一起做。
+- **S-SU-1（C34）**：用密钥 A 写入会话，换成密钥 B 重启 worker 后发一轮消息，得到 `turn.failed{errorCode:state_unreadable, retryable:false}`，文案和固定文案表逐字一致，blob 不变；`resolveApproval`、`deliverToolResult`、`steer` 三个活动各重复一次同样的断言。**S-SU-2**：同样的场景下调 `closeSession` 和 `abort`，都返回成功，重复调用也成功，room 变为 `closed`。**S-SU-3**：打桩让数据库连接失败，activity 抛错并被 Temporal 重试，不会变成 `state_unreadable`。 **S-SU-4**：blob 能解密，但模型校验失败（`ValidationError`）时，结果是 `state_unreadable`，并且有一条单独的 ERROR 日志 `state_invalid_after_decrypt`，和密钥错误的日志区分开。**S-SU-5**：生产模式下读到明文 blob，结果是 `state_unreadable`。**S-SU-6**：对读不出的会话调 `openSession`，返回失败，并且和 README 里写的错误一致；数据库**认证**错误照常抛出，由 Temporal 重试，不会变成 `state_unreadable`。**由谁证明**：S-SU-1 到 S-SU-3 对应 orbit-runtime#6（`9dcab92`）已经有的 E-SK 用例，对应关系由 Sentinel 确认；S-SU-4 到 S-SU-6 随 rename PR 交付，和 runtime#6 复审的 L3 一起做。
 - **S-M-4（C33，流式脱敏）**：
   - 一个密钥被拆在相邻的两个 `assistant.delta` 分片里，发出去的事件里它被替换成 `[REDACTED]`；脱敏只做替换，**永远不抛异常**，也不会中断这一轮。
   - 一段很长的纯中文文本（没有空格），在 block 结束之前至少发出 **2 条** delta（不能因为等空格或分词边界而一直攒着）。
@@ -733,10 +746,10 @@ control 侧的变更：`workerEventTypes`（`app.go:565-574`）加入 5 个新�
 - 模型：`PermissionSnapshot/ApprovalRule/QuestionAsk/TodoItem`，`RunTurnRequest/DecideRequest/AnswerRequest/PermissionChangedRequest`，`ResolveApprovalInput.outcome` 加 `allowed-always`。
 - worker（v2.1）：**并行停车列表化**、逐个决定、部分回填后继续停车、拒绝重复 call_id（§2.2）；external 的 `results[]` 批量回填；gateway 幂等键（§2.3）。
 - worker：快照覆盖；Orbit 风险闸门（默认拒绝，外加 BYPASS 下 always_ask 仍然停车）；`orbit_risk` 声明和 CI 测试；`APPROVAL_REJECTED` 保证和拒绝文案；§2.0 的 id 规则和 turn_id 复用检测；参数脱敏和截断；路径规范化匹配；`ask_user`、`todo_write`。
-- orch：Update 参数改成模型；`answer`、`permissionChanged` Update；`pendingApprovals`、`pendingQuestions` query；patch `orbit-room-ask-user`。
+- orch：Update 参数改成模型；`answer`、`permissionChanged` Update；`pendingApprovals`、`pendingQuestions` query（C34 增加 `decideOutcome`、`decidedApprovalIds`、`decideConfig`，§2.4.1 第 9 条）；patch `orbit-room-ask-user`。
 - mock 脚本：ask、todo、repeat-call-id、slow-tool、delete_file（destructive）。
 - 兼容性：快照为 None 时退回 preset；旧版 control 不调新 Update，也能照常运行。
-- 验收：S-ID-1、S-PP-1..3、S-R3-1..5、S-R4-*、S-Ra-1..13、S-Rb-1..8（其中需要 control 的部分在 PR-B 之后验证）。
+- 验收：S-ID-1、S-PP-1..3、S-R3-1..5、S-R4-*、S-Ra-1..13、S-Rb-1..8（其中需要 control 的部分在 PR-B 之后验证）。C34 新增：S-ID-2..13 按 §2.4.3 的归属表，S-SU-1..6 按 §10.4 的归属。
 
 **PR-A3：子 Agent（P0 委派）**
 - `AgentRunWorkflow` 完整循环（patch `orbit-agent-run-loop`）；扁平子工作流加逻辑树；`childRequest/childResponse/resolve/answer/permission` signal；子 Agent 的审批、追问、快照刷新；委派上限（patch `orbit-room-delegation-v2`）和 `agent.spawn_rejected`；`parent_close_policy=REQUEST_CANCEL`；后台 heartbeat（10 秒）和取消，**显式设置 `ReActConfig(interruption_raise_cancelled_error=True)`**；子 Agent 权限取交集；`SESSION_ABORTED` 闸门；级联中止。
