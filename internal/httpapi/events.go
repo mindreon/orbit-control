@@ -6,22 +6,12 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/mindreon/orbit-control/internal/app"
 )
 
-var heartbeatInterval = 15 * time.Second
-
-// streamHooks are test seams for interleaving publishes with the
-// replay-to-live handoff. Each connection loads them once at start.
-type streamHooks struct {
-	afterSubscribe   func()
-	afterReplayFrame func(seq uint64)
-}
-
-var testHooks atomic.Pointer[streamHooks]
+const heartbeatInterval = 15 * time.Second
 
 // ResetPayload is the payload of a `reset` envelope: the resume cursor cannot
 // be honoured and the client must refetch room state (room, messages,
@@ -78,21 +68,13 @@ func streamRoomEvents(runtime *app.App) http.HandlerFunc {
 			return
 		}
 		defer sub.Close()
-		hooks := testHooks.Load()
-		if hooks == nil {
-			hooks = &streamHooks{}
-		}
-		if hooks.afterSubscribe != nil {
-			hooks.afterSubscribe()
-		}
-
 		h := w.Header()
 		h.Set("Content-Type", "text/event-stream")
 		h.Set("Cache-Control", "no-cache")
 		h.Set("Connection", "keep-alive")
 		h.Set("X-Accel-Buffering", "no")
 		w.WriteHeader(http.StatusOK)
-		s := &sseStream{w: w, flusher: flusher, runtime: runtime, roomID: roomID, cursor: sub.Head, hooks: hooks}
+		s := &sseStream{w: w, flusher: flusher, runtime: runtime, roomID: roomID, cursor: sub.Head}
 		if err := s.comment("connected"); err != nil {
 			return
 		}
@@ -149,7 +131,6 @@ type sseStream struct {
 	runtime *app.App
 	roomID  string
 	cursor  uint64
-	hooks   *streamHooks
 }
 
 func (s *sseStream) comment(text string) error {
@@ -180,9 +161,6 @@ func (s *sseStream) catchUp() error {
 			return err
 		}
 		s.cursor = f.Seq
-		if s.hooks.afterReplayFrame != nil {
-			s.hooks.afterReplayFrame(f.Seq)
-		}
 	}
 	return nil
 }
