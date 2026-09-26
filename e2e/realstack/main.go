@@ -1,10 +1,11 @@
 // Command realstack is the QA sign-off check for SSE Last-Event-ID resume
 // (E-LE-1 .. E-LE-4) against the real stack: a Temporal dev server, orbit-orch
-// and orbit-worker from an orbit-runtime checkout, and the real orbit-control
-// binary. Rooms are driven only through control's public API.
+// and orbit-worker from the published orbit-runtime image (pinned by digest),
+// and the real orbit-control binary. Rooms are driven only through control's
+// public API.
 //
-//	go run ./e2e/realstack run  -runtime ../orbit-runtime -out artifacts/e2e-real-stack.json
-//	go run ./e2e/realstack scan artifacts/e2e-real-stack.json
+//	go run ./e2e/realstack run  -runtime-commit <sha> -out artifacts/e2e-real-stack.json -logs e2e-logs
+//	go run ./e2e/realstack scan artifacts/e2e-real-stack.json e2e-logs/*.log
 //
 // Two worker pairs run on their own task queues, each behind its own control:
 // "mock" (streaming mock model) and "real" (ORBIT_MODEL_MODE=real against an
@@ -88,20 +89,21 @@ func runCmd(args []string) int {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	out := fs.String("out", "artifacts/e2e-real-stack.json", "report path")
 	logs := fs.String("logs", "e2e-logs", "process log directory")
-	rt := fs.String("runtime", "", "orbit-runtime checkout (after uv sync --frozen)")
+	image := fs.String("runtime-image", "ghcr.io/mindreon/orbit-runtime", "orbit-runtime image repository")
+	rtCommit := fs.String("runtime-commit", "", "orbit-runtime commit; its published image tag is pulled and run by digest")
 	commit := fs.String("commit", "", "orbit-control commit (default: git rev-parse HEAD)")
 	cli := fs.String("temporal-cli", "v1.9.1", "Temporal CLI version for the dev server")
 	only := fs.String("only", "", "comma-separated case ids to run (development only)")
 	_ = fs.Parse(args)
-	if *rt == "" {
-		fmt.Fprintln(os.Stderr, "-runtime is required")
+	if *rtCommit == "" {
+		fmt.Fprintln(os.Stderr, "-runtime-commit is required")
 		return 2
 	}
 	if err := os.MkdirAll(*logs, 0o755); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
-	st, err := startStack(*rt, *logs, *cli)
+	st, err := startStack(*image, *rtCommit, *logs, *cli)
 	if st != nil {
 		defer st.stop()
 	}
@@ -138,11 +140,12 @@ func runCmd(args []string) int {
 	report := map[string]any{
 		"suite":      "e2e-control-last-event-id",
 		"commit":     gitCommit(".", *commit),
-		"components": components(st, *rt, *cli),
+		"components": components(st, *rtCommit, *cli),
 		"setup": []string{
 			"Fresh local Temporal dev server (in-memory), Temporal CLI " + *cli + ".",
-			"orbit-orch and orbit-worker from the orbit-runtime checkout on task queue " + queues["mock"] + " (ORBIT_MODEL_MODE=mock, streaming mock model).",
-			"orbit-orch and orbit-worker on task queue " + queues["real"] + " (ORBIT_MODEL_MODE=real, in-process OpenAI-compatible stub).",
+			"orbit-orch and orbit-worker as containers of the orbit-runtime image published for runtime commit " + *rtCommit + ", run by digest (components.orbit-runtime-image), host network.",
+			"Pair 1 on task queue " + queues["mock"] + ": ORBIT_MODEL_MODE=mock, the streaming mock model.",
+			"Pair 2 on task queue " + queues["real"] + ": ORBIT_MODEL_MODE=real against an in-process OpenAI-compatible stub.",
 			"Two orbit-control processes built from this commit, one per task queue (TEMPORAL_ADDRESS set), each with a public listener and a separate internal listener (ORBIT_INTERNAL_ADDR).",
 			"Workers post events with the internal bearer token to their control's internal listener through a recording proxy.",
 			"Rooms are created and driven only through control's public API (POST /v1/rooms, /messages, /v1/approvals/{id}/decide); events are read from GET /v1/rooms/{id}/events and /activity.",
@@ -203,12 +206,14 @@ type stack struct {
 	stubURL        string
 	controls       map[string]*control
 	procs          []*exec.Cmd
+	containers     []string
 	labels         map[string]string
 	mu             sync.Mutex
+	runtimeImage   string
 	pythonVersions map[string]string
 }
 
-func startStack(rt, logs, cliVersion string) (*stack, error) {
+func startStack(image, rtCommit, logs, cliVersion string) (*stack, error) {
 	work, err := os.MkdirTemp("", "e2e-real-stack-")
 	if err != nil {
 		return nil, err
@@ -222,7 +227,24 @@ func startStack(rt, logs, cliVersion string) (*stack, error) {
 		return st, fmt.Errorf("go build ./cmd/orbit-control: %w", err)
 	}
 
-	temporalLog, err := os.Create(filepath.Join(logs, "temporal.log"))
+	tag := image + ":" + rtCommit
+	pull := exec.Command("docker", "pull", "-q", tag)
+	pull.Stdout, pull.Stderr = os.Stderr, os.Stderr
+	if err := pull.Run(); err != nil {
+		return st, fmt.Errorf("docker pull %s: %w", tag, err)
+	}
+	digest, err := exec.Command("docker", "image", "inspect", "--format", "{{index .RepoDigests 0}}", tag).Output()
+	if err != nil {
+		return st, fmt.Errorf("docker image inspect %s: %w", tag, err)
+	}
+	st.runtimeImage = strings.TrimSpace(string(digest))
+	st.pythonVersions = imageVersions(st.runtimeImage)
+
+	temporalOut, err := os.Create(filepath.Join(logs, "temporal.stdout.log"))
+	if err != nil {
+		return st, err
+	}
+	temporalErr, err := os.Create(filepath.Join(logs, "temporal.stderr.log"))
 	if err != nil {
 		return st, err
 	}
@@ -234,8 +256,8 @@ func startStack(rt, logs, cliVersion string) (*stack, error) {
 		CachedDownload: testsuite.CachedDownload{Version: cliVersion, DestDir: cacheDir},
 		ClientOptions:  &client.Options{Namespace: "default"},
 		LogLevel:       "warn",
-		Stdout:         temporalLog,
-		Stderr:         temporalLog,
+		Stdout:         temporalOut,
+		Stderr:         temporalErr,
 	})
 	if err != nil {
 		return st, fmt.Errorf("temporal dev server: %w", err)
@@ -251,23 +273,21 @@ func startStack(rt, logs, cliVersion string) (*stack, error) {
 		return st, err
 	}
 
-	python := filepath.Join(rt, ".venv", "bin", "python")
-	st.pythonVersions = pythonVersions(python)
 	for _, mode := range []string{"mock", "real"} {
 		c, err := startControl(bin, work, logs, mode, temporalAddr)
 		if err != nil {
 			return st, err
 		}
 		st.controls[mode] = c
-		env := baseEnv()
-		env = append(env,
-			"TEMPORAL_ADDRESS="+temporalAddr,
+		env := []string{
+			"PYTHONUNBUFFERED=1",
+			"TEMPORAL_ADDRESS=" + temporalAddr,
 			"TEMPORAL_NAMESPACE=default",
-			"TEMPORAL_TASK_QUEUE="+queues[mode],
-			"ORBIT_EVENT_INGEST_URL="+c.proxyURL+"/internal/events",
-			"ORBIT_INTERNAL_TOKEN="+internalToken,
+			"TEMPORAL_TASK_QUEUE=" + queues[mode],
+			"ORBIT_EVENT_INGEST_URL=" + c.proxyURL + "/internal/events",
+			"ORBIT_INTERNAL_TOKEN=" + internalToken,
 			"ORBIT_WORKER_BIND=127.0.0.1",
-		)
+		}
 		if mode == "mock" {
 			env = append(env, "ORBIT_MODEL_MODE=mock")
 		} else {
@@ -283,13 +303,19 @@ func startStack(rt, logs, cliVersion string) (*stack, error) {
 		if err != nil {
 			return st, err
 		}
-		for _, module := range []string{"orbit_orch.main", "orbit_worker.main"} {
-			procEnv := append(append([]string{}, env...), "ORBIT_WORKER_PORT="+strconv.Itoa(workerPort))
-			cmd, err := startProcess(python, []string{"-m", module}, procEnv, filepath.Join(logs, strings.ReplaceAll(module, "_", "-")+"-"+mode+".log"))
+		for _, entry := range []string{"orbit-orch", "orbit-worker"} {
+			name := fmt.Sprintf("orbit-e2e-%d-%s-%s", os.Getpid(), entry, mode)
+			dockerArgs := []string{"run", "--rm", "--name", name, "--network", "host"}
+			for _, kv := range append(env, "ORBIT_WORKER_PORT="+strconv.Itoa(workerPort)) {
+				dockerArgs = append(dockerArgs, "-e", kv)
+			}
+			dockerArgs = append(dockerArgs, st.runtimeImage, entry)
+			cmd, err := startProcess("docker", dockerArgs, os.Environ(), logs, entry+"-"+mode)
 			if err != nil {
 				return st, err
 			}
 			st.procs = append(st.procs, cmd)
+			st.containers = append(st.containers, name)
 		}
 		if err := waitHTTP(fmt.Sprintf("http://127.0.0.1:%d/", workerPort), 60*time.Second); err != nil {
 			return st, fmt.Errorf("orbit-worker (%s) health: %w", mode, err)
@@ -299,11 +325,15 @@ func startStack(rt, logs, cliVersion string) (*stack, error) {
 }
 
 func (st *stack) stop() {
-	for _, p := range st.procs {
-		if p.Process != nil {
-			_ = p.Process.Signal(os.Interrupt)
-		}
+	var wg sync.WaitGroup
+	for _, name := range st.containers {
+		wg.Add(1)
+		go func(name string) {
+			defer wg.Done()
+			_ = exec.Command("docker", "stop", "-t", "10", name).Run()
+		}(name)
 	}
+	wg.Wait()
 	for _, p := range st.procs {
 		done := make(chan struct{})
 		go func() { _ = p.Wait(); close(done) }()
@@ -428,7 +458,7 @@ func startControl(bin, work, logs, mode, temporalAddr string) (*control, error) 
 		"TEMPORAL_NAMESPACE=default",
 		"TEMPORAL_TASK_QUEUE="+queues[mode],
 	)
-	c.cmd, err = startProcess(bin, nil, env, filepath.Join(logs, "orbit-control-"+mode+".log"))
+	c.cmd, err = startProcess(bin, nil, env, logs, "orbit-control-"+mode)
 	if err != nil {
 		return nil, err
 	}
@@ -605,6 +635,7 @@ type frame struct {
 }
 
 type stream struct {
+	header http.Header
 	frames chan frame
 	cancel context.CancelFunc
 }
@@ -625,7 +656,7 @@ func (c *control) open(roomID, lastEventID string) (*stream, error) {
 		cancel()
 		return nil, fmt.Errorf("SSE status %d", resp.StatusCode)
 	}
-	s := &stream{frames: make(chan frame, 8192), cancel: cancel}
+	s := &stream{header: resp.Header, frames: make(chan frame, 8192), cancel: cancel}
 	go func() {
 		defer close(s.frames)
 		defer resp.Body.Close()
@@ -1013,14 +1044,15 @@ func scanCmd(args []string) int {
 
 // ---- components ----
 
-func components(st *stack, rt, cli string) map[string]string {
+func components(st *stack, rtCommit, cli string) map[string]string {
 	out := map[string]string{
 		"orbit-control": gitCommit(".", ""),
-		"orbit-runtime": gitCommit(rt, ""),
+		"orbit-runtime": rtCommit,
 		"go":            runtime.Version(),
 		"temporalCli":   cli,
 	}
 	if st != nil {
+		out["orbit-runtime-image"] = st.runtimeImage
 		out["temporalServer"] = st.serverVersion
 		for k, v := range st.pythonVersions {
 			out[k] = v
@@ -1029,11 +1061,12 @@ func components(st *stack, rt, cli string) map[string]string {
 	return out
 }
 
-func pythonVersions(python string) map[string]string {
+// imageVersions reads the Python package versions installed in the runtime image.
+func imageVersions(image string) map[string]string {
 	script := `import importlib.metadata as m, json, platform
 names = ["orbit-contracts", "orbit-orch", "orbit-worker", "agentscope", "temporalio", "pydantic", "openai", "aiohttp"]
 print(json.dumps({"python": platform.python_version(), **{n: m.version(n) for n in names}}))`
-	raw, err := exec.Command(python, "-c", script).Output()
+	raw, err := exec.Command("docker", "run", "--rm", image, "python", "-c", script).Output()
 	out := map[string]string{}
 	if err != nil {
 		out["python"] = "unavailable: " + err.Error()
@@ -1067,14 +1100,20 @@ func baseEnv() []string {
 	return env
 }
 
-func startProcess(bin string, args, env []string, logPath string) (*exec.Cmd, error) {
-	logFile, err := os.Create(logPath)
+// startProcess writes the process's stdout and stderr to <name>.stdout.log and
+// <name>.stderr.log under logs.
+func startProcess(bin string, args, env []string, logs, name string) (*exec.Cmd, error) {
+	stdout, err := os.Create(filepath.Join(logs, name+".stdout.log"))
+	if err != nil {
+		return nil, err
+	}
+	stderr, err := os.Create(filepath.Join(logs, name+".stderr.log"))
 	if err != nil {
 		return nil, err
 	}
 	cmd := exec.Command(bin, args...)
 	cmd.Env = env
-	cmd.Stdout, cmd.Stderr = logFile, logFile
+	cmd.Stdout, cmd.Stderr = stdout, stderr
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start %s: %w", filepath.Base(bin), err)
 	}

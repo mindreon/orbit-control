@@ -20,7 +20,7 @@ const (
 func caseELE3(st *stack) caseRow {
 	row := caseRow{
 		ID:    "E-LE-3",
-		Title: "After one turn with 600+ streamed events, tool and approval records remain in activity history; deltas do not count toward the 500 cap",
+		Title: "After a turn with 600+ deltas, tool and approval records are still inside the 500-event window and deltas occupy none of it",
 		Steps: []string{
 			"Mock control: create room T; POST /messages 'echo:keep-me' (gated_echo parks: tool.call, approval.asked) and POST /v1/approvals/{id}/decide allow (tool.result). Record T's activity.",
 			"Open SSE on T. The recording proxy adds 110 ms to each of T's assistant.delta posts (a slow ingest), so the worker's 100 ms coalescing flushes every streamed part; payloads are forwarded unchanged.",
@@ -115,30 +115,30 @@ func caseELE3(st *stack) caseRow {
 		return map[string]int{"tool.call": len(m["tool.call"]), "tool.result": len(m["tool.result"]), "approval.asked": len(m["approval.asked"])}
 	}
 	row.Expected = map[string]any{
-		"toolAndApprovalRecordsBeforeTurn": map[string]int{"tool.call": 1, "tool.result": 1, "approval.asked": 2},
-		"sameRecordIdsAfterTurn":           true,
-		"deltasPostedByWorkerAtLeast600":   true,
-		"sseDeltasEqualWorkerPosts":        true,
-		"streamedEventsInTurnOver600":      true,
-		"deltasInActivity":                 0,
-		"activityGrowthEqualsStoredEvents": true,
-		"oldestActivityIdUnchanged":        true,
-		"activityLengthUnder500":           true,
-		"approvalRecordStatus":             "decided",
-		"errors":                           "",
+		"toolAndApprovalRecordsBeforeTurn":    map[string]int{"tool.call": 1, "tool.result": 1, "approval.asked": 2},
+		"toolAndApprovalRecordsStillInWindow": true,
+		"deltasPostedByWorkerAtLeast600":      true,
+		"sseDeltasEqualWorkerPosts":           true,
+		"streamedEventsInTurnOver600":         true,
+		"windowSlotsTakenByDeltas":            0,
+		"activityGrowthEqualsStoredEvents":    true,
+		"oldestActivityIdUnchanged":           true,
+		"windowLengthUnder500":                true,
+		"approvalRecordStatus":                "decided",
+		"errors":                              "",
 	}
 	row.Actual = map[string]any{
-		"toolAndApprovalRecordsBeforeTurn": counts(recordsBefore),
-		"sameRecordIdsAfterTurn":           equalRecords(recordsBefore, recordsAfter),
-		"deltasPostedByWorkerAtLeast600":   len(workerDeltas) >= 600,
-		"sseDeltasEqualWorkerPosts":        sameDeltas,
-		"streamedEventsInTurnOver600":      len(sseDeltas)+sseStored > 600,
-		"deltasInActivity":                 deltasInActivity,
-		"activityGrowthEqualsStoredEvents": len(after) == len(before)+sseStored,
-		"oldestActivityIdUnchanged":        len(before) > 0 && len(after) > 0 && before[0].ID == after[0].ID,
-		"activityLengthUnder500":           len(after) < 500,
-		"approvalRecordStatus":             approvalStatus,
-		"errors":                           errText(errTurn),
+		"toolAndApprovalRecordsBeforeTurn":    counts(recordsBefore),
+		"toolAndApprovalRecordsStillInWindow": equalRecords(recordsBefore, recordsAfter),
+		"deltasPostedByWorkerAtLeast600":      len(workerDeltas) >= 600,
+		"sseDeltasEqualWorkerPosts":           sameDeltas,
+		"streamedEventsInTurnOver600":         len(sseDeltas)+sseStored > 600,
+		"windowSlotsTakenByDeltas":            deltasInActivity,
+		"activityGrowthEqualsStoredEvents":    len(after) == len(before)+sseStored,
+		"oldestActivityIdUnchanged":           len(before) > 0 && len(after) > 0 && before[0].ID == after[0].ID,
+		"windowLengthUnder500":                len(after) < 500,
+		"approvalRecordStatus":                approvalStatus,
+		"errors":                              errText(errTurn),
 	}
 	return row
 }

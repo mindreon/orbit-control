@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -40,6 +41,7 @@ func caseELE1(st *stack) caseRow {
 			"Rounds 2 and 3: POST /messages 'stream:' with 5 Chinese parts (5 provider deltas). The client disconnects on the round's first assistant.delta, waits until the turn has completed, then reconnects with Last-Event-ID = last stored id received.",
 			"Round 4: one more 'stream:' turn after the last reconnect, delivered live.",
 			"Compare the client-assembled stored ids with /activity (ids > h0).",
+			"Resume ids that cannot be honoured: reconnect to L with Last-Event-ID 'abc', with the latest id of another room L2, and with 999999999; each first message must be a reset envelope whose lastId and SSE id are L's latest id.",
 		},
 	}
 	c := st.controls["mock"]
@@ -97,6 +99,11 @@ func caseELE1(st *stack) caseRow {
 	if err != nil {
 		row.Expected, row.Actual = "SSE opened", err.Error()
 		return row
+	}
+	headers := map[string]string{
+		"Content-Type":      s.header.Get("Content-Type"),
+		"Cache-Control":     s.header.Get("Cache-Control"),
+		"X-Accel-Buffering": s.header.Get("X-Accel-Buffering"),
 	}
 	for {
 		if !driveFinished {
@@ -162,7 +169,14 @@ func caseELE1(st *stack) caseRow {
 	truth, _ := c.activity(rm.ID)
 	want := idsAfter(truth, h0)
 	dups, gaps, nonIncreasing := sequenceStats(assembled, want)
+	unusable := resumeWithUnusableIDs(st, rm, lastID(truth))
 	row.Expected = map[string]any{
+		"sseHeaders": map[string]string{"Content-Type": "text/event-stream", "Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+		"resumeWithUnusableIds": map[string]any{
+			"abc":              map[string]any{"first": "reset", "reason": "malformed", "lastIdIsRoomHead": true, "sseIdIsRoomHead": true},
+			"otherRoomsLastId": map[string]any{"first": "reset", "reason": "unknown", "lastIdIsRoomHead": true, "sseIdIsRoomHead": true},
+			"999999999":        map[string]any{"first": "reset", "reason": "unknown", "lastIdIsRoomHead": true, "sseIdIsRoomHead": true},
+		},
 		"disconnectsOn":             []string{"tool.call", "assistant.delta", "assistant.delta"},
 		"replayNonEmptyOnReconnect": []bool{true, true, true},
 		"assembledEqualsActivity":   true,
@@ -174,6 +188,8 @@ func caseELE1(st *stack) caseRow {
 		"errors":                    "",
 	}
 	row.Actual = map[string]any{
+		"sseHeaders":                headers,
+		"resumeWithUnusableIds":     unusable,
 		"disconnectsOn":             nonNil(dropPoints),
 		"replayNonEmptyOnReconnect": replayNonEmpty,
 		"assembledEqualsActivity":   equalIDs(assembled, want),
@@ -188,4 +204,47 @@ func caseELE1(st *stack) caseRow {
 		row.Actual.(map[string]any)["errors"] = fmt.Sprint("no events after h0; ", row.Actual.(map[string]any)["errors"])
 	}
 	return row
+}
+
+// resumeWithUnusableIDs reconnects to rm with ids control cannot resume from
+// and reports the first message of each stream.
+func resumeWithUnusableIDs(st *stack, rm room, head uint64) map[string]any {
+	c := st.controls["mock"]
+	out := map[string]any{}
+	other, err := st.room("mock", "L2")
+	if err != nil {
+		out["error"] = err.Error()
+		return out
+	}
+	otherItems, _ := c.activity(other.ID)
+	cursors := map[string]string{
+		"abc":              "abc",
+		"otherRoomsLastId": strconv.FormatUint(lastID(otherItems), 10),
+		"999999999":        "999999999",
+	}
+	for label, cursor := range cursors {
+		s, err := c.open(rm.ID, cursor)
+		if err != nil {
+			out[label] = err.Error()
+			continue
+		}
+		f, err := s.next(readTimeout)
+		s.close()
+		if err != nil {
+			out[label] = err.Error()
+			continue
+		}
+		var reset struct {
+			Reason string `json:"reason"`
+			LastID uint64 `json:"lastId"`
+		}
+		_ = json.Unmarshal(f.env.Payload, &reset)
+		out[label] = map[string]any{
+			"first":            f.env.Type,
+			"reason":           reset.Reason,
+			"lastIdIsRoomHead": reset.LastID == head,
+			"sseIdIsRoomHead":  f.id == strconv.FormatUint(head, 10),
+		}
+	}
+	return out
 }
