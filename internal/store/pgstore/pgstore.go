@@ -113,12 +113,13 @@ func (s *Store) inTenantTx(ctx context.Context, tenantID string, fn func(pgx.Tx)
 	return nil
 }
 
-func (s *Store) EnsureTenant(ctx context.Context, tenantID, name string) error {
-	_, err := s.pool.Exec(ctx,
-		`INSERT INTO tenants (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING`,
-		tenantID, name)
-	if err != nil {
-		return storageErr("ensure tenant", err)
+func (s *Store) CheckTenant(ctx context.Context, tenantID string) error {
+	var ok bool
+	if err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM tenants WHERE id = $1)`, tenantID).Scan(&ok); err != nil {
+		return storageErr("check tenant", err)
+	}
+	if !ok {
+		return store.ErrNotFound
 	}
 	return nil
 }

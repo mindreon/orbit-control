@@ -25,8 +25,9 @@ var ErrStorage = errors.New("storage error")
 // implementations must scope every statement by it (§18.5 query layer). The
 // Postgres implementation additionally relies on RLS as a backstop.
 type Repository interface {
-	// EnsureTenant upserts a tenant row (startup default tenant, §18.3).
-	EnsureTenant(ctx context.Context, tenantID, name string) error
+	// CheckTenant returns ErrNotFound when the tenant does not exist. Control
+	// never creates tenants; ops does (deploy/postgres/ensure-tenant.sql).
+	CheckTenant(ctx context.Context, tenantID string) error
 	// UpsertUser inserts the user if it does not exist yet.
 	UpsertUser(ctx context.Context, tenantID string, u UserRecord) error
 

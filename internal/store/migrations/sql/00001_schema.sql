@@ -13,6 +13,9 @@ BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'orbit_app' AND (rolsuper OR rolbypassrls)) THEN
     RAISE EXCEPTION 'role orbit_app must not be SUPERUSER or BYPASSRLS';
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'orbit_ops' AND NOT rolsuper AND NOT rolbypassrls) THEN
+    RAISE EXCEPTION 'role orbit_ops must exist as NOSUPERUSER NOBYPASSRLS';
+  END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_roles
      WHERE rolname = 'orbit_definer' AND NOT rolcanlogin AND rolbypassrls AND NOT rolsuper

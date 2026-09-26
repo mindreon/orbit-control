@@ -4,6 +4,7 @@
 --   psql -v ON_ERROR_STOP=1 \
 --        -v owner_password="$ORBIT_CONTROL_OWNER_PASSWORD" \
 --        -v app_password="$ORBIT_CONTROL_APP_PASSWORD" \
+--        -v ops_password="$ORBIT_CONTROL_OPS_PASSWORD" \
 --        -f deploy/postgres/bootstrap-roles.sql "$SUPERUSER_URL"
 --
 -- Passwords only ever arrive as psql variables; never commit them.
@@ -15,6 +16,8 @@
 --                  audit reads of soft-deleted rows and cross-tenant
 --                  migrations must see every row.
 --   orbit_app      LOGIN, NOBYPASSRLS, not an owner; ORBIT_CONTROL_DB_URL.
+--   orbit_ops      LOGIN, NOBYPASSRLS; creates tenants (ensure-tenant.sql).
+--                  Granted on tenants only; control never uses it.
 --   orbit_definer  NOLOGIN BYPASSRLS; owns orbit_soft_delete_room only.
 
 SELECT format(
@@ -29,6 +32,12 @@ SELECT format(
  WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'orbit_app')
 \gexec
 
+SELECT format(
+  'CREATE ROLE orbit_ops LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD %L',
+  :'ops_password')
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'orbit_ops')
+\gexec
+
 SELECT 'CREATE ROLE orbit_definer NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE BYPASSRLS'
  WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'orbit_definer')
 \gexec
@@ -41,4 +50,4 @@ SELECT 'CREATE DATABASE orbit_control OWNER orbit_owner'
 \gexec
 
 REVOKE ALL ON DATABASE orbit_control FROM PUBLIC;
-GRANT CONNECT ON DATABASE orbit_control TO orbit_app;
+GRANT CONNECT ON DATABASE orbit_control TO orbit_app, orbit_ops;

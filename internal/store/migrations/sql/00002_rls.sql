@@ -110,18 +110,36 @@ CREATE POLICY tenant_live_room_rule ON approval_rules FOR ALL
          AND (room_id IS NULL
               OR EXISTS (SELECT 1 FROM rooms r WHERE r.id = approval_rules.room_id AND r.deleted_at IS NULL)));
 
--- orbit_app is not the owner and has no BYPASSRLS; it only gets DML.
--- DELETE on rooms is granted on purpose: without a DELETE policy it matches
--- 0 rows (S-DB-13 i) instead of failing with a privilege error.
-GRANT SELECT, INSERT, UPDATE ON tenants TO orbit_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON
-  users, sessions, oidc_login_state, rooms, turns, events, messages, approvals,
-  approval_rules, idempotency_keys, artifacts, artifact_versions, personas,
-  mcp_connectors, cloud_agent_jobs
+-- orbit_app is not the owner and has no BYPASSRLS; it gets the least DML
+-- the code paths need. Every DELETE kept below has its reason in
+-- docs/persistence-failure-modes.md ("Privilege decisions").
+-- Tenants are created by orbit_ops (deploy/postgres/ensure-tenant.sql).
+GRANT SELECT ON tenants TO orbit_app;
+GRANT SELECT, INSERT, UPDATE ON tenants TO orbit_ops;
+
+-- History and catalog rows: never deleted by the app in P0.
+GRANT SELECT, INSERT, UPDATE ON
+  users, turns, events, messages, approvals, artifacts, artifact_versions,
+  personas, mcp_connectors, cloud_agent_jobs
 TO orbit_app;
+
+-- Cleanup / revocation tables.
+GRANT SELECT, INSERT, UPDATE, DELETE ON
+  approval_rules, idempotency_keys, sessions, oidc_login_state
+TO orbit_app;
+
+-- rooms: UPDATE per column. id, tenant_id, created_by, created_at,
+-- deleted_at and deleted_by are not updatable by the app. DELETE stays so
+-- that a physical delete matches 0 rows under RLS (S-DB-13 i).
+GRANT SELECT, INSERT, DELETE ON rooms TO orbit_app;
+GRANT UPDATE (kind, title, state, permission_preset, runtime, session_id,
+              persona_id, delegation, failure, last_event_seq, updated_at)
+   ON rooms TO orbit_app;
+
 GRANT USAGE, SELECT ON SEQUENCE events_id_seq TO orbit_app;
 
 -- +goose Down
+REVOKE ALL ON tenants FROM orbit_ops;
 REVOKE ALL ON SEQUENCE events_id_seq FROM orbit_app;
 REVOKE ALL ON
   tenants, users, sessions, oidc_login_state, rooms, turns, events, messages,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -94,8 +95,11 @@ func Handler() (http.Handler, func(), error) {
 	if defaultTenant == "" {
 		defaultTenant = app.DefaultTenantID
 	}
-	if err := repo.EnsureTenant(context.Background(), defaultTenant, defaultTenant); err != nil {
+	if err := repo.CheckTenant(context.Background(), defaultTenant); err != nil {
 		repo.Close()
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, nil, fmt.Errorf("default tenant %q does not exist; create it with the ops role (deploy/postgres/ensure-tenant.sql)", defaultTenant)
+		}
 		return nil, nil, err
 	}
 	opts := app.Options{Worker: worker.New(base), Repo: repo, DefaultTenant: defaultTenant}

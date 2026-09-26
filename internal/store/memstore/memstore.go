@@ -44,7 +44,6 @@ type idemRow struct {
 
 type Store struct {
 	mu        sync.Mutex
-	tenants   map[string]string
 	users     map[string]userRow
 	rooms     map[string]*roomRow
 	messages  map[string][]messageRow
@@ -56,7 +55,6 @@ var _ store.Repository = (*Store)(nil)
 
 func New() *Store {
 	return &Store{
-		tenants:   map[string]string{},
 		users:     map[string]userRow{},
 		rooms:     map[string]*roomRow{},
 		messages:  map[string][]messageRow{},
@@ -67,10 +65,12 @@ func New() *Store {
 
 func (s *Store) Close() {}
 
-func (s *Store) EnsureTenant(_ context.Context, tenantID, name string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.tenants[tenantID] = name
+// CheckTenant accepts any non-empty tenant: the in-memory store has no
+// tenant registry (dev/test only).
+func (s *Store) CheckTenant(_ context.Context, tenantID string) error {
+	if tenantID == "" {
+		return store.ErrNotFound
+	}
 	return nil
 }
 
