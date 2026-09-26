@@ -111,6 +111,9 @@ type App struct {
 	grants        map[string]*grantRecord
 	subs          map[string]map[*subscriber]struct{}
 	clientStreams map[string]int
+	// freedLogs are closed rooms whose event log was freed; later events for
+	// them are discarded so the log is not recreated.
+	freedLogs map[string]struct{}
 	Limits        Limits
 }
 
@@ -134,6 +137,7 @@ func NewWithOrch(w *worker.Client, o *orch.Client) *App {
 		grants:        map[string]*grantRecord{},
 		subs:          map[string]map[*subscriber]struct{}{},
 		clientStreams: map[string]int{},
+		freedLogs:     map[string]struct{}{},
 		Limits:        DefaultLimits(),
 	}
 	return a
@@ -676,7 +680,8 @@ func (a *App) publishDurable(env Envelope) {
 	}
 	a.mu.Lock()
 	room := a.Rooms[env.TaskID]
-	if room == nil {
+	_, freed := a.freedLogs[env.TaskID]
+	if room == nil || freed {
 		a.mu.Unlock()
 		return
 	}

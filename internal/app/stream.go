@@ -129,6 +129,7 @@ func (a *App) roomClosed(roomID string) {
 		defer a.mu.Unlock()
 		if room, ok := a.Rooms[roomID]; ok && room.State == RoomClosed {
 			_ = a.Events.Drop(roomID)
+			a.freedLogs[roomID] = struct{}{}
 		}
 	}
 	if ttl <= 0 {
