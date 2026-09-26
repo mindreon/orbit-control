@@ -84,8 +84,10 @@ W0 does not implement encryption. This rule is the contract for later waves.
 
 Token streams and tool lifecycle are too chatty for Temporal.
 
-W1 has an **internal** ingest (service auth is still pending and it is not
-listed as a public path in OpenAPI) that accepts allowlisted **Orbit events**
+W1 has an **internal** ingest (bearer `ORBIT_INTERNAL_TOKEN`; not listed as a
+public path in OpenAPI). It is served only on the internal listener
+(`ORBIT_INTERNAL_ADDR`, default `127.0.0.1:8081`); the public listener returns
+`404` for every `/internal/*` path. The ingest accepts allowlisted **Orbit events**
 only (see OpenAPI `OrbitEvent`, the orbit-runtime A1 types). Control validates
 the routing fields (`type`, `roomId`/`sessionId`, `occurredAt`) and keeps the
 body unchanged as the payload of a typed `EventEnvelope`; it does not

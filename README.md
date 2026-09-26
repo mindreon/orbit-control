@@ -75,7 +75,13 @@ curl -s http://127.0.0.1:8080/health
 # {"status":"ok"}
 ```
 
-Default listen address is `:8080` (override with `PORT`).
+Default listen address is `:8080` (override with `PORT`). Worker → control
+routes (`/internal/*`, e.g. `POST /internal/events`) are served only on a
+separate internal listener, `ORBIT_INTERNAL_ADDR` (default `127.0.0.1:8081`);
+the public listener answers `/internal/*` with `404`. Point the worker's
+`ORBIT_EVENT_INGEST_URL` at the internal address (in Compose, set
+`ORBIT_INTERNAL_ADDR=:8081` on control and use `http://control:8081/internal/events`),
+and do not publish that port.
 
 ## Room events (SSE) and resume
 
@@ -120,14 +126,30 @@ curl -N -H 'Last-Event-ID: 42' \
   http://127.0.0.1:8080/v1/rooms/rm_0123456789abcdef/events
 ```
 
-End-to-end check (builds and starts the real binary, talks to it only over
-HTTP, writes `artifacts/e2e-last-event-id.json`; CI uploads it from the `e2e`
-workflow). What it covers, and what is isolation-tested instead, is in
-[docs/testing/last-event-id-failure-modes.md](./docs/testing/last-event-id-failure-modes.md).
+### End-to-end checks
+
+QA sign-off (E-LE-1 to E-LE-4) runs against the real stack: a Temporal dev
+server, `orbit-orch` and `orbit-worker` from an
+[orbit-runtime](https://github.com/mindreon/orbit-runtime) checkout, and two
+`orbit-control` processes built from this tree. It writes
+`artifacts/e2e-real-stack.json` (commit, component versions, per case id,
+steps, expected, actual, pass; no timestamps, ports, or random ids). The `e2e`
+workflow runs it twice on the PR head, requires identical reports, scans them
+for secrets, and uploads `artifacts/`.
 
 ```bash
-go run ./e2e/lasteventid
+# orbit-runtime at the commit pinned in .github/workflows/e2e.yml
+git clone https://github.com/mindreon/orbit-runtime ../orbit-runtime
+(cd ../orbit-runtime && cat uv.lock.parts/part-* > uv.lock && UV_PYTHON=3.11 uv sync --frozen --no-dev)
+go run ./e2e/realstack run -runtime ../orbit-runtime
+go run ./e2e/realstack scan artifacts/e2e-real-stack.json
 ```
+
+`go run ./e2e/lasteventid` checks the rest of the SSE contract (resets for
+malformed, unknown, and expired ids, restart, headers, heartbeat) against the
+real binary with a stub worker. What each check covers, and what is
+isolation-tested instead, is in
+[docs/testing/last-event-id-failure-modes.md](./docs/testing/last-event-id-failure-modes.md).
 
 ## Non-goals (W1)
 
