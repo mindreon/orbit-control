@@ -78,10 +78,23 @@ ORBIT_CONTROL_MIGRATE_DB_URL=postgres://orbit_owner:...@127.0.0.1:5432/orbit_con
 ORBIT_CONTROL_MIGRATE_ON_START=1 go run ./cmd/orbit-control
 ```
 
-The S-DB tests in `internal/store/pgstore` run when `ORBIT_TEST_DB_URL`
-(orbit_app) and `ORBIT_TEST_MIGRATE_DB_URL` (orbit_owner) are set, and skip
-otherwise. `DELETE /v1/rooms/{id}` checks CSRF against
-`ORBIT_ALLOWED_ORIGINS` (comma separated).
+`DELETE /v1/rooms/{id}` checks CSRF against `ORBIT_ALLOWED_ORIGINS` (comma
+separated).
+
+## Persistence E2E (contract §18)
+
+The S-DB-11 / S-DB-13 suite lives in `e2e/persistence` (build tag `e2e`). It
+drives the scenarios through the HTTP API against a real Postgres and writes
+`artifacts/e2e-persistence-report.json`, which CI uploads. Isolated SQL, role
+and static checks are limited to those listed in
+[docs/persistence-failure-modes.md](docs/persistence-failure-modes.md).
+
+```bash
+docker compose -f e2e/compose.yaml up -d --wait
+ORBIT_TEST_DB_URL=postgres://orbit_app:e2e-app@127.0.0.1:55432/orbit_control?sslmode=disable \
+ORBIT_TEST_MIGRATE_DB_URL=postgres://orbit_owner:e2e-owner@127.0.0.1:55432/orbit_control?sslmode=disable \
+go test -tags e2e -count=1 ./e2e/...
+```
 
 ## Run W1
 
