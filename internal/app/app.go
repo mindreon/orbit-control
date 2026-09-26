@@ -343,7 +343,6 @@ func (a *App) setRoomState(ctx context.Context, tenantID string, room *Room, sta
 		a.SessionRoom[sessionID] = room.ID
 		a.mu.Unlock()
 	}
-	a.persistRoom(room)
 	return nil
 }
 
@@ -407,7 +406,6 @@ func (a *App) CreateRoom(ctx context.Context, p Principal, input CreateRoomInput
 	if replayed {
 		return room, true, nil
 	}
-	a.persistRoom(room)
 
 	if a.Orch != nil {
 		view, err := a.Orch.StartRoom(ctx, room.ID, kind, permissionPreset)
@@ -596,7 +594,6 @@ func (a *App) applyTurnResult(ctx context.Context, tenantID, roomID string, out 
 		return nil, nil, err
 	}
 	room := roomFromRecord(rec)
-	a.persistRoom(room)
 	if appr == nil {
 		// completed / continue: keep the session open so the user can send again.
 		return room, nil, nil

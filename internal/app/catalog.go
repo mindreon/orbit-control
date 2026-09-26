@@ -270,8 +270,3 @@ func (a *App) persistActivity(roomID string, item ActivityEvent) {
 	a.ensureCatalog()
 	_ = a.Store.AppendJSONL("audit/"+roomID+".jsonl", item)
 }
-
-func (a *App) persistRoom(room *Room) {
-	a.ensureCatalog()
-	_ = a.Store.WriteJSON("rooms/"+room.ID+".json", room)
-}

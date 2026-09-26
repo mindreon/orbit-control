@@ -55,8 +55,4 @@ func TestPersonaGrantCompositionAndAuditPersist(t *testing.T) {
 	if len(raw) == 0 {
 		t.Fatal("expected audit jsonl bytes")
 	}
-	roomPath := filepath.Join(dir, "rooms", roomID+".json")
-	if _, err := os.Stat(roomPath); err != nil {
-		t.Fatal(err)
-	}
 }
