@@ -90,9 +90,11 @@ only (see OpenAPI `OrbitEvent`). Control keeps a bounded in-memory timeline and
 fans SSE. Raw ACP `session/update` frames and events not associated with a
 known Room are rejected.
 
-SSE ids come from one global event sequence (no per-room counters or locks);
-the future Postgres table is `docs/schema/room_events.sql`, with a
-`(task_id, id)` index for filtered replay. Resume is scoped per room: a cursor
+SSE ids come from one process-global counter in the in-memory event store
+(`app.EventLog`, implemented by `MemoryEventLog`); there are no per-room
+counters or locks, and every read filters by room. Replay and reset rules use
+only that interface, so a later persistence PR can swap the store without
+changing them. Until then a restart forgets every id. Resume is scoped per room: a cursor
 must be an event of the requested room, and a stream only reads that room's
 history. The handler subscribes to the live buffer before reading history, so
 the handoff has no gaps or duplicates; a cursor it cannot honour yields an

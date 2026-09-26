@@ -265,8 +265,9 @@ paths:
 
         **Event ids.** Every message carries `id: <sequence>`, where
         `sequence` is `ActivityEvent.sequence`: the event's id from one
-        global, persisted sequence shared by all rooms. Within a room ids
-        strictly increase but are not contiguous.
+        process-global in-memory counter shared by all rooms. Within a room
+        ids strictly increase but are not contiguous. The counter restarts
+        with control, so ids issued before a restart are unknown afterwards.
 
         **Resume.** Send the last id you received as the `Last-Event-ID`
         header (browsers do this on EventSource auto-reconnect) or as the
@@ -277,13 +278,16 @@ paths:
         a cursor the stream is live-only, as before.
 
         **Reset.** If the cursor is malformed, unknown (not an event of this
-        room — e.g. another room's id — or beyond the global head), or older
-        than the earliest retained event (activity keeps the last 500 per
-        room), the first message is a `StreamReset` whose `id:` is this
-        room's latest event id. Refetch the room, messages, and activity,
-        then keep reading this stream; it continues live after `sequence`.
+        room — e.g. another room's id, an id beyond the latest issued, or any
+        id issued before a control restart), or older than the earliest
+        retained event (activity keeps the last 500 per room), the first
+        message is a `StreamReset` whose `id:` is this room's latest event
+        id. Refetch the room, messages, and activity, then keep reading this
+        stream; it continues live after `sequence`. Rooms are also in memory,
+        so after a restart the room itself is usually gone and the request
+        gets `404` before any stream opens.
 
-        **assistant.delta** frames are live-only: not persisted, never
+        **assistant.delta** frames are live-only: not stored, never
         replayed. Their `id:` repeats the id of the last durable event
         delivered on this connection. Clients drop partial drafts on
         reconnect.
@@ -840,9 +844,9 @@ components:
           type: integer
           format: int64
           description: |
-            Event id from one global, persisted sequence shared by all rooms;
-            strictly increasing within a room, not contiguous. This is the
-            event's SSE `id:`.
+            Event id from one process-global counter shared by all rooms;
+            strictly increasing within a room, not contiguous, and reset when
+            control restarts. This is the event's SSE `id:`.
         type:
           type: string
           enum:
@@ -955,8 +959,9 @@ components:
           enum: [malformed, unknown, expired]
           description: |
             `malformed` — not a canonical decimal id. `unknown` — not an event
-            of this room (e.g. another room's id), or beyond the global head.
-            `expired` — older than the earliest retained event.
+            of this room: another room's id, beyond the latest issued id, or
+            issued before a control restart. `expired` — older than the
+            earliest retained event of this room.
         sequence:
           type: integer
           format: int64
