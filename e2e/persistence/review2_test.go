@@ -230,7 +230,7 @@ func TestReviewMdSingleWinnerDecide(t *testing.T) {
 	ap := aps[0]
 	srv.check(t, "REVIEW-Md/worker/decide-again", c, "a later decision on the decided approval → 409 APPROVAL_NOT_PENDING, nothing sent",
 		httpReq{Method: "POST", Path: "/v1/approvals/" + ap + "/decide", Headers: user("u-md"), Body: `{"decision":"reject"}`},
-		httpExp{Status: 409, BodyIncludes: []string{"APPROVAL_NOT_PENDING"}})
+		httpExp{Status: 409, BodyEquals: `{"error":"approval not pending","code":"APPROVAL_NOT_PENDING","message":"approval is not pending"}` + "\n"})
 	record(t, caseInput{ID: "REVIEW-Md/worker/no-extra-delivery", Contract: c, Description: "the rejected later decision reached neither resolveApproval nor resume",
 		Request: "stub worker counters", Expected: map[string]int32{"resolveApproval": rounds, "resume": rounds},
 		Actual: map[string]int32{"resolveApproval": resolves.Load(), "resume": resumes.Load()}, Pass: resolves.Load() == rounds && resumes.Load() == rounds})

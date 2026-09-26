@@ -22,8 +22,8 @@ import (
 
 const (
 	contractRevision = "§18 (C32 rev3)"
-	// Relayed abbreviated; replace with the full value once provided.
-	contractSHA256 = "113aebd8…f90b"
+	// Contract of record: docs/contracts/orbit-contract-v2.md (Celestial-confirmed).
+	contractSHA256 = "113aebd89914a1008d1c57457572ef38e5de35c74e88ce2f8b8410997f9af90b"
 	// Previous signed version (C32 rev2).
 	previousContractSHA256 = "053a37bb093e06602a50f6412cd57eb3491161f039b567880ba6650ec6965229"
 )
@@ -337,7 +337,7 @@ func writeReport() (string, bool, error) {
 	sum := sha256.Sum256(normCases)
 	report := map[string]any{
 		"suite":      "e2e-persistence",
-		"contract":   map[string]string{"document": "orbit-contract-draft-v2.md", "section": contractRevision, "sha256": contractSHA256, "sha256Note": "abbreviated as relayed; full value pending", "previousSha256": previousContractSHA256},
+		"contract":   map[string]string{"document": contractFile, "section": contractRevision, "sha256": contractSHA256, "previousSha256": previousContractSHA256},
 		"gitSha":     gitSHA(root),
 		"components": components(),
 		"harness": map[string]string{

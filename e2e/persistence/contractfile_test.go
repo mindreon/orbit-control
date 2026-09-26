@@ -11,37 +11,25 @@ import (
 	"testing"
 )
 
-// contractFile is where the shipped contract lives in the repo.
-const contractFile = "docs/contract/orbit-contract-draft-v2.md"
+// contractFile is the contract of record in this repository.
+const contractFile = "docs/contracts/orbit-contract-v2.md"
 
-// The relayed rev3 sha256 is abbreviated ("113aebd8…f90b"); the shipped file
-// must match its prefix and suffix, and the report carries the full value
-// for Sentinel to verify.
+// The shipped contract must be byte-identical to the Celestial-confirmed
+// C32 rev3 file: sha256 and line count.
 func TestContractFileMatchesRevision(t *testing.T) {
 	root, err := repoRoot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile(filepath.Join(root, contractFile))
-	if err != nil {
-		blocked(t, "process/contract-file-sha256", "QA gate", "process",
-			"the shipped contract file matches §18 "+contractRevision+" sha256 "+contractSHA256,
-			"the C32 rev3 contract file has not been provided to the implementer; only the rev2 file (sha256 "+previousContractSHA256[:8]+"…) is available",
-			[]string{"sha256sum " + contractFile, "compare with the relayed " + contractSHA256}, map[string]string{"sha256": contractSHA256})
-		return
-	}
+	raw, readErr := os.ReadFile(filepath.Join(root, contractFile))
 	sum := sha256.Sum256(raw)
 	full := hex.EncodeToString(sum[:])
-	parts := strings.SplitN(contractSHA256, "…", 2)
-	match := full == contractSHA256
-	if len(parts) == 2 {
-		match = strings.HasPrefix(full, parts[0]) && strings.HasSuffix(full, parts[1])
-	}
+	lines := strings.Count(string(raw), "\n")
 	record(t, caseInput{ID: "process/contract-file-sha256", Contract: "QA gate", Kind: "process",
-		Description: "the shipped contract file matches §18 " + contractRevision + " sha256 " + contractSHA256,
-		Steps:       []string{"sha256sum " + contractFile, "compare with the relayed " + contractSHA256},
+		Description: "the shipped contract file is byte-identical to §18 " + contractRevision,
+		Steps:       []string{"read " + contractFile, "sha256 over the raw bytes", "count lines", "compare with the confirmed values"},
 		Request:     map[string]string{"file": contractFile},
-		Expected:    map[string]string{"sha256": contractSHA256},
-		Actual:      map[string]string{"sha256": full},
-		Pass:        match})
+		Expected:    map[string]any{"sha256": contractSHA256, "lines": 986, "read": "ok"},
+		Actual:      map[string]any{"sha256": full, "lines": lines, "read": sqlState(readErr)},
+		Pass:        readErr == nil && full == contractSHA256 && lines == 986})
 }
