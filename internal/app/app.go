@@ -109,6 +109,8 @@ type App struct {
 	CloudAgents   map[string]*CloudAgentJob
 	grants        map[string]*grantRecord
 	subs          map[string]map[*subscriber]struct{}
+	clientStreams map[string]int
+	Limits        Limits
 }
 
 func New(w *worker.Client) *App {
@@ -130,6 +132,8 @@ func NewWithOrch(w *worker.Client, o *orch.Client) *App {
 		CloudAgents:   map[string]*CloudAgentJob{},
 		grants:        map[string]*grantRecord{},
 		subs:          map[string]map[*subscriber]struct{}{},
+		clientStreams: map[string]int{},
+		Limits:        DefaultLimits(),
 	}
 	return a
 }
@@ -408,6 +412,7 @@ func (a *App) Decide(ctx context.Context, approvalID, decision string) (*Approva
 		a.mu.Unlock()
 		if decision == "reject" {
 			a.Publish(roomID, Event{"type": "session.status", "roomId": roomID, "status": "closed"})
+			a.roomClosed(roomID)
 			return &cp, nil
 		}
 		if res.Turn != nil {
@@ -429,6 +434,7 @@ func (a *App) Decide(ctx context.Context, approvalID, decision string) (*Approva
 		cp := *appr
 		a.mu.Unlock()
 		a.Publish(roomID, Event{"type": "session.status", "roomId": roomID, "status": "closed"})
+		a.roomClosed(roomID)
 		return &cp, nil
 	}
 
@@ -492,6 +498,7 @@ func (a *App) AbortRoom(ctx context.Context, roomID string) error {
 	room.State = RoomClosed
 	a.mu.Unlock()
 	a.Publish(roomID, Event{"type": "session.status", "roomId": roomID, "status": "closed"})
+	a.roomClosed(roomID)
 	return nil
 }
 
@@ -661,24 +668,27 @@ func (a *App) Publish(roomID string, ev Event) {
 
 func (a *App) publishDurable(env Envelope) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	room := a.Rooms[env.TaskID]
 	if room == nil {
+		a.mu.Unlock()
 		return
 	}
 	// Append and broadcast under a.mu so SubscribeRoom's head snapshot sees
 	// every event either in the log or in its buffer.
 	env, err := a.Events.Append(env.TaskID, env)
 	if err != nil {
+		a.mu.Unlock()
 		return
 	}
+	snapshot := *room
+	if raw, err := EncodeEnvelope(env); err == nil {
+		a.broadcastLocked(env.TaskID, StreamFrame{Seq: env.ID, Durable: true, Data: raw})
+	}
+	a.mu.Unlock()
+	// Audit and room files are written outside a.mu; concurrent publishes may
+	// append audit lines out of id order, so readers sort by id.
 	a.persistActivity(env.TaskID, env)
-	a.persistRoom(room)
-	raw, err := EncodeEnvelope(env)
-	if err != nil {
-		return
-	}
-	a.broadcastLocked(env.TaskID, StreamFrame{Seq: env.ID, Durable: true, Data: raw})
+	a.persistRoom(&snapshot)
 }
 
 func runTurnFromOrch(res orch.RunTurnResult) worker.RunTurnOut {

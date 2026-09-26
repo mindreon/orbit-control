@@ -50,6 +50,11 @@ type EventLog interface {
 	Contains(taskID string, id uint64) (bool, error)
 	// EvictedThrough is the id of taskID's newest evicted event, or 0 if none.
 	EvictedThrough(taskID string) (uint64, error)
+	// WasEvicted reports whether id was one of taskID's events and has been
+	// evicted from the retained window.
+	WasEvicted(taskID string, id uint64) (bool, error)
+	// Drop frees everything stored for taskID.
+	Drop(taskID string) error
 	// Head is taskID's latest event id, or 0 if it has none.
 	Head(taskID string) (uint64, error)
 	// LastID is the latest id issued for any task.
@@ -65,9 +70,14 @@ type MemoryEventLog struct {
 	tasks  map[string]*memoryTask
 }
 
+// maxEvictedIDs bounds the per-task record of evicted ids; older evicted ids
+// are forgotten and then resolve as unknown rather than expired.
+const maxEvictedIDs = 1 << 16
+
 type memoryTask struct {
 	events         []Envelope
 	evictedThrough uint64
+	evicted        []uint64
 }
 
 // NewMemoryEventLog keeps the newest retainPerTask events of each task.
@@ -88,9 +98,33 @@ func (l *MemoryEventLog) Append(taskID string, ev Envelope) (Envelope, error) {
 	t.events = append(t.events, ev)
 	if drop := len(t.events) - l.retain; drop > 0 {
 		t.evictedThrough = t.events[drop-1].ID
+		for _, gone := range t.events[:drop] {
+			t.evicted = append(t.evicted, gone.ID)
+		}
+		if over := len(t.evicted) - maxEvictedIDs; over > 0 {
+			t.evicted = append([]uint64(nil), t.evicted[over:]...)
+		}
 		t.events = append([]Envelope(nil), t.events[drop:]...)
 	}
 	return ev, nil
+}
+
+func (l *MemoryEventLog) WasEvicted(taskID string, id uint64) (bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	t := l.tasks[taskID]
+	if t == nil {
+		return false, nil
+	}
+	i := sort.Search(len(t.evicted), func(i int) bool { return t.evicted[i] >= id })
+	return i < len(t.evicted) && t.evicted[i] == id, nil
+}
+
+func (l *MemoryEventLog) Drop(taskID string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.tasks, taskID)
+	return nil
 }
 
 func (l *MemoryEventLog) After(taskID string, after uint64) ([]Envelope, error) {

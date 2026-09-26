@@ -2,10 +2,12 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -67,6 +69,7 @@ func Handlers() (public, internal http.Handler) {
 		}
 		runtime = app.NewWithOrch(w, oc)
 	}
+	runtime.Limits = app.LimitsFromEnv()
 	return HandlerWith(runtime), InternalHandler(runtime)
 }
 
@@ -305,7 +308,13 @@ func InternalHandler(runtime *app.App) http.Handler {
 			writeErr(w, http.StatusUnauthorized, "UNAUTHORIZED", "internal token required")
 			return
 		}
-		raw, err := io.ReadAll(r.Body)
+		raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, runtime.Limits.IngestMaxBytes))
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeErr(w, http.StatusRequestEntityTooLarge, "PAYLOAD_TOO_LARGE",
+				"event body exceeds "+strconv.FormatInt(tooLarge.Limit, 10)+" bytes")
+			return
+		}
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
 			return
