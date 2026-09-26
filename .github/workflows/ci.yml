@@ -26,8 +26,17 @@ jobs:
           --health-interval 2s
           --health-timeout 5s
           --health-retries 30
+    env:
+      # Throwaway CI-only credentials for the service container above.
+      ORBIT_TEST_DB_URL: postgres://orbit_app:ci-app@127.0.0.1:5432/orbit_control?sslmode=disable
+      ORBIT_TEST_MIGRATE_DB_URL: postgres://orbit_owner:ci-owner@127.0.0.1:5432/orbit_control?sslmode=disable
+      ORBIT_E2E_GIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      ORBIT_E2E_POSTGRES_IMAGE: postgres:16-alpine
     steps:
       - uses: actions/checkout@v4
+        with:
+          # process/commit-order/* reads the full history.
+          fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
@@ -46,20 +55,48 @@ jobs:
             -h 127.0.0.1 -U postgres -d postgres \
             -f deploy/postgres/bootstrap-roles.sql
 
-      # Contract §18 E2E: migrations up -> down -> up, then S-DB-11 and
-      # S-DB-13 through the HTTP API; writes the report even on failure.
-      - name: E2E persistence
+      # Contract §18 E2E: S-DB-1..13 (S-DB-6 migrations run first and leave
+      # the schema migrated). Each run writes its report even on failure.
+      - name: E2E persistence (run 1)
         env:
-          # Throwaway CI-only credentials for the service container above.
-          ORBIT_TEST_DB_URL: postgres://orbit_app:ci-app@127.0.0.1:5432/orbit_control?sslmode=disable
-          ORBIT_TEST_MIGRATE_DB_URL: postgres://orbit_owner:ci-owner@127.0.0.1:5432/orbit_control?sslmode=disable
-          ORBIT_E2E_GIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          ORBIT_E2E_REPORT: artifacts/e2e-persistence-report.json
         run: go test -tags e2e -race -count=1 -v ./e2e/...
 
-      - name: Upload E2E report
+      - name: E2E persistence (run 2, same commit)
+        if: always()
+        env:
+          ORBIT_E2E_REPORT: artifacts/e2e-persistence-report.run2.json
+        run: go test -tags e2e -race -count=1 ./e2e/...
+
+      - name: Reruns match
+        if: always()
+        run: |
+          norm='{gitSha, contract, components, gate, summary, cases}'
+          diff <(jq -S "$norm" artifacts/e2e-persistence-report.json) \
+               <(jq -S "$norm" artifacts/e2e-persistence-report.run2.json)
+          echo "runs identical: $(jq -r .summary.casesFingerprint artifacts/e2e-persistence-report.json)"
+
+      - name: Secret-scan reports
+        if: always()
+        run: |
+          if grep -nE 'postgres(ql)?://|ci-owner|ci-app|ci-superuser|e2e-planted|sk-live|BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16}' artifacts/*.json; then
+            echo "::error::secret-like value found in the E2E report"
+            exit 1
+          fi
+          echo "no DB URLs, DB passwords or planted secrets in the reports"
+
+      - name: Gate summary
+        if: always()
+        run: |
+          jq -r '"gate=\(.gate) " + (.summary | "total=\(.total) passed=\(.passed) failed=\(.failed) blocked=\(.blocked)")' artifacts/e2e-persistence-report.json
+          jq -r '.cases[] | select(.status == "blocked") | "::warning title=blocked \(.id)::\(.blockedBy)"' artifacts/e2e-persistence-report.json
+
+      - name: Upload E2E reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: e2e-persistence-report
-          path: artifacts/e2e-persistence-report.json
+          path: |
+            artifacts/e2e-persistence-report.json
+            artifacts/e2e-persistence-report.run2.json
           if-no-files-found: error
