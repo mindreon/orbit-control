@@ -85,7 +85,7 @@ below has a written reason; a new grant needs a new line here first.
 |---|---|---|
 | `tenants` | SELECT | Tenants are created by the ops role `orbit_ops`, which has **SELECT and INSERT only** (no UPDATE, review L-a), via `deploy/postgres/ensure-tenant.sql` (`INSERT … ON CONFLICT DO NOTHING`). `tenants.id` has `CHECK (id <> '')`. Control only checks at startup that its default tenant exists, and refuses to start if it does not. |
 | `rooms` | SELECT, INSERT, UPDATE (`state, session_id, updated_at, last_event_seq, failure`); **no DELETE** | UPDATE covers only the columns the code writes (review M-c). `last_event_seq` is incremented in the same transaction as `INSERT events` (§18.4, FM-62). `failure` is written when a room becomes `failed` with `failure.code = DECIDED_APPROVALS_LIMIT` (C34 T5/T11). **C32 rev3 (Celestial):** no DELETE privilege and no DELETE policy, so `DELETE FROM rooms` fails with `42501 permission denied`. Soft delete writes `deleted_at` / `deleted_by` only through `orbit_soft_delete_room`, which runs as `orbit_definer`. |
-| `approvals` | SELECT, INSERT, UPDATE (`status, decision, decided_at, delivery_state, delivery_updated_at, delivery_attempt, result_attempt`); **no DELETE** | The claim and every later delivery transition are conditional UPDATEs (C34 T1–T12, FM-64). `result_attempt` is the write-back idempotency key (FM-61): it is set to `delivery_attempt` in the same transaction as the resumed turn's messages, and only when it is still NULL. The `BEFORE UPDATE` trigger `orbit_approvals_delivery_transition` allows only those transitions, for every role. |
+| `approvals` | SELECT, INSERT, UPDATE (`status, decision, decided_at, delivery_state, delivery_updated_at, delivery_attempt, result_attempt, result_body`); **no DELETE** | The claim and every later delivery transition are conditional UPDATEs (C34 T1–T12, FM-64). `result_attempt` is the write-back idempotency key (FM-61): it is set to `delivery_attempt` in the same transaction as the resumed turn's messages, and only when it is still NULL. `result_body` (FM-71) stores that write so a restarted process can apply it without an in-memory cache. The `BEFORE UPDATE` trigger `orbit_approvals_delivery_transition` allows only those transitions, for every role. `status` and `decision` have CHECK constraints (FM-73). |
 | `sessions` | SELECT, INSERT, UPDATE (`last_seen_at`), DELETE | `auth.Sessions.Lookup` refreshes `last_seen_at`. DELETE is kept because logout destroys the server session (§17.3) and expired sessions are cleaned up. |
 | `events`, `messages`, `artifact_versions` | SELECT, INSERT; **no UPDATE, no DELETE** | Immutable history (review M-c): a written event, message or artifact version is never rewritten. |
 | `turns`, `artifacts` | SELECT, INSERT; **no UPDATE, no DELETE** | No P0 code path updates them. Phase 2 / the §16 PR add their columns here first (`turns.status`/`finished_at`, `artifacts.latest_version`/`updated_at`). |
@@ -698,15 +698,11 @@ How each phase handles it:
   The reopen needs a narrowly scoped path the Low-1 trigger allows, for
   example a SECURITY DEFINER function added to the S-DB-11 allowlist, with
   its own FM entry first.
-- **E2E, blocked until phase 2** (`REVIEW-F2/delivered-but-timeout-once`).
-  Inject one "delivered but the response timed out", then retry, and assert
-  the worker applied the decision exactly once. It depends on two external
-  changes, and stays blocked until both have merged:
-  - the **orbit-runtime section 2.4 PR**: the RoomWorkflow `decide` Update
-    handler dedupes by `updateId` and records `decided_approvals`, so a
-    repeated decision for the same approval is applied at most once;
-  - **contract PR orbit-control#18**, which defines the phase-2 retry and
-    delivery-state semantics this case asserts.
+- **E2E** (`REVIEW-F2/delivered-but-timeout-once`, FM-75). The e2e fault
+  layer delivers once, then reports `Unknown` on that first attempt. The
+  retry uses the same Update id and returns the accepted update without a
+  second delivery. The response is **200**, `delivery_state` is `delivered`,
+  and the stub records one Decide. This is the same injection as S-ID-3.
 
 ### N1 — Temporal decide: the delivery timeout bounds acceptance only
 
@@ -722,23 +718,21 @@ How each phase handles it:
 The fix splits delivery from waiting for the turn result:
 
 1. **Delivery = acceptance.** Control calls `UpdateWorkflow` with
-   `WaitForStage: Accepted` and **`UpdateID` = the approval id**, under a
-   context bounded by `DeliveryTimeout`. Only this step is delivery. If it
-   fails or times out, the response is the phase-1 502 above: the WARN log,
-   the approval stays decided, and resubmits get 409. Nothing else changes
-   for F2.
-2. **Turn result under the request context.** After acceptance, control
-   calls `handle.Get` under the request context, with no delivery timeout,
-   and then applies the turn result with `applyTurnResult` as before.
-3. **A failure after acceptance is not a delivery failure.** If
-   `handle.Get` fails, the decision was delivered; the response is the
-   documented **400** of the decide route ("the decision was delivered, but
-   resuming the turn afterwards failed"), the same as a failed resume
-   `runTurn` on the direct path. It is never 502.
-4. **`UpdateID` = approval id.** Temporal deduplicates Updates with the
-   same id on a workflow run, and the phase-2 `decide` handler dedupe
-   (orbit-runtime section 2.4) keys on the same `updateId`. Passing it
-   explicitly now means phase 2 does not change the delivery call.
+   `WaitForStage: Accepted` and **`UpdateID` = `approvalRequestId`** (C35;
+   the workflow derives `resumeTurnId`, and the decide request does not
+   send that field). The acceptance wait is bounded by
+   `ORBIT_DECISION_DELIVERY_TIMEOUT`. Only this step is delivery.
+2. **Turn result on a background context.** After acceptance, control calls
+   `handle.Get` under `context.WithTimeout(bg, turnTimeout)`, where `bg` is
+   `context.WithoutCancel` of the request. That wait is not
+   `ORBIT_DECISION_DELIVERY_TIMEOUT` (S-ID-13).
+3. **A failure after acceptance is not a delivery failure.** `handle.Get`
+   returning `ApplicationError` type `DECIDED_APPROVALS_LIMIT` is T11
+   (FM-66). Any other `handle.Get` failure is **502 `WORKER_ERROR`** with
+   fixed text (FM-66). It is not a string match on the error.
+4. **`UpdateID` = `approvalRequestId`.** Repeated deliveries of one
+   decision, including in-request retries and reconciler retries, share
+   that id.
 
 Phase 2 closes the remaining gap (FM-61, below). Writing the resumed turn
 back no longer uses the HTTP request context. A client that disconnects
@@ -782,17 +776,18 @@ and the room becomes `failed` with
 `failure.code = DECIDED_APPROVALS_LIMIT`.
 
 - **FM-61.** The resumed turn is written back on a background context
-  (`context.WithoutCancel` of the request, with its own lifetime), not on
-  the HTTP request context. Disconnecting the client after the decision is
-  claimed does not cancel delivery or the write-back. The write is
-  idempotent on `delivery_attempt`: one transaction sets
-  `result_attempt = delivery_attempt` only when `result_attempt IS NULL`
-  and `delivery_state = 'delivered'`, and in that same transaction inserts
-  the resumed turn's messages and updates the room. A second write with the
-  same attempt affects 0 rows and inserts nothing. A reconciler
-  (`App.ReconcileDeliveredResults`) selects `delivered` rows in the
-  process's default tenant whose `result_attempt` is still NULL and runs
-  that same write. E2E: `FM-60/disconnect-after-approve/{orch,worker}`,
+  (`context.WithoutCancel` of the request, then
+  `context.WithTimeout(bg, turnTimeout)`), not on the HTTP request context.
+  Disconnecting the client after the decision is claimed does not cancel
+  delivery or the write-back. The write is idempotent on `delivery_attempt`:
+  one transaction sets `result_attempt = delivery_attempt` only when
+  `result_attempt IS NULL` and `delivery_state = 'delivered'`, and in that
+  same transaction inserts the resumed turn's messages and updates the room.
+  A second write with the same attempt affects 0 rows and inserts nothing.
+  Before that write, control stores the result in `approvals.result_body`
+  (FM-71) so a later process can apply it. The reconciler does not keep an
+  in-process cache of pending writes. E2E:
+  `FM-60/disconnect-after-approve/{orch,worker}`,
   `FM-60/duplicate-writeback`, `FM-60/reconcile-unwritten`.
 - **FM-64.** `BEFORE UPDATE` trigger `orbit_approvals_delivery_transition`
   allows only C34 transitions T1–T12, plus the FM-61 `result_attempt`
@@ -823,3 +818,132 @@ and the room becomes `failed` with
   `ORBIT_ARTIFACT_MAX_BYTES` is **413**, counted while streaming, and
   leaves no temp file. On the public listener every `/internal/*` path,
   including `/internal/events` and `/internal/artifact-blobs`, is **404**.
+
+## R1: C35 delivery follow-up (FM-65 … FM-75)
+
+Contract of record: `docs/contracts/orbit-contract-v2.md` at the merged
+commit `53ee38c053b48a58e7035940bbf050510554eac2` (C35). The suite hashes
+that blob from git. It does not hard-code the hash, and it does not name
+an unmerged commit.
+
+`UpdateID` on the decide Update is `approvalRequestId`. The request body
+does not contain `resumeTurnId`. In-request retries of `Unknown` use that
+same id, with bounded backoff, and stop at
+`ORBIT_DECISION_DELIVERY_TIMEOUT` (default 30s). Locks are held only inside
+each transition `UPDATE`. Temporal RPC, retries, and waits run without a
+row lock.
+
+The reconciler interval is `ORBIT_DELIVERY_RECONCILE_INTERVAL_S` (default
+10). The unknown deadline is `ORBIT_DELIVERY_UNKNOWN_TIMEOUT_S` (default
+600). S-ID-9 (c) sets that variable to 5. None of the three is a fixed
+10s sleep in the reconciler loop. `turnTimeout` (default 2 minutes) bounds
+`handle.Get` and the result write, and is separate from the delivery
+timeout (S-ID-13).
+
+NotDelivered is only `ApplicationError` type `APPROVAL_UNKNOWN` when
+`decideConfig.ttlS` was read successfully and `now() - decided_at < ttlS/2`
+(FM-69). A failed `decideConfig` query is Unknown. There is no match on
+the text `NOT_DELIVERED`.
+
+- **FM-65.** T5 or T11 and the room failure are one transaction. The
+  approval `UPDATE` and `rooms.state = 'failed'` commit together, or both
+  roll back. Zero rows on the approval update means the caller lost the
+  race: the transaction rolls back, the room is not marked failed, and
+  control does not deliver, emit, or take any later step (contract §2.4.2).
+  E2E: `S-ID-18/t5-zero-rows`, `S-ID-18/t11-zero-rows`.
+- **FM-66.** T11 runs only when `errors.As` yields
+  `*temporal.ApplicationError` and `Type() == "DECIDED_APPROVALS_LIMIT"`.
+  Every other `handle.Get` failure is **502 `WORKER_ERROR`** with fixed
+  text, including errors whose message happens to contain that code.
+  E2E: `S-ID-8/t11-application-error`, `FM-66/other-get-is-502`.
+- **FM-67.** Ingest of `room.failed` marks the room failed and stores
+  `failure` from the event's `{code, message}` in one transaction. A second
+  ingest of the same event does not write the room again: `failure` stays
+  byte-for-byte the first value, and `last_event_seq` does not move. The
+  event does not change approval rows. A later decide on that room is
+  **409 `ROOM_FAILED`**. On a failed room the reconciler sends a stalled
+  `in_flight` row through T3 first; an `unknown` row is queried once via
+  `decideOutcome`. A done outcome becomes `delivered` (T7). A missing
+  outcome or a failed query becomes `unresolved` (T8) in that pass, with
+  no T6 retry. E2E: `S-ID-8/ingest-room-failed`,
+  `S-ID-8/ingest-room-failed-twice`, `S-ID-8/decide-after-room-failed`,
+  `S-ID-8/failed-room-outcome-delivered`,
+  `S-ID-8/failed-room-outcome-unresolved`. The runtime half of S-ID-8
+  (1024 carried-over ids) stays blocked: `S-ID-8/runtime-carry-over`.
+- **FM-68.** When any in-request transition `UPDATE` affects 0 rows (F4,
+  S-ID-18), control does not deliver, change the room, or emit an event.
+  It re-reads the row and answers from that state: `in_flight` or `unknown`
+  with the same decision is **202**; a different decision is **409
+  `APPROVAL_DELIVERY_PENDING`**; `delivered` is **200**; `unresolved` or
+  `cancelled` is **409 `APPROVAL_NOT_PENDING`**; a failed room is **409
+  `ROOM_FAILED`**; a T9 reopen to pending is **503
+  `APPROVAL_NOT_DELIVERED`**. The response is never **500**. E2E:
+  `S-ID-18/t2`, `S-ID-18/t3`, `S-ID-18/t5`, `S-ID-18/t11`.
+- **FM-69.** T4 is decided from `decideConfig.ttlS`, compared with `ttlS/2`.
+  E2E: `FM-69/inside-window`, `FM-69/config-query-fails`,
+  `FM-69/outside-window`.
+- **FM-70.** `failure.message` is one of the §10.2 sentences, imported from
+  `internal/failtext` (generated from that table). A `room.failed` event
+  control itself emits carries `failure: {code, message}`. E2E:
+  `FM-70/messages-match-section-10-2`, and the message on
+  `S-ID-8/t11-application-error`.
+- **FM-71.** Reconciliation is driven by the database, for every tenant,
+  not by an in-process `pendingWrites` map. Each pass reads `unknown`
+  rows, stalled `in_flight` rows (T3, matching the attempt and
+  `delivery_updated_at`, older than the delivery timeout plus 30s), leftover
+  `not_delivered` rows (T9), and `unresolved` rows from T8 whose
+  `decided_at` is inside 24 hours (T12 when `decideOutcome` is found).
+  Abort cancels pending approvals (T10) and does not cancel `in_flight`.
+  A restarted control applies a saved `result_body` for every tenant.
+  E2E: `FM-71/restart-reconcile-from-database` (assertions read only the
+  database), `FM-71/all-tenants`, `S-ID-12/t10-abort`.
+- **FM-72.** A **400** body uses a fixed message. It does not return
+  `err.Error()`. Operators use `docs/runbooks/stuck-room.md` when a room
+  or approval stops moving. E2E: `FM-72/bad-request-hides-cause`.
+- **FM-73.** `approvals.status` is `pending`, `decided`, or `cancelled`.
+  `approvals.decision` is `''`, `allow`, or `reject`. Other values fail
+  the CHECK. E2E: `FM-73/status-check`, `FM-73/decision-check`.
+- **FM-74.** `orbit_app` cannot `DISABLE TRIGGER` or `DROP TRIGGER` on
+  `orbit_approvals_delivery_transition` (SQLSTATE `42501`). E2E:
+  `FM-74/disable-trigger`, `FM-74/drop-trigger`.
+- **FM-75.** `ORBIT_E2E_FAULTS` and the symbol `orbitE2EFaults` exist only
+  in a build with `-tags e2e`. The production binary does not contain that
+  symbol. CI builds both and checks. `POST /internal/e2e/reconcile` is
+  registered only in the e2e build. E2E: `FM-75/production-binary-has-no-fault-symbol`
+  and `REVIEW-F2/delivered-but-timeout-once`.
+
+S-ID cases this process runs through application code:
+
+| Case | Id |
+|---|---|
+| S-ID-3 | `S-ID-3/unknown-once-same-update-id` |
+| S-ID-4 | `S-ID-4/not-delivered` |
+| S-ID-5 | `S-ID-5/unknown-then-workflow-ended` |
+| S-ID-6 | `S-ID-6/reconcile-vs-reopen` |
+| S-ID-8 control, including the C35 ingest lines | the `S-ID-8/*` ids under FM-66 and FM-67 |
+| S-ID-9 (a) (b) (c) | `S-ID-9/a-unknown-then-delivered`, `S-ID-9/b-same-decision`, `S-ID-9/b-different-decision`, `S-ID-9/c-unknown-timeout` |
+| S-ID-12 | `S-ID-12/t1` … `S-ID-12/t12`, `S-ID-12/stale-attempt-t2`, `S-ID-12/crash-before-t4-commit`, `S-ID-12/forbidden-delivered`, `S-ID-12/forbidden-unresolved`, `S-ID-12/forbidden-t9-decision`, `S-ID-12/forbidden-skip-in-flight`, `S-ID-12/forbidden-pending-unknown`, `S-ID-12/forbidden-cancelled-pending`, `S-ID-12/forbidden-t12-after-t11` |
+| S-ID-13 | `S-ID-13/resume-slower-than-delivery-timeout` |
+| S-ID-18 | the `S-ID-18/*` ids under FM-65 and FM-68 |
+
+These stay `blocked`, each with `blockedBy`, and are not skipped silently.
+They belong to the orbit-runtime §2.4 work. orbit-runtime#11 is not merged,
+so real-stack keeps the merged runtime pin already in
+`.github/workflows/e2e.yml`. These rows do not name an unmerged commit:
+
+- `S-ID-2/repeat-delivery`
+- `S-ID-7/continue-as-new`
+- `S-ID-8/runtime-carry-over`
+- `S-ID-10/ttl-cleanup`
+- `S-ID-11/child-resolve`
+- `S-ID-14/child-limit`
+- `S-ID-15/shared-limit`
+- `S-ID-16/fatal-before-end`
+- `S-ID-17/room-failed-once`
+- `C3/real-temporal-decide`
+- `C3/real-temporal-fm60-disconnect`
+
+`C3/real-temporal-decide` and `C3/real-temporal-fm60-disconnect` are
+implemented under `e2e/realstack` and run only when
+`ORBIT_RUNTIME_DECIDE_E2E=1`. That variable stays unset until the runtime
+pin is the merge commit of orbit-runtime#11.
