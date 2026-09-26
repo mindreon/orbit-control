@@ -513,13 +513,18 @@ paths:
         The approval is claimed with a conditional update (`status = pending`)
         before anything is sent to the workflow, so concurrent decisions have
         exactly one winner and the workflow receives exactly one decision.
-        Deciding an approval that is no longer pending returns **409**
-        `APPROVAL_NOT_PENDING` (contract §2.0; previously 400). If delivering
-        the decision fails or times out, the response is **502**
-        `DECISION_DELIVERY_FAILED` and the approval stays decided (no
-        automatic retry, no reopen in phase 1). Delivery ends when the
-        decision is accepted; waiting for the resumed turn is not bounded by
-        the delivery timeout, so a slow resumed turn never produces the 502.
+        Deciding an approval that is already `delivered`, `unresolved`, or
+        `cancelled` returns **409** `APPROVAL_NOT_PENDING` (contract §2.0).
+        While `deliveryState` is `in_flight` or `unknown`, the same decision
+        again returns **202** and is not re-delivered; a different decision
+        returns **409** `APPROVAL_DELIVERY_PENDING` with the current
+        `approval` on the error body (C34 §2.4). An unconfirmed delivery
+        (timeout or any ambiguous error) returns **202**
+        `{approval, deliveryState: "unknown"}`. A confirmed
+        `DECIDED_APPROVALS_LIMIT` returns **409** `ROOM_FAILED`. Delivery
+        ends when the decision is accepted; the resumed turn is written back
+        on a background context, so a slow turn is **200** and a client
+        disconnect does not drop that write (FM-61).
       x-unimplemented: false
       parameters:
         - $ref: "#/components/parameters/ApprovalId"
@@ -560,10 +565,40 @@ paths:
                 error: not found
                 code: NOT_FOUND
                 message: approval not found
+        "202":
+          description: |
+            Delivery outcome is not confirmed (`deliveryState` `unknown`), or
+            the caller repeated the same decision while delivery is `in_flight`
+            or `unknown`. Not an error body. Nothing is re-delivered.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [approval, deliveryState]
+                properties:
+                  approval:
+                    $ref: "#/components/schemas/Approval"
+                  deliveryState:
+                    type: string
+                    enum: [in_flight, unknown]
         "409":
-          $ref: "#/components/responses/ApprovalNotPending"
-        "502":
-          $ref: "#/components/responses/DecisionDeliveryFailed"
+          description: |
+            `APPROVAL_NOT_PENDING` when the approval is no longer waiting on
+            delivery, or `APPROVAL_DELIVERY_PENDING` / `ROOM_FAILED` (both
+            include `approval`). See the component responses.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "503":
+          description: |
+            `APPROVAL_NOT_DELIVERED`. The decision was provably not delivered
+            and the approval is pending again.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -829,6 +864,11 @@ components:
         message:
           type: string
           description: Human-readable explanation (not a secret)
+        approval:
+          $ref: "#/components/schemas/Approval"
+          description: |
+            Optional. Set on `APPROVAL_DELIVERY_PENDING`, `ROOM_FAILED`, and
+            `APPROVAL_NOT_DELIVERED` (C34 §2.4).
       example:
         error: not implemented
         code: NOT_IMPLEMENTED
@@ -949,6 +989,9 @@ components:
           type: string
         decision:
           type: string
+        deliveryState:
+          type: string
+          description: C34 delivery state. Empty while the approval is pending.
         createdAt:
           type: string
     ApprovalList:

@@ -63,16 +63,16 @@ No unit tests are added for persistence.
 |---|---|---|
 | S-DB-1 | static, ISO-9 | — |
 | S-DB-2 | E2E cross-tenant over HTTP, plus ISO-10 | — |
-| S-DB-3 | E2E through the binary: create, restart, read back | events persisted with `last_event_seq` continuing, and artifacts: phase 2 (per-task `seq`, §18.4) and §16 control artifact PR |
+| S-DB-3 | E2E through the binary: create, restart, read back; events and `last_event_seq` (FM-62) | artifact metadata read API: §16 control artifact PR |
 | S-DB-4 | ISO-11 (schema) | a real login's `sessions` row holds only the hash: auth PR (§17, after this PR per §17.9) |
 | S-DB-5 | — | artifact version ingest (200/200/200/409/409): §16 control artifact PR |
 | S-DB-6 | ISO-12 (migrations) | — |
-| S-DB-7 | — | per-task `seq`, SubscribeAndReplay: phase 2, after Last-Event-ID PR #15 |
+| S-DB-7 | E2E: 32 writers, 1000 events, per-task seq (FM-62) | injected writes between subscribe and replay: handoff hooks not exposed |
 | S-DB-8 | E2E through the binary | — |
 | S-DB-9 | E2E through the binary (DB connect and migrate failures) and over HTTP (runtime storage failure) | session and OIDC error paths: auth PR |
-| S-DB-10 | ISO-13 (DB constraint) | streamed turn not persisting deltas: phase 2 (events are not persisted yet) |
+| S-DB-10 | ISO-13 (DB constraint) and E2E ingest (FM-62): `assistant.delta` is not stored | — |
 | S-DB-11 | (a) static ISO-1; (b) E2E + ISO-2 | — |
-| S-DB-12 | — | `/internal/artifact-blobs` and the internal listener: phase 2 |
+| S-DB-12 | E2E (FM-63): blob ingest on the internal listener; public listener returns 404 | — |
 | S-DB-13 | E2E + ISO-3…8 | none at the storage level; see ISO-6 for routes control does not have yet |
 | S-DB-14 (Sentinel follow-up on #16; not yet in the contract text) | ISO-18, connected as `orbit_app` | — |
 
@@ -84,8 +84,8 @@ below has a written reason; a new grant needs a new line here first.
 | Table | orbit_app | Reason for anything beyond SELECT/INSERT |
 |---|---|---|
 | `tenants` | SELECT | Tenants are created by the ops role `orbit_ops`, which has **SELECT and INSERT only** (no UPDATE, review L-a), via `deploy/postgres/ensure-tenant.sql` (`INSERT … ON CONFLICT DO NOTHING`). `tenants.id` has `CHECK (id <> '')`. Control only checks at startup that its default tenant exists, and refuses to start if it does not. |
-| `rooms` | SELECT, INSERT, UPDATE (`state, session_id, updated_at`); **no DELETE** | UPDATE covers only the columns `pgstore.UpdateRoomState` writes (review M-c); phase 2 adds `last_event_seq` with its own line here. **C32 rev3 (Celestial):** no DELETE privilege and no DELETE policy, so `DELETE FROM rooms` fails with `42501 permission denied`. Soft delete writes `deleted_at` / `deleted_by` only through `orbit_soft_delete_room`, which runs as `orbit_definer`. |
-| `approvals` | SELECT, INSERT, UPDATE (`status, decision, decided_at`); **no DELETE** | UPDATE covers exactly what `pgstore.DecideApproval` writes. The decision UPDATE is conditional on `status = 'pending'` (review M-d). The `BEFORE UPDATE` trigger `approvals_frozen_once_decided` rejects **any** update when `OLD.status <> 'pending'`, for every role (review Low-1). A decided approval is therefore final, and there is no reopen path in phase 1 (see ISO-20 / FM-59). |
+| `rooms` | SELECT, INSERT, UPDATE (`state, session_id, updated_at, last_event_seq, failure`); **no DELETE** | UPDATE covers only the columns the code writes (review M-c). `last_event_seq` is incremented in the same transaction as `INSERT events` (§18.4, FM-62). `failure` is written when a room becomes `failed` with `failure.code = DECIDED_APPROVALS_LIMIT` (C34 T5/T11). **C32 rev3 (Celestial):** no DELETE privilege and no DELETE policy, so `DELETE FROM rooms` fails with `42501 permission denied`. Soft delete writes `deleted_at` / `deleted_by` only through `orbit_soft_delete_room`, which runs as `orbit_definer`. |
+| `approvals` | SELECT, INSERT, UPDATE (`status, decision, decided_at, delivery_state, delivery_updated_at, delivery_attempt, result_attempt`); **no DELETE** | The claim and every later delivery transition are conditional UPDATEs (C34 T1–T12, FM-64). `result_attempt` is the write-back idempotency key (FM-61): it is set to `delivery_attempt` in the same transaction as the resumed turn's messages, and only when it is still NULL. The `BEFORE UPDATE` trigger `orbit_approvals_delivery_transition` allows only those transitions, for every role. |
 | `sessions` | SELECT, INSERT, UPDATE (`last_seen_at`), DELETE | `auth.Sessions.Lookup` refreshes `last_seen_at`. DELETE is kept because logout destroys the server session (§17.3) and expired sessions are cleaned up. |
 | `events`, `messages`, `artifact_versions` | SELECT, INSERT; **no UPDATE, no DELETE** | Immutable history (review M-c): a written event, message or artifact version is never rewritten. |
 | `turns`, `artifacts` | SELECT, INSERT; **no UPDATE, no DELETE** | No P0 code path updates them. Phase 2 / the §16 PR add their columns here first (`turns.status`/`finished_at`, `artifacts.latest_version`/`updated_at`). |
@@ -740,10 +740,10 @@ The fix splits delivery from waiting for the turn result:
    (orbit-runtime section 2.4) keys on the same `updateId`. Passing it
    explicitly now means phase 2 does not change the delivery call.
 
-Known gap, unchanged by this fix: if the client disconnects while control
-waits for the turn result, the request context is cancelled and this
-request does not apply the result. The direct path's resume has the same
-gap. It is tracked for phase 2, together with late worker events.
+Phase 2 closes the remaining gap (FM-61, below). Writing the resumed turn
+back no longer uses the HTTP request context. A client that disconnects
+after the decision is claimed does not cancel that write, and a later
+reconcile pass compensates a `delivered` row whose result was never written.
 
 **Direct worker path.** N1 does not apply there. `DeliveryTimeout` bounds
 only `resolveApproval`; the resume `runTurn` already runs under the request
@@ -761,81 +761,65 @@ the stub's **acceptance** past `DeliveryTimeout`, and still expects the
 502, 409 on resubmit, and at most one delivery. The reverse check (restore
 the whole-call timeout) makes the `/orch` case fail with 502.
 
-### Phase 2: delivery-state response (documented only; no code in phase 1)
+### Phase 2: C34 delivery state (FM-61, FM-64)
 
-**502 `DECISION_DELIVERY_FAILED` is temporary phase-1 behavior.** In phase 2,
-per **contract C34 §2.4**, a decide whose delivery outcome is not confirmed
-MUST instead return **202 with `{"deliveryState": "unknown"}`**. That change
-ships as one unit together with all of the following:
+C34 is in `docs/contracts/orbit-contract-v2.md` (§2.4, merged with #18).
+Phase 2 follows that section. The phase-1 502 `DECISION_DELIVERY_FAILED`
+for an unconfirmed delivery is retired: that outcome is **202**
+`{"approval", "deliveryState":"unknown"}` (a success body, not `ErrorBody`).
 
-- **The convergence path.** This is how the client learns the final
-  delivery state after the 202. C34 §2.4 defines it; phase 2 implements it
-  as specified there, not as a control-local design.
-- **The `delivery_state` values and their allowed transitions**, as
-  C34 §2.4 defines them. The values used in the next section (`delivered`,
-  `not_delivered`, `unknown`) are this file's working names. They must be
-  reconciled with C34 before the phase-2 migration is written, and this
-  file is updated first.
-- **Its E2E cases: contract PR #18 H4 / S-ID-9.** They land in
-  `e2e/persistence` and in the persistence report. The phase-1 case
-  `REVIEW-F2/phase1-timeout-at-most-once` is then rewritten to expect the
-  202 and the convergence, not deleted.
+`approvals` gains `delivery_state`, `delivery_updated_at`, and
+`delivery_attempt` (C34 §2.4.2) plus `result_attempt` (FM-61, below).
+The public `status` value stays `pending` | `decided` | `cancelled`. C34's
+words "allowed" and "rejected" are this row's `decision` (`allow` /
+`reject`) while `status = 'decided'`. `ErrorBody` gains an optional
+`approval` object. While `delivery_state` is `in_flight` or `unknown`, the
+same decision again is **202** and is not re-delivered; a different
+decision is **409 `APPROVAL_DELIVERY_PENDING`** and the body includes
+`approval`. `DECIDED_APPROVALS_LIMIT` from the accepted update's result is
+**409 `ROOM_FAILED`**: the approval goes `delivered` → `unresolved` (T11),
+and the room becomes `failed` with
+`failure.code = DECIDED_APPROVALS_LIMIT`.
 
-C34 is **not yet part of the contract of record** in this repository.
-`docs/contracts/orbit-contract-v2.md` is C32 rev3, sha256
-`113aebd89914a1008d1c57457572ef38e5de35c74e88ce2f8b8410997f9af90b`. Phase 2
-therefore starts by committing the contract revision that contains C34, and
-takes the exact response, convergence and transition shapes from it. Until
-then, phase 1 keeps the 502 described above, and this section only records
-the obligation.
+- **FM-61.** The resumed turn is written back on a background context
+  (`context.WithoutCancel` of the request, with its own lifetime), not on
+  the HTTP request context. Disconnecting the client after the decision is
+  claimed does not cancel delivery or the write-back. The write is
+  idempotent on `delivery_attempt`: one transaction sets
+  `result_attempt = delivery_attempt` only when `result_attempt IS NULL`
+  and `delivery_state = 'delivered'`, and in that same transaction inserts
+  the resumed turn's messages and updates the room. A second write with the
+  same attempt affects 0 rows and inserts nothing. A reconciler
+  (`App.ReconcileDeliveredResults`) selects `delivered` rows in the
+  process's default tenant whose `result_attempt` is still NULL and runs
+  that same write. E2E: `FM-60/disconnect-after-approve/{orch,worker}`,
+  `FM-60/duplicate-writeback`, `FM-60/reconcile-unwritten`.
+- **FM-64.** `BEFORE UPDATE` trigger `orbit_approvals_delivery_transition`
+  allows only C34 transitions T1–T12, plus the FM-61 `result_attempt`
+  assignment (delivery columns unchanged). Every other update raises
+  `P0001` / `approval is not pending`, for every role. T2, T3, T4, T5 and
+  T11 match `delivery_attempt`, so a late result cannot land on a newer
+  `in_flight`. The trigger sets `delivery_updated_at = now()` on each
+  delivery transition and ignores a caller-supplied value. E2E:
+  `C34/transitions` (each allowed transition, a stale attempt affecting 0
+  rows, and a forbidden rewrite raising `P0001`).
 
-### Phase 2: relaxing the Low-1 trigger (documented only; no code in phase 1)
+### Phase 2: per-task event seq and internal routes (FM-62, FM-63)
 
-When phase 2 adds the reopen path, the trigger is relaxed to allow
-**exactly one** transition on a decided approval:
-
-- `status = 'decided' AND delivery_state = 'not_delivered'` → `status = 'pending'`
-
-It is performed as **one conditional UPDATE**, and nothing else:
-
-```sql
-UPDATE approvals
-   SET status = 'pending', decision = '', decided_at = NULL, delivery_state = NULL
- WHERE tenant_id = $1 AND id = $2
-   AND status = 'decided' AND delivery_state = 'not_delivered'
-```
-
-- `delivery_state` is a new column in phase 2. It is written only by
-  control's delivery code, from the classified outcome of the delivery
-  call: `delivered`, `not_delivered` or `unknown`.
-- 0 rows affected means no reopen, and the approval stays decided.
-- The trigger checks this exact shape: `OLD.status = 'decided'`,
-  `OLD.delivery_state = 'not_delivered'`, `NEW.status = 'pending'`, and
-  every other column except the four above unchanged. It raises
-  `P0001 approval is not pending` for everything else.
-
-Every other update of a decided approval keeps raising `P0001`. Each
-forbidden transition gets its own E2E case, as `orbit_app` with direct SQL,
-asserting `P0001` and the value unchanged:
-
-1. decided with `delivery_state = 'delivered'` → pending;
-2. decided with `delivery_state = 'unknown'` (timeout or ambiguous error)
-   → pending;
-3. decided with `delivery_state` NULL → pending;
-4. decided → decided with a different `decision` (allow ↔ reject);
-5. decided → any other status value;
-6. decided (`not_delivered`) → pending while also changing any other column
-   (`tool_name`, `approval_request_id`, `task_id`, …);
-7. `delivery_state` rewritten on a decided approval (for example
-   `unknown` → `not_delivered`, which would launder a timeout into a
-   reopen).
-
-The allowed transition gets its own E2E as well: exactly one row reopens,
-and a second identical UPDATE affects 0 rows.
-
-**Temporal Update validator rejections do not count as `not_delivered`.**
-Until **C1 in contract PR #18** is fixed, a rejection by the RoomWorkflow
-`decide` Update validator (an ApplicationError such as
-`APPROVAL_NOT_PENDING`) must be classified as `unknown`, not
-`not_delivered`. So it never reopens. The classification changes only
-after C1 is fixed, with a doc line here first.
+- **FM-62.** A durable event and its per-task seq are written in one
+  transaction: `UPDATE rooms SET last_event_seq = last_event_seq + 1 …
+  RETURNING last_event_seq`, then `INSERT INTO events`. The SSE id is that
+  seq. `assistant.delta` is still not stored. `POST /internal/events` for a
+  soft-deleted room, or for a room whose state is `closed` or `failed`,
+  returns **404**, does not insert a row, and does not move
+  `last_event_seq`. Control's own closing `session.status` may still be
+  stored; the 404 is for events that arrive afterwards.
+- **FM-63.** `POST /internal/artifact-blobs?taskId=` is served only on the
+  internal listener. The tenant and the task come from the database; a
+  tenant in the query or headers is ignored. The path is
+  `{artifactDir}/{tenant}/{sha256}` using the sha256 control computed. A
+  missing or ill-formed `X-Content-Digest` is **400**. A mismatch is
+  **422** and the temp file is removed. A body over
+  `ORBIT_ARTIFACT_MAX_BYTES` is **413**, counted while streaming, and
+  leaves no temp file. On the public listener every `/internal/*` path,
+  including `/internal/events` and `/internal/artifact-blobs`, is **404**.
