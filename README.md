@@ -71,7 +71,9 @@ docs/openapi.yaml      Public HTTP/WS contract
 ## Postgres (optional in dev)
 
 ```bash
-psql -v ON_ERROR_STOP=1 -v owner_password=... -v app_password=... -v ops_password=... \
+# Passwords may be (and in CI are) SCRAM verifiers, so plaintext never reaches the server:
+#   app_v=$(printf '%s\n' "$APP_PASSWORD" | python3 deploy/postgres/scram-verifier.py)
+psql -v ON_ERROR_STOP=1 -v owner_password=... -v app_password="$app_v" -v ops_password=... \
   -f deploy/postgres/bootstrap-roles.sql "$SUPERUSER_URL"
 ORBIT_CONTROL_MIGRATE_DB_URL=... go run ./cmd/orbit-control   # once, with ORBIT_CONTROL_MIGRATE_ON_START=1
 psql -v ON_ERROR_STOP=1 -v tenant_id=default \
