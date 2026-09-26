@@ -208,6 +208,8 @@ type serverOpts struct {
 	workerURL    string
 	orch         app.Orchestrator
 	abortTimeout time.Duration
+	// deliveryTimeout bounds resolveApproval / the decide Update.
+	deliveryTimeout time.Duration
 }
 
 func startServer(t *testing.T, o serverOpts) *server {
@@ -219,6 +221,7 @@ func startServer(t *testing.T, o serverOpts) *server {
 	runtime := app.NewWithOptions(app.Options{
 		Worker: worker.New(o.workerURL), Orch: o.orch, Repo: repo,
 		Log: log.New(logs, "", 0), DefaultTenant: o.tenant, AbortTimeout: o.abortTimeout,
+		DeliveryTimeout: o.deliveryTimeout,
 	})
 	tenant := o.tenant
 	auth := httpapi.AuthenticatorFunc(func(r *http.Request) (app.Principal, bool) {
@@ -399,10 +402,17 @@ func (f *stubOrch) RunTurn(context.Context, string, string, string) (orch.RunTur
 	}
 	return orch.RunTurnResult{Status: "completed"}, nil
 }
-func (f *stubOrch) Decide(_ context.Context, _, _, _, decision, _ string) (orch.DecideResult, error) {
+
+// Decide counts the Update as delivered on receipt, like a workflow that has
+// accepted it, then answers after decideDelay unless the caller gives up.
+func (f *stubOrch) Decide(ctx context.Context, _, _, _, decision, _ string) (orch.DecideResult, error) {
 	f.decides.Add(1)
-	time.Sleep(f.decideDelay)
-	return orch.DecideResult{Decision: decision}, nil
+	select {
+	case <-time.After(f.decideDelay):
+		return orch.DecideResult{Decision: decision}, nil
+	case <-ctx.Done():
+		return orch.DecideResult{}, ctx.Err()
+	}
 }
 func (f *stubOrch) Steer(context.Context, string, string, string) error { return nil }
 func (f *stubOrch) Abort(ctx context.Context, roomID, _, _ string) error {
