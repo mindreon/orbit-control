@@ -142,11 +142,31 @@ func (c *Client) RunTurn(ctx context.Context, roomID, turnID, message string) (R
 	return out, nil
 }
 
-func (c *Client) Decide(ctx context.Context, roomID, turnID, approvalRequestID, decision, resumeTurnID string) (DecideResult, error) {
+// DecideUpdate is a decide Update that RoomWorkflow has accepted.
+type DecideUpdate interface {
+	// Result waits for the Update to complete, which includes the resumed turn.
+	Result(ctx context.Context) (DecideResult, error)
+}
+
+type decideUpdate struct{ h client.WorkflowUpdateHandle }
+
+func (d decideUpdate) Result(ctx context.Context) (DecideResult, error) {
+	var out DecideResult
+	if err := d.h.Get(ctx, &out); err != nil {
+		return DecideResult{}, err
+	}
+	return out, nil
+}
+
+// Decide delivers a decision and returns as soon as RoomWorkflow has accepted
+// the decide Update; ctx bounds acceptance only. updateID is the approval id,
+// so repeated deliveries of one decision share an Update id.
+func (c *Client) Decide(ctx context.Context, roomID, updateID, turnID, approvalRequestID, decision, resumeTurnID string) (DecideUpdate, error) {
 	handle, err := c.tc.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
+		UpdateID:     updateID,
 		WorkflowID:   WorkflowID(roomID),
 		UpdateName:   "decide",
-		WaitForStage: client.WorkflowUpdateStageCompleted,
+		WaitForStage: client.WorkflowUpdateStageAccepted,
 		Args: []any{map[string]any{
 			"turnId":            turnID,
 			"approvalRequestId": approvalRequestID,
@@ -155,13 +175,9 @@ func (c *Client) Decide(ctx context.Context, roomID, turnID, approvalRequestID, 
 		}},
 	})
 	if err != nil {
-		return DecideResult{}, err
+		return nil, err
 	}
-	var out DecideResult
-	if err := handle.Get(ctx, &out); err != nil {
-		return DecideResult{}, err
-	}
-	return out, nil
+	return decideUpdate{h: handle}, nil
 }
 
 func (c *Client) Steer(ctx context.Context, roomID, turnID, instruction string) error {

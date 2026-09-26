@@ -85,7 +85,7 @@ type Principal struct {
 type Orchestrator interface {
 	StartRoom(ctx context.Context, roomID, kind, permissionPreset string) (orch.RoomView, error)
 	RunTurn(ctx context.Context, roomID, turnID, message string) (orch.RunTurnResult, error)
-	Decide(ctx context.Context, roomID, turnID, approvalRequestID, decision, resumeTurnID string) (orch.DecideResult, error)
+	Decide(ctx context.Context, roomID, updateID, turnID, approvalRequestID, decision, resumeTurnID string) (orch.DecideUpdate, error)
 	Steer(ctx context.Context, roomID, turnID, instruction string) error
 	Abort(ctx context.Context, roomID, turnID, reason string) error
 }
@@ -192,7 +192,8 @@ type App struct {
 	Log           *log.Logger
 	DefaultTenant string
 	AbortTimeout  time.Duration
-	// DeliveryTimeout bounds resolveApproval / the decide Update.
+	// DeliveryTimeout bounds resolveApproval / acceptance of the decide
+	// Update; never the resumed turn.
 	DeliveryTimeout time.Duration
 	Activity        map[string][]ActivityEvent
 	SessionRoom     map[string]string
@@ -652,12 +653,18 @@ func (a *App) Decide(ctx context.Context, p Principal, approvalID, decision stri
 	}
 
 	if a.Orch != nil {
+		// Delivery is acceptance of the Update; the resumed turn that follows
+		// runs under the request context, not the delivery timeout (FM-60).
 		dctx, cancel := context.WithTimeout(ctx, a.DeliveryTimeout)
-		res, err := a.Orch.Decide(dctx, roomID, id("tn_"), reqID, decision, id("tn_"))
+		upd, err := a.Orch.Decide(dctx, roomID, approvalID, id("tn_"), reqID, decision, id("tn_"))
 		timedOut := errors.Is(dctx.Err(), context.DeadlineExceeded)
 		cancel()
 		if err != nil {
 			return nil, a.deliveryFailed(approvalID, timedOut)
+		}
+		res, err := upd.Result(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("orch decide result: %w", err)
 		}
 		if decision == "reject" {
 			return out, closeRoom()
