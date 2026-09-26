@@ -3,10 +3,12 @@
 Orbit **control plane**. This repository is the **sole public HTTP and WebSocket API** for Orbit.
 
 W1 status: rooms, messages, HITL approvals, steer, bounded execution history,
-and SSE events are implemented in-memory. A Room pins a dsh permission preset
+and SSE events are implemented. Rooms, messages, approvals and idempotency keys
+are stored in Postgres when `ORBIT_CONTROL_DB_URL` is set, in memory otherwise
+(dev/test only). A Room pins a dsh permission preset
 and exposes its runtime snapshot. Session lifecycle talks to orbit-worker over
 HTTP by default, or via Temporal `RoomWorkflow` when `TEMPORAL_ADDRESS` is set.
-No database, no OAuth. Other resource groups still return empty lists.
+No OAuth. Other resource groups still return empty lists.
 
 ## Container image
 
@@ -61,8 +63,25 @@ internal/httpapi/      Mux (rooms, HITL, steer, activity, SSE, empty lists)
 internal/app/          In-memory Room FSM + bounded activity timeline
 internal/worker/       HTTP client to orbit-worker activities
 internal/orch/         Optional Temporal client (RoomWorkflow Updates)
+internal/store/        Repository interface; memstore, pgstore, goose migrations
+deploy/postgres/       One-time role + database bootstrap (superuser)
 docs/openapi.yaml      Public HTTP/WS contract
 ```
+
+## Postgres (optional in dev)
+
+```bash
+psql -v ON_ERROR_STOP=1 -v owner_password=... -v app_password=... \
+  -f deploy/postgres/bootstrap-roles.sql "$SUPERUSER_URL"
+ORBIT_CONTROL_DB_URL=postgres://orbit_app:...@127.0.0.1:5432/orbit_control \
+ORBIT_CONTROL_MIGRATE_DB_URL=postgres://orbit_owner:...@127.0.0.1:5432/orbit_control \
+ORBIT_CONTROL_MIGRATE_ON_START=1 go run ./cmd/orbit-control
+```
+
+The S-DB tests in `internal/store/pgstore` run when `ORBIT_TEST_DB_URL`
+(orbit_app) and `ORBIT_TEST_MIGRATE_DB_URL` (orbit_owner) are set, and skip
+otherwise. `DELETE /v1/rooms/{id}` checks CSRF against
+`ORBIT_ALLOWED_ORIGINS` (comma separated).
 
 ## Run W1
 
@@ -80,7 +99,6 @@ Default listen address is `:8080` (override with `PORT`).
 ## Non-goals (W1)
 
 - Real OAuth / session auth
-- Database migrations or persisted data
 - LLM calls or dsh in this process (those live on orbit-worker)
 - Running Temporal workers here (orch hosts workflows; worker hosts activities)
 - Decrypting or storing tenant secrets outside this service (and not even here yet)

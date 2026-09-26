@@ -105,6 +105,29 @@ known Room are rejected.
 - This permission preset is not a substitute for future tenant/workspace
   authorization in control.
 
+### 7. Persistence and tenant isolation (contract §18)
+
+- Rooms, messages, approvals and idempotency keys go through
+  `store.Repository` (`internal/store`). With `ORBIT_CONTROL_DB_URL` the
+  implementation is Postgres (`internal/store/pgstore`); without it an
+  in-memory store is used for dev and tests. `ORBIT_ENV=prod` or
+  `ORBIT_AUTH_MODE=oidc` without a DB URL refuses to start.
+- Control connects as `orbit_app` (not an owner, no BYPASSRLS). goose
+  migrations (`internal/store/migrations`) run as `orbit_owner` via
+  `ORBIT_CONTROL_MIGRATE_DB_URL`, on start only with
+  `ORBIT_CONTROL_MIGRATE_ON_START=1`. Roles are provisioned once by
+  `deploy/postgres/bootstrap-roles.sql`.
+- Every repository method takes `tenantID`, filters by it, and runs in a
+  transaction that starts with `SELECT set_config('app.tenant_id', $1, true)`.
+  `SET` / `SET LOCAL` / `set_config(..., false)` for the tenant are banned
+  (S-DB-11 static check). RLS is the backstop on every tenant table.
+- Room delete is a soft delete, only through the `SECURITY DEFINER` function
+  `orbit_soft_delete_room`. A deleted room and all of its child rows are
+  invisible to `orbit_app`; child foreign keys are `ON DELETE RESTRICT`, so
+  there is no physical delete path.
+- Activity history, SSE fan-out and event sequence numbers are still
+  in-process.
+
 ## Contract links
 
 | Contract | Home | How control uses it |
@@ -117,6 +140,7 @@ known Room are rejected.
 
 ## Still intentionally missing
 
-No OAuth, database, KMS, workspace membership policy, persona/skill catalog,
-credential grants, artifact store, or production service authentication.
+No OAuth, KMS, workspace membership policy, persisted persona/skill catalog,
+persisted credential grants, artifact store, or production service
+authentication.
 Model and dsh execution remain outside this process.
