@@ -50,23 +50,24 @@ func cors(next http.Handler) http.Handler {
 	})
 }
 
-// Handler is the default process mux.
+// Handlers builds the process's public and internal muxes over one App.
 // Worker URL: ORBIT_WORKER_URL (default http://127.0.0.1:8090).
 // When TEMPORAL_ADDRESS is set, rooms are driven through RoomWorkflow.
-func Handler() http.Handler {
+func Handlers() (public, internal http.Handler) {
 	base := os.Getenv("ORBIT_WORKER_URL")
 	if base == "" {
 		base = "http://127.0.0.1:8090"
 	}
 	w := worker.New(base)
+	runtime := app.New(w)
 	if addr := os.Getenv("TEMPORAL_ADDRESS"); addr != "" {
 		oc, err := dialOrch(addr, os.Getenv("TEMPORAL_NAMESPACE"), os.Getenv("TEMPORAL_TASK_QUEUE"))
 		if err != nil {
 			panic("temporal dial: " + err.Error())
 		}
-		return HandlerWith(app.NewWithOrch(w, oc))
+		runtime = app.NewWithOrch(w, oc)
 	}
-	return HandlerWith(app.New(w))
+	return HandlerWith(runtime), InternalHandler(runtime)
 }
 
 func dialOrch(addr, namespace, taskQueue string) (*orch.Client, error) {
@@ -189,21 +190,9 @@ func HandlerWith(runtime *app.App) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, appr)
 	})
-	mux.HandleFunc("POST /internal/events", func(w http.ResponseWriter, r *http.Request) {
-		if !internalauth.Authorized(r) {
-			writeErr(w, http.StatusUnauthorized, "UNAUTHORIZED", "internal token required")
-			return
-		}
-		raw, err := io.ReadAll(r.Body)
-		if err != nil {
-			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
-			return
-		}
-		if err := runtime.Ingest(raw); err != nil {
-			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
-			return
-		}
-		writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
+	// Internal routes live only on InternalHandler's listener.
+	mux.HandleFunc("/internal/", func(w http.ResponseWriter, _ *http.Request) {
+		writeErr(w, http.StatusNotFound, "NOT_FOUND", "not found")
 	})
 	mux.HandleFunc("GET /v1/personas", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"items": runtime.ListPersonas()})
@@ -302,4 +291,33 @@ func HandlerWith(runtime *app.App) http.Handler {
 		writeErr(w, http.StatusNotImplemented, "NOT_IMPLEMENTED", "use GET /v1/rooms/{roomId}/events (SSE) in W1")
 	})
 	return cors(mux)
+}
+
+// InternalHandler serves worker → control routes. It must be bound to a
+// listener that is not published (ORBIT_INTERNAL_ADDR), never the public one.
+func InternalHandler(runtime *app.App) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, HealthBody{Status: "ok"})
+	})
+	mux.HandleFunc("POST /internal/events", func(w http.ResponseWriter, r *http.Request) {
+		if !internalauth.Authorized(r) {
+			writeErr(w, http.StatusUnauthorized, "UNAUTHORIZED", "internal token required")
+			return
+		}
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+			return
+		}
+		if err := runtime.Ingest(raw); err != nil {
+			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		writeErr(w, http.StatusNotFound, "NOT_FOUND", "not found")
+	})
+	return mux
 }

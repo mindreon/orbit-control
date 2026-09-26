@@ -49,8 +49,9 @@ type sseConn struct {
 }
 
 type eventsEnv struct {
-	runtime *app.App
-	srv     *httptest.Server
+	runtime  *app.App
+	srv      *httptest.Server
+	internal *httptest.Server
 }
 
 func newEventsEnv(t *testing.T) *eventsEnv {
@@ -65,7 +66,9 @@ func newEventsEnv(t *testing.T) *eventsEnv {
 	runtime.Store = store.New(t.TempDir())
 	srv := httptest.NewServer(HandlerWith(runtime))
 	t.Cleanup(srv.Close)
-	return &eventsEnv{runtime: runtime, srv: srv}
+	internal := httptest.NewServer(InternalHandler(runtime))
+	t.Cleanup(internal.Close)
+	return &eventsEnv{runtime: runtime, srv: srv, internal: internal}
 }
 
 func (e *eventsEnv) createRoom(t *testing.T) *app.Room {
@@ -92,7 +95,7 @@ func (e *eventsEnv) ingest(t *testing.T, wantStatus int, body any) []byte {
 			t.Fatal(err)
 		}
 	}
-	resp, err := http.Post(e.srv.URL+"/internal/events", "application/json", strings.NewReader(string(raw)))
+	resp, err := http.Post(e.internal.URL+"/internal/events", "application/json", strings.NewReader(string(raw)))
 	if err != nil {
 		t.Fatal(err)
 	}

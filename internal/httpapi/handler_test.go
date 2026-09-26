@@ -91,7 +91,7 @@ func TestRoomHITLAllowCompletesTurn(t *testing.T) {
 	req = internalReq(http.MethodPost, "/internal/events",
 		`{"eventId":"ev-worker-1","occurredAt":"2026-09-11T00:00:00Z","type":"tool.call","roomId":"`+
 			room.ID+`","sessionId":"`+room.SessionID+`","toolName":"bash","status":"pending","runtime":"agentscope","protocol":"session"}`)
-	h.ServeHTTP(rec, req)
+	InternalHandler(runtime).ServeHTTP(rec, req)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("ingest %d %s", rec.Code, rec.Body.String())
 	}
@@ -281,7 +281,7 @@ func TestCreateCloudAgentAcceptsReadOnlyPerJob(t *testing.T) {
 }
 
 func TestInternalEventsRejectRawOrUnknownPayloads(t *testing.T) {
-	h := HandlerWith(app.New(worker.New("")))
+	h := InternalHandler(app.New(worker.New("")))
 	for _, body := range []string{
 		`{"jsonrpc":"2.0","method":"session/update"}`,
 		`{"type":"session/update","sessionId":"sess-raw"}`,

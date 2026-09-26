@@ -718,11 +718,11 @@ type room struct {
 }
 
 type control struct {
-	bin, dataDir, logPath, token string
-	base, workerURL              string
-	port                         int
-	cmd                          *exec.Cmd
-	worker                       *http.Server
+	bin, dataDir, logPath, token  string
+	base, internalBase, workerURL string
+	port, internalPort            int
+	cmd                           *exec.Cmd
+	worker                        *http.Server
 }
 
 func newControl(work, bin string) (*control, error) {
@@ -742,8 +742,13 @@ func newControl(work, bin string) (*control, error) {
 	if err != nil {
 		return nil, err
 	}
-	c.port = port
+	internalPort, err := freePort()
+	if err != nil {
+		return nil, err
+	}
+	c.port, c.internalPort = port, internalPort
 	c.base = fmt.Sprintf("http://127.0.0.1:%d", port)
+	c.internalBase = fmt.Sprintf("http://127.0.0.1:%d", internalPort)
 	return c, c.start()
 }
 
@@ -777,6 +782,7 @@ func (c *control) start() error {
 	}
 	cmd.Env = append(env,
 		"PORT="+strconv.Itoa(c.port),
+		"ORBIT_INTERNAL_ADDR=127.0.0.1:"+strconv.Itoa(c.internalPort),
 		"ORBIT_WORKER_URL="+c.workerURL,
 		"ORBIT_DATA_DIR="+c.dataDir,
 		"ORBIT_INTERNAL_TOKEN="+c.token,
@@ -843,7 +849,7 @@ func (c *control) createRoom() (room, error) {
 
 func (c *control) ingest(body map[string]any) error {
 	raw, _ := json.Marshal(body)
-	req, _ := http.NewRequest(http.MethodPost, c.base+"/internal/events", bytes.NewReader(raw))
+	req, _ := http.NewRequest(http.MethodPost, c.internalBase+"/internal/events", bytes.NewReader(raw))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	resp, err := http.DefaultClient.Do(req)
