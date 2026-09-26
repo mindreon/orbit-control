@@ -381,14 +381,14 @@ control 侧的变更：`workerEventTypes`（`app.go:565-574`）加入 5 个新�
    2. id 在 `pending_approvals` 里：接受；
    3. 两处都没有：拒绝，`ApplicationError(type="APPROVAL_UNKNOWN")`。
    validator 不修改状态。§2.0 里“只接受 pending 列表里的 id”这条规则相应改成上面的顺序。
-4. **handler**：先查 `decided_approvals`。命中且 `state=="done"` 就直接返回存下的 `DecideOutcome`；命中且 `state=="running"`（第一次还在续跑）就 `wait_condition` 等它变成 done 再返回同一个结果，绝不再执行。没命中时，**在 handler 开头**（任何 await 之前）写入 `{state:"running", decided_at: workflow.now()}` 并从 `pending_approvals` 移除，然后执行；结束时（成功或失败都算）写 `state="done"` 和 outcome（修 Sentinel N9）。`DecideOutcome = {decision, agentId, resumeTurnId, turnStatus, errorCode?}`，只放小摘要，不放 AgentState 或回复正文。
+4. **handler**：先查 `decided_approvals`。命中且 `state=="done"` 就直接返回存下的 `DecideOutcome`；命中且 `state=="running"`（第一次还在续跑）就 `wait_condition` 等它变成 done 再返回同一个结果，绝不再执行。没命中时，**在 handler 开头**（任何 await 之前）严格按这个顺序处理（F1）：① 先清掉过期条目，只清 `state=="done"` 的条目，`running` 条目永远不清；② 再按第 6 条检查上限；③ 通过后才写入 `{state:"running", decided_at: workflow.now()}` 并从 `pending_approvals` 移除，然后执行。`state="done"` 和 outcome 在 `finally` 里写，成功、失败和取消都走这一步（修 Sentinel N9）。`DecideOutcome = {decision, agentId, resumeTurnId, turnStatus, errorCode?}`，只放小摘要，不放 AgentState 或回复正文。
 5. **过期和上限**：
    - 条目的 TTL 是 `ORBIT_DECIDED_APPROVAL_TTL_S`（默认 86400），用 `workflow.now()` 计算。
    - 每次 handler 在检查上限**之前**先清掉过期条目；continue-as-new 时也清一次。
    - 硬上限 `MAX_DECIDED_APPROVALS = 1024`，写成常量，不能配置。
 6. **达到上限时的机制**（修 Sentinel H5）：清掉过期条目后，如果已有 1024 条、而这个 id 不在表里，handler 就**不执行**这次决定：
    - 把 `self._fatal = "DECIDED_APPROVALS_LIMIT"` 置位，然后让这次 Update 失败，错误是 `ApplicationError(type="DECIDED_APPROVALS_LIMIT", non_retryable=True)`。
-   - workflow 主循环用 `wait_condition` 看到 `_fatal` 后，先发一条事件 `room.failed {failure:{code:"DECIDED_APPROVALS_LIMIT", message:"这个任务的审批次数超过上限，已停止。"}}`（OrbitEvent 新增这个类型），再按 §6.3 取消所有子 Agent，最后在 `run` 里抛出同一个 `ApplicationError`。这时 workflow execution 的状态是 **Failed**。
+   - workflow 主循环用 `wait_condition` 看到 `_fatal` 后，先发一条事件 `room.failed {failure:{code:"DECIDED_APPROVALS_LIMIT", message:"此任务的审批次数已达上限，无法继续。你可以查看记录，或新建任务继续工作。"}}`（OrbitEvent 新增这个类型），再按 §6.3 取消所有子 Agent，最后在 `run` 里抛出同一个 `ApplicationError`。这时 workflow execution 的状态是 **Failed**。
    - 已有的 1024 个 id 可以通过 query `decidedApprovalIds` 读到。Temporal 在保留期内允许对已关闭的 workflow 发 query。
 7. **continue-as-new**：`RoomCarryOver` 增加 `decided_approvals: list[DecidedApproval]`（§2.3），只带没过期的条目；只在 `all_handlers_finished()` 时发生，所以不会带 running 条目。
 9. **新增 query**（Temporal 接口，§12 的 orch 列表同步）：`decideOutcome(approvalRequestId) -> DecideOutcome | None`（只返回 done 的条目）；`decidedApprovalIds() -> list[str]`；`decideConfig() -> {ttlS:int, maxDecided:int}`，control 判断 NotDelivered 时用的 TTL **只从这个 query 读**（修 Sentinel N3）。
@@ -473,7 +473,7 @@ control 侧的变更：`workerEventTypes`（`app.go:565-574`）加入 5 个新�
 | **S-ID-12** 转换表 | #16 第二阶段 | T1 到 T12 每个允许的转换各一条 E2E，都成功；另有一条：带旧 attempt 的 T2 影响 0 行；一条：T4 之后 control 崩溃（e2e 注入点在 T4 和提交之间），事务回滚，行仍是 in_flight，之后由对账收敛。用 orbit_app 尝试这几种禁止的转换，每种一条 E2E，都报 P0001：`delivered` 改成别的值、`unresolved` 改成别的值、T9 带非空 decision、跳过 `in_flight` 直接写 `delivered`、pending 直接写 `unknown`、cancelled 改回 pending、T8 以外来源的 `unresolved` 改成 `delivered` |
 | **S-ID-13** 续跑慢但送达成功 | #16 | 桩的 decide 被接受后，续跑超过 `ORBIT_DECISION_DELIVERY_TIMEOUT` 才完成。不返回 502，turn 结果已保存，room 离开 awaiting_approval（对应 #16 N1） |
 
-**产品影响，待 Nexus 确认（Sentinel M7）**：一个 room 在 24 小时内决定超过 1024 个审批，就会以 `DECIDED_APPROVALS_LIMIT` 永久失败，用户只能新建任务。见 §13 第 10 条。
+**产品影响，已确认，P0 接受，TTL 不缩短（Sentinel M7）**：一个 room 在 24 小时内决定超过 1024 个审批，就会以 `DECIDED_APPROVALS_LIMIT` 永久失败，用户只能新建任务。见 §13 第 10 条。
 
 
 ---
@@ -676,6 +676,7 @@ control 侧的变更：`workerEventTypes`（`app.go:565-574`）加入 5 个新�
 | `auth` | 模型配置有问题，请联系管理员。 | 无 |
 | `config` | 模型配置有问题，请联系管理员。 | 无 |
 | `state_unreadable` | 此任务的运行状态已失效，无法继续。你可以查看记录，或新建任务继续工作。 | 无（C34；Nexus 定稿，逐字一致；两种触发原因不向用户区分） |
+| `DECIDED_APPROVALS_LIMIT` | 此任务的审批次数已达上限，无法继续。你可以查看记录，或新建任务继续工作。 | 无（C34；这是 room 的 `failure.code`，不是 TurnErrorCode，用于 `room.failed` 和 Room `failure.message`；runtime 在 schema 里定义为常量，web 从生成的类型导入） |
 
 
 | errorCode | 触发条件 | retryable |
@@ -706,7 +707,7 @@ control 侧的变更：`workerEventTypes`（`app.go:565-574`）加入 5 个新�
 - S-M-1：用一个假 key（形如 `sk-test…`）启动 real 模式，跑完一轮后，用 `temporal workflow show` 导出 history，对它、control 的 `.orbit-data/audit/*.jsonl` 和各容器日志执行 `grep -r "sk-test"`，都没有结果。
 - S-M-2：mock 模式下，SSE 事件和 Update 返回都带 `modelMode=mock`；worker 启动日志里有 WARNING `chat model: mock`。
 - S-M-3（C28）：real 模式下去掉 `ORBIT_MODEL_API_KEY`，worker 非 0 退出，输出里有变量名，没有任何变量值。（不变）
-- **S-SU-1（C34）**：用密钥 A 写入会话，换成密钥 B 重启 worker 后发一轮消息，得到 `turn.failed{errorCode:state_unreadable, retryable:false}`，文案和固定文案表逐字一致，blob 不变；`resolveApproval`、`deliverToolResult`、`steer` 三个活动各重复一次同样的断言。**S-SU-2**：同样的场景下调 `closeSession` 和 `abort`，都返回成功，重复调用也成功，room 变为 `closed`。**S-SU-3**：打桩让数据库连接失败，activity 抛错并被 Temporal 重试，不会变成 `state_unreadable`。 **S-SU-4**：blob 能解密，但模型校验失败（`ValidationError`）时，结果是 `state_unreadable`，并且有一条单独的 ERROR 日志 `state_invalid_after_decrypt`，和密钥错误的日志区分开。**S-SU-5**：生产模式下读到明文 blob，结果是 `state_unreadable`。**S-SU-6**：对读不出的会话调 `openSession`，返回失败，并且和 README 里写的错误一致；数据库**认证**错误照常抛出，由 Temporal 重试，不会变成 `state_unreadable`。**由谁证明**：S-SU-1 到 S-SU-3 对应 orbit-runtime#6（`9dcab92`）已经有的 E-SK 用例，对应关系由 Sentinel 确认；S-SU-4 到 S-SU-6 随 rename PR 交付，和 runtime#6 复审的 L3 一起做。
+- **S-SU-1（C34）**：用密钥 A 写入会话，换成密钥 B 重启 worker 后发一轮消息，得到 `turn.failed{errorCode:state_unreadable, retryable:false}`，文案和固定文案表逐字一致，blob 不变；`resolveApproval`、`deliverToolResult`、`steer` 三个活动各重复一次同样的断言。**S-SU-2**：同样的场景下调 `closeSession` 和 `abort`，都返回成功，重复调用也成功，room 变为 `closed`。**S-SU-3**：打桩让数据库连接失败，activity 抛错并被 Temporal 重试，不会变成 `state_unreadable`。 **S-SU-4**：blob 能解密，但模型校验失败（`ValidationError`）时，结果是 `state_unreadable`，并且有一条单独的 ERROR 日志 `state_invalid_after_decrypt`，和密钥错误的日志区分开。**S-SU-5**：生产模式下读到明文 blob，结果是 `state_unreadable`。**S-SU-6**：对读不出的会话调 `openSession`，返回失败，并且和 README 里写的错误一致；数据库**认证**错误照常抛出，由 Temporal 重试，不会变成 `state_unreadable`。**由谁证明**：S-SU-1 到 S-SU-3 对应 orbit-runtime#6（main 上的合并提交 `e720906`，tree `ffbe9b5f` 与签字 head `822da94` 一致）已经有的 E-SK 用例，对应关系由 Sentinel 确认；S-SU-4 到 S-SU-6 随 rename PR 交付，和 runtime#6 复审的 L3 一起做。
 - **S-M-4（C33，流式脱敏）**：
   - 一个密钥被拆在相邻的两个 `assistant.delta` 分片里，发出去的事件里它被替换成 `[REDACTED]`；脱敏只做替换，**永远不抛异常**，也不会中断这一轮。
   - 一段很长的纯中文文本（没有空格），在 block 结束之前至少发出 **2 条** delta（不能因为等空格或分词边界而一直攒着）。
