@@ -77,6 +77,33 @@ curl -s http://127.0.0.1:8080/health
 
 Default listen address is `:8080` (override with `PORT`).
 
+## Room events (SSE) and resume
+
+`GET /v1/rooms/{roomId}/events` streams the room's normalized events. Every
+message has `id: <roomId>:<sequence>`; `sequence` is the per-room
+`ActivityEvent.sequence`, persisted with the audit log.
+
+To resume after a disconnect, send the last id you received as the
+`Last-Event-ID` header (EventSource does this on auto-reconnect) or as
+`?lastEventId=` (the header wins if both are set). Control replays this room's
+retained events after that id, in order, then continues live with no gaps or
+duplicates. Without a cursor the stream is live-only.
+
+A cursor that is malformed, belongs to another room, is beyond the room head,
+or is older than the retained window (last 500 events) gets a `reset` message
+instead (`{"type":"reset","reason":"malformed|unknown|expired","sequence":N}`):
+refetch the room, messages, and activity, then keep reading.
+
+`assistant.delta` drafts are live-only: never persisted, never replayed.
+Heartbeat comments are sent about every 15s. See
+[docs/openapi.yaml](./docs/openapi.yaml) and
+[docs/contract-notes/sse-resume.md](./docs/contract-notes/sse-resume.md).
+
+```bash
+curl -N -H 'Last-Event-ID: rm_0123456789abcdef:42' \
+  http://127.0.0.1:8080/v1/rooms/rm_0123456789abcdef/events
+```
+
 ## Non-goals (W1)
 
 - Real OAuth / session auth

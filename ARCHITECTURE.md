@@ -90,6 +90,14 @@ only (see OpenAPI `OrbitEvent`). Control keeps a bounded in-memory timeline and
 fans SSE. Raw ACP `session/update` frames and events not associated with a
 known Room are rejected.
 
+SSE resume (`Last-Event-ID`) is scoped per room: ids are
+`<roomId>:<sequence>`, and a stream only ever reads its own room's history.
+The handler subscribes to the live buffer before reading history, so the
+handoff has no gaps or duplicates; a cursor it cannot honour yields an explicit
+`reset`, never a silent skip. `assistant.delta` is live-only and never enters
+the timeline or audit log. When user auth (contract §17) lands, it runs in
+`authorizeRoomStream` — before the room lookup, stream headers, and replay.
+
 ### 6. Permission selection is an execution snapshot
 
 - Public callers select one closed preset on that room or cloud-agent job:
