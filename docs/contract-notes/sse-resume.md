@@ -132,7 +132,9 @@ continues live after `lastId`; dedupe the refetch against the stream by `id`.
   delivered, then the stream ends. A stream opened on a closed room replays
   and ends. `ORBIT_CLOSED_ROOM_LOG_TTL` after the close, the room's event log
   is freed: `/activity` returns no items, and a resume with any earlier id
-  gets `reset` `unknown` with `lastId` 0, after which the stream ends.
+  gets `reset` `unknown` with `lastId` 0, after which the stream ends. Events
+  that arrive for the room after that (e.g. the worker's own closing events)
+  are accepted and discarded, so the freed log stays freed.
 - A write stalls longer than `ORBIT_SSE_WRITE_TIMEOUT`: the stream is closed.
 - `reset` `lagging`, above.
 - An event store error: control sends `retry: 10000` (reconnect in 10 s)
