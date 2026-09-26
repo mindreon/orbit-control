@@ -28,63 +28,119 @@ jobs:
           --health-retries 30
     env:
       # Throwaway CI-only credentials for the service container above.
+      OWNER_PW: ci-owner
+      APP_PW: ci-app
+      OPS_PW: ci-ops
       ORBIT_TEST_DB_URL: postgres://orbit_app:ci-app@127.0.0.1:5432/orbit_control?sslmode=disable
       ORBIT_TEST_MIGRATE_DB_URL: postgres://orbit_owner:ci-owner@127.0.0.1:5432/orbit_control?sslmode=disable
       ORBIT_TEST_OPS_DB_URL: postgres://orbit_ops:ci-ops@127.0.0.1:5432/orbit_control?sslmode=disable
-      ORBIT_E2E_GIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       ORBIT_E2E_POSTGRES_IMAGE: postgres:16-alpine
+      GITLEAKS_VERSION: 8.30.1
+      # sha256 of gitleaks_8.30.1_linux_x64.tar.gz from the release's checksums.txt
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+      # The commit under test: the PR head on pull_request, the pushed commit otherwise.
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
         with:
-          # process/commit-order/* reads the full history.
+          # Test the PR head itself, not the synthetic merge commit.
+          ref: ${{ github.event.pull_request.head.sha }}
+          # gitleaks history scan and process/commit-order/* need full history.
           fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
 
-      - run: go vet ./...
-      - run: go vet -tags e2e ./...
-      - run: go test -race -count=1 ./...
+      - run: mkdir -p artifacts/logs
 
-      - name: Bootstrap control roles and database
+      - name: Checked out the commit under test
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          echo "testing $(git rev-parse HEAD)"
+
+      - name: Install gitleaks (pinned, checksum verified)
+        run: |
+          curl -fsSLo /tmp/gitleaks.tgz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tgz" | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
+          /tmp/gitleaks version
+
+      - name: gitleaks (full git history)
+        run: |
+          /tmp/gitleaks git --config .gitleaks.toml --redact --no-banner \
+            --report-format json --report-path artifacts/gitleaks-git.json . 2>&1 | tee artifacts/logs/gitleaks-git.log
+
+      - run: go vet ./... 2>&1 | tee artifacts/logs/vet.log
+      - run: go vet -tags e2e ./... 2>&1 | tee -a artifacts/logs/vet.log
+      - run: go test -race -count=1 ./... 2>&1 | tee artifacts/logs/unit.log
+
+      - name: Postgres logs DDL (so a plaintext role password would show up)
         env:
           PGPASSWORD: ci-superuser
         run: |
-          psql -v ON_ERROR_STOP=1 \
-            -v owner_password=ci-owner -v app_password=ci-app -v ops_password=ci-ops \
-            -h 127.0.0.1 -U postgres -d postgres \
-            -f deploy/postgres/bootstrap-roles.sql
+          psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U postgres -d postgres \
+            -c "ALTER SYSTEM SET log_statement = 'ddl'" -c "SELECT pg_reload_conf()"
 
-      # Contract §18 E2E: S-DB-1..13 (S-DB-6 migrations run first and leave
+      - name: Bootstrap control roles and database (SCRAM verifiers)
+        env:
+          PGPASSWORD: ci-superuser
+        run: |
+          owner_v=$(printf '%s\n' "$OWNER_PW" | python3 deploy/postgres/scram-verifier.py)
+          app_v=$(printf '%s\n' "$APP_PW" | python3 deploy/postgres/scram-verifier.py)
+          ops_v=$(printf '%s\n' "$OPS_PW" | python3 deploy/postgres/scram-verifier.py)
+          psql -v ON_ERROR_STOP=1 \
+            -v owner_password="$owner_v" -v app_password="$app_v" -v ops_password="$ops_v" \
+            -h 127.0.0.1 -U postgres -d postgres \
+            -f deploy/postgres/bootstrap-roles.sql 2>&1 | tee artifacts/logs/bootstrap.log
+
+      # Contract §18 E2E: S-DB-1..14 (S-DB-6 migrations run first and leave
       # the schema migrated). Each run writes its report even on failure.
       - name: E2E persistence (run 1)
         env:
           ORBIT_E2E_REPORT: artifacts/e2e-persistence-report.json
-        run: go test -tags e2e -race -count=1 -v ./e2e/...
+        run: go test -tags e2e -race -count=1 -v ./e2e/... 2>&1 | tee artifacts/logs/e2e-run1.log
 
       - name: E2E persistence (run 2, same commit)
         if: always()
         env:
           ORBIT_E2E_REPORT: artifacts/e2e-persistence-report.run2.json
-        run: go test -tags e2e -race -count=1 ./e2e/...
+        run: go test -tags e2e -race -count=1 -v ./e2e/... 2>&1 | tee artifacts/logs/e2e-run2.log
 
-      - name: Reruns match
+      - name: Reruns match (cmp)
         if: always()
         run: |
           norm='{gitSha, contract, components, gate, summary, cases}'
-          diff <(jq -S "$norm" artifacts/e2e-persistence-report.json) \
-               <(jq -S "$norm" artifacts/e2e-persistence-report.run2.json)
-          echo "runs identical: $(jq -r .summary.casesFingerprint artifacts/e2e-persistence-report.json)"
+          jq -S "$norm" artifacts/e2e-persistence-report.json > /tmp/run1.json
+          jq -S "$norm" artifacts/e2e-persistence-report.run2.json > /tmp/run2.json
+          cmp /tmp/run1.json /tmp/run2.json
+          echo "run 1 fingerprint: $(jq -r .summary.casesFingerprint artifacts/e2e-persistence-report.json)"
+          echo "run 2 fingerprint: $(jq -r .summary.casesFingerprint artifacts/e2e-persistence-report.run2.json)"
+          test "$(jq -r .gitSha artifacts/e2e-persistence-report.json)" = "$EXPECTED_SHA"
 
-      - name: Secret-scan reports
+      - name: Collect Postgres service log
+        if: always()
+        run: docker logs "${{ job.services.postgres.id }}" > artifacts/logs/postgres.log 2>&1
+
+      - name: gitleaks (working tree, reports and logs)
         if: always()
         run: |
-          if grep -nE 'postgres(ql)?://|ci-owner|ci-app|ci-ops|ci-superuser|e2e-planted|sk-live|BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16}' artifacts/*.json; then
-            echo "::error::secret-like value found in the E2E report"
+          /tmp/gitleaks dir --config .gitleaks.toml --redact --no-banner \
+            --report-format json --report-path artifacts/gitleaks-dir.json . 2>&1 | tee artifacts/logs/gitleaks-dir.log
+
+      - name: Secret-scan reports and logs
+        if: always()
+        run: |
+          pattern='postgres(ql)?://|ci-owner|ci-app|ci-ops|ci-superuser|e2e-planted|sk-live|BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16}'
+          if grep -rnE "$pattern" artifacts/; then
+            echo "::error::secret-like value found in the E2E reports or logs"
             exit 1
           fi
-          echo "no DB URLs, DB passwords or planted secrets in the reports"
+          echo "no DB URLs, DB passwords or planted secrets in: $(find artifacts -type f | sort | tr '\n' ' ')"
 
       - name: Gate summary
         if: always()
@@ -92,12 +148,10 @@ jobs:
           jq -r '"gate=\(.gate) " + (.summary | "total=\(.total) passed=\(.passed) failed=\(.failed) blocked=\(.blocked)")' artifacts/e2e-persistence-report.json
           jq -r '.cases[] | select(.status == "blocked") | "::warning title=blocked \(.id)::\(.blockedBy)"' artifacts/e2e-persistence-report.json
 
-      - name: Upload E2E reports
+      - name: Upload E2E reports, gitleaks reports and logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: e2e-persistence-report
-          path: |
-            artifacts/e2e-persistence-report.json
-            artifacts/e2e-persistence-report.run2.json
+          path: artifacts/
           if-no-files-found: error

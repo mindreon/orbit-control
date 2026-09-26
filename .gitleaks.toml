@@ -1,0 +1,20 @@
+# gitleaks configuration (pinned version in .github/workflows/ci.yml).
+# Default rules, plus one narrow allowlist: the persistence E2E suite plants
+# fake secrets on purpose to prove none of them reach logs, responses or the
+# report. Matches must hit both a listed path and a listed planted value.
+title = "orbit-control"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Planted fake secrets in the persistence E2E suite (current and historical paths)"
+condition = "AND"
+paths = [
+  '''^e2e/persistence/[a-z0-9_]+_test\.go$''',
+  '''^internal/store/pgstore/sdb13_test\.go$''',
+]
+regexes = [
+  '''^e2e-planted-[a-z0-9-]+$''',
+  '''^sk-live-(E2E-PLANTED|SDB13)-SECRET$''',
+]
