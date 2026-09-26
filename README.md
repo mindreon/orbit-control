@@ -131,7 +131,7 @@ up in the report.
 | `ORBIT_SSE_WRITE_TIMEOUT` | `10s` | Deadline for each SSE write; a stalled reader's stream is closed. |
 | `ORBIT_SSE_MAX_CONSECUTIVE_LAGS` | `3` | A reader that overflows its live buffer this many times in a row gets `reset` (`lagging`) and the stream closes. |
 | `ORBIT_INGEST_MAX_BYTES` | `1048576` | Larger `POST /internal/events` bodies get `413 PAYLOAD_TOO_LARGE`; nothing is stored. |
-| `ORBIT_CLOSED_ROOM_LOG_TTL` | `15m` | A closed room's event log (activity and replay) is freed this long after it closes; `0` frees it at once. |
+| `ORBIT_CLOSED_ROOM_LOG_TTL` | `15m` | A closed room's event log (activity and replay) is freed this long after it closes; `0` frees it at once. After that `/activity` is empty and a resume gets `reset` `unknown` (`lastId` 0), then the stream ends. |
 
 When a room closes (abort, or a reject that closes it), its open SSE streams
 deliver what is buffered and end.
@@ -189,8 +189,12 @@ a pinned runtime commit (run by digest), and two `orbit-control` processes
 built from this tree. It writes `artifacts/e2e-real-stack.json` (control
 commit, component versions including the runtime image digest, and per case
 id, steps, expected, actual, pass; no timestamps, ports, or random ids). The
-`e2e` workflow runs it twice on the PR head, requires byte-identical reports,
-scans the reports and all process logs for secrets, and uploads both.
+`e2e` workflow runs it twice on the PR head, fails unless `git rev-parse HEAD`
+is non-empty, equals the PR head sha, and equals both reports' `commit`,
+requires byte-identical reports, scans the reports and all process logs for
+secrets, and uploads both. Timing values that differ between runs (for
+example how long a stalled stream took to release its slot) are written to a
+sidecar `<report>.observed.json` keyed by case id, not to the report.
 Requires Docker.
 
 ```bash

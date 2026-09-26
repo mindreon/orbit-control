@@ -130,7 +130,9 @@ continues live after `lastId`; dedupe the refetch against the stream by `id`.
   when the room or the client (peer IP) is at its stream cap.
 - The room closes (abort, or a reject that closes it): buffered frames are
   delivered, then the stream ends. A stream opened on a closed room replays
-  and ends.
+  and ends. `ORBIT_CLOSED_ROOM_LOG_TTL` after the close, the room's event log
+  is freed: `/activity` returns no items, and a resume with any earlier id
+  gets `reset` `unknown` with `lastId` 0, after which the stream ends.
 - A write stalls longer than `ORBIT_SSE_WRITE_TIMEOUT`: the stream is closed.
 - `reset` `lagging`, above.
 - An event store error: control sends `retry: 10000` (reconnect in 10 s)

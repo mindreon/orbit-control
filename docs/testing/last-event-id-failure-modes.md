@@ -39,9 +39,9 @@ logs (the runner's `scan` and pinned gitleaks), and uploads reports and logs.
 | F17 | Unbounded SSE subscriptions per room or per client | E-LE-6 (third stream on a room and fifth from one client get 429 before any stream opens; a closed stream frees its slot) |
 | F18 | Oversized ingest body stored or streamed | E-LE-6 (413 `PAYLOAD_TOO_LARGE`, activity unchanged, nothing on the open stream; a body just under the limit is stored) |
 | F19 | Streams stay open after their room closes | E-LE-6 (abort ends the open stream after a `session.status`; a new stream on the closed room ends at once) |
-| F20 | A stalled reader pins a handler (no write deadline) | No automated test. |
-| F21 | A reader that keeps overflowing is caught up forever | No automated test (the `lagging` reset after `ORBIT_SSE_MAX_CONSECUTIVE_LAGS`). |
-| F22 | Closed rooms' event logs are never freed | No automated test (`ORBIT_CLOSED_ROOM_LOG_TTL`, default 15 min). |
+| F20 | A stalled reader pins a handler (no write deadline) | E-LE-6 `writeTimeoutReleasesSlot` (real control, `ORBIT_SSE_WRITE_TIMEOUT=200ms`: two clients that never read hold the room's 2 slots; after a flood blocks their writes, a new stream is accepted) |
+| F21 | A reader that keeps overflowing is caught up forever | E-LE-6 `lagResetsStream` (mock control, `ORBIT_SSE_MAX_CONSECUTIVE_LAGS=1`: a client that pauses while its buffer overflows, then reads while events keep arriving, gets `reset` `lagging` and the stream ends) |
+| F22 | Closed rooms' event logs are never freed | E-LE-6 `closedRoomLogReleased` (real control, `ORBIT_CLOSED_ROOM_LOG_TTL=1s`: after the abort `/activity` becomes empty and a resume gets `reset` `unknown` with `lastId` 0, then the stream ends) |
 | F23 | Another room's id older than this room's eviction point reported as `expired` | No automated test (needs 500+ events in the room plus an older foreign id); E-LE-1 covers a recent foreign id. |
 | F24 | Event store error makes clients reconnect at once with the same id | No automated test (`retry: 10000` before close). |
 | F25 | Unauthenticated or cross-tenant replay | **Open until §17.** The auth PR must add E-LE-5 (no session → 401, other tenant → 403/404, zero events replayed). Until then control refuses a non-loopback public bind unless `ORBIT_ALLOW_UNAUTHENTICATED_BIND=1` (verified by hand; no automated test). |

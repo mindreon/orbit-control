@@ -117,7 +117,10 @@ per-client stream caps (429 before any stream opens), a per-write SSE
 deadline, a consecutive-lag limit that ends a stream with `reset` `lagging`,
 a 413 ingest body cap, and closed rooms' streams ending and their logs being
 freed after a TTL. `EventsAfter` copies events under the App lock and encodes
-them outside it; audit and room files are written outside the lock.
+them outside it. `publishDurable` encodes the envelope before taking the lock
+and only splices in the id under it; appending and broadcasting stay under
+the lock so subscribers receive a room's events in id order. Audit and room
+files are written outside the lock.
 
 ### 5a. No user auth yet — deploy gate
 
