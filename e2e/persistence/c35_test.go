@@ -279,13 +279,14 @@ func TestSID6ReconcileVsReopen(t *testing.T) {
 			t9ok = false
 		}
 	}
+	decidedAllow := strings.HasPrefix(state, "decided:allow:")
 	record(t, caseInput{ID: "S-ID-6/reconcile-vs-reopen", Contract: "S-ID-6", Kind: "e2e", FailureModes: []string{"FM-71"},
 		Description: "four reconcile calls race four T9 updates; T9 does not match an unknown row and nothing returns 500",
 		Steps:       []string{"leave the approval unknown", "POST /internal/e2e/reconcile four times", "run T9 SQL four times as orbit_app", "read the row"},
 		Request:     map[string]string{"approval": "unknown"},
-		Expected:    map[string]any{"decideStatus": 202, "decideCalls": 1, "no500": true, "t9ZeroOrP0001": true, "status": "decided"},
-		Actual:      map[string]any{"decideStatus": act.Status, "decideCalls": so.decides.Load(), "reconcile": codes, "t9": t9, "state": state},
-		Pass:        act.Status == 202 && so.decides.Load() == 1 && no500 && t9ok && strings.HasPrefix(state, "decided:allow:")})
+		Expected:    map[string]any{"decideStatus": 202, "decideCalls": 1, "no500": true, "t9ZeroOrP0001": true, "decidedAllow": true},
+		Actual:      map[string]any{"decideStatus": act.Status, "decideCalls": so.decides.Load(), "no500": no500, "t9ZeroOrP0001": t9ok, "decidedAllow": decidedAllow},
+		Pass:        act.Status == 202 && so.decides.Load() == 1 && no500 && t9ok && decidedAllow})
 }
 
 func TestSID8Control(t *testing.T) {
