@@ -687,6 +687,8 @@ How each phase handles it:
     operator acts.
   - E2E: `REVIEW-F2/phase1-timeout-at-most-once`, direct worker path and
     Temporal path.
+  - **This 502 is temporary phase-1 behavior.** Phase 2 MUST replace it;
+    see "Phase 2: delivery-state response" below.
 - **Phase 2**, together with the real worker. Reopen only on errors that
   prove non-delivery: a connection refused before the request was sent, or
   an explicit "not applied" response. Never reopen on a timeout or an
@@ -698,6 +700,34 @@ How each phase handles it:
 - **E2E, blocked until phase 2** (`REVIEW-F2/delivered-but-timeout-once`).
   Inject one "delivered but the response timed out", then retry, and assert
   the worker applied the decision exactly once.
+
+### Phase 2: delivery-state response (documented only; no code in phase 1)
+
+**502 `DECISION_DELIVERY_FAILED` is temporary phase-1 behavior.** In phase 2,
+per **contract C34 §2.4**, a decide whose delivery outcome is not confirmed
+MUST instead return **202 with `{"deliveryState": "unknown"}`**. That change
+ships as one unit together with all of the following:
+
+- **The convergence path.** This is how the client learns the final
+  delivery state after the 202. C34 §2.4 defines it; phase 2 implements it
+  as specified there, not as a control-local design.
+- **The `delivery_state` values and their allowed transitions**, as
+  C34 §2.4 defines them. The values used in the next section (`delivered`,
+  `not_delivered`, `unknown`) are this file's working names. They must be
+  reconciled with C34 before the phase-2 migration is written, and this
+  file is updated first.
+- **Its E2E cases: contract PR #18 H4 / S-ID-9.** They land in
+  `e2e/persistence` and in the persistence report. The phase-1 case
+  `REVIEW-F2/phase1-timeout-at-most-once` is then rewritten to expect the
+  202 and the convergence, not deleted.
+
+C34 is **not yet part of the contract of record** in this repository.
+`docs/contracts/orbit-contract-v2.md` is C32 rev3, sha256
+`113aebd89914a1008d1c57457572ef38e5de35c74e88ce2f8b8410997f9af90b`. Phase 2
+therefore starts by committing the contract revision that contains C34, and
+takes the exact response, convergence and transition shapes from it. Until
+then, phase 1 keeps the 502 described above, and this section only records
+the obligation.
 
 ### Phase 2: relaxing the Low-1 trigger (documented only; no code in phase 1)
 

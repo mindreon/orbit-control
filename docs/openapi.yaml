@@ -1155,6 +1155,15 @@ components:
         The approval stays decided and is not re-delivered; a resubmit returns
         409 `APPROVAL_NOT_PENDING`. The body is fixed and never includes
         worker or Temporal error text.
+
+        **Temporary phase-1 behavior.** In phase 2 this response MUST change
+        to **202 `{deliveryState: "unknown"}`**, per contract C34 §2.4. It
+        ships together with the convergence path defined there: how the
+        client learns the final delivery state, plus the `delivery_state`
+        values and transitions. It also ships with its E2E cases, contract
+        PR #18 H4 / S-ID-9. C34 is not yet part of the contract of record in
+        this repository (`docs/contracts/orbit-contract-v2.md`, C32 rev3), so
+        the exact phase-2 shapes are taken from C34 when it lands.
       content:
         application/json:
           schema:
