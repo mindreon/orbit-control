@@ -166,7 +166,7 @@ END;
 $$;
 -- +goose StatementEnd
 
-CREATE TRIGGER approvals_delivery_transition
+CREATE TRIGGER orbit_approvals_delivery_transition
   BEFORE UPDATE ON approvals
   FOR EACH ROW EXECUTE FUNCTION public.orbit_approvals_delivery_transition();
 
@@ -178,7 +178,7 @@ GRANT UPDATE (delivery_state, delivery_updated_at, delivery_attempt, result_atte
 REVOKE UPDATE (delivery_state, delivery_updated_at, delivery_attempt, result_attempt) ON approvals FROM orbit_app;
 REVOKE UPDATE (last_event_seq, failure) ON rooms FROM orbit_app;
 
-DROP TRIGGER approvals_delivery_transition ON approvals;
+DROP TRIGGER orbit_approvals_delivery_transition ON approvals;
 DROP FUNCTION public.orbit_approvals_delivery_transition();
 
 ALTER TABLE approvals DROP CONSTRAINT approvals_delivery_state_check;

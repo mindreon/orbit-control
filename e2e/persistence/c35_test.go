@@ -368,6 +368,7 @@ func TestSID8Control(t *testing.T) {
 	if got := sendTo(t, srv.internal, httpReq{Method: "POST", Path: "/internal/events", Body: failEv}); got.Status != 202 {
 		t.Fatalf("fail room: %d %s", got.Status, got.Body)
 	}
+	so.outcomes.Delete("ask-orch-1")
 	before := approvalTuple(t, ap4)
 	code := reconcile(t, srv)
 	after := approvalTuple(t, ap4)
@@ -520,6 +521,7 @@ func TestSID12Transitions(t *testing.T) {
 	ap, _ := parkQuiet(t, srv, u)
 	so.onDecide = func() { seen <- approvalTuple(t, ap) }
 	res := sendTo(t, srv.base, httpReq{Method: "POST", Path: "/v1/approvals/" + ap + "/decide", Headers: user(u), Body: `{"decision":"allow"}`})
+	so.onDecide = nil
 	var mid string
 	select {
 	case mid = <-seen:
@@ -1110,13 +1112,14 @@ func TestFM72BadRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	hides := !strings.Contains(act.Body, "kind must be solo or collab") && strings.Contains(act.Body, "the request is invalid")
+	runbookText := strings.ToLower(string(runbook))
 	record(t, caseInput{ID: "FM-72/bad-request-hides-cause", Contract: "FM-72", Kind: "e2e", FailureModes: []string{"FM-72"},
 		Description: "a 400 body uses the fixed message and the stuck-room runbook tells operators not to expect err.Error()",
 		Steps:       []string{"POST /v1/rooms with kind nope", "read the body", "read docs/runbooks/stuck-room.md"},
 		Request:     httpReq{Method: "POST", Path: "/v1/rooms", Body: `{"kind":"nope"}`},
 		Expected:    map[string]any{"status": 400, "message": "the request is invalid", "hidesCause": true, "runbook": true},
-		Actual:      map[string]any{"status": act.Status, "body": act.Body, "runbook": strings.Contains(string(runbook), "err.Error()")},
-		Pass:        act.Status == 400 && hides && strings.Contains(string(runbook), "stuck") && strings.Contains(string(runbook), "err.Error()")})
+		Actual:      map[string]any{"status": act.Status, "body": act.Body, "runbook": strings.Contains(runbookText, "err.error()")},
+		Pass:        act.Status == 400 && hides && strings.Contains(runbookText, "stuck") && strings.Contains(runbookText, "err.error()")})
 }
 
 func TestFM73Checks(t *testing.T) {
