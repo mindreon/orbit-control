@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/mindreon/orbit-control/internal/app"
@@ -13,11 +14,14 @@ import (
 
 var heartbeatInterval = 15 * time.Second
 
-// Test seams for interleaving publishes with the replay-to-live handoff.
-var (
-	afterSubscribeHook   func()
-	afterReplayFrameHook func(seq uint64)
-)
+// streamHooks are test seams for interleaving publishes with the
+// replay-to-live handoff. Each connection loads them once at start.
+type streamHooks struct {
+	afterSubscribe   func()
+	afterReplayFrame func(seq uint64)
+}
+
+var testHooks atomic.Pointer[streamHooks]
 
 // StreamReset tells the client its resume cursor cannot be honoured and it
 // must refetch room state (room, messages, activity) before trusting the stream.
@@ -66,14 +70,22 @@ func streamRoomEvents(runtime *app.App) http.HandlerFunc {
 		// P0 supports a single control instance only; for multiple replicas,
 		// live fan-out moves to Postgres LISTEN/NOTIFY or NATS, while replay
 		// logic stays unchanged.
-		sub, ok := runtime.SubscribeRoom(roomID)
-		if !ok {
+		sub, err := runtime.SubscribeRoom(roomID)
+		if errors.Is(err, app.ErrRoomNotFound) {
 			writeErr(w, http.StatusNotFound, "NOT_FOUND", "room not found")
 			return
 		}
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "EVENT_STORE_ERROR", "event store unavailable")
+			return
+		}
 		defer sub.Close()
-		if afterSubscribeHook != nil {
-			afterSubscribeHook()
+		hooks := testHooks.Load()
+		if hooks == nil {
+			hooks = &streamHooks{}
+		}
+		if hooks.afterSubscribe != nil {
+			hooks.afterSubscribe()
 		}
 
 		h := w.Header()
@@ -82,7 +94,7 @@ func streamRoomEvents(runtime *app.App) http.HandlerFunc {
 		h.Set("Connection", "keep-alive")
 		h.Set("X-Accel-Buffering", "no")
 		w.WriteHeader(http.StatusOK)
-		s := &sseStream{w: w, flusher: flusher, runtime: runtime, roomID: roomID, cursor: sub.Head}
+		s := &sseStream{w: w, flusher: flusher, runtime: runtime, roomID: roomID, cursor: sub.Head, hooks: hooks}
 		if err := s.comment("connected"); err != nil {
 			return
 		}
@@ -139,6 +151,7 @@ type sseStream struct {
 	runtime *app.App
 	roomID  string
 	cursor  uint64
+	hooks   *streamHooks
 }
 
 func (s *sseStream) comment(text string) error {
@@ -169,8 +182,8 @@ func (s *sseStream) catchUp() error {
 			return err
 		}
 		s.cursor = f.Seq
-		if afterReplayFrameHook != nil {
-			afterReplayFrameHook(f.Seq)
+		if s.hooks.afterReplayFrame != nil {
+			s.hooks.afterReplayFrame(f.Seq)
 		}
 	}
 	return nil

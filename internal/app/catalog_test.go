@@ -42,7 +42,6 @@ func TestPersonaGrantCompositionAndAuditPersist(t *testing.T) {
 	roomID := "rm_test"
 	a.mu.Lock()
 	a.Rooms[roomID] = &Room{ID: roomID, PermissionPreset: PermissionWorkspaceWrite, State: RoomIdle}
-	a.Activity[roomID] = nil
 	a.mu.Unlock()
 	a.Publish(roomID, Event{"type": "session.status", "roomId": roomID, "status": "idle"})
 	auditPath := filepath.Join(dir, "audit", roomID+".jsonl")

@@ -8,9 +8,17 @@ import (
 	"github.com/mindreon/orbit-control/internal/worker"
 )
 
-// Acceptance 2 (persistence): event ids come from one global sequence that is
-// recovered from the audit logs, so a new process never reissues an id.
-func TestGlobalEventSequencePersistsAcrossRestart(t *testing.T) {
+func cursorReason(err error) ResetReason {
+	var cursorErr *CursorError
+	if errors.As(err, &cursorErr) {
+		return cursorErr.Reason
+	}
+	return ""
+}
+
+// Acceptance 2 and 3: ids come from one process-global counter shared by all
+// rooms; a restarted control has forgotten every id and answers with reset.
+func TestEventIDsAreGlobalAndUnknownAfterRestart(t *testing.T) {
 	dir := t.TempDir()
 	boot := func() *App {
 		a := New(worker.New(""))
@@ -36,17 +44,40 @@ func TestGlobalEventSequencePersistsAcrossRestart(t *testing.T) {
 			t.Fatalf("ids across rooms = %v, want one shared sequence 1..5", got)
 		}
 	}
-
-	second := boot()
-	if id := publish(second, "rm_a"); id != 6 {
-		t.Fatalf("after restart rm_a got id %d, want 6", id)
-	}
-
-	var cursorErr *CursorError
-	if _, _, err := second.EventsAfter("rm_a", 1); !errors.As(err, &cursorErr) || cursorErr.Reason != ResetExpired {
-		t.Fatalf("rm_a cursor evicted by restart: err = %v, want expired", err)
-	}
-	if _, _, err := second.EventsAfter("rm_b", 1); !errors.As(err, &cursorErr) || cursorErr.Reason != ResetUnknown {
+	if _, _, err := first.EventsAfter("rm_b", 1); cursorReason(err) != ResetUnknown {
 		t.Fatalf("rm_b with rm_a's id: err = %v, want unknown", err)
+	}
+
+	restarted := boot()
+	publish(restarted, "rm_b")
+	for _, old := range []uint64{got[3], got[4]} {
+		if _, _, err := restarted.EventsAfter("rm_b", old); cursorReason(err) != ResetUnknown {
+			t.Fatalf("pre-restart id %d: err = %v, want unknown", old, err)
+		}
+	}
+}
+
+func TestMemoryEventLogEvictsPerTaskFromOneSequence(t *testing.T) {
+	log := NewMemoryEventLog(2)
+	for _, task := range []string{"a", "b", "a", "a", "b"} {
+		if _, err := log.Append(task, ActivityEvent{RoomID: task}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	events, _ := log.After("a", 0)
+	if len(events) != 2 || events[0].Sequence != 3 || events[1].Sequence != 4 {
+		t.Fatalf("task a retained %+v, want ids 3,4", events)
+	}
+	if through, _ := log.EvictedThrough("a"); through != 1 {
+		t.Fatalf("task a evicted through %d, want 1", through)
+	}
+	if ok, _ := log.Contains("a", 2); ok {
+		t.Fatal("task a claims task b's id 2")
+	}
+	if head, _ := log.Head("b"); head != 5 {
+		t.Fatalf("task b head %d, want 5", head)
+	}
+	if last, _ := log.LastID(); last != 5 {
+		t.Fatalf("LastID %d, want 5", last)
 	}
 }

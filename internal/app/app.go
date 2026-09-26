@@ -122,16 +122,13 @@ type App struct {
 	Rooms         map[string]*Room
 	Messages      map[string][]Message
 	Approvals     map[string]*Approval
-	Activity      map[string][]ActivityEvent
+	Events        EventLog
 	SessionRoom   map[string]string
 	Personas      map[string]*Persona
 	McpConnectors map[string]*McpConnector
 	CloudAgents   map[string]*CloudAgentJob
 	grants        map[string]*grantRecord
-	// eventSeq is the single global event id sequence; there is no per-room counter.
-	eventSeq       uint64
-	eventSeqLoaded bool
-	subs           map[string]map[*subscriber]struct{}
+	subs          map[string]map[*subscriber]struct{}
 }
 
 func New(w *worker.Client) *App {
@@ -146,7 +143,7 @@ func NewWithOrch(w *worker.Client, o *orch.Client) *App {
 		Rooms:         map[string]*Room{},
 		Messages:      map[string][]Message{},
 		Approvals:     map[string]*Approval{},
-		Activity:      map[string][]ActivityEvent{},
+		Events:        NewMemoryEventLog(maxActivityPerRoom),
 		SessionRoom:   map[string]string{},
 		Personas:      map[string]*Persona{},
 		McpConnectors: map[string]*McpConnector{},
@@ -192,7 +189,6 @@ func (a *App) CreateRoom(ctx context.Context, input CreateRoomInput) (*Room, err
 	a.mu.Lock()
 	a.Rooms[room.ID] = room
 	a.Messages[room.ID] = nil
-	a.Activity[room.ID] = nil
 	a.mu.Unlock()
 
 	if a.Orch != nil {
@@ -301,11 +297,7 @@ func (a *App) ListMessages(roomID string) []Message {
 }
 
 func (a *App) ListActivity(roomID string) []ActivityEvent {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	src := a.Activity[roomID]
-	out := make([]ActivityEvent, len(src))
-	copy(out, src)
+	out, _ := a.Events.After(roomID, 0)
 	return out
 }
 
@@ -640,7 +632,6 @@ func (a *App) publish(roomID string, ev Event, source string) {
 		a.mu.Unlock()
 		return
 	}
-	seq := a.nextEventIDLocked()
 	runtimeName := eventString(ev, "runtime")
 	if runtimeName == "" {
 		runtimeName = room.Runtime.Kernel
@@ -654,7 +645,6 @@ func (a *App) publish(roomID string, ev Event, source string) {
 	}
 	item := ActivityEvent{
 		ID:                eventID,
-		Sequence:          seq,
 		Type:              eventString(ev, "type"),
 		RoomID:            roomID,
 		SessionID:         eventString(ev, "sessionId"),
@@ -673,19 +663,21 @@ func (a *App) publish(roomID string, ev Event, source string) {
 		PermissionPreset:  room.PermissionPreset,
 		OccurredAt:        occurredAt,
 	}
-	history := append(a.Activity[roomID], item)
-	if len(history) > maxActivityPerRoom {
-		history = append([]ActivityEvent(nil), history[len(history)-maxActivityPerRoom:]...)
+	// Append and broadcast under a.mu so SubscribeRoom's head snapshot sees
+	// every event either in the log or in its buffer.
+	item, err := a.Events.Append(roomID, item)
+	if err != nil {
+		a.mu.Unlock()
+		return
 	}
 	a.persistActivity(roomID, item)
 	a.persistRoom(room)
-	a.Activity[roomID] = history
 	raw, err := json.Marshal(item)
 	if err != nil {
 		a.mu.Unlock()
 		return
 	}
-	a.broadcastLocked(roomID, StreamFrame{Seq: seq, Durable: true, Data: raw})
+	a.broadcastLocked(roomID, StreamFrame{Seq: item.Sequence, Durable: true, Data: raw})
 	a.mu.Unlock()
 }
 

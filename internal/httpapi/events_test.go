@@ -197,8 +197,8 @@ func (e *eventsEnv) idsAfter(roomID string, after uint64) []uint64 {
 
 func setHooks(t *testing.T, afterSubscribe func(), afterReplayFrame func(uint64)) {
 	t.Helper()
-	afterSubscribeHook, afterReplayFrameHook = afterSubscribe, afterReplayFrame
-	t.Cleanup(func() { afterSubscribeHook, afterReplayFrameHook = nil, nil })
+	testHooks.Store(&streamHooks{afterSubscribe: afterSubscribe, afterReplayFrame: afterReplayFrame})
+	t.Cleanup(func() { testHooks.Store(nil) })
 }
 
 // Acceptance 1: replay only this room's events after Last-Event-ID, in order,
@@ -407,6 +407,23 @@ func TestEventsInvalidCursorSendsReset(t *testing.T) {
 			c.expectIDs(t, tc.roomID, env.idsAfter(tc.roomID, head)...)
 		})
 	}
+
+	// Rooms are in memory too, so after a restart the room itself is gone and
+	// the stream is refused before any replay. Ids forgotten by a restart for
+	// a room that is known are covered by TestEventIDsAreGlobalAndUnknownAfterRestart.
+	t.Run("after restart", func(t *testing.T) {
+		restarted := newEventsEnv(t)
+		req, _ := http.NewRequest(http.MethodGet, restarted.srv.URL+"/v1/rooms/"+room.ID+"/events", nil)
+		req.Header.Set("Last-Event-ID", app.FormatEventID(env.idsAfter(room.ID, 0)[0]))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound || resp.Header.Get("Content-Type") == "text/event-stream" {
+			t.Fatalf("status %d content-type %q, want 404 JSON", resp.StatusCode, resp.Header.Get("Content-Type"))
+		}
+	})
 }
 
 // Acceptance 4: assistant.delta is streamed live but never persisted, so a
