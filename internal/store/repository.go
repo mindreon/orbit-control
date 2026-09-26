@@ -61,11 +61,9 @@ type Repository interface {
 	GetApproval(ctx context.Context, tenantID, userID, approvalID string) (ApprovalRecord, error)
 	ListApprovals(ctx context.Context, tenantID, userID string) ([]ApprovalRecord, error)
 	// DecideApproval moves a pending approval to status/decision; if it is no
-	// longer pending it returns ErrApprovalNotPending.
+	// longer pending it returns ErrApprovalNotPending. A decided approval is
+	// final (DB trigger); there is no reopen in phase 1.
 	DecideApproval(ctx context.Context, tenantID, approvalID, status, decision string) error
-	// ReopenApproval undoes DecideApproval when the decision could not be
-	// delivered to the workflow.
-	ReopenApproval(ctx context.Context, tenantID, approvalID, decision string) error
 
 	Close()
 }

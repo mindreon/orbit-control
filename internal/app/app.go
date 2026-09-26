@@ -605,8 +605,9 @@ func (a *App) applyTurnResult(ctx context.Context, tenantID, roomID string, out 
 
 // Decide claims the approval with a conditional UPDATE (status = 'pending')
 // before anything is sent to the workflow, so concurrent decisions produce
-// exactly one delivery; the loser gets ErrApprovalNotPending (409). If the
-// decision cannot be delivered, the claim is released.
+// exactly one delivery; the loser gets ErrApprovalNotPending (409). A decided
+// approval is final: if delivery fails the error is returned and the claim
+// stays, because a timed-out delivery may already have been applied.
 func (a *App) Decide(ctx context.Context, p Principal, approvalID, decision string) (*Approval, error) {
 	appr, err := a.Repo.GetApproval(ctx, p.TenantID, p.UserID, approvalID)
 	if err != nil {
@@ -628,9 +629,6 @@ func (a *App) Decide(ctx context.Context, p Principal, approvalID, decision stri
 	appr.Status = "decided"
 	appr.Decision = value
 	out := approvalFromRecord(appr)
-	release := func() {
-		_ = a.Repo.ReopenApproval(context.WithoutCancel(ctx), p.TenantID, approvalID, value)
-	}
 	closeRoom := func() error {
 		if err := a.Repo.UpdateRoomState(ctx, p.TenantID, roomID, string(RoomClosed), ""); err != nil {
 			return err
@@ -642,7 +640,6 @@ func (a *App) Decide(ctx context.Context, p Principal, approvalID, decision stri
 	if a.Orch != nil {
 		res, err := a.Orch.Decide(ctx, roomID, id("tn_"), reqID, decision, id("tn_"))
 		if err != nil {
-			release()
 			return nil, err
 		}
 		if decision == "reject" {
@@ -669,10 +666,8 @@ func (a *App) Decide(ctx context.Context, p Principal, approvalID, decision stri
 		"approvalRequestId": reqID,
 		"outcome":           "allowed-once",
 	}, &applied); err != nil {
-		release()
 		return nil, err
 	}
-	// The worker has applied the decision; a failed resume is not undone.
 	var turn worker.RunTurnOut
 	if err := a.Worker.Call(ctx, "runTurn", map[string]any{
 		"roomId":              roomID,

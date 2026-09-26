@@ -129,8 +129,8 @@ TO orbit_app;
 -- Cleanup / revocation tables.
 GRANT DELETE ON approval_rules, idempotency_keys, sessions, oidc_login_state TO orbit_app;
 
--- Column-scoped UPDATE: pgstore.UpdateRoomState, pgstore.DecideApproval /
--- ReopenApproval, auth.Sessions.Lookup. rooms has no DELETE (C32 rev3).
+-- Column-scoped UPDATE: pgstore.UpdateRoomState, pgstore.DecideApproval,
+-- auth.Sessions.Lookup. rooms has no DELETE (C32 rev3).
 GRANT UPDATE (state, session_id, updated_at) ON rooms TO orbit_app;
 GRANT UPDATE (status, decision, decided_at) ON approvals TO orbit_app;
 GRANT UPDATE (last_seen_at) ON sessions TO orbit_app;

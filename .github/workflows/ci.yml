@@ -27,7 +27,9 @@ jobs:
           --health-timeout 5s
           --health-retries 30
     env:
-      # Throwaway CI-only credentials for the service container above.
+      # ONE-TIME CREDENTIALS ONLY (README "CI credentials"): these values exist
+      # solely for the throwaway service container above. Never put a real,
+      # shared or reusable secret, token, key or DB URL here.
       OWNER_PW: ci-owner
       APP_PW: ci-app
       OPS_PW: ci-ops
@@ -132,15 +134,27 @@ jobs:
           /tmp/gitleaks dir --config .gitleaks.toml --redact --no-banner \
             --report-format json --report-path artifacts/gitleaks-dir.json . 2>&1 | tee artifacts/logs/gitleaks-dir.log
 
-      - name: Secret-scan reports and logs
+      # Low-2: prove the scan reports a plaintext password in a Postgres-style
+      # log. The control log lives in a CI-only temp dir and is never uploaded.
+      - name: Secret-scan positive control
         if: always()
         run: |
-          pattern='postgres(ql)?://|ci-owner|ci-app|ci-ops|ci-superuser|e2e-planted|sk-live|BEGIN [A-Z ]*PRIVATE KEY|AKIA[0-9A-Z]{16}'
-          if grep -rnE "$pattern" artifacts/; then
-            echo "::error::secret-like value found in the E2E reports or logs"
+          ctl=$(mktemp -d)
+          canary="canary-$(openssl rand -hex 12)"
+          printf "%s LOG:  statement: CREATE ROLE ctl_fake LOGIN PASSWORD '%s'\n" "$(date -u +%FT%TZ)" "$canary" > "$ctl/postgres-fake-password.log"
+          printf "%s LOG:  statement: CREATE ROLE ctl_app LOGIN PASSWORD '%s'\n" "$(date -u +%FT%TZ)" "$APP_PW" > "$ctl/postgres-ci-password.log"
+          if SCAN_CANARY="$canary" scripts/ci-secret-scan.sh "$ctl" > "$ctl.out"; then
+            echo "::error::positive control: the scan did not report the planted passwords"
             exit 1
           fi
-          echo "no DB URLs, DB passwords or planted secrets in: $(find artifacts -type f | sort | tr '\n' ' ')"
+          grep -q "postgres-fake-password.log" "$ctl.out"
+          grep -q "postgres-ci-password.log" "$ctl.out"
+          echo "positive control: both planted passwords reported (values not printed)"
+          rm -rf "$ctl" "$ctl.out"
+
+      - name: Secret-scan reports and logs
+        if: always()
+        run: scripts/ci-secret-scan.sh artifacts
 
       - name: Gate summary
         if: always()

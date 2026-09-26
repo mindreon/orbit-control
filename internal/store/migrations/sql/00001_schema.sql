@@ -162,6 +162,26 @@ CREATE TABLE approvals (
 );
 CREATE INDEX approvals_task_status_idx ON approvals (task_id, status);
 
+-- A decided approval is final for every role (review Low-1): the only update
+-- ever allowed is the conditional pending -> decided claim.
+-- +goose StatementBegin
+CREATE FUNCTION public.orbit_approvals_frozen_once_decided() RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, public
+AS $$
+BEGIN
+  IF OLD.status <> 'pending' THEN
+    RAISE EXCEPTION 'approval is not pending' USING ERRCODE = 'P0001';
+  END IF;
+  RETURN NEW;
+END
+$$;
+-- +goose StatementEnd
+
+CREATE TRIGGER approvals_frozen_once_decided
+  BEFORE UPDATE ON approvals
+  FOR EACH ROW EXECUTE FUNCTION public.orbit_approvals_frozen_once_decided();
+
 -- room_id is DB-only: equals scope_id when scope='room', otherwise NULL.
 CREATE TABLE approval_rules (
   id                       TEXT PRIMARY KEY,
@@ -273,3 +293,4 @@ DROP TABLE oidc_login_state;
 DROP TABLE sessions;
 DROP TABLE users;
 DROP TABLE tenants;
+DROP FUNCTION public.orbit_approvals_frozen_once_decided();

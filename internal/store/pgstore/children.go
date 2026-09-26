@@ -155,20 +155,6 @@ func (s *Store) DecideApproval(ctx context.Context, tenantID, approvalID, status
 	})
 }
 
-func (s *Store) ReopenApproval(ctx context.Context, tenantID, approvalID, decision string) error {
-	return s.inTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `
-			UPDATE approvals
-			   SET status = 'pending', decision = '', decided_at = NULL
-			 WHERE tenant_id = $1 AND id = $2 AND status = 'decided' AND decision = $3`,
-			tenantID, approvalID, decision)
-		if err != nil {
-			return childWriteErr("reopen approval", err)
-		}
-		return nil
-	})
-}
-
 func nullTime(t time.Time) *time.Time {
 	if t.IsZero() {
 		return nil

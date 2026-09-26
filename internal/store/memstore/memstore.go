@@ -275,19 +275,6 @@ func (s *Store) ListApprovals(_ context.Context, tenantID, userID string) ([]sto
 	return out, nil
 }
 
-func (s *Store) ReopenApproval(_ context.Context, tenantID, approvalID, decision string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	row, ok := s.approvals[approvalID]
-	if !ok || row.tenantID != tenantID || row.rec.Status != "decided" || row.rec.Decision != decision {
-		return nil
-	}
-	row.rec.Status = "pending"
-	row.rec.Decision = ""
-	row.rec.DecidedAt = nil
-	return nil
-}
-
 func (s *Store) DecideApproval(_ context.Context, tenantID, approvalID, status, decision string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
