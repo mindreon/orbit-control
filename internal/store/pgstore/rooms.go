@@ -11,12 +11,12 @@ import (
 )
 
 const roomColumns = `id, tenant_id, created_by, kind, title, state, permission_preset,
-	runtime, session_id, persona_id, created_at, updated_at`
+	runtime, failure, session_id, persona_id, created_at, updated_at`
 
 func scanRoom(row pgx.Row) (store.RoomRecord, error) {
 	var r store.RoomRecord
 	err := row.Scan(&r.ID, &r.TenantID, &r.CreatedBy, &r.Kind, &r.Title, &r.State,
-		&r.PermissionPreset, &r.Runtime, &r.SessionID, &r.PersonaID, &r.CreatedAt, &r.UpdatedAt)
+		&r.PermissionPreset, &r.Runtime, &r.Failure, &r.SessionID, &r.PersonaID, &r.CreatedAt, &r.UpdatedAt)
 	return r, err
 }
 

@@ -1,9 +1,12 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"strconv"
 	"time"
+
+	"github.com/mindreon/orbit-control/internal/store"
 )
 
 // StreamFrame is one SSE-bound event for a room.
@@ -73,7 +76,7 @@ func (a *App) SubscribeRoom(roomID, client string) (*Subscription, error) {
 	if a.clientStreams[client] >= a.Limits.MaxStreamsPerClient {
 		return nil, ErrClientStreamLimit
 	}
-	head, err := a.Events.Head(roomID)
+	head, err := a.headLocked(roomID)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +159,7 @@ func (a *App) closeSubscribers(roomID string) {
 func (a *App) RoomHead(roomID string) (uint64, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.Events.Head(roomID)
+	return a.headLocked(roomID)
 }
 
 func (a *App) broadcastLocked(roomID string, frame StreamFrame) {
@@ -211,6 +214,30 @@ func ParseEventID(raw string) (uint64, error) {
 // events and has been evicted, and ResetUnknown in every other case: another
 // room's id, an id beyond LastID, or an id issued before a control restart.
 func (a *App) EventsAfter(roomID string, after uint64) ([]StreamFrame, uint64, error) {
+	if es, ok := a.Repo.(store.EventStore); ok {
+		a.mu.Lock()
+		tenantID := a.live[roomID].TenantID
+		a.mu.Unlock()
+		if tenantID == "" {
+			tenantID = a.DefaultTenant
+		}
+		rows, head, cursorOK, err := es.EventsAfter(context.Background(), tenantID, roomID, int64(after))
+		if err != nil {
+			return nil, uint64(head), err
+		}
+		if !cursorOK {
+			return nil, uint64(head), &CursorError{Reason: ResetUnknown}
+		}
+		frames := make([]StreamFrame, 0, len(rows))
+		for _, row := range rows {
+			raw, err := EncodeEnvelope(envelopeFromEvent(row))
+			if err != nil {
+				return nil, uint64(head), err
+			}
+			frames = append(frames, StreamFrame{Seq: uint64(row.Seq), Durable: true, Data: raw})
+		}
+		return frames, uint64(head), nil
+	}
 	a.mu.Lock()
 	head, err := a.Events.Head(roomID)
 	if err == nil {
@@ -272,6 +299,25 @@ func (a *App) checkCursorLocked(roomID string, after uint64) error {
 func (a *App) publishLive(env Envelope) {
 	raw, err := EncodeEnvelope(env)
 	if err != nil {
+		return
+	}
+	if es, ok := a.Repo.(store.EventStore); ok {
+		a.mu.Lock()
+		tenantID := a.live[env.TaskID].TenantID
+		a.mu.Unlock()
+		if tenantID == "" {
+			tenantID = a.DefaultTenant
+		}
+		head, err := es.RoomEventHead(context.Background(), tenantID, env.TaskID)
+		if err != nil {
+			return
+		}
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		if _, ok := a.live[env.TaskID]; !ok {
+			return
+		}
+		a.broadcastLocked(env.TaskID, StreamFrame{Seq: uint64(head), Data: raw})
 		return
 	}
 	a.mu.Lock()

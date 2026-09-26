@@ -87,7 +87,8 @@ func (s *Store) CreateApproval(ctx context.Context, tenantID string, a store.App
 
 const approvalSelect = `
 	SELECT a.id, a.task_id, r.session_id, COALESCE(a.approval_request_id, ''), COALESCE(a.call_id, ''),
-	       a.tool_name, a.reason, a.status, a.decision, a.created_at, a.decided_at
+	       a.tool_name, a.reason, a.status, a.decision, COALESCE(a.delivery_state, ''),
+	       a.delivery_attempt, a.result_attempt, a.created_at, a.decided_at
 	  FROM approvals a
 	  JOIN rooms r ON r.id = a.task_id
 	 WHERE a.tenant_id = $1 AND r.tenant_id = $1 AND r.created_by = $2 AND r.deleted_at IS NULL`
@@ -95,7 +96,8 @@ const approvalSelect = `
 func scanApproval(row pgx.Row) (store.ApprovalRecord, error) {
 	var a store.ApprovalRecord
 	err := row.Scan(&a.ID, &a.TaskID, &a.SessionID, &a.ApprovalRequestID, &a.CallID,
-		&a.ToolName, &a.Reason, &a.Status, &a.Decision, &a.CreatedAt, &a.DecidedAt)
+		&a.ToolName, &a.Reason, &a.Status, &a.Decision, &a.DeliveryState,
+		&a.DeliveryAttempt, &a.ResultAttempt, &a.CreatedAt, &a.DecidedAt)
 	return a, err
 }
 

@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mindreon/orbit-control/internal/orch"
@@ -28,6 +29,7 @@ const (
 	RoomRunning          RoomState = "running"
 	RoomAwaitingApproval RoomState = "awaiting_approval"
 	RoomClosed           RoomState = "closed"
+	RoomFailed           RoomState = "failed"
 
 	PermissionWorkspaceWrite   = "workspace-write"
 	PermissionReadOnly         = "read-only"
@@ -51,6 +53,28 @@ var ErrInvalid = errors.New("invalid request")
 // to the workflow failed or timed out (502). It never carries the upstream
 // error text.
 var ErrDecisionDeliveryFailed = errors.New("decision delivery failed")
+
+// ErrNotDelivered is a delivery the workflow provably never accepted (C34).
+// An error whose text contains NOT_DELIVERED is treated the same way.
+var ErrNotDelivered = errors.New("NOT_DELIVERED")
+
+// DeliveryUnknownError is HTTP 202: delivery is in_flight or unknown, and
+// this call did not deliver again.
+type DeliveryUnknownError struct {
+	Approval *Approval
+}
+
+func (e *DeliveryUnknownError) Error() string { return "delivery outcome unknown" }
+
+// StatusError is an HTTP error whose body includes the C34 approval object.
+type StatusError struct {
+	Status   int
+	Code     string
+	Message  string
+	Approval *Approval
+}
+
+func (e *StatusError) Error() string { return e.Message }
 
 // ErrNotFound and ErrIdempotencyKeyReused are the repository sentinels.
 var (
@@ -106,6 +130,7 @@ type Room struct {
 	PermissionPreset string          `json:"permissionPreset"`
 	Runtime          RuntimeSnapshot `json:"runtime"`
 	SessionID        string          `json:"sessionId,omitempty"`
+	Failure          *RoomFailure    `json:"failure,omitempty"`
 	CreatedAt        string          `json:"createdAt"`
 }
 
@@ -127,7 +152,14 @@ type Approval struct {
 	Reason            string `json:"reason,omitempty"`
 	Status            string `json:"status"`
 	Decision          string `json:"decision,omitempty"`
+	DeliveryState     string `json:"deliveryState,omitempty"`
 	CreatedAt         string `json:"createdAt"`
+}
+
+// RoomFailure is the persisted reason a room is in state failed (C34).
+type RoomFailure struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 // Event is a control-originated event payload (camelCase keys).
@@ -165,6 +197,11 @@ type Options struct {
 	AbortTimeout time.Duration
 	// DeliveryTimeout bounds delivering an approval decision to the workflow.
 	DeliveryTimeout time.Duration
+	// ArtifactDir is the content-addressed blob root ({dir}/{tenant}/{sha256}).
+	// Empty disables POST /internal/artifact-blobs.
+	ArtifactDir string
+	// ArtifactMaxBytes caps one blob body. Zero uses 32 MiB.
+	ArtifactMaxBytes int64
 }
 
 type App struct {
@@ -178,17 +215,21 @@ type App struct {
 	AbortTimeout  time.Duration
 	// DeliveryTimeout bounds resolveApproval / acceptance of the decide
 	// Update; never the resumed turn.
-	DeliveryTimeout time.Duration
-	Events          EventLog
-	SessionRoom     map[string]string
-	Personas        map[string]*Persona
-	McpConnectors   map[string]*McpConnector
-	CloudAgents     map[string]*CloudAgentJob
-	live            map[string]liveRoom
-	knownUsers      map[string]struct{}
-	grants          map[string]*grantRecord
-	subs            map[string]map[*subscriber]struct{}
-	clientStreams   map[string]int
+	DeliveryTimeout  time.Duration
+	ArtifactDir      string
+	ArtifactMaxBytes int64
+	pendingWrites    sync.Map
+	skipResultWrite  atomic.Bool
+	Events           EventLog
+	SessionRoom      map[string]string
+	Personas         map[string]*Persona
+	McpConnectors    map[string]*McpConnector
+	CloudAgents      map[string]*CloudAgentJob
+	live             map[string]liveRoom
+	knownUsers       map[string]struct{}
+	grants           map[string]*grantRecord
+	subs             map[string]map[*subscriber]struct{}
+	clientStreams    map[string]int
 	// freedLogs are closed rooms whose event log was freed; later events for
 	// them are discarded so the log is not recreated.
 	freedLogs map[string]struct{}
@@ -223,28 +264,35 @@ func NewWithOptions(opts Options) *App {
 	if opts.DeliveryTimeout <= 0 {
 		opts.DeliveryTimeout = defaultDeliveryTimeout
 	}
-	return &App{
-		Worker:          opts.Worker,
-		Orch:            opts.Orch,
-		Repo:            opts.Repo,
-		Store:           store.New(""),
-		Log:             opts.Log,
-		DefaultTenant:   opts.DefaultTenant,
-		AbortTimeout:    opts.AbortTimeout,
-		DeliveryTimeout: opts.DeliveryTimeout,
-		Events:          NewMemoryEventLog(maxActivityPerRoom),
-		SessionRoom:     map[string]string{},
-		Personas:        map[string]*Persona{},
-		McpConnectors:   map[string]*McpConnector{},
-		CloudAgents:     map[string]*CloudAgentJob{},
-		live:            map[string]liveRoom{},
-		knownUsers:      map[string]struct{}{},
-		grants:          map[string]*grantRecord{},
-		subs:            map[string]map[*subscriber]struct{}{},
-		clientStreams:   map[string]int{},
-		freedLogs:       map[string]struct{}{},
-		Limits:          DefaultLimits(),
+	a := &App{
+		Worker:           opts.Worker,
+		Orch:             opts.Orch,
+		Repo:             opts.Repo,
+		Store:            store.New(""),
+		Log:              opts.Log,
+		DefaultTenant:    opts.DefaultTenant,
+		AbortTimeout:     opts.AbortTimeout,
+		DeliveryTimeout:  opts.DeliveryTimeout,
+		ArtifactDir:      opts.ArtifactDir,
+		ArtifactMaxBytes: opts.ArtifactMaxBytes,
+		Events:           NewMemoryEventLog(maxActivityPerRoom),
+		SessionRoom:      map[string]string{},
+		Personas:         map[string]*Persona{},
+		McpConnectors:    map[string]*McpConnector{},
+		CloudAgents:      map[string]*CloudAgentJob{},
+		live:             map[string]liveRoom{},
+		knownUsers:       map[string]struct{}{},
+		grants:           map[string]*grantRecord{},
+		subs:             map[string]map[*subscriber]struct{}{},
+		clientStreams:    map[string]int{},
+		freedLogs:        map[string]struct{}{},
+		Limits:           DefaultLimits(),
 	}
+	if a.ArtifactMaxBytes <= 0 {
+		a.ArtifactMaxBytes = 32 << 20
+	}
+	a.startReconcile()
+	return a
 }
 
 func id(prefix string) string {
@@ -268,6 +316,12 @@ func roomFromRecord(rec store.RoomRecord) *Room {
 		CreatedAt:        stamp(rec.CreatedAt),
 	}
 	_ = json.Unmarshal(rec.Runtime, &room.Runtime)
+	if len(rec.Failure) > 0 && string(rec.Failure) != "null" {
+		var failure RoomFailure
+		if json.Unmarshal(rec.Failure, &failure) == nil && failure.Code != "" {
+			room.Failure = &failure
+		}
+	}
 	return room
 }
 
@@ -285,6 +339,7 @@ func approvalFromRecord(rec store.ApprovalRecord) *Approval {
 		Reason:            rec.Reason,
 		Status:            rec.Status,
 		Decision:          rec.Decision,
+		DeliveryState:     rec.DeliveryState,
 		CreatedAt:         stamp(rec.CreatedAt),
 	}
 }
@@ -509,6 +564,17 @@ func (a *App) ListActivity(ctx context.Context, p Principal, roomID string) ([]E
 	if _, err := a.getRoom(ctx, p, roomID); err != nil {
 		return nil, err
 	}
+	if es, ok := a.Repo.(store.EventStore); ok {
+		rows, _, _, err := es.EventsAfter(ctx, p.TenantID, roomID, 0)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]Envelope, 0, len(rows))
+		for _, row := range rows {
+			out = append(out, envelopeFromEvent(row))
+		}
+		return out, nil
+	}
 	return a.Events.After(roomID, 0)
 }
 
@@ -602,12 +668,22 @@ func (a *App) applyTurnResult(ctx context.Context, tenantID, roomID string, out 
 	return room, approvalFromRecord(*appr), nil
 }
 
-// Decide claims the approval with a conditional UPDATE (status = 'pending')
-// before anything is sent to the workflow, so concurrent decisions produce
-// exactly one delivery; the loser gets ErrApprovalNotPending (409). A decided
-// approval is final: if delivery fails the error is returned and the claim
-// stays, because a timed-out delivery may already have been applied.
+// Decide claims the approval, delivers that claim once, and writes the
+// resumed turn back. Postgres uses the C34 delivery machine. The in-memory
+// repository keeps the phase-1 path so unit tests stay on 200/502.
 func (a *App) Decide(ctx context.Context, p Principal, approvalID, decision string) (*Approval, error) {
+	if _, ok := a.Repo.(store.DeliveryStore); ok {
+		return a.decideWithDelivery(ctx, p, approvalID, decision)
+	}
+	return a.decideLegacy(ctx, p, approvalID, decision)
+}
+
+// decideLegacy claims with status = 'pending' before anything is sent to the
+// workflow, so concurrent decisions produce exactly one delivery; the loser
+// gets ErrApprovalNotPending (409). A decided approval is final: if delivery
+// fails the error is returned and the claim stays, because a timed-out
+// delivery may already have been applied.
+func (a *App) decideLegacy(ctx context.Context, p Principal, approvalID, decision string) (*Approval, error) {
 	appr, err := a.Repo.GetApproval(ctx, p.TenantID, p.UserID, approvalID)
 	if err != nil {
 		return nil, err
@@ -902,10 +978,15 @@ func (a *App) Ingest(ctx context.Context, raw []byte) error {
 		a.publishLive(env)
 		return nil
 	}
+	// A room that is already closed or failed does not take another worker
+	// event. Control's own closing session.status is published separately,
+	// with allowFinished, before this 404 applies (FM-62).
+	if rec.State == string(RoomClosed) || rec.State == string(RoomFailed) {
+		return ErrNotFound
+	}
 	// Assistant text is persisted from runTurn.texts to avoid duplicates when
 	// ingest is also enabled; the activity copy is the timeline record.
-	a.publishDurable(env)
-	return nil
+	return a.emitDurable(ctx, rec.TenantID, env, false)
 }
 
 // Publish records a control-originated event. Control owns this payload, so it
@@ -936,10 +1017,10 @@ func (a *App) Publish(roomID string, ev Event) {
 	if err != nil {
 		return
 	}
-	a.publishDurable(Envelope{
+	_ = a.emitDurable(context.Background(), room.TenantID, Envelope{
 		Type: eventString(payload, "type"), TaskID: roomID, TS: eventString(payload, "occurredAt"),
 		Source: "control", Payload: raw,
-	})
+	}, true)
 }
 
 func (a *App) publishDurable(env Envelope) {

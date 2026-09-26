@@ -85,6 +85,7 @@ type RoomRecord struct {
 	State            string
 	PermissionPreset string
 	Runtime          json.RawMessage
+	Failure          json.RawMessage
 	SessionID        string
 	PersonaID        string
 	CreatedAt        time.Time
@@ -110,8 +111,35 @@ type ApprovalRecord struct {
 	Reason            string
 	Status            string
 	Decision          string
+	DeliveryState     string
+	DeliveryAttempt   int
+	ResultAttempt     *int
 	CreatedAt         time.Time
 	DecidedAt         *time.Time
+}
+
+// EventRecord is one durable per-task event. Seq is the SSE cursor (§18.4).
+type EventRecord struct {
+	Seq       int64
+	EventUID  string
+	TaskID    string
+	Type      string
+	Source    string
+	Payload   json.RawMessage
+	CreatedAt time.Time
+}
+
+// DecideResultWrite is the idempotent persisted outcome of one delivery_attempt
+// (FM-61). UpdateRoom is false when the workflow accepted the decision but
+// returned no turn, so the room state is left as it is.
+type DecideResultWrite struct {
+	ApprovalID string
+	Attempt    int
+	RoomID     string
+	RoomState  string
+	UpdateRoom bool
+	Texts      []string
+	Next       *ApprovalRecord
 }
 
 // IdempotencyRecord carries only hashes; the raw Idempotency-Key is never

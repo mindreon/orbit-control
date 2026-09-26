@@ -32,7 +32,11 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
-var _ store.Repository = (*Store)(nil)
+var (
+	_ store.Repository    = (*Store)(nil)
+	_ store.DeliveryStore = (*Store)(nil)
+	_ store.EventStore    = (*Store)(nil)
+)
 
 // New wraps an existing pool (tests size it explicitly, e.g. MaxConns=1).
 func New(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }

@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -23,9 +24,10 @@ import (
 // ErrorBody is the JSON error shape. Keep 401/403 examples in docs/openapi.yaml
 // stable for Sentinel.
 type ErrorBody struct {
-	Error   string `json:"error"`
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Error    string        `json:"error"`
+	Code     string        `json:"code"`
+	Message  string        `json:"message"`
+	Approval *app.Approval `json:"approval,omitempty"`
 }
 
 type HealthBody struct {
@@ -40,6 +42,69 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeErr(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, status, ErrorBody{Error: strings.ToLower(strings.ReplaceAll(code, "_", " ")), Code: code, Message: message})
+}
+
+type deliveryAcceptedBody struct {
+	Approval      *app.Approval `json:"approval"`
+	DeliveryState string        `json:"deliveryState"`
+}
+
+func writeDecideErr(lg *log.Logger, w http.ResponseWriter, err error) {
+	var unknown *app.DeliveryUnknownError
+	if errors.As(err, &unknown) && unknown.Approval != nil {
+		writeJSON(w, http.StatusAccepted, deliveryAcceptedBody{
+			Approval: unknown.Approval, DeliveryState: unknown.Approval.DeliveryState,
+		})
+		return
+	}
+	var statusErr *app.StatusError
+	if errors.As(err, &statusErr) {
+		writeJSON(w, statusErr.Status, ErrorBody{
+			Error:    strings.ToLower(strings.ReplaceAll(statusErr.Code, "_", " ")),
+			Code:     statusErr.Code,
+			Message:  statusErr.Message,
+			Approval: statusErr.Approval,
+		})
+		return
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return
+	}
+	writeAppErr(lg, w, err, approvalNotFound, http.StatusBadRequest, "BAD_REQUEST")
+}
+
+func writeBlobErr(lg *log.Logger, w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, app.ErrTooLarge):
+		writeErr(w, http.StatusRequestEntityTooLarge, "PAYLOAD_TOO_LARGE", "artifact body exceeds the configured limit")
+	case errors.Is(err, app.ErrDigestMismatch):
+		writeErr(w, http.StatusUnprocessableEntity, "DIGEST_MISMATCH", "X-Content-Digest does not match the body")
+	default:
+		writeAppErr(lg, w, err, roomNotFound, http.StatusBadRequest, "BAD_REQUEST")
+	}
+}
+
+func artifactDirFromEnv() string {
+	if dir := strings.TrimSpace(os.Getenv("ORBIT_ARTIFACT_DIR")); dir != "" {
+		return dir
+	}
+	if data := strings.TrimSpace(os.Getenv("ORBIT_DATA_DIR")); data != "" {
+		return filepath.Join(data, "artifacts")
+	}
+	return ""
+}
+
+func artifactMaxFromEnv() int64 {
+	raw := strings.TrimSpace(os.Getenv("ORBIT_ARTIFACT_MAX_BYTES"))
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || n <= 0 {
+		log.Printf("ignoring ORBIT_ARTIFACT_MAX_BYTES=%q: want a positive integer", raw)
+		return 0
+	}
+	return n
 }
 
 // writeAppErr maps repository sentinels first; anything else keeps the
@@ -109,7 +174,10 @@ func Handlers() (public, internal http.Handler, closeStore func(), err error) {
 		}
 		return nil, nil, nil, err
 	}
-	opts := app.Options{Worker: worker.New(base), Repo: repo, DefaultTenant: defaultTenant}
+	opts := app.Options{
+		Worker: worker.New(base), Repo: repo, DefaultTenant: defaultTenant,
+		ArtifactDir: artifactDirFromEnv(), ArtifactMaxBytes: artifactMaxFromEnv(),
+	}
 	if addr := os.Getenv("TEMPORAL_ADDRESS"); addr != "" {
 		oc, err := dialOrch(addr, os.Getenv("TEMPORAL_NAMESPACE"), os.Getenv("TEMPORAL_TASK_QUEUE"))
 		if err != nil {
@@ -313,7 +381,7 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		appr, err := runtime.Decide(r.Context(), p, r.PathValue("approvalId"), body.Decision)
 		if err != nil {
-			writeAppErr(runtime.Log, w, err, approvalNotFound, http.StatusBadRequest, "BAD_REQUEST")
+			writeDecideErr(runtime.Log, w, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, appr)
@@ -449,6 +517,25 @@ func InternalHandler(runtime *app.App) http.Handler {
 			return
 		}
 		writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
+	})
+	mux.HandleFunc("POST /internal/artifact-blobs", func(w http.ResponseWriter, r *http.Request) {
+		if !internalauth.Authorized(r) {
+			writeErr(w, http.StatusUnauthorized, "UNAUTHORIZED", "internal token required")
+			return
+		}
+		taskID := r.URL.Query().Get("taskId")
+		if taskID == "" {
+			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "taskId is required")
+			return
+		}
+		ref, err := runtime.SaveArtifactBlob(taskID, r.Header.Get("X-Content-Digest"), r.Body)
+		if err != nil {
+			writeBlobErr(runtime.Log, w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, struct {
+			StorageRef string `json:"storageRef"`
+		}{StorageRef: ref})
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		writeErr(w, http.StatusNotFound, "NOT_FOUND", "not found")
