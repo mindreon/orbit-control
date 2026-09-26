@@ -75,7 +75,136 @@ curl -s http://127.0.0.1:8080/health
 # {"status":"ok"}
 ```
 
-Default listen address is `:8080` (override with `PORT`).
+The public listener binds `127.0.0.1:$PORT` (default port `8080`);
+`ORBIT_PUBLIC_ADDR` overrides the full address. Worker → control routes
+(`/internal/*`, e.g. `POST /internal/events`) are served only on a separate
+internal listener, `ORBIT_INTERNAL_ADDR` (default `127.0.0.1:8081`); the public
+listener answers `/internal/*` with `404`. Point the worker's
+`ORBIT_EVENT_INGEST_URL` at the internal address (in Compose, set
+`ORBIT_INTERNAL_ADDR=:8081` on control and use `http://control:8081/internal/events`),
+and do not publish that port.
+
+## Deploy gate: no external exposure before user auth (§17)
+
+Control has **no user authentication or authorization yet**. Every `/v1`
+path is open to anyone who can reach it: `GET /v1/rooms` lists every room id,
+`authorizeRoomStream` allows every caller, SSE replay returns any room's
+history, and CORS is `*`.
+
+- **(a)** This service must **not** be deployed to any externally reachable
+  environment until the §17 auth PR has merged.
+- **(b)** The §17 auth PR must add **E-LE-5** to the real-stack E2E: an SSE
+  reconnect with `Last-Event-ID` and no session gets `401`, one with another
+  tenant's session gets `403`/`404`, and in both cases zero events are
+  replayed (no `text/event-stream` response is opened).
+
+The gate is enforced at startup: `orbit-control` **refuses to start** when the
+public listener's address is not loopback (`127.0.0.1`, `::1`, `localhost`).
+The container image therefore does not serve outside itself by default. For an
+environment that is not externally reachable (e.g. a local Compose network),
+set `ORBIT_PUBLIC_ADDR=:8080` **and** `ORBIT_ALLOW_UNAUTHENTICATED_BIND=1`;
+control logs a warning at startup. Production configuration must never set
+`ORBIT_ALLOW_UNAUTHENTICATED_BIND`; the §17 auth PR replaces this switch with
+a real auth check.
+
+## Resource limits
+
+All limits are env vars read at startup; invalid values keep the default.
+**P0 supports a single control instance**, so these per-process limits bound
+the whole deployment and are the inputs for capacity planning: concurrent SSE
+connections are at most `ORBIT_SSE_MAX_STREAMS_PER_ROOM` × open rooms, and at
+most `ORBIT_SSE_MAX_STREAMS_PER_CLIENT` from any one IP (behind a proxy that
+does not preserve client IPs, every browser shares the proxy's IP, so size
+the per-client cap for the proxy). Each stream holds a 256-event live buffer.
+The real-stack E2E (E-LE-6) runs one control with small values
+(`ORBIT_SSE_MAX_STREAMS_PER_ROOM=2`, `ORBIT_SSE_MAX_STREAMS_PER_CLIENT=4`,
+`ORBIT_INGEST_MAX_BYTES=65536`) to exercise the 429 and 413 paths. Its report
+row's `config` records the limits that run used (resolved by
+`app.LimitsFromEnv`, as the binary does) and the defaults below (read from
+`app.DefaultLimits`, the code's source of truth), so a default change shows
+up in the report.
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `ORBIT_SSE_MAX_STREAMS_PER_ROOM` | `32` | Further SSE connections to that room get `429 STREAM_LIMIT_ROOM` before any stream opens. |
+| `ORBIT_SSE_MAX_STREAMS_PER_CLIENT` | `16` | Per peer IP (proxy headers are not trusted); over it, `429 STREAM_LIMIT_CLIENT`. |
+| `ORBIT_SSE_WRITE_TIMEOUT` | `10s` | Deadline for each SSE write; a stalled reader's stream is closed. |
+| `ORBIT_SSE_MAX_CONSECUTIVE_LAGS` | `3` | A reader that overflows its live buffer this many times in a row gets `reset` (`lagging`) and the stream closes. |
+| `ORBIT_INGEST_MAX_BYTES` | `1048576` | Larger `POST /internal/events` bodies get `413 PAYLOAD_TOO_LARGE`; nothing is stored. |
+| `ORBIT_CLOSED_ROOM_LOG_TTL` | `15m` | A closed room's event log (activity and replay) is freed this long after it closes; `0` frees it at once. After that `/activity` is empty and a resume gets `reset` `unknown` (`lastId` 0), then the stream ends. |
+
+When a room closes (abort, or a reject that closes it), its open SSE streams
+deliver what is buffered and end.
+
+## Room events (SSE) and resume
+
+`GET /v1/rooms/{roomId}/events` streams the room's events; `GET
+/v1/rooms/{roomId}/activity` lists the retained ones. Both use one shape, an
+`EventEnvelope`: `{id, type, taskId, ts, source, payload}`. Worker events
+(`/internal/events`, orbit-runtime A1 `OrbitEvent`, all 15 types) are passed
+through unchanged as `payload`, so camelCase fields like `delta`, `blockId`,
+`argsPreview`, `toolState`, `truncated`, `agentPath`, and `failure` reach
+clients; unknown types are rejected with 400.
+
+Every SSE message has `id: <id>`: the event's id from one process-global
+counter in the in-memory event store (`app.EventLog`), shared by all rooms.
+Within a room ids strictly increase but are not contiguous. The counter
+restarts with control.
+
+To resume after a disconnect, send the last id you received as the
+`Last-Event-ID` header (EventSource does this on auto-reconnect) or as
+`?lastEventId=` (the header wins if both are set). Control replays this room's
+retained events after that id, in order, then continues live with no gaps or
+duplicates. Without a cursor the stream is live-only.
+
+A cursor that is malformed, is not an event of this room (including any id
+issued before a control restart), or is older than the retained window (last
+500 events per room) gets a `reset` envelope instead
+(`{"type":"reset",…,"payload":{"reason":"malformed|unknown|expired","lastId":N}}`):
+refetch the room, messages, and activity, then keep reading.
+
+`assistant.delta` drafts are live-only: never stored, never replayed, and
+never counted against the 500-event window, so they cannot evict tool or
+approval records.
+Heartbeat comments are sent about every 15s. See
+[docs/openapi.yaml](./docs/openapi.yaml) and
+[docs/contract-notes/sse-resume.md](./docs/contract-notes/sse-resume.md).
+
+P0 supports a single control instance only: the replay-to-live handoff uses
+this process's in-memory fan-out. For multiple replicas, live fan-out moves to
+Postgres LISTEN/NOTIFY or NATS, while replay logic stays unchanged.
+
+```bash
+curl -N -H 'Last-Event-ID: 42' \
+  http://127.0.0.1:8080/v1/rooms/rm_0123456789abcdef/events
+```
+
+### End-to-end checks
+
+QA sign-off (E-LE-1 to E-LE-4 and E-LE-6; E-LE-5 comes with the §17 auth PR)
+runs against the real stack: a Temporal dev
+server, `orbit-orch` and `orbit-worker` as containers of the
+[orbit-runtime](https://github.com/mindreon/orbit-runtime) image published for
+a pinned runtime commit (run by digest), and two `orbit-control` processes
+built from this tree. It writes `artifacts/e2e-real-stack.json` (control
+commit, component versions including the runtime image digest, and per case
+id, steps, expected, actual, pass; no timestamps, ports, or random ids). The
+`e2e` workflow runs it twice on the PR head, fails unless `git rev-parse HEAD`
+is non-empty, equals the PR head sha, and equals both reports' `commit`,
+requires byte-identical reports, scans the reports and all process logs for
+secrets, and uploads both. Timing values that differ between runs (for
+example how long a stalled stream took to release its slot) are written to a
+sidecar `<report>.observed.json` keyed by case id, not to the report.
+Requires Docker.
+
+```bash
+# runtime commit pinned as ORBIT_RUNTIME_REF in .github/workflows/e2e.yml
+go run ./e2e/realstack run -runtime-commit f8addbccc8f3ffc360ddccf3717f4d094c39f7ee
+go run ./e2e/realstack scan artifacts/e2e-real-stack.json e2e-logs/*.log
+```
+
+What each case covers, and which failure modes have no automated test, is in
+[docs/testing/last-event-id-failure-modes.md](./docs/testing/last-event-id-failure-modes.md).
 
 ## Non-goals (W1)
 

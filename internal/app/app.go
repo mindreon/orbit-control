@@ -1,11 +1,13 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -82,29 +84,8 @@ type Approval struct {
 	CreatedAt         string `json:"createdAt"`
 }
 
+// Event is a control-originated event payload (camelCase keys).
 type Event map[string]any
-
-type ActivityEvent struct {
-	ID                string `json:"id"`
-	Sequence          uint64 `json:"sequence"`
-	Type              string `json:"type"`
-	RoomID            string `json:"roomId"`
-	SessionID         string `json:"sessionId,omitempty"`
-	TurnID            string `json:"turnId,omitempty"`
-	Source            string `json:"source"`
-	Runtime           string `json:"runtime,omitempty"`
-	Protocol          string `json:"protocol,omitempty"`
-	Role              string `json:"role,omitempty"`
-	Text              string `json:"text,omitempty"`
-	ToolName          string `json:"toolName,omitempty"`
-	CallID            string `json:"callId,omitempty"`
-	ApprovalID        string `json:"approvalId,omitempty"`
-	ApprovalRequestID string `json:"approvalRequestId,omitempty"`
-	Reason            string `json:"reason,omitempty"`
-	Status            string `json:"status,omitempty"`
-	PermissionPreset  string `json:"permissionPreset,omitempty"`
-	OccurredAt        string `json:"occurredAt"`
-}
 
 type CreateRoomInput struct {
 	Kind             string
@@ -122,14 +103,18 @@ type App struct {
 	Rooms         map[string]*Room
 	Messages      map[string][]Message
 	Approvals     map[string]*Approval
-	Activity      map[string][]ActivityEvent
+	Events        EventLog
 	SessionRoom   map[string]string
 	Personas      map[string]*Persona
 	McpConnectors map[string]*McpConnector
 	CloudAgents   map[string]*CloudAgentJob
 	grants        map[string]*grantRecord
-	sequences     map[string]uint64
-	subs          map[string]map[chan []byte]struct{}
+	subs          map[string]map[*subscriber]struct{}
+	clientStreams map[string]int
+	// freedLogs are closed rooms whose event log was freed; later events for
+	// them are discarded so the log is not recreated.
+	freedLogs map[string]struct{}
+	Limits    Limits
 }
 
 func New(w *worker.Client) *App {
@@ -144,14 +129,16 @@ func NewWithOrch(w *worker.Client, o *orch.Client) *App {
 		Rooms:         map[string]*Room{},
 		Messages:      map[string][]Message{},
 		Approvals:     map[string]*Approval{},
-		Activity:      map[string][]ActivityEvent{},
+		Events:        NewMemoryEventLog(maxActivityPerRoom),
 		SessionRoom:   map[string]string{},
 		Personas:      map[string]*Persona{},
 		McpConnectors: map[string]*McpConnector{},
 		CloudAgents:   map[string]*CloudAgentJob{},
 		grants:        map[string]*grantRecord{},
-		sequences:     map[string]uint64{},
-		subs:          map[string]map[chan []byte]struct{}{},
+		subs:          map[string]map[*subscriber]struct{}{},
+		clientStreams: map[string]int{},
+		freedLogs:     map[string]struct{}{},
+		Limits:        DefaultLimits(),
 	}
 	return a
 }
@@ -191,7 +178,6 @@ func (a *App) CreateRoom(ctx context.Context, input CreateRoomInput) (*Room, err
 	a.mu.Lock()
 	a.Rooms[room.ID] = room
 	a.Messages[room.ID] = nil
-	a.Activity[room.ID] = nil
 	a.mu.Unlock()
 
 	if a.Orch != nil {
@@ -299,12 +285,8 @@ func (a *App) ListMessages(roomID string) []Message {
 	return out
 }
 
-func (a *App) ListActivity(roomID string) []ActivityEvent {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	src := a.Activity[roomID]
-	out := make([]ActivityEvent, len(src))
-	copy(out, src)
+func (a *App) ListActivity(roomID string) []Envelope {
+	out, _ := a.Events.After(roomID, 0)
 	return out
 }
 
@@ -435,6 +417,7 @@ func (a *App) Decide(ctx context.Context, approvalID, decision string) (*Approva
 		a.mu.Unlock()
 		if decision == "reject" {
 			a.Publish(roomID, Event{"type": "session.status", "roomId": roomID, "status": "closed"})
+			a.roomClosed(roomID)
 			return &cp, nil
 		}
 		if res.Turn != nil {
@@ -456,6 +439,7 @@ func (a *App) Decide(ctx context.Context, approvalID, decision string) (*Approva
 		cp := *appr
 		a.mu.Unlock()
 		a.Publish(roomID, Event{"type": "session.status", "roomId": roomID, "status": "closed"})
+		a.roomClosed(roomID)
 		return &cp, nil
 	}
 
@@ -519,6 +503,7 @@ func (a *App) AbortRoom(ctx context.Context, roomID string) error {
 	room.State = RoomClosed
 	a.mu.Unlock()
 	a.Publish(roomID, Event{"type": "session.status", "roomId": roomID, "status": "closed"})
+	a.roomClosed(roomID)
 	return nil
 }
 
@@ -562,15 +547,29 @@ func (a *App) SteerRoom(ctx context.Context, roomID, instruction string) (bool, 
 	return accepted, nil
 }
 
+// workerEventTypes is OrbitEvent.type from orbit-runtime schema/OrbitEvent.json (A1).
 var workerEventTypes = map[string]struct{}{
-	"session.status":    {},
-	"assistant.message": {},
-	"tool.call":         {},
-	"tool.result":       {},
-	"approval.asked":    {},
-	"agent.started":     {},
-	"agent.finished":    {},
-	"usage":             {},
+	"session.status":       {},
+	"assistant.message":    {},
+	"assistant.delta":      {},
+	"tool.call":            {},
+	"tool.result":          {},
+	"approval.asked":       {},
+	"approval.resolved":    {},
+	"question.asked":       {},
+	"question.answered":    {},
+	"todo.updated":         {},
+	"usage":                {},
+	"agent.started":        {},
+	"agent.finished":       {},
+	"agent.spawn_rejected": {},
+	"turn.failed":          {},
+}
+
+// liveOnlyEventTypes are fanned out over SSE but never stored: they take no
+// id, never count against the retained window, and are never replayed.
+var liveOnlyEventTypes = map[string]struct{}{
+	"assistant.delta": {},
 }
 
 func eventString(ev Event, key string) string {
@@ -578,18 +577,35 @@ func eventString(ev Event, key string) string {
 	return value
 }
 
-func (a *App) Ingest(ev Event) error {
-	eventType := eventString(ev, "type")
+// Ingest validates a worker event's routing fields and stores or streams the
+// body unchanged as the envelope payload.
+func (a *App) Ingest(raw []byte) error {
+	var payload bytes.Buffer
+	if err := json.Compact(&payload, raw); err != nil || payload.Len() == 0 || payload.Bytes()[0] != '{' {
+		return fmt.Errorf("event must be a JSON object")
+	}
+	var head struct {
+		Type       string `json:"type"`
+		RoomID     string `json:"roomId"`
+		SessionID  string `json:"sessionId"`
+		OccurredAt string `json:"occurredAt"`
+	}
+	if err := json.Unmarshal(payload.Bytes(), &head); err != nil {
+		return fmt.Errorf("event type, roomId, sessionId, and occurredAt must be strings")
+	}
+	eventType := head.Type
 	if _, ok := workerEventTypes[eventType]; !ok {
 		return fmt.Errorf("unsupported Orbit event type %q", eventType)
 	}
-	if occurredAt := eventString(ev, "occurredAt"); occurredAt != "" {
-		if _, err := time.Parse(time.RFC3339Nano, occurredAt); err != nil {
+	ts := head.OccurredAt
+	if ts != "" {
+		if _, err := time.Parse(time.RFC3339Nano, ts); err != nil {
 			return fmt.Errorf("occurredAt must be RFC3339")
 		}
+	} else {
+		ts = now()
 	}
-	sessionID, _ := ev["sessionId"].(string)
-	roomID, _ := ev["roomId"].(string)
+	sessionID, roomID := head.SessionID, head.RoomID
 	a.mu.Lock()
 	mappedRoomID := ""
 	if sessionID != "" {
@@ -606,100 +622,85 @@ func (a *App) Ingest(ev Event) error {
 	if roomID == "" || !roomExists {
 		return fmt.Errorf("event is not associated with a known room")
 	}
+	env := Envelope{Type: eventType, TaskID: roomID, TS: ts, Source: "worker", Payload: payload.Bytes()}
+	if _, ok := liveOnlyEventTypes[eventType]; ok {
+		a.publishLive(env)
+		return nil
+	}
 	// Assistant text is persisted from runTurn.texts to avoid duplicates when
-	// ingest is also enabled. Activity stores the normalized live projection.
-	a.publish(roomID, ev, "worker")
+	// ingest is also enabled; the activity copy is the timeline record.
+	a.publishDurable(env)
 	return nil
 }
 
-func (a *App) Subscribe(roomID string) (<-chan []byte, func()) {
-	ch := make(chan []byte, 32)
-	a.mu.Lock()
-	if a.subs[roomID] == nil {
-		a.subs[roomID] = map[chan []byte]struct{}{}
-	}
-	a.subs[roomID][ch] = struct{}{}
-	a.mu.Unlock()
-	return ch, func() {
-		a.mu.Lock()
-		delete(a.subs[roomID], ch)
-		a.mu.Unlock()
-		close(ch)
-	}
-}
-
+// Publish records a control-originated event. Control owns this payload, so it
+// fills in room context the worker would otherwise supply.
 func (a *App) Publish(roomID string, ev Event) {
-	a.publish(roomID, ev, "control")
-}
-
-func (a *App) publish(roomID string, ev Event, source string) {
-	occurredAt := eventString(ev, "occurredAt")
-	if occurredAt == "" {
-		occurredAt = now()
-	}
-	eventID := eventString(ev, "eventId")
-	if eventID == "" {
-		eventID = id("ev_")
-	}
-
 	a.mu.Lock()
 	room := a.Rooms[roomID]
+	var preset, kernel string
+	if room != nil {
+		preset, kernel = room.PermissionPreset, room.Runtime.Kernel
+	}
+	a.mu.Unlock()
 	if room == nil {
+		return
+	}
+	payload := make(Event, len(ev)+4)
+	for k, v := range ev {
+		payload[k] = v
+	}
+	defaults := map[string]string{
+		"roomId":           roomID,
+		"occurredAt":       now(),
+		"runtime":          kernel,
+		"permissionPreset": preset,
+	}
+	for k, v := range defaults {
+		if eventString(payload, k) == "" && v != "" {
+			payload[k] = v
+		}
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	a.publishDurable(Envelope{
+		Type: eventString(payload, "type"), TaskID: roomID, TS: eventString(payload, "occurredAt"),
+		Source: "control", Payload: raw,
+	})
+}
+
+func (a *App) publishDurable(env Envelope) {
+	// Encoded before the lock without its id; env.ID is zero here, so the
+	// omitempty id field is absent and the id is spliced in once assigned.
+	body, err := EncodeEnvelope(env)
+	if err != nil || len(body) == 0 || body[0] != '{' {
+		return
+	}
+	a.mu.Lock()
+	room := a.Rooms[env.TaskID]
+	_, freed := a.freedLogs[env.TaskID]
+	if room == nil || freed {
 		a.mu.Unlock()
 		return
 	}
-	a.sequences[roomID]++
-	runtimeName := eventString(ev, "runtime")
-	if runtimeName == "" {
-		runtimeName = room.Runtime.Kernel
-	}
-	if runtimeName == "" {
-		runtimeName = RuntimeKernel
-	}
-	protocol := eventString(ev, "protocol")
-	if protocol == "" {
-		protocol = room.Runtime.Protocol
-	}
-	item := ActivityEvent{
-		ID:                eventID,
-		Sequence:          a.sequences[roomID],
-		Type:              eventString(ev, "type"),
-		RoomID:            roomID,
-		SessionID:         eventString(ev, "sessionId"),
-		TurnID:            eventString(ev, "turnId"),
-		Source:            source,
-		Runtime:           runtimeName,
-		Protocol:          protocol,
-		Role:              eventString(ev, "role"),
-		Text:              eventString(ev, "text"),
-		ToolName:          eventString(ev, "toolName"),
-		CallID:            eventString(ev, "callId"),
-		ApprovalID:        eventString(ev, "approvalId"),
-		ApprovalRequestID: eventString(ev, "approvalRequestId"),
-		Reason:            eventString(ev, "reason"),
-		Status:            eventString(ev, "status"),
-		PermissionPreset:  room.PermissionPreset,
-		OccurredAt:        occurredAt,
-	}
-	history := append(a.Activity[roomID], item)
-	if len(history) > maxActivityPerRoom {
-		history = append([]ActivityEvent(nil), history[len(history)-maxActivityPerRoom:]...)
-	}
-	a.persistActivity(roomID, item)
-	a.persistRoom(room)
-	a.Activity[roomID] = history
-	raw, err := json.Marshal(item)
+	// Append and broadcast under a.mu so SubscribeRoom's head snapshot sees
+	// every event either in the log or in its buffer, and subscribers get a
+	// room's events in id order.
+	env, err = a.Events.Append(env.TaskID, env)
 	if err != nil {
 		a.mu.Unlock()
 		return
 	}
-	for ch := range a.subs[roomID] {
-		select {
-		case ch <- raw:
-		default:
-		}
-	}
+	snapshot := *room
+	raw := append([]byte(`{"id":`+strconv.FormatUint(env.ID, 10)+`,`), body[1:]...)
+	a.broadcastLocked(env.TaskID, StreamFrame{Seq: env.ID, Durable: true, Data: raw})
 	a.mu.Unlock()
+	// Audit and room files are written outside a.mu; concurrent publishes may
+	// append audit lines out of id order, so readers sort by id.
+	a.persistActivity(env.TaskID, env)
+	a.persistRoom(&snapshot)
 }
 
 func runTurnFromOrch(res orch.RunTurnResult) worker.RunTurnOut {
