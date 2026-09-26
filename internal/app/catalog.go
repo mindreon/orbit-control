@@ -266,7 +266,7 @@ func (a *App) CompositionForRoom(personaID, grantID string) (*Persona, []*McpCon
 	return persona, connectors, grantEnv, nil
 }
 
-func (a *App) persistActivity(roomID string, item ActivityEvent) {
+func (a *App) persistActivity(roomID string, item Envelope) {
 	a.ensureCatalog()
 	_ = a.Store.AppendJSONL("audit/"+roomID+".jsonl", item)
 }

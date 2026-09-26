@@ -123,11 +123,17 @@ func startBinary(t *testing.T, vars []envVar) *proc {
 	t.Helper()
 	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME")}
 	port := ""
+	internalSet := false
 	for _, v := range vars {
 		env = append(env, v.Name+"="+v.Value)
 		if v.Name == "PORT" {
 			port = v.Value
 		}
+		internalSet = internalSet || v.Name == "ORBIT_INTERNAL_ADDR"
+	}
+	if !internalSet {
+		// Parallel binaries must not share the default internal port.
+		env = append(env, "ORBIT_INTERNAL_ADDR=127.0.0.1:"+freePort(t))
 	}
 	p := &proc{output: &lockedBuffer{}, done: make(chan struct{})}
 	p.cmd = exec.Command(binaryPath)

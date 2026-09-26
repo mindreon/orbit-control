@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -82,18 +83,20 @@ func cors(next http.Handler) http.Handler {
 	})
 }
 
-// Handler is the default process mux, configured from the environment.
+// Handlers builds the process's public and internal muxes over one App,
+// configured from the environment.
 // Worker URL: ORBIT_WORKER_URL (default http://127.0.0.1:8090).
 // When TEMPORAL_ADDRESS is set, rooms are driven through RoomWorkflow.
 // Storage follows §18.2 (ORBIT_CONTROL_DB_URL); the returned func closes it.
-func Handler() (http.Handler, func(), error) {
+// The internal handler must only be bound to ORBIT_INTERNAL_ADDR.
+func Handlers() (public, internal http.Handler, closeStore func(), err error) {
 	base := os.Getenv("ORBIT_WORKER_URL")
 	if base == "" {
 		base = "http://127.0.0.1:8090"
 	}
 	repo, err := openRepository(context.Background())
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	defaultTenant := strings.TrimSpace(os.Getenv("ORBIT_DEFAULT_TENANT"))
 	if defaultTenant == "" {
@@ -102,25 +105,26 @@ func Handler() (http.Handler, func(), error) {
 	if err := repo.CheckTenant(context.Background(), defaultTenant); err != nil {
 		repo.Close()
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, nil, fmt.Errorf("default tenant %q does not exist; create it with the ops role (deploy/postgres/ensure-tenant.sql)", defaultTenant)
+			return nil, nil, nil, fmt.Errorf("default tenant %q does not exist; create it with the ops role (deploy/postgres/ensure-tenant.sql)", defaultTenant)
 		}
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	opts := app.Options{Worker: worker.New(base), Repo: repo, DefaultTenant: defaultTenant}
 	if addr := os.Getenv("TEMPORAL_ADDRESS"); addr != "" {
 		oc, err := dialOrch(addr, os.Getenv("TEMPORAL_NAMESPACE"), os.Getenv("TEMPORAL_TASK_QUEUE"))
 		if err != nil {
 			repo.Close()
-			return nil, nil, errors.New("temporal dial: " + err.Error())
+			return nil, nil, nil, errors.New("temporal dial: " + err.Error())
 		}
 		opts.Orch = oc
 	}
 	runtime := app.NewWithOptions(opts)
-	h := HandlerWithOptions(runtime, Options{
+	runtime.Limits = app.LimitsFromEnv()
+	public = HandlerWithOptions(runtime, Options{
 		Auth:           authenticatorFromEnv(defaultTenant),
 		AllowedOrigins: allowedOriginsFromEnv(),
 	})
-	return h, repo.Close, nil
+	return public, InternalHandler(runtime), repo.Close, nil
 }
 
 func dialOrch(addr, namespace, taskQueue string) (*orch.Client, error) {
@@ -293,39 +297,7 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"items": items})
 	}))
-	mux.HandleFunc("GET /v1/rooms/{roomId}/events", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
-		roomID := r.PathValue("roomId")
-		flusher, ok := w.(http.Flusher)
-		if !ok {
-			writeErr(w, http.StatusInternalServerError, "SSE_UNSUPPORTED", "streaming unsupported")
-			return
-		}
-		// Subscribe before the visibility check: a concurrent DELETE either
-		// closes this channel or is already visible to the check below.
-		ch, cancel := runtime.Subscribe(roomID)
-		defer cancel()
-		if _, err := runtime.GetRoom(r.Context(), p, roomID); err != nil {
-			writeAppErr(runtime.Log, w, err, roomNotFound, http.StatusInternalServerError, "INTERNAL")
-			return
-		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-		_, _ = io.WriteString(w, ": connected\n\n")
-		flusher.Flush()
-		for {
-			select {
-			case <-r.Context().Done():
-				return
-			case raw, ok := <-ch:
-				if !ok {
-					return
-				}
-				_, _ = io.WriteString(w, "data: "+string(raw)+"\n\n")
-				flusher.Flush()
-			}
-		}
-	}))
+	mux.HandleFunc("GET /v1/rooms/{roomId}/events", authed(streamRoomEvents(runtime)))
 	mux.HandleFunc("GET /v1/approvals", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		items, err := runtime.ListApprovals(r.Context(), p)
 		if err != nil {
@@ -346,21 +318,9 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, appr)
 	}))
-	mux.HandleFunc("POST /internal/events", func(w http.ResponseWriter, r *http.Request) {
-		if !internalauth.Authorized(r) {
-			writeErr(w, http.StatusUnauthorized, "UNAUTHORIZED", "internal token required")
-			return
-		}
-		var ev app.Event
-		if err := json.NewDecoder(r.Body).Decode(&ev); err != nil {
-			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
-			return
-		}
-		if err := runtime.Ingest(r.Context(), ev); err != nil {
-			writeAppErr(runtime.Log, w, err, roomNotFound, http.StatusBadRequest, "BAD_REQUEST")
-			return
-		}
-		writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
+	// Internal routes live only on InternalHandler's listener.
+	mux.HandleFunc("/internal/", func(w http.ResponseWriter, _ *http.Request) {
+		writeErr(w, http.StatusNotFound, "NOT_FOUND", "not found")
 	})
 	mux.HandleFunc("GET /v1/personas", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"items": runtime.ListPersonas()})
@@ -459,4 +419,39 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 		writeErr(w, http.StatusNotImplemented, "NOT_IMPLEMENTED", "use GET /v1/rooms/{roomId}/events (SSE) in W1")
 	})
 	return cors(mux)
+}
+
+// InternalHandler serves worker → control routes. It must be bound to a
+// listener that is not published (ORBIT_INTERNAL_ADDR), never the public one.
+func InternalHandler(runtime *app.App) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, HealthBody{Status: "ok"})
+	})
+	mux.HandleFunc("POST /internal/events", func(w http.ResponseWriter, r *http.Request) {
+		if !internalauth.Authorized(r) {
+			writeErr(w, http.StatusUnauthorized, "UNAUTHORIZED", "internal token required")
+			return
+		}
+		raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, runtime.Limits.IngestMaxBytes))
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeErr(w, http.StatusRequestEntityTooLarge, "PAYLOAD_TOO_LARGE",
+				"event body exceeds "+strconv.FormatInt(tooLarge.Limit, 10)+" bytes")
+			return
+		}
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+			return
+		}
+		if err := runtime.Ingest(r.Context(), raw); err != nil {
+			writeAppErr(runtime.Log, w, err, roomNotFound, http.StatusBadRequest, "BAD_REQUEST")
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		writeErr(w, http.StatusNotFound, "NOT_FOUND", "not found")
+	})
+	return mux
 }

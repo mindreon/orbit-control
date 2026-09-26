@@ -313,13 +313,113 @@ paths:
       summary: SSE room events
       description: |
         W1 stand-in for public WebSocket. orbit-web subscribes here only.
-        Frames are normalized `ActivityEvent` JSON (not raw ACP).
+        Every frame is a default SSE `message` whose `data:` is an
+        `EventEnvelope` (never raw ACP); switch on `data.type`.
+
+        **Event ids.** Every message carries `id: <n>`, where `n` is
+        `EventEnvelope.id`: the event's id from one process-global in-memory
+        counter shared by all rooms. Within a room ids strictly increase but
+        are not contiguous. The counter restarts with control, so ids issued
+        before a restart are unknown afterwards.
+
+        **Resume.** Send the last id you received as the `Last-Event-ID`
+        header (browsers do this on EventSource auto-reconnect) or as the
+        `lastEventId` query parameter. The header wins when both are present.
+        The cursor must be `0` or the id of an event of **this** room.
+        Control replays this room's retained events with a greater id, in
+        order, then switches to live with no duplicates and no gaps. Without
+        a cursor the stream is live-only, as before.
+
+        **Reset.** If the cursor is malformed, unknown (not an event of this
+        room — e.g. another room's id, an id beyond the latest issued, or any
+        id issued before a control restart), or older than the earliest
+        retained event (activity keeps the last 500 per room), the first
+        message is a `reset` envelope (payload `ResetPayload`) whose `id:` is
+        this room's latest event id. Refetch the room, messages, and
+        activity, then keep reading this stream; it continues live after
+        `payload.lastId`. Rooms are also in memory, so after a restart the
+        room itself is usually gone and the request gets `404` before any
+        stream opens.
+
+        **assistant.delta** envelopes are live-only: not stored, no envelope
+        `id`, never replayed, and never counted against the 500-event
+        window. Their SSE `id:` repeats the id of the last durable event
+        delivered on this connection. Clients drop partial drafts on
+        reconnect. Deltas can be dropped (behind replayed events, or while a
+        stream catches up after a buffer overflow) without any signal; the
+        persisted `assistant.message` is authoritative.
+
+        **No authorization yet.** Until the §17 auth PR, any caller can
+        replay any room. Control refuses to start on a non-loopback public
+        bind unless `ORBIT_ALLOW_UNAUTHENTICATED_BIND=1` (not externally
+        reachable environments only).
+
+        **Stream end.** The stream ends when its room closes (after buffered
+        frames), when a write stalls past `ORBIT_SSE_WRITE_TIMEOUT`, after a
+        `lagging` reset, or on an event store error (preceded by
+        `retry: 10000`).
+
+        Comment lines `: connected` and `: heartbeat` (about every 15s) keep
+        proxies from idling the connection; they carry no id.
       x-unimplemented: false
       parameters:
         - $ref: "#/components/parameters/RoomId"
+        - name: Last-Event-ID
+          in: header
+          required: false
+          description: Resume cursor, the last event id received (decimal).
+          schema:
+            type: string
+          example: "42"
+        - name: lastEventId
+          in: query
+          required: false
+          description: EventSource fallback for `Last-Event-ID`; ignored when the header is set.
+          schema:
+            type: string
+          example: "42"
       responses:
         "200":
-          description: text/event-stream of ActivityEvent JSON
+          description: |
+            `text/event-stream` with `Cache-Control: no-cache` and
+            `X-Accel-Buffering: no`. Each `data:` is an `EventEnvelope`.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                enum: [no-cache]
+            X-Accel-Buffering:
+              schema:
+                type: string
+                enum: ["no"]
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/EventEnvelope"
+        "404":
+          description: Room not found. Returned before any stream is opened.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+              example:
+                error: not found
+                code: NOT_FOUND
+                message: room not found
+        "429":
+          description: |
+            The room (`STREAM_LIMIT_ROOM`, `ORBIT_SSE_MAX_STREAMS_PER_ROOM`) or
+            the client IP (`STREAM_LIMIT_CLIENT`,
+            `ORBIT_SSE_MAX_STREAMS_PER_CLIENT`) is at its SSE stream cap.
+            Returned before any stream is opened.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+              example:
+                error: stream limit room
+                code: STREAM_LIMIT_ROOM
+                message: too many streams on this room
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -330,8 +430,10 @@ paths:
       operationId: listRoomActivity
       summary: List the room execution timeline
       description: |
-        Returns a bounded, ordered history of normalized Orbit events. The
-        response never contains raw dsh or ACP frames.
+        Returns the room's retained durable events (last 500), oldest first,
+        as `EventEnvelope`s with the producer's payload passed through
+        unchanged. `assistant.delta` is never included. The response never
+        contains raw dsh or ACP frames.
       x-unimplemented: false
       parameters:
         - $ref: "#/components/parameters/RoomId"
@@ -858,67 +960,106 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Approval"
-    ActivityEvent:
+    EventEnvelope:
       type: object
       additionalProperties: false
-      required: [id, sequence, type, roomId, source, occurredAt]
+      required: [type, taskId, ts, source, payload]
+      description: |
+        One room (task) event on `/activity` and SSE: typed routing fields
+        plus the producer's payload. **BREAKING** vs the former flat
+        `ActivityEvent`: fields such as `text`, `toolName`, `role`,
+        `status`, and `reason` now live under `payload`, and `sequence` is
+        now `id`.
       properties:
         id:
-          type: string
-        sequence:
           type: integer
           format: int64
+          description: |
+            Event id from one process-global counter shared by all rooms;
+            strictly increasing within a room, not contiguous, and reset when
+            control restarts. This is the event's SSE `id:`. Absent on
+            live-only envelopes (`assistant.delta`, `reset`).
         type:
           type: string
-          enum:
-            - session.status
-            - assistant.message
-            - tool.call
-            - tool.result
-            - approval.asked
-            - agent.started
-            - agent.finished
-            - usage
-            - room.steered
-        roomId:
+          description: |
+            Worker types are `OrbitEvent.type` (orbit-runtime A1 schema).
+            Control also emits `session.status`, `assistant.message` (user
+            turns), `approval.asked`, `room.steered`, and `reset` (SSE only).
+          example: tool.result
+        taskId:
           type: string
-        sessionId:
+          description: Room id (room = task, contract C29).
+        ts:
           type: string
-        turnId:
-          type: string
+          format: date-time
+          description: The payload's `occurredAt` when present, otherwise when control received it.
         source:
           type: string
           enum: [control, worker]
-        runtime:
-          type: string
+        payload:
+          anyOf:
+            - $ref: "#/components/schemas/ResetPayload"
+            - type: object
+              additionalProperties: true
           description: |
-            Runtime that produced the event. The AgentScope worker sends
-            `agentscope`. `dsh` is not required.
-          example: agentscope
-        protocol:
-          type: string
-          description: Session protocol when present. `acp` is not required.
-        role:
-          type: string
-        text:
-          type: string
-        toolName:
-          type: string
-        callId:
-          type: string
-        approvalId:
-          type: string
-        approvalRequestId:
-          type: string
+            `source=worker`: the ingested `OrbitEvent` body, unchanged
+            (camelCase; whitespace compacted), including fields control does
+            not interpret — e.g. `delta`, `blockId`, `seq`,
+            `activityAttempt`, `argsPreview`, `toolState`, `truncated`,
+            `agentId`, `agentPath`, `turnId`, `failure`, and usage counters.
+            `source=control`: control's own event fields plus `roomId`,
+            `occurredAt`, `runtime`, and `permissionPreset`. `type=reset`:
+            `ResetPayload`.
+      example:
+        id: 42
+        type: tool.result
+        taskId: rm_0123456789abcdef
+        ts: "2026-09-26T14:00:00.123456+00:00"
+        source: worker
+        payload:
+          type: tool.result
+          roomId: rm_0123456789abcdef
+          sessionId: sess-1
+          toolName: bash
+          callId: c1
+          toolState: success
+          truncated: false
+          text: README.md
+          agentId: main
+          agentPath: main
+          turnId: tn_1
+          occurredAt: "2026-09-26T14:00:00.123456+00:00"
+    ResetPayload:
+      type: object
+      additionalProperties: false
+      required: [reason, lastId]
+      description: |
+        Payload of a `type=reset` envelope (no envelope `id`, `source=control`),
+        sent as the first SSE message when a resume cursor cannot be
+        honoured. Control never silently skips: refetch
+        `GET /v1/rooms/{roomId}`, `/messages`, and `/activity`, then keep
+        reading the same stream, which continues live after `lastId`. The
+        frame's SSE `id:` is `lastId`.
+      properties:
         reason:
           type: string
-        status:
-          type: string
-        permissionPreset:
-          $ref: "#/components/schemas/PermissionPreset"
-        occurredAt:
-          type: string
-          format: date-time
+          enum: [malformed, unknown, expired, lagging]
+          description: |
+            `malformed` — not a canonical decimal id. `unknown` — not an event
+            of this room: another room's id, beyond the latest issued id, or
+            issued before a control restart. `expired` — one of this room's
+            own events, evicted from the retained window. `lagging` — the
+            reader fell behind its live buffer too many times in a row; the
+            stream closes after this frame (reconnect with `lastId`).
+        lastId:
+          type: integer
+          format: int64
+          description: |
+            This room's latest event id at reset time (0 if none); the stream
+            resumes after it.
+      example:
+        reason: expired
+        lastId: 812
     ActivityEventList:
       type: object
       additionalProperties: false
@@ -927,7 +1068,7 @@ components:
         items:
           type: array
           items:
-            $ref: "#/components/schemas/ActivityEvent"
+            $ref: "#/components/schemas/EventEnvelope"
     PostMessageResponse:
       type: object
       additionalProperties: false
@@ -1030,21 +1171,32 @@ components:
       additionalProperties: true
       required: [type]
       description: |
-        Public WS envelope. Worker ingest must already be this shape — never
-        raw ACP session/update.
+        Worker ingest body (internal `/internal/events`), camelCase, as in
+        orbit-runtime `schema/OrbitEvent.json` (A1) — never raw ACP
+        session/update. Control validates `type` (unknown types are 400),
+        `roomId`/`sessionId`, and `occurredAt`, then stores or streams the
+        body unchanged as `EventEnvelope.payload`. `assistant.delta` is
+        fanned out over SSE only: never stored, never replayed, never
+        counted against the 500-event window.
       properties:
         type:
           type: string
           enum:
             - session.status
             - assistant.message
+            - assistant.delta
             - tool.call
             - tool.result
             - approval.asked
+            - approval.resolved
+            - question.asked
+            - question.answered
+            - todo.updated
+            - usage
             - agent.started
             - agent.finished
-            - usage
-            - room.steered
+            - agent.spawn_rejected
+            - turn.failed
         roomId:
           type: string
         jobId:

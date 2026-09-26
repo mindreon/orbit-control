@@ -197,9 +197,12 @@ func (s *syncBuffer) String() string {
 
 // server is the production handler stack on a real TCP listener.
 type server struct {
-	base    string
-	appPool *pgxpool.Pool
-	logs    *syncBuffer
+	base string
+	// internal is the internal listener (POST /internal/*); the public one
+	// answers 404 there.
+	internal string
+	appPool  *pgxpool.Pool
+	logs     *syncBuffer
 }
 
 type serverOpts struct {
@@ -235,7 +238,9 @@ func startServer(t *testing.T, o serverOpts) *server {
 		Auth: auth, AllowedOrigins: []string{testOrigin},
 	}))
 	t.Cleanup(srv.Close)
-	return &server{base: srv.URL, appPool: pool, logs: logs}
+	isrv := httptest.NewServer(httpapi.InternalHandler(runtime))
+	t.Cleanup(isrv.Close)
+	return &server{base: srv.URL, internal: isrv.URL, appPool: pool, logs: logs}
 }
 
 type httpReq struct {
@@ -318,7 +323,11 @@ func (e httpExp) matches(a httpAct) bool {
 // check sends req, compares with exp and records an e2e case.
 func (s *server) check(t *testing.T, id, contract, desc string, req httpReq, exp httpExp) httpAct {
 	t.Helper()
-	act := sendTo(t, s.base, req)
+	base := s.base
+	if strings.HasPrefix(req.Path, "/internal/") {
+		base = s.internal
+	}
+	act := sendTo(t, base, req)
 	record(t, caseInput{ID: id, Contract: contract, Kind: "e2e", Description: desc, Request: req, Expected: exp, Actual: act, Pass: exp.matches(act)})
 	return act
 }

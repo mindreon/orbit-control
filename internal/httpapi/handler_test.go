@@ -92,7 +92,7 @@ func TestRoomHITLAllowCompletesTurn(t *testing.T) {
 	req = internalReq(http.MethodPost, "/internal/events",
 		`{"eventId":"ev-worker-1","occurredAt":"2026-09-11T00:00:00Z","type":"tool.call","roomId":"`+
 			room.ID+`","sessionId":"`+room.SessionID+`","toolName":"bash","status":"pending","runtime":"agentscope","protocol":"session"}`)
-	h.ServeHTTP(rec, req)
+	InternalHandler(runtime).ServeHTTP(rec, req)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("ingest %d %s", rec.Code, rec.Body.String())
 	}
@@ -170,8 +170,19 @@ func TestRoomHITLAllowCompletesTurn(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("activity %d %s", rec.Code, rec.Body.String())
 	}
+	type payload struct {
+		EventID          string `json:"eventId"`
+		ToolName         string `json:"toolName"`
+		Runtime          string `json:"runtime"`
+		Protocol         string `json:"protocol"`
+		PermissionPreset string `json:"permissionPreset"`
+	}
 	var activity struct {
-		Items []app.ActivityEvent `json:"items"`
+		Items []struct {
+			Type    string  `json:"type"`
+			Source  string  `json:"source"`
+			Payload payload `json:"payload"`
+		} `json:"items"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&activity); err != nil {
 		t.Fatal(err)
@@ -181,21 +192,21 @@ func TestRoomHITLAllowCompletesTurn(t *testing.T) {
 	}
 	foundWorkerEvent := false
 	for _, item := range activity.Items {
-		if item.ID == "ev-worker-1" && item.Source == "worker" && item.ToolName == "bash" {
+		if item.Payload.EventID == "ev-worker-1" && item.Source == "worker" && item.Payload.ToolName == "bash" {
 			foundWorkerEvent = true
-			if item.Runtime != "agentscope" || item.Protocol != "session" {
+			if item.Payload.Runtime != "agentscope" || item.Payload.Protocol != "session" {
 				t.Fatalf("worker event runtime = %+v", item)
 			}
 		}
 	}
 	if !foundWorkerEvent {
-		t.Fatalf("missing normalized worker event: %+v", activity.Items)
+		t.Fatalf("missing worker event: %+v", activity.Items)
 	}
 	last := activity.Items[len(activity.Items)-1]
-	if last.Type != "room.steered" || last.Source != "control" || last.PermissionPreset != app.PermissionWorkspaceWrite {
+	if last.Type != "room.steered" || last.Source != "control" || last.Payload.PermissionPreset != app.PermissionWorkspaceWrite {
 		t.Fatalf("last activity = %+v", last)
 	}
-	if last.Runtime != app.RuntimeKernel || last.Protocol != "" {
+	if last.Payload.Runtime != app.RuntimeKernel || last.Payload.Protocol != "" {
 		t.Fatalf("control event still forces dsh/acp: %+v", last)
 	}
 }
@@ -271,7 +282,7 @@ func TestCreateCloudAgentAcceptsReadOnlyPerJob(t *testing.T) {
 }
 
 func TestInternalEventsRejectRawOrUnknownPayloads(t *testing.T) {
-	h := HandlerWith(app.New(worker.New("")))
+	h := InternalHandler(app.New(worker.New("")))
 	for _, body := range []string{
 		`{"jsonrpc":"2.0","method":"session/update"}`,
 		`{"type":"session/update","sessionId":"sess-raw"}`,

@@ -21,11 +21,13 @@ import (
 )
 
 const (
-	contractRevision = "§18 (C32 rev3)"
-	// Contract of record: docs/contracts/orbit-contract-v2.md (Celestial-confirmed).
-	contractSHA256 = "113aebd89914a1008d1c57457572ef38e5de35c74e88ce2f8b8410997f9af90b"
-	// Previous signed version (C32 rev2).
-	previousContractSHA256 = "053a37bb093e06602a50f6412cd57eb3491161f039b567880ba6650ec6965229"
+	contractRevision = "C32 rev3 + C34 rev2.1 (orbit-control#18 head 79b185a)"
+	// Contract of record: docs/contracts/orbit-contract-v2.md as merged to
+	// main by orbit-control#18 (17baead).
+	contractSHA256 = "848d2fd39447de049639484fcf2daf16f57cafef78cc68b984be852d2aa9eaf0"
+	contractLines  = 1109
+	// Previous version of record (C32 rev3, phase 1).
+	previousContractSHA256 = "113aebd89914a1008d1c57457572ef38e5de35c74e88ce2f8b8410997f9af90b"
 )
 
 // Case is one row of the report. Kind is "e2e", "isolated" (must cite FM ids

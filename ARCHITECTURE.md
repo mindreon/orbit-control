@@ -84,11 +84,53 @@ W0 does not implement encryption. This rule is the contract for later waves.
 
 Token streams and tool lifecycle are too chatty for Temporal.
 
-W1 has an **internal** ingest (service auth is still pending and it is not
-listed as a public path in OpenAPI) that accepts allowlisted **Orbit events**
-only (see OpenAPI `OrbitEvent`). Control keeps a bounded in-memory timeline and
-fans SSE. Raw ACP `session/update` frames and events not associated with a
-known Room are rejected.
+W1 has an **internal** ingest (bearer `ORBIT_INTERNAL_TOKEN`; not listed as a
+public path in OpenAPI). It is served only on the internal listener
+(`ORBIT_INTERNAL_ADDR`, default `127.0.0.1:8081`); the public listener returns
+`404` for every `/internal/*` path. The ingest accepts allowlisted **Orbit events**
+only (see OpenAPI `OrbitEvent`, the orbit-runtime A1 types). Control validates
+the routing fields (`type`, `roomId`/`sessionId`, `occurredAt`) and keeps the
+body unchanged as the payload of a typed `EventEnvelope`; it does not
+re-shape worker events. Control keeps a bounded in-memory timeline and fans
+SSE. Raw ACP `session/update` frames, unknown types, and events not associated
+with a known Room are rejected.
+
+SSE ids come from one process-global counter in the in-memory event store
+(`app.EventLog`, implemented by `MemoryEventLog`); there are no per-room
+counters or locks, and every read filters by room. Replay and reset rules use
+only that interface, so a later persistence PR can swap the store without
+changing them. Until then a restart forgets every id. Resume is scoped per room: a cursor
+must be an event of the requested room, and a stream only reads that room's
+history. The handler subscribes to the live buffer before reading history, so
+the handoff has no gaps or duplicates; a cursor it cannot honour yields an
+explicit `reset`, never a silent skip. `assistant.delta` is live-only: it never
+enters the timeline or audit log and takes no slot in the 500-event window.
+When user auth (contract §17) lands, it runs
+in `authorizeRoomStream` — before the room lookup, stream headers, and replay.
+
+P0 supports a single control instance only; for multiple replicas, live
+fan-out moves to Postgres LISTEN/NOTIFY or NATS, while replay logic stays
+unchanged.
+
+Streams and ingest are bounded (README "Resource limits"): per-room and
+per-client stream caps (429 before any stream opens), a per-write SSE
+deadline, a consecutive-lag limit that ends a stream with `reset` `lagging`,
+a 413 ingest body cap, and closed rooms' streams ending and their logs being
+freed after a TTL. `EventsAfter` copies events under the App lock and encodes
+them outside it. `publishDurable` encodes the envelope before taking the lock
+and only splices in the id under it; appending and broadcasting stay under
+the lock so subscribers receive a room's events in id order. Audit and room
+files are written outside the lock.
+
+### 5a. No user auth yet — deploy gate
+
+Until the §17 auth PR merges, no `/v1` path is authenticated or authorized
+(`authorizeRoomStream` allows everyone, `GET /v1/rooms` lists every id, CORS
+is `*`). Control must not be externally reachable: it refuses to start on a
+non-loopback public bind unless `ORBIT_ALLOW_UNAUTHENTICATED_BIND=1`, which is
+only for networks not reachable from outside. The auth PR must add E-LE-5
+(reconnect without a session → 401, another tenant's session → 403/404, zero
+events replayed) and remove that switch.
 
 ### 6. Permission selection is an execution snapshot
 
@@ -100,8 +142,9 @@ known Room are rejected.
 - The worker validates it again and applies it to that AgentScope session.
 - The room snapshot records kernel `agentscope`. It does not require `dsh` or
   protocol `acp`.
-- The value is visible in Room and activity responses so operators can audit
-  the effective starting policy.
+- The value is visible in Room responses and in the payload of every
+  control-originated activity event (worker events carry the worker's own
+  value) so operators can audit the effective starting policy.
 - This permission preset is not a substitute for future tenant/workspace
   authorization in control.
 
