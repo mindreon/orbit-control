@@ -9,18 +9,98 @@ on:
 permissions:
   contents: read
 
+env:
+  # orbit-runtime commit the real-stack sign-off runs against (A1 events, PR #4).
+  ORBIT_RUNTIME_REF: 72372183cf6cf7562738e622835e26f6a11f0e71
+
 jobs:
-  last-event-id:
+  # QA sign-off E-LE-1..4: real Temporal, orbit-orch, orbit-worker, and orbit-control.
+  real-stack:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
+    env:
+      UV_PYTHON: "3.11"
     steps:
+      # The PR head itself, not the merge commit, so the report names the head SHA.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/checkout@v4
+        with:
+          repository: mindreon/orbit-runtime
+          ref: ${{ env.ORBIT_RUNTIME_REF }}
+          path: .e2e/orbit-runtime
 
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
 
-      - name: SSE Last-Event-ID end-to-end (real orbit-control binary)
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.12.17"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install orbit-runtime (orbit-orch, orbit-worker)
+        working-directory: .e2e/orbit-runtime
+        run: |
+          cat uv.lock.parts/part-* > uv.lock
+          sha256sum -c uv.lock.parts/SHA256SUMS
+          uv sync --frozen --no-dev
+
+      - name: E-LE run 1
+        run: go run ./e2e/realstack run -runtime .e2e/orbit-runtime -out artifacts/e2e-real-stack.json -logs e2e-logs/run1
+
+      - name: E-LE run 2 must match run 1
+        run: |
+          go run ./e2e/realstack run -runtime .e2e/orbit-runtime -out e2e-rerun/e2e-real-stack.json -logs e2e-logs/run2
+          cmp artifacts/e2e-real-stack.json e2e-rerun/e2e-real-stack.json
+          cp e2e-rerun/e2e-real-stack.json artifacts/e2e-real-stack.rerun.json
+
+      - name: Secret scan of the E2E reports
+        run: |
+          go run ./e2e/realstack scan artifacts/e2e-real-stack.json artifacts/e2e-real-stack.rerun.json -out artifacts/e2e-real-stack-secret-scan.json
+          curl -sSfL -o /tmp/gitleaks.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  /tmp/gitleaks.tgz" | sha256sum -c
+          tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
+          /tmp/gitleaks dir artifacts --no-banner --redact --report-format json --report-path /tmp/gitleaks.json
+          cp /tmp/gitleaks.json artifacts/e2e-real-stack-gitleaks.json
+
+      - name: Upload E2E report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-real-stack
+          path: artifacts/
+          if-no-files-found: error
+
+      # Worker logs can carry the planted test secrets, so only on failure.
+      - name: Upload E2E process logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-real-stack-process-logs
+          path: e2e-logs/
+          if-no-files-found: ignore
+
+  # SSE contract checks against the real control binary with a stub worker
+  # (resets for malformed/unknown/expired ids, restart, headers, heartbeat).
+  last-event-id:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: SSE Last-Event-ID end-to-end (real orbit-control binary, stub worker)
         run: go run ./e2e/lasteventid -out artifacts/e2e-last-event-id.json
 
       - uses: actions/upload-artifact@v4

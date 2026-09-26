@@ -1109,9 +1109,6 @@ func freePort() (int, error) {
 }
 
 func commit() string {
-	if sha := os.Getenv("GITHUB_SHA"); sha != "" {
-		return sha
-	}
 	out, err := exec.Command("git", "rev-parse", "HEAD").Output()
 	if err != nil {
 		return ""
