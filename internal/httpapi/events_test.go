@@ -90,14 +90,6 @@ func (e *eventsEnv) publish(roomID, text string) {
 	e.runtime.Publish(roomID, app.Event{"type": "room.steered", "roomId": roomID, "text": text})
 }
 
-func (e *eventsEnv) head(roomID string) uint64 {
-	items := e.runtime.ListActivity(roomID)
-	if len(items) == 0 {
-		return 0
-	}
-	return items[len(items)-1].Sequence
-}
-
 func (e *eventsEnv) connect(t *testing.T, roomID string, header, query string) *sseConn {
 	t.Helper()
 	u := e.srv.URL + "/v1/rooms/" + roomID + "/events"
@@ -179,22 +171,26 @@ func (c *sseConn) nextFrame() (sseFrame, error) {
 	}
 }
 
-// expectSeqs asserts the next durable frames are exactly want, in order.
-func (c *sseConn) expectSeqs(t *testing.T, roomID string, want ...uint64) {
+// expectIDs asserts the next durable frames are exactly want, in order, all
+// from roomID, with the SSE id equal to the global event id.
+func (c *sseConn) expectIDs(t *testing.T, roomID string, want ...uint64) {
 	t.Helper()
-	for _, seq := range want {
+	for _, id := range want {
 		f := c.next(t)
 		d := f.decode(t)
-		if d.Sequence != seq || d.RoomID != roomID || f.ID != app.FormatEventID(roomID, seq) {
-			t.Fatalf("got frame id=%q room=%s seq=%d type=%s, want %s", f.ID, d.RoomID, d.Sequence, d.Type, app.FormatEventID(roomID, seq))
+		if d.Sequence != id || d.RoomID != roomID || f.ID != app.FormatEventID(id) {
+			t.Fatalf("got frame id=%q room=%s sequence=%d type=%s, want id %d in %s", f.ID, d.RoomID, d.Sequence, d.Type, id, roomID)
 		}
 	}
 }
 
-func seqRange(from, to uint64) []uint64 {
+// idsAfter lists the room's retained event ids greater than after.
+func (e *eventsEnv) idsAfter(roomID string, after uint64) []uint64 {
 	var out []uint64
-	for s := from; s <= to; s++ {
-		out = append(out, s)
+	for _, item := range e.runtime.ListActivity(roomID) {
+		if item.Sequence > after {
+			out = append(out, item.Sequence)
+		}
 	}
 	return out
 }
@@ -213,47 +209,62 @@ func TestEventsResumeReplaysThenGoesLiveWithoutGapsOrDuplicates(t *testing.T) {
 	b := env.createRoom(t)
 	for i := 0; i < 5; i++ {
 		env.publish(a.ID, "before")
+		env.publish(b.ID, "other-room")
 	}
-	resumeFrom := env.head(a.ID) - 3
+	history := env.idsAfter(a.ID, 0)
+	resumeFrom := history[len(history)-4]
 
 	var once sync.Once
 	setHooks(t,
 		func() {
 			// Lands both in the live buffer and in history: must not repeat.
 			env.publish(a.ID, "during-subscribe-1")
-			env.publish(a.ID, "during-subscribe-2")
 			env.publish(b.ID, "other-room")
+			env.publish(a.ID, "during-subscribe-2")
 		},
 		func(uint64) {
 			// History is already snapshotted: only the buffer can deliver these.
 			once.Do(func() {
 				env.publish(a.ID, "during-replay-1")
-				env.publish(a.ID, "during-replay-2")
 				env.publish(b.ID, "other-room")
+				env.publish(a.ID, "during-replay-2")
 			})
 		},
 	)
 
 	// Header wins over a stale query cursor.
-	c := env.connect(t, a.ID, app.FormatEventID(a.ID, resumeFrom), "garbage")
-	head := resumeFrom + 3 + 4
-	c.expectSeqs(t, a.ID, seqRange(resumeFrom+1, head)...)
-	if got := env.head(a.ID); got != head {
-		t.Fatalf("head = %d, want %d", got, head)
+	c := env.connect(t, a.ID, app.FormatEventID(resumeFrom), "garbage")
+	const replayed, duringHandoff = 3, 4
+	var got []uint64
+	for i := 0; i < replayed+duringHandoff; i++ {
+		f := c.next(t)
+		d := f.decode(t)
+		if d.RoomID != a.ID || f.ID != app.FormatEventID(d.Sequence) {
+			t.Fatalf("frame %d: id=%q room=%s", i, f.ID, d.RoomID)
+		}
+		got = append(got, d.Sequence)
+	}
+	if want := env.idsAfter(a.ID, resumeFrom); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("delivered %v, want exactly %v", got, want)
 	}
 
+	env.publish(b.ID, "other-room")
 	env.publish(a.ID, "live")
-	c.expectSeqs(t, a.ID, head+1)
+	c.expectIDs(t, a.ID, env.idsAfter(a.ID, got[len(got)-1])...)
 
 	t.Run("concurrent publisher", func(t *testing.T) {
 		setHooks(t, nil, nil)
 		room := env.createRoom(t)
+		noise := env.createRoom(t)
 		const total = 300
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
 			for i := 0; i < total; i++ {
 				env.publish(room.ID, "burst")
+				if i%3 == 0 {
+					env.publish(noise.ID, "noise")
+				}
 				if i%10 == 0 {
 					time.Sleep(time.Millisecond)
 				}
@@ -262,26 +273,24 @@ func TestEventsResumeReplaysThenGoesLiveWithoutGapsOrDuplicates(t *testing.T) {
 		var wg sync.WaitGroup
 		for i := 0; i < 8; i++ {
 			time.Sleep(3 * time.Millisecond)
-			cursor := env.head(room.ID) / 2
-			conn := env.connect(t, room.ID, app.FormatEventID(room.ID, cursor), "")
+			ids := env.idsAfter(room.ID, 0)
+			cursor := ids[len(ids)/2]
+			conn := env.connect(t, room.ID, app.FormatEventID(cursor), "")
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
 				<-done
-				final := env.head(room.ID)
-				prev := cursor
-				for prev < final {
+				for _, want := range env.idsAfter(room.ID, cursor) {
 					f, err := conn.nextFrame()
 					if err != nil {
-						t.Errorf("client from %d: %v after seq %d", cursor, err, prev)
+						t.Errorf("client from %d: %v, want id %d", cursor, err, want)
 						return
 					}
 					var d sseData
-					if err := json.Unmarshal([]byte(f.Data), &d); err != nil || d.Sequence != prev+1 || f.ID != app.FormatEventID(room.ID, d.Sequence) {
-						t.Errorf("client from %d: got seq %d (id %q) after %d", cursor, d.Sequence, f.ID, prev)
+					if err := json.Unmarshal([]byte(f.Data), &d); err != nil || d.Sequence != want || d.RoomID != room.ID || f.ID != app.FormatEventID(want) {
+						t.Errorf("client from %d: got id %q (room %s), want %d", cursor, f.ID, d.RoomID, want)
 						return
 					}
-					prev = d.Sequence
 				}
 			}()
 		}
@@ -289,8 +298,9 @@ func TestEventsResumeReplaysThenGoesLiveWithoutGapsOrDuplicates(t *testing.T) {
 	})
 }
 
-// Acceptance 2: every SSE message has an id, ids strictly increase by one per
-// durable event, and a client without Last-Event-ID still gets live-only.
+// Acceptance 2: every SSE message has an id; ids come from one global
+// sequence, so within a room they strictly increase (with gaps where other
+// rooms' events were allocated). A client without Last-Event-ID is live-only.
 func TestEventsEverySSEMessageCarriesMonotonicID(t *testing.T) {
 	prev := heartbeatInterval
 	heartbeatInterval = 20 * time.Millisecond
@@ -298,8 +308,10 @@ func TestEventsEverySSEMessageCarriesMonotonicID(t *testing.T) {
 
 	env := newEventsEnv(t)
 	room := env.createRoom(t)
+	other := env.createRoom(t)
 	env.publish(room.ID, "history-not-replayed")
-	start := env.head(room.ID)
+	start := env.idsAfter(room.ID, 0)
+	last := start[len(start)-1]
 
 	c := env.connect(t, room.ID, "", "")
 	for k, want := range map[string]string{
@@ -328,21 +340,26 @@ func TestEventsEverySSEMessageCarriesMonotonicID(t *testing.T) {
 
 	for i := 0; i < 5; i++ {
 		env.publish(room.ID, "live")
+		env.publish(other.ID, "interleaved")
 	}
-	last := start
+	sawGap := false
 	for i := 0; i < 5; i++ {
 		f := c.next(t)
 		if !f.HasID || f.ID == "" {
 			t.Fatalf("message without id: %+v", f)
 		}
-		seq, err := app.ParseEventID(room.ID, f.ID)
+		id, err := app.ParseEventID(f.ID)
 		if err != nil {
 			t.Fatalf("id %q: %v", f.ID, err)
 		}
-		if seq != last+1 || f.decode(t).Sequence != seq {
-			t.Fatalf("id %q after seq %d", f.ID, last)
+		if id <= last || f.decode(t).Sequence != id {
+			t.Fatalf("id %q after %d", f.ID, last)
 		}
-		last = seq
+		sawGap = sawGap || id > last+1
+		last = id
+	}
+	if !sawGap {
+		t.Fatal("room ids are contiguous; expected a shared global sequence")
 	}
 }
 
@@ -356,36 +373,38 @@ func TestEventsInvalidCursorSendsReset(t *testing.T) {
 		env.publish(room.ID, "x")
 	}
 	evicted := env.createRoom(t)
+	firstEvicted := env.idsAfter(evicted.ID, 0)[0]
 	for i := 0; i < 520; i++ {
 		env.publish(evicted.ID, "x")
 	}
+	otherID := env.idsAfter(other.ID, 0)[0]
 
 	cases := []struct {
 		name, roomID, header, query, reason string
 	}{
 		{"garbage", room.ID, "not-an-id", "", "malformed"},
-		{"bare sequence", room.ID, "2", "", "malformed"},
-		{"non-numeric sequence", room.ID, room.ID + ":abc", "", "malformed"},
-		{"non-canonical sequence", room.ID, room.ID + ":02", "", "malformed"},
-		{"query fallback", room.ID, "", room.ID + ":-1", "malformed"},
-		{"beyond head", room.ID, room.ID + ":999", "", "unknown"},
-		{"other room", room.ID, app.FormatEventID(other.ID, 1), "", "unknown"},
-		{"evicted", evicted.ID, app.FormatEventID(evicted.ID, 1), "", "expired"},
+		{"old room-prefixed form", room.ID, room.ID + ":2", "", "malformed"},
+		{"non-canonical", room.ID, "02", "", "malformed"},
+		{"query fallback", room.ID, "", "-1", "malformed"},
+		{"beyond global head", room.ID, "999999", "", "unknown"},
+		{"other room's event", room.ID, app.FormatEventID(otherID), "", "unknown"},
+		{"evicted", evicted.ID, app.FormatEventID(firstEvicted), "", "expired"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			head := env.head(tc.roomID)
+			ids := env.idsAfter(tc.roomID, 0)
+			head := ids[len(ids)-1]
 			c := env.connect(t, tc.roomID, tc.header, tc.query)
 			f := c.next(t)
 			d := f.decode(t)
 			if d.Type != "reset" || d.Reason != tc.reason || d.RoomID != tc.roomID || d.Sequence != head {
 				t.Fatalf("first message = %s, want reset reason=%s sequence=%d", f.Data, tc.reason, head)
 			}
-			if f.ID != app.FormatEventID(tc.roomID, head) {
-				t.Fatalf("reset id = %q", f.ID)
+			if f.ID != app.FormatEventID(head) {
+				t.Fatalf("reset id = %q, want room head %d", f.ID, head)
 			}
 			env.publish(tc.roomID, "after-reset")
-			c.expectSeqs(t, tc.roomID, head+1)
+			c.expectIDs(t, tc.roomID, env.idsAfter(tc.roomID, head)...)
 		})
 	}
 }
@@ -395,7 +414,8 @@ func TestEventsInvalidCursorSendsReset(t *testing.T) {
 func TestEventsAssistantDeltaIsLiveOnlyAndNeverReplayed(t *testing.T) {
 	env := newEventsEnv(t)
 	room := env.createRoom(t)
-	base := env.head(room.ID)
+	ids := env.idsAfter(room.ID, 0)
+	base := ids[len(ids)-1]
 	delta := func(text string) {
 		if err := env.runtime.Ingest(app.Event{
 			"type": "assistant.delta", "roomId": room.ID, "sessionId": room.SessionID,
@@ -409,14 +429,15 @@ func TestEventsAssistantDeltaIsLiveOnlyAndNeverReplayed(t *testing.T) {
 	delta("Hel")
 	env.publish(room.ID, "durable")
 	delta("lo")
+	durable := env.idsAfter(room.ID, base)[0]
 
 	f := live.next(t)
-	if d := f.decode(t); d.Type != "assistant.delta" || d.Delta != "Hel" || f.ID != app.FormatEventID(room.ID, base) {
+	if d := f.decode(t); d.Type != "assistant.delta" || d.Delta != "Hel" || f.ID != app.FormatEventID(base) {
 		t.Fatalf("first live frame = id %q %s", f.ID, f.Data)
 	}
-	live.expectSeqs(t, room.ID, base+1)
+	live.expectIDs(t, room.ID, durable)
 	f = live.next(t)
-	if d := f.decode(t); d.Type != "assistant.delta" || d.Delta != "lo" || f.ID != app.FormatEventID(room.ID, base+1) {
+	if d := f.decode(t); d.Type != "assistant.delta" || d.Delta != "lo" || f.ID != app.FormatEventID(durable) {
 		t.Fatalf("third live frame = id %q %s", f.ID, f.Data)
 	}
 
@@ -433,40 +454,41 @@ func TestEventsAssistantDeltaIsLiveOnlyAndNeverReplayed(t *testing.T) {
 		t.Fatal("delta persisted in audit log")
 	}
 
-	resumed := env.connect(t, room.ID, app.FormatEventID(room.ID, base), "")
-	resumed.expectSeqs(t, room.ID, base+1)
+	resumed := env.connect(t, room.ID, app.FormatEventID(base), "")
+	resumed.expectIDs(t, room.ID, durable)
 	env.publish(room.ID, "sentinel")
-	resumed.expectSeqs(t, room.ID, base+2)
+	resumed.expectIDs(t, room.ID, env.idsAfter(room.ID, durable)...)
 }
 
-// Acceptance 5: cursors are scoped per room; one room's id never yields
-// another room's events, in either direction.
+// Acceptance 5: a cursor must be an event id of the requested room; one
+// room's id never yields another room's events, in either direction.
 func TestEventsCursorIsScopedPerRoom(t *testing.T) {
 	env := newEventsEnv(t)
 	a := env.createRoom(t)
 	b := env.createRoom(t)
 	for i := 0; i < 10; i++ {
 		env.publish(a.ID, "a")
-	}
-	for i := 0; i < 3; i++ {
 		env.publish(b.ID, "b")
 	}
+	aIDs := env.idsAfter(a.ID, 0)
+	aCursor := aIDs[2]
 
-	// A's cursor is numerically within B's range but must not be replayed as B's.
-	onB := env.connect(t, b.ID, app.FormatEventID(a.ID, 2), "")
+	// A's id lies inside B's id range; it must not select B's later events.
+	onB := env.connect(t, b.ID, app.FormatEventID(aCursor), "")
 	f := onB.next(t)
 	if d := f.decode(t); d.Type != "reset" || d.Reason != "unknown" || d.RoomID != b.ID {
 		t.Fatalf("B with A's cursor = %s", f.Data)
 	}
+	bHead := env.idsAfter(b.ID, 0)
 	env.publish(a.ID, "a-live")
 	env.publish(b.ID, "b-live")
-	onB.expectSeqs(t, b.ID, env.head(b.ID))
+	onB.expectIDs(t, b.ID, env.idsAfter(b.ID, bHead[len(bHead)-1])...)
 
 	setHooks(t, func() { env.publish(b.ID, "b-during-subscribe") }, func(uint64) {})
-	aHead := env.head(a.ID)
-	onA := env.connect(t, a.ID, app.FormatEventID(a.ID, 2), "")
-	onA.expectSeqs(t, a.ID, seqRange(3, aHead)...)
+	want := env.idsAfter(a.ID, aCursor)
+	onA := env.connect(t, a.ID, app.FormatEventID(aCursor), "")
+	onA.expectIDs(t, a.ID, want...)
 	env.publish(b.ID, "b-live")
 	env.publish(a.ID, "a-sentinel")
-	onA.expectSeqs(t, a.ID, aHead+1)
+	onA.expectIDs(t, a.ID, env.idsAfter(a.ID, want[len(want)-1])...)
 }

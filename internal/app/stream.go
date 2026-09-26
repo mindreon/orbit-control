@@ -2,6 +2,8 @@ package app
 
 import (
 	"encoding/json"
+	"math"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -9,9 +11,9 @@ import (
 // StreamFrame is one SSE-bound event for a room.
 //
 // Durable frames are ActivityEvents: persisted to the audit log and retained
-// in the bounded activity window, Seq is their per-room sequence.
+// in the bounded activity window; Seq is their global event id.
 // Non-durable frames (assistant.delta) are fanned out live only; Seq is the
-// room's sequence at emission time, i.e. the last durable event before it.
+// global event head at emission time.
 type StreamFrame struct {
 	Seq     uint64
 	Durable bool
@@ -29,11 +31,12 @@ type subscriber struct {
 
 type Subscription struct {
 	Frames <-chan StreamFrame
-	// Lagged receives a token when a frame could not be buffered. The reader
-	// must re-read history after its cursor before trusting the buffer again.
+	// Lagged receives a token when a frame could not be buffered, before any
+	// later frame is buffered. The reader must re-read history after its
+	// cursor before delivering another frame.
 	Lagged <-chan struct{}
-	// Head is the room sequence at the instant the subscription started.
-	// Every durable frame on Frames has Seq > Head.
+	// Head is the room's latest event id when the subscription started (0 if
+	// none). Every durable frame on Frames has a greater id.
 	Head  uint64
 	close func()
 }
@@ -59,7 +62,7 @@ func (a *App) SubscribeRoom(roomID string) (*Subscription, bool) {
 	return &Subscription{
 		Frames: sub.frames,
 		Lagged: sub.lagged,
-		Head:   a.sequenceLocked(roomID),
+		Head:   a.roomHeadLocked(roomID),
 		close: func() {
 			a.mu.Lock()
 			delete(a.subs[roomID], sub)
@@ -96,50 +99,52 @@ type CursorError struct {
 
 func (e *CursorError) Error() string { return "event cursor " + string(e.Reason) }
 
-// FormatEventID is the public SSE `id:` for a durable event: "<roomId>:<sequence>".
-// The room prefix scopes ids per task so a cursor from one room is never
-// interpreted against another room's sequence.
-func FormatEventID(roomID string, seq uint64) string {
-	return roomID + ":" + strconv.FormatUint(seq, 10)
-}
+// FormatEventID is the public SSE `id:` of a durable event: its global event id.
+func FormatEventID(id uint64) string { return strconv.FormatUint(id, 10) }
 
-// ParseEventID accepts only the exact form FormatEventID emits for roomID.
-func ParseEventID(roomID, raw string) (uint64, error) {
-	i := strings.LastIndexByte(raw, ':')
-	if i <= 0 {
+// ParseEventID accepts only the canonical decimal form FormatEventID emits.
+// Whether the id belongs to a given room is decided by EventsAfter.
+func ParseEventID(raw string) (uint64, error) {
+	id, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil || strconv.FormatUint(id, 10) != raw {
 		return 0, &CursorError{Reason: ResetMalformed}
 	}
-	seq, err := strconv.ParseUint(raw[i+1:], 10, 64)
-	if err != nil || strconv.FormatUint(seq, 10) != raw[i+1:] {
-		return 0, &CursorError{Reason: ResetMalformed}
-	}
-	if raw[:i] != roomID {
-		return 0, &CursorError{Reason: ResetUnknown}
-	}
-	return seq, nil
+	return id, nil
 }
 
-// EventsAfter returns the retained durable events of roomID with sequence >
-// after, oldest first, plus the room head. It fails with ResetUnknown when
-// after is beyond anything this room issued, and ResetExpired when events
-// between after and the retained window were already evicted.
+// EventsAfter returns the retained durable events of roomID with id > after,
+// oldest first, plus the room's latest event id.
+//
+// after must be 0 (before the room's first event) or the id of an event of
+// this room; anything else is ResetUnknown, so an id from another room never
+// selects this room's events. ResetExpired means events after the cursor were
+// evicted from the retained window.
 func (a *App) EventsAfter(roomID string, after uint64) ([]StreamFrame, uint64, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	head := a.sequenceLocked(roomID)
-	if after > head {
+	head := a.roomHeadLocked(roomID)
+	if after > a.eventHeadLocked() {
 		return nil, head, &CursorError{Reason: ResetUnknown}
 	}
-	if after == head {
-		return nil, head, nil
-	}
 	history := a.Activity[roomID]
-	if len(history) == 0 || history[0].Sequence > after+1 {
+	start := sort.Search(len(history), func(i int) bool { return history[i].Sequence > after })
+	switch {
+	case after == 0:
+		oldestRetained := uint64(math.MaxUint64)
+		if len(history) > 0 {
+			oldestRetained = history[0].Sequence
+		}
+		if a.persistedRoomEventLocked(roomID, func(id uint64) bool { return id < oldestRetained }) {
+			return nil, head, &CursorError{Reason: ResetExpired}
+		}
+	case start > 0 && history[start-1].Sequence == after:
+	case a.persistedRoomEventLocked(roomID, func(id uint64) bool { return id == after }):
 		return nil, head, &CursorError{Reason: ResetExpired}
+	default:
+		return nil, head, &CursorError{Reason: ResetUnknown}
 	}
-	pending := history[after+1-history[0].Sequence:]
-	frames := make([]StreamFrame, 0, len(pending))
-	for _, item := range pending {
+	frames := make([]StreamFrame, 0, len(history)-start)
+	for _, item := range history[start:] {
 		raw, err := json.Marshal(item)
 		if err != nil {
 			return nil, head, err
@@ -149,26 +154,73 @@ func (a *App) EventsAfter(roomID string, after uint64) ([]StreamFrame, uint64, e
 	return frames, head, nil
 }
 
-// sequenceLocked returns the room's last issued sequence. The first lookup in
-// a process recovers the high-water mark from the persisted audit log, so ids
-// keep increasing for a room across control restarts.
-func (a *App) sequenceLocked(roomID string) uint64 {
-	if seq, ok := a.sequences[roomID]; ok {
-		return seq
+func (a *App) roomHeadLocked(roomID string) uint64 {
+	history := a.Activity[roomID]
+	if len(history) == 0 {
+		return 0
 	}
-	var last uint64
+	return history[len(history)-1].Sequence
+}
+
+// persistedRoomEventLocked reports whether the room's audit log (the durable
+// event table filtered by task) holds an id matching match. It only runs for
+// cursors outside the retained window.
+func (a *App) persistedRoomEventLocked(roomID string, match func(uint64) bool) bool {
 	a.ensureCatalog()
-	_ = a.Store.ReadJSONL("audit/"+roomID+".jsonl", func(line []byte) error {
-		var item struct {
-			Sequence uint64 `json:"sequence"`
-		}
-		if json.Unmarshal(line, &item) == nil && item.Sequence > last {
-			last = item.Sequence
+	found := false
+	_ = a.Store.ReadJSONL(auditPath(roomID), func(line []byte) error {
+		if !found {
+			if id, ok := auditSequence(line); ok && match(id) {
+				found = true
+			}
 		}
 		return nil
 	})
-	a.sequences[roomID] = last
-	return last
+	return found
+}
+
+// nextEventIDLocked allocates from the single global event sequence shared by
+// all rooms (the stand-in for a database identity column).
+func (a *App) nextEventIDLocked() uint64 {
+	a.eventHeadLocked()
+	a.eventSeq++
+	return a.eventSeq
+}
+
+// eventHeadLocked returns the last allocated global event id. The first call
+// in a process recovers it as the max id across all persisted audit logs, so
+// ids keep increasing across control restarts.
+func (a *App) eventHeadLocked() uint64 {
+	if a.eventSeqLoaded {
+		return a.eventSeq
+	}
+	a.ensureCatalog()
+	names, _ := a.Store.List("audit")
+	for _, name := range names {
+		if !strings.HasSuffix(name, ".jsonl") {
+			continue
+		}
+		_ = a.Store.ReadJSONL("audit/"+name, func(line []byte) error {
+			if id, ok := auditSequence(line); ok && id > a.eventSeq {
+				a.eventSeq = id
+			}
+			return nil
+		})
+	}
+	a.eventSeqLoaded = true
+	return a.eventSeq
+}
+
+func auditPath(roomID string) string { return "audit/" + roomID + ".jsonl" }
+
+func auditSequence(line []byte) (uint64, bool) {
+	var item struct {
+		Sequence uint64 `json:"sequence"`
+	}
+	if json.Unmarshal(line, &item) != nil || item.Sequence == 0 {
+		return 0, false
+	}
+	return item.Sequence, true
 }
 
 // AssistantDelta is the live-only streaming draft frame (contract §2.1).
@@ -215,7 +267,7 @@ func (a *App) publishEphemeral(roomID string, ev Event, source string) {
 	if _, ok := a.Rooms[roomID]; !ok {
 		return
 	}
-	a.broadcastLocked(roomID, StreamFrame{Seq: a.sequenceLocked(roomID), Data: raw})
+	a.broadcastLocked(roomID, StreamFrame{Seq: a.eventHeadLocked(), Data: raw})
 }
 
 func eventInt(ev Event, key string) int64 {

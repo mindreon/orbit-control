@@ -128,8 +128,10 @@ type App struct {
 	McpConnectors map[string]*McpConnector
 	CloudAgents   map[string]*CloudAgentJob
 	grants        map[string]*grantRecord
-	sequences     map[string]uint64
-	subs          map[string]map[*subscriber]struct{}
+	// eventSeq is the single global event id sequence; there is no per-room counter.
+	eventSeq       uint64
+	eventSeqLoaded bool
+	subs           map[string]map[*subscriber]struct{}
 }
 
 func New(w *worker.Client) *App {
@@ -150,7 +152,6 @@ func NewWithOrch(w *worker.Client, o *orch.Client) *App {
 		McpConnectors: map[string]*McpConnector{},
 		CloudAgents:   map[string]*CloudAgentJob{},
 		grants:        map[string]*grantRecord{},
-		sequences:     map[string]uint64{},
 		subs:          map[string]map[*subscriber]struct{}{},
 	}
 	return a
@@ -639,8 +640,7 @@ func (a *App) publish(roomID string, ev Event, source string) {
 		a.mu.Unlock()
 		return
 	}
-	seq := a.sequenceLocked(roomID) + 1
-	a.sequences[roomID] = seq
+	seq := a.nextEventIDLocked()
 	runtimeName := eventString(ev, "runtime")
 	if runtimeName == "" {
 		runtimeName = room.Runtime.Kernel

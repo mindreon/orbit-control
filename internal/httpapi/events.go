@@ -60,8 +60,12 @@ func streamRoomEvents(runtime *app.App) http.HandlerFunc {
 			writeErr(w, http.StatusInternalServerError, "SSE_UNSUPPORTED", "streaming unsupported")
 			return
 		}
-		// Subscribe before reading history: anything published from here on is
-		// buffered, and the cursor below drops what replay already delivered.
+		// Handoff: subscribe (buffer) → read history → drain buffer, skipping
+		// ids <= last replayed. This is only correct within one control
+		// instance, because the buffer is this process's in-memory fan-out.
+		// P0 supports a single control instance only; for multiple replicas,
+		// live fan-out moves to Postgres LISTEN/NOTIFY or NATS, while replay
+		// logic stays unchanged.
 		sub, ok := runtime.SubscribeRoom(roomID)
 		if !ok {
 			writeErr(w, http.StatusNotFound, "NOT_FOUND", "room not found")
@@ -84,7 +88,7 @@ func streamRoomEvents(runtime *app.App) http.HandlerFunc {
 		}
 
 		if raw, ok := lastEventID(r); ok {
-			seq, err := app.ParseEventID(roomID, raw)
+			seq, err := app.ParseEventID(raw)
 			if err != nil {
 				err = s.resetFor(err, sub.Head)
 			} else {
@@ -104,7 +108,16 @@ func streamRoomEvents(runtime *app.App) http.HandlerFunc {
 			case <-r.Context().Done():
 				return
 			case frame := <-sub.Frames:
-				err = s.deliver(frame)
+				// A drop is signalled before any later frame is buffered, so
+				// checking here keeps a newer frame from jumping a lost one.
+				select {
+				case <-sub.Lagged:
+					err = s.catchUp()
+				default:
+				}
+				if err == nil {
+					err = s.deliver(frame)
+				}
 			case <-sub.Lagged:
 				err = s.catchUp()
 			case <-heartbeat.C:
@@ -117,9 +130,9 @@ func streamRoomEvents(runtime *app.App) http.HandlerFunc {
 	}
 }
 
-// sseStream writes one connection's frames. cursor is the sequence of the last
-// durable event delivered (or skipped by a reset); every durable frame written
-// has sequence cursor+1, which is what makes the stream gap- and dup-free.
+// sseStream writes one connection's frames. cursor is the global id of the
+// last durable event of this room delivered (or skipped by a reset). Ids are
+// global, so a room's ids are increasing but not contiguous.
 type sseStream struct {
 	w       io.Writer
 	flusher http.Flusher
@@ -137,7 +150,7 @@ func (s *sseStream) comment(text string) error {
 }
 
 func (s *sseStream) write(seq uint64, data []byte) error {
-	if _, err := io.WriteString(s.w, "id: "+app.FormatEventID(s.roomID, seq)+"\ndata: "+string(data)+"\n\n"); err != nil {
+	if _, err := io.WriteString(s.w, "id: "+app.FormatEventID(seq)+"\ndata: "+string(data)+"\n\n"); err != nil {
 		return err
 	}
 	s.flusher.Flush()
@@ -165,23 +178,13 @@ func (s *sseStream) catchUp() error {
 
 func (s *sseStream) deliver(f app.StreamFrame) error {
 	if f.Durable {
-		switch {
-		case f.Seq <= s.cursor:
+		if f.Seq <= s.cursor {
 			return nil
-		case f.Seq == s.cursor+1:
-			s.cursor = f.Seq
-			return s.write(f.Seq, f.Data)
-		default:
-			// Buffer overflowed earlier; history still holds f and its predecessors.
-			return s.catchUp()
 		}
+		s.cursor = f.Seq
+		return s.write(f.Seq, f.Data)
 	}
-	if f.Seq > s.cursor {
-		if err := s.catchUp(); err != nil {
-			return err
-		}
-	}
-	if f.Seq != s.cursor {
+	if f.Seq < s.cursor {
 		// Durable events after this draft were already delivered.
 		return nil
 	}

@@ -57,6 +57,27 @@ func (s *FileStore) ReadJSON(rel string, v any) error {
 	return json.Unmarshal(raw, v)
 }
 
+// List returns the names of regular files directly under rel. A missing
+// directory is empty.
+func (s *FileStore) List(rel string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entries, err := os.ReadDir(s.path(rel))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.Type().IsRegular() {
+			names = append(names, e.Name())
+		}
+	}
+	return names, nil
+}
+
 func (s *FileStore) AppendJSONL(rel string, v any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
