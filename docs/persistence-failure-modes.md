@@ -85,7 +85,7 @@ below has a written reason; a new grant needs a new line here first.
 |---|---|---|
 | `tenants` | SELECT | Tenants are created by the ops role `orbit_ops`, which has **SELECT and INSERT only** (no UPDATE, review L-a), via `deploy/postgres/ensure-tenant.sql` (`INSERT … ON CONFLICT DO NOTHING`). `tenants.id` has `CHECK (id <> '')`. Control only checks at startup that its default tenant exists, and refuses to start if it does not. |
 | `rooms` | SELECT, INSERT, UPDATE (`state, session_id, updated_at`); **no DELETE** | UPDATE covers only the columns `pgstore.UpdateRoomState` writes (review M-c); phase 2 adds `last_event_seq` with its own line here. **C32 rev3 (Celestial):** no DELETE privilege and no DELETE policy, so `DELETE FROM rooms` fails with `42501 permission denied`. Soft delete writes `deleted_at` / `deleted_by` only through `orbit_soft_delete_room`, which runs as `orbit_definer`. |
-| `approvals` | SELECT, INSERT, UPDATE (`status, decision, decided_at`); **no DELETE** | UPDATE covers exactly what `pgstore.DecideApproval` / `ReopenApproval` write. The decision UPDATE is conditional on `status = 'pending'` (review M-d). |
+| `approvals` | SELECT, INSERT, UPDATE (`status, decision, decided_at`); **no DELETE** | UPDATE covers exactly what `pgstore.DecideApproval` writes. The decision UPDATE is conditional on `status = 'pending'` (review M-d). The `BEFORE UPDATE` trigger `approvals_frozen_once_decided` rejects **any** update when `OLD.status <> 'pending'`, for every role (review Low-1). A decided approval is therefore final, and there is no reopen path in phase 1 (see ISO-20 / FM-59). |
 | `sessions` | SELECT, INSERT, UPDATE (`last_seen_at`), DELETE | `auth.Sessions.Lookup` refreshes `last_seen_at`. DELETE is kept because logout destroys the server session (§17.3) and expired sessions are cleaned up. |
 | `events`, `messages`, `artifact_versions` | SELECT, INSERT; **no UPDATE, no DELETE** | Immutable history (review M-c): a written event, message or artifact version is never rewritten. |
 | `turns`, `artifacts` | SELECT, INSERT; **no UPDATE, no DELETE** | No P0 code path updates them. Phase 2 / the §16 PR add their columns here first (`turns.status`/`finished_at`, `artifacts.latest_version`/`updated_at`). |
@@ -165,8 +165,20 @@ Operators should pass **SCRAM-SHA-256 verifiers** instead of plaintext:
 - The plaintext therefore never reaches the server.
 
 CI does exactly this. It also runs Postgres with `log_statement = 'ddl'`
-and scans the server log, so a regression that sends a plaintext password
-would be caught.
+and scans the server log with `scripts/ci-secret-scan.sh`. The scan has a
+**positive control** (review Low-2), a CI step that runs before the real
+scan:
+
+1. The step writes a Postgres-style log line into a temporary directory
+   that exists only inside CI and is never uploaded. The line is
+   `CREATE ROLE … PASSWORD '<value>'`. It does this twice: once with a
+   freshly generated one-time fake password, and once with the CI app
+   password.
+2. It runs the same script on that directory and requires it to report
+   both files.
+
+So "the log scan would catch a plaintext password" is demonstrated on every
+run. The script prints only file names, never the matched value.
 
 ## Isolated checks and the failures they catch
 
@@ -622,3 +634,52 @@ Failure modes:
   `set_config` ends, `current_setting('app.tenant_id', true)` returns `''`.
   Rows of an empty-id tenant would then match every "unset" query and break
   the "no GUC → 0 rows" guarantee.
+
+### ISO-20 — review Low-1: a decided approval is frozen (trigger)
+
+`BEFORE UPDATE ON approvals FOR EACH ROW` runs
+`orbit_approvals_frozen_once_decided()`. When `OLD.status <> 'pending'` it
+raises `P0001 approval is not pending`. This holds for every role
+(`orbit_app`, the owner, BYPASSRLS), because triggers are not subject to
+RLS or column privileges.
+
+E2E (isolated SQL on an approval that was decided through the API): as
+`orbit_app`, with the tenant set, both of these fail with that error, and
+the owner reads `decided:allow` unchanged:
+
+- `UPDATE approvals SET status = 'pending', decision = ''` (reopen);
+- `UPDATE approvals SET decision = 'reject'` (flip).
+
+The pending → decided transition through the API keeps working (REVIEW-Md).
+
+- **FM-58.** A decided approval is rewritten, either reopened or flipped
+  between allow and reject, by a bug, a replayed request or direct SQL. The
+  audit trail and the delivered decision then disagree.
+
+### F2 — phase 1 has no reopen; phase 2 must not double-deliver (documented, not implemented)
+
+- **FM-59.** If control reopens an approval after `Orch.Decide`, or the
+  worker's `resolveApproval`, *timed out*, the decision may already have
+  been delivered. A retry then delivers it a second time.
+
+How each phase handles it:
+
+- **Before Low-1.** `App.Decide` reopened the approval on any delivery error,
+  including timeouts, so FM-59 was possible.
+- **Phase 1 now.** The Low-1 trigger forbids any update of a decided
+  approval, so the reopen path is removed. A failed or timed-out delivery
+  leaves the approval `decided` and the request returns an error (400).
+  A retry gets 409 `APPROVAL_NOT_PENDING`. There is no double delivery, but
+  a decision that truly was not delivered stays stuck until an operator
+  acts.
+- **Phase 2**, together with the real worker. Reopen only on errors that
+  prove non-delivery: a connection refused before the request was sent, or
+  an explicit "not applied" response. Never reopen on a timeout or an
+  ambiguous error. Deliver with the approval id as the idempotency /
+  dedupe key, so the worker and RoomWorkflow apply a decision at most once.
+  The reopen needs a narrowly scoped path the Low-1 trigger allows, for
+  example a SECURITY DEFINER function added to the S-DB-11 allowlist, with
+  its own FM entry first.
+- **E2E, blocked until phase 2** (`REVIEW-F2/delivered-but-timeout-once`).
+  Inject one "delivered but the response timed out", then retry, and assert
+  the worker applied the decision exactly once.

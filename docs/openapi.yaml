@@ -430,7 +430,10 @@ paths:
               schema:
                 $ref: "#/components/schemas/Approval"
         "400":
-          description: The decision could not be delivered to the workflow (the approval is reopened).
+          description: |
+            The decision is recorded but could not be delivered to the
+            workflow. The approval stays decided (phase 1 has no reopen), so a
+            retry returns 409.
           content:
             application/json:
               schema:

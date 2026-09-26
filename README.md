@@ -86,6 +86,17 @@ ORBIT_CONTROL_MIGRATE_ON_START=1 go run ./cmd/orbit-control
 `DELETE /v1/rooms/{id}` checks CSRF against `ORBIT_ALLOWED_ORIGINS` (comma
 separated).
 
+## CI credentials
+
+The `env:` of `.github/workflows/ci.yml` may contain **only one-time
+credentials**. These are values that exist solely for the throwaway Postgres
+service container of that job: `ci-superuser`, `ci-owner`, `ci-app`,
+`ci-ops`. Never put a real, shared or reusable value there, not even
+"temporarily". That includes production or staging passwords, API tokens,
+signing keys and DB URLs of real databases. Such values belong in GitHub
+secrets and must not be needed by this job at all. The secret scan and
+gitleaks treat any other credential-shaped value as a finding.
+
 ## Persistence E2E (contract §18)
 
 The S-DB-11 / S-DB-13 suite lives in `e2e/persistence` (build tag `e2e`). It
