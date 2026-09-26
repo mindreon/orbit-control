@@ -208,7 +208,7 @@ type serverOpts struct {
 	workerURL    string
 	orch         app.Orchestrator
 	abortTimeout time.Duration
-	// deliveryTimeout bounds resolveApproval / the decide Update.
+	// deliveryTimeout bounds resolveApproval / acceptance of the decide Update.
 	deliveryTimeout time.Duration
 }
 
@@ -385,10 +385,16 @@ type stubOrch struct {
 	onAbort func(roomID string)
 	seq     atomic.Int64
 	// askApproval makes RunTurn park an approval; decides counts the
-	// Update calls that deliver a decision (review M-d).
-	askApproval bool
-	decideDelay time.Duration
-	decides     atomic.Int32
+	// Update calls that deliver a decision (review M-d). acceptDelay holds
+	// acceptance of the decide Update; completeDelay holds its result (the
+	// resumed turn) after acceptance; resumeText, when set, is the resumed
+	// turn's assistant text.
+	askApproval   bool
+	acceptDelay   time.Duration
+	completeDelay time.Duration
+	resumeText    string
+	decides       atomic.Int32
+	updateIDs     sync.Map
 }
 
 const planted = "sk-live-E2E-PLANTED-SECRET"
@@ -403,16 +409,35 @@ func (f *stubOrch) RunTurn(context.Context, string, string, string) (orch.RunTur
 	return orch.RunTurnResult{Status: "completed"}, nil
 }
 
-// Decide counts the Update as delivered on receipt, like a workflow that has
-// accepted it, then answers after decideDelay unless the caller gives up.
-func (f *stubOrch) Decide(ctx context.Context, _, _, _, decision, _ string) (orch.DecideResult, error) {
+// Decide counts the Update as delivered on receipt, then reports acceptance
+// after acceptDelay unless the caller gives up first.
+func (f *stubOrch) Decide(ctx context.Context, _, updateID, _, _, decision, _ string) (orch.DecideUpdate, error) {
 	f.decides.Add(1)
+	f.updateIDs.Store(updateID, true)
 	select {
-	case <-time.After(f.decideDelay):
-		return orch.DecideResult{Decision: decision}, nil
+	case <-time.After(f.acceptDelay):
+		return stubDecideUpdate{f: f, decision: decision}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+type stubDecideUpdate struct {
+	f        *stubOrch
+	decision string
+}
+
+func (u stubDecideUpdate) Result(ctx context.Context) (orch.DecideResult, error) {
+	select {
+	case <-time.After(u.f.completeDelay):
 	case <-ctx.Done():
 		return orch.DecideResult{}, ctx.Err()
 	}
+	out := orch.DecideResult{Decision: u.decision}
+	if u.f.resumeText != "" {
+		out.Turn = &orch.RunTurnResult{Status: "completed", Texts: []string{u.f.resumeText}}
+	}
+	return out, nil
 }
 func (f *stubOrch) Steer(context.Context, string, string, string) error { return nil }
 func (f *stubOrch) Abort(ctx context.Context, roomID, _, _ string) error {

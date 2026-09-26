@@ -82,7 +82,7 @@ func TestReviewMcColumnScopedUpdate(t *testing.T) {
 // decideWorker stubs the worker for M-d: resolveApproval takes resolveDelay
 // (so decisions overlap, or outlast the delivery timeout), and every
 // delivered decision is counted on receipt.
-func decideWorker(t *testing.T, resolveDelay time.Duration) (*httptest.Server, *atomic.Int32, *atomic.Int32) {
+func decideWorker(t *testing.T, resolveDelay, resumeDelay time.Duration) (*httptest.Server, *atomic.Int32, *atomic.Int32) {
 	var resolves, resumes, n atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -94,6 +94,7 @@ func decideWorker(t *testing.T, resolveDelay time.Duration) (*httptest.Server, *
 		case strings.HasSuffix(r.URL.Path, "/runTurn"):
 			if strings.Contains(string(raw), `"resumeAfterApproval":true`) {
 				resumes.Add(1)
+				time.Sleep(resumeDelay)
 				_, _ = io.WriteString(w, `{"status":"completed","texts":["resumed"]}`)
 				return
 			}
@@ -206,7 +207,7 @@ func TestReviewMdSingleWinnerDecide(t *testing.T) {
 
 	// Direct worker path: the stub worker is the outbound record.
 	const rounds = 5
-	wk, resolves, resumes := decideWorker(t, 300*time.Millisecond)
+	wk, resolves, resumes := decideWorker(t, 300*time.Millisecond, 0)
 	srv := startServer(t, serverOpts{tenant: "t-md-worker", maxConns: 16, workerURL: wk.URL})
 	var aps []string
 	for i := 0; i < rounds; i++ {
@@ -254,7 +255,7 @@ func TestReviewMdSingleWinnerDecide(t *testing.T) {
 	}
 
 	// Temporal path: the stub Orchestrator's Decide Update is the record.
-	so := &stubOrch{askApproval: true, decideDelay: 300 * time.Millisecond}
+	so := &stubOrch{askApproval: true, acceptDelay: 300 * time.Millisecond}
 	osrv := startServer(t, serverOpts{tenant: "t-md-orch", maxConns: 16, orch: so})
 	var oaps []string
 	for i := 0; i < rounds; i++ {
@@ -278,7 +279,7 @@ func TestReviewMdSingleWinnerDecide(t *testing.T) {
 func TestReviewF2DeliveredButTimeoutOnce(t *testing.T) {
 	blocked(t, "REVIEW-F2/delivered-but-timeout-once", "§18 review F2", "e2e",
 		"inject one decision that is delivered but whose response times out, then retry: the worker applies the decision exactly once",
-		"phase 2, together with the real worker: reopen only on errors that prove non-delivery and dedupe deliveries by approval id. Phase 1 has no reopen at all (Low-1 trigger), so no second delivery can happen today",
+		"depends on the orbit-runtime section 2.4 PR (the RoomWorkflow decide Update handler dedupes by updateId and records decided_approvals) and on contract PR orbit-control#18 (phase-2 retry and delivery-state semantics); stays blocked until both merge. Phase 1 has no reopen at all (Low-1 trigger), so no second delivery can happen today",
 		[]string{"real worker applies resolveApproval but its response is delayed past the control timeout", "retry POST /v1/approvals/{id}/decide", "count applied decisions in the worker"},
 		map[string]any{"workerAppliedDecisions": 1})
 }
@@ -323,14 +324,14 @@ func TestReviewF2Phase1TimeoutAtMostOnce(t *testing.T) {
 		{"worker",
 			"simulated: the stub orbit-worker accepts resolveApproval (counted on receipt as delivered) and answers only after 1s; control's DeliveryTimeout is 200ms, so control sees a timeout after the worker already has the decision",
 			func() (*server, func() int32, func() int32) {
-				wk, resolves, resumes := decideWorker(t, time.Second)
+				wk, resolves, resumes := decideWorker(t, time.Second, 0)
 				srv := startServer(t, serverOpts{tenant: "t-f2-worker", maxConns: 4, workerURL: wk.URL, deliveryTimeout: 200 * time.Millisecond})
 				return srv, resolves.Load, resumes.Load
 			}},
 		{"orch",
-			"simulated: the stub Orchestrator accepts the decide Update (counted on receipt as delivered) and answers only after 1s; control's DeliveryTimeout is 200ms, so control sees a timeout after the workflow already has the decision",
+			"simulated: the stub Orchestrator receives the decide Update (counted on receipt as delivered) but reports acceptance only after 1s; control's DeliveryTimeout is 200ms, so the acceptance wait times out after the workflow already has the decision",
 			func() (*server, func() int32, func() int32) {
-				so := &stubOrch{askApproval: true, decideDelay: time.Second}
+				so := &stubOrch{askApproval: true, acceptDelay: time.Second}
 				srv := startServer(t, serverOpts{tenant: "t-f2-orch", maxConns: 4, orch: so, deliveryTimeout: 200 * time.Millisecond})
 				return srv, so.decides.Load, func() int32 { return 0 }
 			}},
@@ -380,5 +381,119 @@ func TestReviewF2Phase1TimeoutAtMostOnce(t *testing.T) {
 			Pass: first.Status == 502 && first.Body == deliveryFailedBody && afterFirst == "decided:allow" &&
 				second.Status == 409 && second.Body == notPendingBody && afterSecond == "decided:allow" &&
 				n <= 1 && n == 1 && resumes() == 0 && strings.Contains(logs, wantLog)})
+	}
+}
+
+// Review N1 (FM-60): the delivery timeout bounds acceptance of the decision
+// only. A resumed turn that outlasts it still returns 200, and its result is
+// applied: assistant text persisted, room no longer awaiting_approval.
+func TestReviewN1AcceptedThenSlowTurn(t *testing.T) {
+	const c = "§18 review N1"
+	for _, path := range []struct {
+		label, simulated, resumeText string
+		setup                        func() (*server, func(approvalID string) bool)
+	}{
+		{"orch",
+			"simulated: the stub Orchestrator accepts the decide Update at once and completes it (the resumed turn) only after 1s; control's DeliveryTimeout is 200ms",
+			"resumed-orch",
+			func() (*server, func(string) bool) {
+				so := &stubOrch{askApproval: true, completeDelay: time.Second, resumeText: "resumed-orch"}
+				srv := startServer(t, serverOpts{tenant: "t-n1-orch", maxConns: 4, orch: so, deliveryTimeout: 200 * time.Millisecond})
+				return srv, func(approvalID string) bool {
+					_, ok := so.updateIDs.Load(approvalID)
+					return ok && so.decides.Load() == 1
+				}
+			}},
+		{"worker",
+			"simulated: the stub orbit-worker answers resolveApproval at once and the resume runTurn only after 1s; control's DeliveryTimeout is 200ms",
+			"resumed",
+			func() (*server, func(string) bool) {
+				wk, resolves, resumes := decideWorker(t, 0, time.Second)
+				srv := startServer(t, serverOpts{tenant: "t-n1-worker", maxConns: 4, workerURL: wk.URL, deliveryTimeout: 200 * time.Millisecond})
+				return srv, func(string) bool { return resolves.Load() == 1 && resumes.Load() == 1 }
+			}},
+	} {
+		srv, delivered := path.setup()
+		u := "u-n1-" + path.label
+		pfx := "REVIEW-N1/accepted-then-slow-turn/" + path.label
+		room := roomID(t, srv.check(t, pfx+"/create", c, "create a task",
+			httpReq{Method: "POST", Path: "/v1/rooms", Headers: user(u), Body: `{"kind":"solo"}`}, httpExp{Status: 200}))
+		alias(room, "<room-n1-"+path.label+">")
+		posted := srv.check(t, pfx+"/park", c, "a message parks one approval",
+			httpReq{Method: "POST", Path: "/v1/rooms/" + room + "/messages", Headers: user(u), Body: `{"message":"list files"}`},
+			httpExp{Status: 200, BodyIncludes: []string{`"approval":{`}})
+		var parked struct {
+			Approval *app.Approval `json:"approval"`
+		}
+		_ = json.Unmarshal([]byte(posted.Body), &parked)
+		if parked.Approval == nil {
+			t.Fatalf("no approval: %s", posted.Body)
+		}
+		ap := parked.Approval.ID
+		alias(ap, "<approval-n1-"+path.label+">")
+		roomState := func() string {
+			var r app.Room
+			_ = json.Unmarshal([]byte(sendTo(t, srv.base, httpReq{Method: "GET", Path: "/v1/rooms/" + room, Headers: user(u)}).Body), &r)
+			return string(r.State)
+		}
+		before := roomState()
+
+		decideReq := httpReq{Method: "POST", Path: "/v1/approvals/" + ap + "/decide", Headers: user(u), Body: `{"decision":"allow"}`}
+		started := time.Now()
+		res := sendTo(t, srv.base, decideReq)
+		outlasted := time.Since(started) >= time.Second
+		var decided app.Approval
+		_ = json.Unmarshal([]byte(res.Body), &decided)
+
+		var msgs struct {
+			Items []app.Message `json:"items"`
+		}
+		_ = json.Unmarshal([]byte(sendTo(t, srv.base, httpReq{Method: "GET", Path: "/v1/rooms/" + room + "/messages", Headers: user(u)}).Body), &msgs)
+		assistant := []string{}
+		for _, m := range msgs.Items {
+			if m.Role == "assistant" {
+				assistant = append(assistant, m.Text)
+			}
+		}
+		resumedPersisted := false
+		for _, s := range assistant {
+			resumedPersisted = resumedPersisted || s == path.resumeText
+		}
+		after := roomState()
+		deliveredOnce := delivered(ap)
+		logs := srv.logs.String()
+		noAlert := !strings.Contains(logs, "alert=decision_delivery_failed")
+
+		record(t, caseInput{ID: pfx, Contract: c, FailureModes: []string{"FM-60"},
+			Description: "a resumed turn that outlasts DeliveryTimeout is not a delivery failure: decide returns 200 and the turn result is applied. " + path.simulated,
+			Steps: []string{
+				"GET /v1/rooms/{id}: the room is awaiting_approval",
+				"POST /v1/approvals/{id}/decide (allow); the resumed turn takes 1s, DeliveryTimeout is 200ms",
+				"GET /v1/rooms/{id}/messages: collect assistant texts",
+				"GET /v1/rooms/{id}: room state; count deliveries at the fake workflow endpoint (Temporal: Update id = approval id); read the server log",
+			},
+			Request: decideReq,
+			Expected: map[string]any{
+				"roomBefore":             "awaiting_approval",
+				"decide":                 map[string]any{"status": 200, "approvalStatus": "decided", "decision": "allow"},
+				"responseAfterSlowTurn":  true,
+				"assistantTextsInclude":  path.resumeText,
+				"resumedTextPersisted":   true,
+				"roomAfter":              "running",
+				"deliveredOnce":          true,
+				"deliveryFailedAlertLog": false,
+			},
+			Actual: map[string]any{
+				"roomBefore":             before,
+				"decide":                 map[string]any{"status": res.Status, "approvalStatus": decided.Status, "decision": decided.Decision},
+				"responseAfterSlowTurn":  outlasted,
+				"assistantTexts":         assistant,
+				"resumedTextPersisted":   resumedPersisted,
+				"roomAfter":              after,
+				"deliveredOnce":          deliveredOnce,
+				"deliveryFailedAlertLog": !noAlert,
+			},
+			Pass: before == "awaiting_approval" && res.Status == 200 && decided.Status == "decided" && decided.Decision == "allow" &&
+				outlasted && resumedPersisted && after == "running" && deliveredOnce && noAlert})
 	}
 }
