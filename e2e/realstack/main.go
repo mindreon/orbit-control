@@ -79,6 +79,9 @@ type caseRow struct {
 	Expected any  `json:"expected"`
 	Actual   any  `json:"actual"`
 	Pass     bool `json:"pass"`
+	// Observed holds values that vary between runs (timings). They go to the
+	// sidecar <report>.observed.json so the report stays byte-identical.
+	Observed map[string]any `json:"-"`
 }
 
 func main() {
@@ -109,6 +112,11 @@ func runCmd(args []string) int {
 	_ = fs.Parse(args)
 	if *rtCommit == "" {
 		fmt.Fprintln(os.Stderr, "-runtime-commit is required")
+		return 2
+	}
+	controlCommit := gitCommit(".", *commit)
+	if controlCommit == "" {
+		fmt.Fprintln(os.Stderr, "orbit-control commit is empty: git rev-parse HEAD returned nothing and -commit is not set")
 		return 2
 	}
 	if err := os.MkdirAll(*logs, 0o755); err != nil {
@@ -151,8 +159,8 @@ func runCmd(args []string) int {
 	}
 	report := map[string]any{
 		"suite":      "e2e-control-last-event-id",
-		"commit":     gitCommit(".", *commit),
-		"components": components(st, *rtCommit, *cli),
+		"commit":     controlCommit,
+		"components": components(st, controlCommit, *rtCommit, *cli),
 		"setup": []string{
 			"Fresh local Temporal dev server (in-memory), Temporal CLI " + *cli + ".",
 			"orbit-orch and orbit-worker as containers of the orbit-runtime image published for runtime commit " + *rtCommit + ", run by digest (components.orbit-runtime-image), host network.",
@@ -172,6 +180,17 @@ func runCmd(args []string) int {
 	}
 	raw, _ := json.MarshalIndent(report, "", "  ")
 	if err := os.WriteFile(*out, append(raw, '\n'), 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	observed := map[string]any{"commit": controlCommit, "cases": map[string]any{}}
+	for _, r := range rows {
+		if len(r.Observed) > 0 {
+			observed["cases"].(map[string]any)[r.ID] = r.Observed
+		}
+	}
+	rawObserved, _ := json.MarshalIndent(observed, "", "  ")
+	if err := os.WriteFile(strings.TrimSuffix(*out, ".json")+".observed.json", append(rawObserved, '\n'), 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
@@ -1071,9 +1090,9 @@ func scanCmd(args []string) int {
 
 // ---- components ----
 
-func components(st *stack, rtCommit, cli string) map[string]string {
+func components(st *stack, controlCommit, rtCommit, cli string) map[string]string {
 	out := map[string]string{
-		"orbit-control": gitCommit(".", ""),
+		"orbit-control": controlCommit,
 		"orbit-runtime": rtCommit,
 		"go":            runtime.Version(),
 		"temporalCli":   cli,

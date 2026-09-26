@@ -25,23 +25,49 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
+      - name: Resolve the checked-out PR head
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          HEAD_SHA="$(git rev-parse HEAD)"
+          if [ -z "$HEAD_SHA" ]; then
+            echo "::error::git rev-parse HEAD returned nothing"
+            exit 1
+          fi
+          if [ "$HEAD_SHA" != "$EXPECTED_HEAD" ]; then
+            echo "::error::checked out $HEAD_SHA, expected PR head $EXPECTED_HEAD"
+            exit 1
+          fi
+          echo "HEAD_SHA=$HEAD_SHA" >> "$GITHUB_ENV"
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
 
       - name: E-LE run 1
-        run: go run ./e2e/realstack run -runtime-commit "$ORBIT_RUNTIME_REF" -out artifacts/e2e-real-stack.json -logs e2e-logs/run1
+        run: go run ./e2e/realstack run -commit "$HEAD_SHA" -runtime-commit "$ORBIT_RUNTIME_REF" -out artifacts/e2e-real-stack.json -logs e2e-logs/run1
 
       - name: E-LE run 2 must match run 1
         run: |
-          go run ./e2e/realstack run -runtime-commit "$ORBIT_RUNTIME_REF" -out e2e-rerun/e2e-real-stack.json -logs e2e-logs/run2
+          go run ./e2e/realstack run -commit "$HEAD_SHA" -runtime-commit "$ORBIT_RUNTIME_REF" -out e2e-rerun/e2e-real-stack.json -logs e2e-logs/run2
           cmp artifacts/e2e-real-stack.json e2e-rerun/e2e-real-stack.json
           cp e2e-rerun/e2e-real-stack.json artifacts/e2e-real-stack.rerun.json
+          cp e2e-rerun/e2e-real-stack.observed.json artifacts/e2e-real-stack.rerun.observed.json
+
+      - name: Both reports name the PR head
+        run: |
+          for report in artifacts/e2e-real-stack.json artifacts/e2e-real-stack.rerun.json; do
+            commit="$(jq -r '.commit' "$report")"
+            if [ "$commit" != "$HEAD_SHA" ]; then
+              echo "::error::$report commit is '$commit', expected PR head $HEAD_SHA"
+              exit 1
+            fi
+          done
           sha256sum artifacts/e2e-real-stack.json artifacts/e2e-real-stack.rerun.json | tee artifacts/e2e-real-stack.sha256
 
       - name: Secret scan of the E2E reports and all process logs
         run: |
-          go run ./e2e/realstack scan artifacts/e2e-real-stack.json artifacts/e2e-real-stack.rerun.json e2e-logs/run1/*.log e2e-logs/run2/*.log -out artifacts/e2e-real-stack-secret-scan.json
+          go run ./e2e/realstack scan artifacts/e2e-real-stack.json artifacts/e2e-real-stack.rerun.json artifacts/e2e-real-stack.observed.json artifacts/e2e-real-stack.rerun.observed.json e2e-logs/run1/*.log e2e-logs/run2/*.log -out artifacts/e2e-real-stack-secret-scan.json
           curl -sSfL -o /tmp/gitleaks.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
           echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  /tmp/gitleaks.tgz" | sha256sum -c
           tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
