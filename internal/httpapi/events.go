@@ -23,14 +23,6 @@ type ResetPayload struct {
 	LastID uint64          `json:"lastId"`
 }
 
-// authorizeRoomStream is the §17 (C31) hook. Authentication (401) and room
-// authorization (404) must be decided here: before the room lookup, before
-// any text/event-stream header is written, and before any replay.
-// W1 has no user auth, so every caller is allowed.
-func authorizeRoomStream(w http.ResponseWriter, r *http.Request, roomID string) bool {
-	return true
-}
-
 // lastEventID prefers the header: on EventSource auto-reconnect the browser
 // sends the newest id there while the URL still carries the original query.
 func lastEventID(r *http.Request) (string, bool) {
@@ -57,10 +49,14 @@ func clientKey(r *http.Request) string {
 // store error, so clients back off instead of reconnecting at once.
 const storeRetry = 10 * time.Second
 
-func streamRoomEvents(runtime *app.App) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+// streamRoomEvents runs after authentication (401). Room authorization (404:
+// missing, not the caller's, or deleted) is decided before any
+// text/event-stream header is written and before any replay.
+func streamRoomEvents(runtime *app.App) principalHandler {
+	return func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		roomID := r.PathValue("roomId")
-		if !authorizeRoomStream(w, r, roomID) {
+		if _, err := runtime.GetRoom(r.Context(), p, roomID); err != nil {
+			writeAppErr(runtime.Log, w, err, roomNotFound, http.StatusInternalServerError, "INTERNAL")
 			return
 		}
 		flusher, ok := w.(http.Flusher)

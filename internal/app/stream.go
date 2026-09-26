@@ -63,7 +63,7 @@ func (a *App) SubscribeRoom(roomID, client string) (*Subscription, error) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	room, ok := a.Rooms[roomID]
+	room, ok := a.live[roomID]
 	if !ok {
 		return nil, ErrRoomNotFound
 	}
@@ -82,7 +82,7 @@ func (a *App) SubscribeRoom(roomID, client string) (*Subscription, error) {
 	}
 	a.subs[roomID][sub] = struct{}{}
 	a.clientStreams[client]++
-	if room.State == RoomClosed {
+	if room.Closed {
 		sub.end()
 	}
 	return &Subscription{
@@ -119,6 +119,10 @@ func (s *subscriber) end() {
 // room's closing session.status has been published.
 func (a *App) roomClosed(roomID string) {
 	a.mu.Lock()
+	if room, ok := a.live[roomID]; ok {
+		room.Closed = true
+		a.live[roomID] = room
+	}
 	for sub := range a.subs[roomID] {
 		sub.end()
 	}
@@ -127,7 +131,7 @@ func (a *App) roomClosed(roomID string) {
 	free := func() {
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		if room, ok := a.Rooms[roomID]; ok && room.State == RoomClosed {
+		if room, ok := a.live[roomID]; ok && room.Closed {
 			_ = a.Events.Drop(roomID)
 			a.freedLogs[roomID] = struct{}{}
 		}
@@ -137,6 +141,15 @@ func (a *App) roomClosed(roomID string) {
 		return
 	}
 	time.AfterFunc(ttl, free)
+}
+
+// closeSubscribers ends every live SSE stream of a deleted room.
+func (a *App) closeSubscribers(roomID string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for sub := range a.subs[roomID] {
+		sub.end()
+	}
 }
 
 // RoomHead is the room's latest event id (0 if none).
@@ -263,7 +276,7 @@ func (a *App) publishLive(env Envelope) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if _, ok := a.Rooms[env.TaskID]; !ok {
+	if _, ok := a.live[env.TaskID]; !ok {
 		return
 	}
 	last, err := a.Events.LastID()

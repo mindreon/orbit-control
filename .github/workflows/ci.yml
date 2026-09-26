@@ -1,0 +1,171 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-superuser
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      # ONE-TIME CREDENTIALS ONLY (README "CI credentials"): these values exist
+      # solely for the throwaway service container above. Never put a real,
+      # shared or reusable secret, token, key or DB URL here.
+      OWNER_PW: ci-owner
+      APP_PW: ci-app
+      OPS_PW: ci-ops
+      ORBIT_TEST_DB_URL: postgres://orbit_app:ci-app@127.0.0.1:5432/orbit_control?sslmode=disable
+      ORBIT_TEST_MIGRATE_DB_URL: postgres://orbit_owner:ci-owner@127.0.0.1:5432/orbit_control?sslmode=disable
+      ORBIT_TEST_OPS_DB_URL: postgres://orbit_ops:ci-ops@127.0.0.1:5432/orbit_control?sslmode=disable
+      ORBIT_E2E_POSTGRES_IMAGE: postgres:16-alpine
+      GITLEAKS_VERSION: 8.30.1
+      # sha256 of gitleaks_8.30.1_linux_x64.tar.gz from the release's checksums.txt
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+      # The commit under test: the PR head on pull_request, the pushed commit otherwise.
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Test the PR head itself, not the synthetic merge commit.
+          ref: ${{ github.event.pull_request.head.sha }}
+          # gitleaks history scan and process/commit-order/* need full history.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - run: mkdir -p artifacts/logs
+
+      - name: Checked out the commit under test
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          echo "testing $(git rev-parse HEAD)"
+
+      - name: Install gitleaks (pinned, checksum verified)
+        run: |
+          curl -fsSLo /tmp/gitleaks.tgz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tgz" | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
+          /tmp/gitleaks version
+
+      - name: gitleaks (full git history)
+        run: |
+          /tmp/gitleaks git --config .gitleaks.toml --redact --no-banner \
+            --report-format json --report-path artifacts/gitleaks-git.json . 2>&1 | tee artifacts/logs/gitleaks-git.log
+
+      - run: go vet ./... 2>&1 | tee artifacts/logs/vet.log
+      - run: go vet -tags e2e ./... 2>&1 | tee -a artifacts/logs/vet.log
+      - run: go test -race -count=1 ./... 2>&1 | tee artifacts/logs/unit.log
+
+      - name: Postgres logs DDL (so a plaintext role password would show up)
+        env:
+          PGPASSWORD: ci-superuser
+        run: |
+          psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U postgres -d postgres \
+            -c "ALTER SYSTEM SET log_statement = 'ddl'" -c "SELECT pg_reload_conf()"
+
+      - name: Bootstrap control roles and database (SCRAM verifiers)
+        env:
+          PGPASSWORD: ci-superuser
+        run: |
+          owner_v=$(printf '%s\n' "$OWNER_PW" | python3 deploy/postgres/scram-verifier.py)
+          app_v=$(printf '%s\n' "$APP_PW" | python3 deploy/postgres/scram-verifier.py)
+          ops_v=$(printf '%s\n' "$OPS_PW" | python3 deploy/postgres/scram-verifier.py)
+          psql -v ON_ERROR_STOP=1 \
+            -v owner_password="$owner_v" -v app_password="$app_v" -v ops_password="$ops_v" \
+            -h 127.0.0.1 -U postgres -d postgres \
+            -f deploy/postgres/bootstrap-roles.sql 2>&1 | tee artifacts/logs/bootstrap.log
+
+      # Contract §18 E2E: S-DB-1..14 (S-DB-6 migrations run first and leave
+      # the schema migrated). Each run writes its report even on failure.
+      - name: E2E persistence (run 1)
+        env:
+          ORBIT_E2E_REPORT: artifacts/e2e-persistence-report.json
+        run: go test -tags e2e -race -count=1 -v ./e2e/... 2>&1 | tee artifacts/logs/e2e-run1.log
+
+      - name: E2E persistence (run 2, same commit)
+        if: always()
+        env:
+          ORBIT_E2E_REPORT: artifacts/e2e-persistence-report.run2.json
+        run: go test -tags e2e -race -count=1 -v ./e2e/... 2>&1 | tee artifacts/logs/e2e-run2.log
+
+      - name: Reruns match (cmp)
+        if: always()
+        run: |
+          norm='{gitSha, contract, components, gate, summary, cases}'
+          jq -S "$norm" artifacts/e2e-persistence-report.json > /tmp/run1.json
+          jq -S "$norm" artifacts/e2e-persistence-report.run2.json > /tmp/run2.json
+          cmp /tmp/run1.json /tmp/run2.json
+          echo "run 1 fingerprint: $(jq -r .summary.casesFingerprint artifacts/e2e-persistence-report.json)"
+          echo "run 2 fingerprint: $(jq -r .summary.casesFingerprint artifacts/e2e-persistence-report.run2.json)"
+          test "$(jq -r .gitSha artifacts/e2e-persistence-report.json)" = "$EXPECTED_SHA"
+
+      - name: Collect Postgres service log
+        if: always()
+        run: docker logs "${{ job.services.postgres.id }}" > artifacts/logs/postgres.log 2>&1
+
+      - name: gitleaks (working tree, reports and logs)
+        if: always()
+        run: |
+          /tmp/gitleaks dir --config .gitleaks.toml --redact --no-banner \
+            --report-format json --report-path artifacts/gitleaks-dir.json . 2>&1 | tee artifacts/logs/gitleaks-dir.log
+
+      # Low-2: prove the scan reports a plaintext password in a Postgres-style
+      # log. The control log lives in a CI-only temp dir and is never uploaded.
+      - name: Secret-scan positive control
+        if: always()
+        run: |
+          ctl=$(mktemp -d)
+          canary="canary-$(openssl rand -hex 12)"
+          printf "%s LOG:  statement: CREATE ROLE ctl_fake LOGIN PASSWORD '%s'\n" "$(date -u +%FT%TZ)" "$canary" > "$ctl/postgres-fake-password.log"
+          printf "%s LOG:  statement: CREATE ROLE ctl_app LOGIN PASSWORD '%s'\n" "$(date -u +%FT%TZ)" "$APP_PW" > "$ctl/postgres-ci-password.log"
+          if SCAN_CANARY="$canary" scripts/ci-secret-scan.sh "$ctl" > "$ctl.out"; then
+            echo "::error::positive control: the scan did not report the planted passwords"
+            exit 1
+          fi
+          grep -q "postgres-fake-password.log" "$ctl.out"
+          grep -q "postgres-ci-password.log" "$ctl.out"
+          echo "positive control: both planted passwords reported (values not printed)"
+          rm -rf "$ctl" "$ctl.out"
+
+      - name: Secret-scan reports and logs
+        if: always()
+        run: scripts/ci-secret-scan.sh artifacts
+
+      - name: Gate summary
+        if: always()
+        run: |
+          jq -r '"gate=\(.gate) " + (.summary | "total=\(.total) passed=\(.passed) failed=\(.failed) blocked=\(.blocked)")' artifacts/e2e-persistence-report.json
+          jq -r '.cases[] | select(.status == "blocked") | "::warning title=blocked \(.id)::\(.blockedBy)"' artifacts/e2e-persistence-report.json
+
+      - name: Upload E2E reports, gitleaks reports and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-persistence-report
+          path: artifacts/
+          if-no-files-found: error

@@ -4,9 +4,11 @@ info:
   version: 0.2.0-w1
   description: |
     W1 **live rooms**. Health, rooms, messages, approvals, room activity history,
-    steer, and SSE events are implemented in-memory. Control calls orbit-worker
-    HTTP activities directly, or RoomWorkflow when Temporal is configured. It
-    still has no database or OAuth.
+    steer, and SSE events are implemented. Rooms, messages, approvals and
+    idempotency keys are stored in Postgres when `ORBIT_CONTROL_DB_URL` is set
+    (in-memory otherwise, dev/test only); activity and SSE are still
+    in-process. Control calls orbit-worker HTTP activities directly, or
+    RoomWorkflow when Temporal is configured. It still has no OAuth.
 
     Product surfaces:
 
@@ -100,6 +102,8 @@ paths:
         room, not as a global client switch. `kind=collab` is accepted but
         still one parent session in W1.
       x-unimplemented: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -108,11 +112,33 @@ paths:
               $ref: "#/components/schemas/CreateRoomRequest"
       responses:
         "200":
-          description: Created room
+          description: |
+            Created room, or the original room when the same
+            `Idempotency-Key` and body are replayed.
+          headers:
+            Idempotent-Replayed:
+              description: "`true` when this response is a replay."
+              schema:
+                type: string
+                enum: ["true"]
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Room"
+        "404":
+          description: |
+            The `Idempotency-Key` belongs to a room that was deleted. The body
+            is identical to a missing room and never contains its id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+              example:
+                error: not found
+                code: NOT_FOUND
+                message: room not found
+        "409":
+          $ref: "#/components/responses/IdempotencyKeyReused"
         "502":
           $ref: "#/components/responses/NotImplemented"
         "401":
@@ -140,6 +166,33 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+    delete:
+      tags: [rooms]
+      operationId: deleteRoom
+      summary: Soft-delete a room (task)
+      description: |
+        Only the creator may delete. Checks run in order: unauthenticated →
+        401, CSRF (`Origin` not allowed or `X-Orbit-Request: 1` missing) →
+        403, not the creator / missing / already deleted → 404.
+
+        Control first sends `abort` to the room workflow, then marks the room
+        deleted. If the abort fails or times out, the room is still deleted
+        and 204 is returned. Open SSE streams for the room are closed; the
+        room, its messages, activity, events and approvals then return 404.
+        Any request body is ignored; `deleted_at` / `deleted_by` are set by
+        the server from the session. There is no restore or purge API.
+      x-unimplemented: false
+      parameters:
+        - $ref: "#/components/parameters/RoomId"
+      responses:
+        "204":
+          description: Room deleted
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/CsrfRejected"
+        "404":
+          $ref: "#/components/responses/NotFound"
   /v1/rooms/{roomId}/messages:
     get:
       tags: [messages]
@@ -456,6 +509,17 @@ paths:
         Public HITL verb. Control maps `allow` to worker `resolveApproval`
         (`allowed-once`) then `runTurn` resume. `reject` maps to worker `abort`.
         Temporal Update/Signal is the later stand-in target.
+
+        The approval is claimed with a conditional update (`status = pending`)
+        before anything is sent to the workflow, so concurrent decisions have
+        exactly one winner and the workflow receives exactly one decision.
+        Deciding an approval that is no longer pending returns **409**
+        `APPROVAL_NOT_PENDING` (contract §2.0; previously 400). If delivering
+        the decision fails or times out, the response is **502**
+        `DECISION_DELIVERY_FAILED` and the approval stays decided (no
+        automatic retry, no reopen in phase 1). Delivery ends when the
+        decision is accepted; waiting for the resumed turn is not bounded by
+        the delivery timeout, so a slow resumed turn never produces the 502.
       x-unimplemented: false
       parameters:
         - $ref: "#/components/parameters/ApprovalId"
@@ -473,7 +537,33 @@ paths:
               schema:
                 $ref: "#/components/schemas/Approval"
         "400":
-          $ref: "#/components/responses/NotImplemented"
+          description: |
+            The decision was delivered, but resuming the turn afterwards
+            failed: the worker `runTurn` resume on the direct path, or waiting
+            for the result of the accepted `decide` Update on the Temporal
+            path. The message carries the error. The approval stays decided.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+              example:
+                error: bad request
+                code: BAD_REQUEST
+                message: "worker runTurn: HTTP 500"
+        "404":
+          description: Missing, not owned by the caller, in another tenant, or its task was deleted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+              example:
+                error: not found
+                code: NOT_FOUND
+                message: approval not found
+        "409":
+          $ref: "#/components/responses/ApprovalNotPending"
+        "502":
+          $ref: "#/components/responses/DecisionDeliveryFailed"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -684,6 +774,16 @@ paths:
           $ref: "#/components/responses/Forbidden"
 components:
   parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: |
+        Optional, at most 128 characters. Scoped to the calling user and
+        kept for 24 hours; only its sha256 is stored.
+      schema:
+        type: string
+        maxLength: 128
     RoomId:
       name: roomId
       in: path
@@ -1156,3 +1256,86 @@ components:
             error: forbidden
             code: FORBIDDEN
             message: insufficient permissions
+    Unauthenticated:
+      description: |
+        No valid session (contract §17.6). Emitted before any storage lookup,
+        so the body is identical on every path.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+          example:
+            error: unauthenticated
+            code: UNAUTHENTICATED
+            message: authentication required
+    CsrfRejected:
+      description: |
+        State-changing request without an allowed `Origin` and
+        `X-Orbit-Request: 1` (contract §17.4).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+          example:
+            error: csrf rejected
+            code: CSRF_REJECTED
+            message: "state-changing requests need an allowed Origin and X-Orbit-Request: 1"
+    NotFound:
+      description: |
+        Missing, not owned by the caller, in another tenant, or deleted.
+        These cases share one body.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+          example:
+            error: not found
+            code: NOT_FOUND
+            message: room not found
+    ApprovalNotPending:
+      description: The approval was already decided (or lost a concurrent decision).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+          example:
+            error: approval not pending
+            code: APPROVAL_NOT_PENDING
+            message: approval is not pending
+    DecisionDeliveryFailed:
+      description: |
+        The decision is recorded, but delivering it to the workflow failed or
+        exceeded the delivery timeout. The delivery call is `resolveApproval`
+        on the direct worker path and the acceptance of the `decide` Update
+        (`UpdateID` = approval id) on the Temporal path; the resumed turn that
+        follows is not part of delivery.
+        The approval stays decided and is not re-delivered; a resubmit returns
+        409 `APPROVAL_NOT_PENDING`. The body is fixed and never includes
+        worker or Temporal error text.
+
+        **Temporary phase-1 behavior.** In phase 2 this response MUST change
+        to **202 `{deliveryState: "unknown"}`**, per contract C34 §2.4. It
+        ships together with the convergence path defined there: how the
+        client learns the final delivery state, plus the `delivery_state`
+        values and transitions. It also ships with its E2E cases, contract
+        PR #18 H4 / S-ID-9. C34 is not yet part of the contract of record in
+        this repository (`docs/contracts/orbit-contract-v2.md`, C32 rev3), so
+        the exact phase-2 shapes are taken from C34 when it lands.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+          example:
+            error: decision delivery failed
+            code: DECISION_DELIVERY_FAILED
+            message: the decision is recorded but its delivery to the workflow failed or timed out; it is not retried
+    IdempotencyKeyReused:
+      description: The `Idempotency-Key` was already used with a different body.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+          example:
+            error: idempotency key reused
+            code: IDEMPOTENCY_KEY_REUSED
+            message: Idempotency-Key was already used with a different request body

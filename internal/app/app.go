@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,6 +17,7 @@ import (
 
 	"github.com/mindreon/orbit-control/internal/orch"
 	"github.com/mindreon/orbit-control/internal/store"
+	"github.com/mindreon/orbit-control/internal/store/memstore"
 	"github.com/mindreon/orbit-control/internal/worker"
 )
 
@@ -31,7 +35,32 @@ const (
 	// RuntimeKernel is the live worker. Rooms do not require dsh or ACP.
 	RuntimeKernel      = "agentscope"
 	maxActivityPerRoom = 500
+
+	DefaultTenantID        = "default"
+	LocalIssuer            = "orbit-local"
+	MaxIdempotencyKeyLen   = 128
+	idempotencyTTL         = 24 * time.Hour
+	defaultAbortTimeout    = 5 * time.Second
+	defaultDeliveryTimeout = 30 * time.Second
 )
+
+// ErrInvalid marks caller errors (400).
+var ErrInvalid = errors.New("invalid request")
+
+// ErrDecisionDeliveryFailed means a decision was recorded but delivering it
+// to the workflow failed or timed out (502). It never carries the upstream
+// error text.
+var ErrDecisionDeliveryFailed = errors.New("decision delivery failed")
+
+// ErrNotFound and ErrIdempotencyKeyReused are the repository sentinels.
+var (
+	ErrNotFound             = store.ErrNotFound
+	ErrIdempotencyKeyReused = store.ErrIdempotencyKeyReused
+)
+
+func invalidf(format string, args ...any) error {
+	return fmt.Errorf("%w: %s", ErrInvalid, fmt.Sprintf(format, args...))
+}
 
 func normalizePermissionPreset(raw string) (string, error) {
 	preset := strings.TrimSpace(raw)
@@ -42,8 +71,25 @@ func normalizePermissionPreset(raw string) (string, error) {
 	case PermissionWorkspaceWrite, PermissionReadOnly, PermissionDangerFullAccess:
 		return preset, nil
 	default:
-		return "", fmt.Errorf("permissionPreset must be workspace-write, read-only, or danger-full-access")
+		return "", invalidf("permissionPreset must be workspace-write, read-only, or danger-full-access")
 	}
+}
+
+// Principal is the authenticated caller. TenantID and UserID come only from
+// the authenticator (session), never from request bodies (§17.5).
+type Principal struct {
+	TenantID string
+	UserID   string
+}
+
+// Orchestrator is the Temporal RoomWorkflow surface control drives.
+// *orch.Client implements it.
+type Orchestrator interface {
+	StartRoom(ctx context.Context, roomID, kind, permissionPreset string) (orch.RoomView, error)
+	RunTurn(ctx context.Context, roomID, turnID, message string) (orch.RunTurnResult, error)
+	Decide(ctx context.Context, roomID, updateID, turnID, approvalRequestID, decision, resumeTurnID string) (orch.DecideUpdate, error)
+	Steer(ctx context.Context, roomID, turnID, instruction string) error
+	Abort(ctx context.Context, roomID, turnID, reason string) error
 }
 
 type RuntimeSnapshot struct {
@@ -93,24 +139,56 @@ type CreateRoomInput struct {
 	PermissionPreset string
 	PersonaID        string
 	GrantID          string
+	// IdempotencyKey is the raw Idempotency-Key header; only its sha256 is
+	// stored.
+	IdempotencyKey string
+}
+
+// liveRoom is the per-process projection publish() needs. The repository is
+// the source of truth; this is refilled from it on every successful read.
+type liveRoom struct {
+	TenantID         string
+	Runtime          RuntimeSnapshot
+	PermissionPreset string
+	// Closed ends new SSE subscriptions at once and lets the event log be
+	// freed after Limits.ClosedRoomLogTTL.
+	Closed bool
+}
+
+type Options struct {
+	Worker        *worker.Client
+	Orch          Orchestrator
+	Repo          store.Repository
+	Log           *log.Logger
+	DefaultTenant string
+	// AbortTimeout bounds the workflow abort sent before a soft delete.
+	AbortTimeout time.Duration
+	// DeliveryTimeout bounds delivering an approval decision to the workflow.
+	DeliveryTimeout time.Duration
 }
 
 type App struct {
 	mu            sync.Mutex
 	Worker        *worker.Client
-	Orch          *orch.Client // optional Temporal; nil → direct worker HTTP
+	Orch          Orchestrator // optional Temporal; nil → direct worker HTTP
+	Repo          store.Repository
 	Store         *store.FileStore
-	Rooms         map[string]*Room
-	Messages      map[string][]Message
-	Approvals     map[string]*Approval
-	Events        EventLog
-	SessionRoom   map[string]string
-	Personas      map[string]*Persona
-	McpConnectors map[string]*McpConnector
-	CloudAgents   map[string]*CloudAgentJob
-	grants        map[string]*grantRecord
-	subs          map[string]map[*subscriber]struct{}
-	clientStreams map[string]int
+	Log           *log.Logger
+	DefaultTenant string
+	AbortTimeout  time.Duration
+	// DeliveryTimeout bounds resolveApproval / acceptance of the decide
+	// Update; never the resumed turn.
+	DeliveryTimeout time.Duration
+	Events          EventLog
+	SessionRoom     map[string]string
+	Personas        map[string]*Persona
+	McpConnectors   map[string]*McpConnector
+	CloudAgents     map[string]*CloudAgentJob
+	live            map[string]liveRoom
+	knownUsers      map[string]struct{}
+	grants          map[string]*grantRecord
+	subs            map[string]map[*subscriber]struct{}
+	clientStreams   map[string]int
 	// freedLogs are closed rooms whose event log was freed; later events for
 	// them are discarded so the log is not recreated.
 	freedLogs map[string]struct{}
@@ -122,25 +200,51 @@ func New(w *worker.Client) *App {
 }
 
 func NewWithOrch(w *worker.Client, o *orch.Client) *App {
-	a := &App{
-		Worker:        w,
-		Orch:          o,
-		Store:         store.New(""),
-		Rooms:         map[string]*Room{},
-		Messages:      map[string][]Message{},
-		Approvals:     map[string]*Approval{},
-		Events:        NewMemoryEventLog(maxActivityPerRoom),
-		SessionRoom:   map[string]string{},
-		Personas:      map[string]*Persona{},
-		McpConnectors: map[string]*McpConnector{},
-		CloudAgents:   map[string]*CloudAgentJob{},
-		grants:        map[string]*grantRecord{},
-		subs:          map[string]map[*subscriber]struct{}{},
-		clientStreams: map[string]int{},
-		freedLogs:     map[string]struct{}{},
-		Limits:        DefaultLimits(),
+	opts := Options{Worker: w}
+	if o != nil {
+		opts.Orch = o
 	}
-	return a
+	return NewWithOptions(opts)
+}
+
+func NewWithOptions(opts Options) *App {
+	if opts.Repo == nil {
+		opts.Repo = memstore.New()
+	}
+	if opts.Log == nil {
+		opts.Log = log.Default()
+	}
+	if opts.DefaultTenant == "" {
+		opts.DefaultTenant = DefaultTenantID
+	}
+	if opts.AbortTimeout <= 0 {
+		opts.AbortTimeout = defaultAbortTimeout
+	}
+	if opts.DeliveryTimeout <= 0 {
+		opts.DeliveryTimeout = defaultDeliveryTimeout
+	}
+	return &App{
+		Worker:          opts.Worker,
+		Orch:            opts.Orch,
+		Repo:            opts.Repo,
+		Store:           store.New(""),
+		Log:             opts.Log,
+		DefaultTenant:   opts.DefaultTenant,
+		AbortTimeout:    opts.AbortTimeout,
+		DeliveryTimeout: opts.DeliveryTimeout,
+		Events:          NewMemoryEventLog(maxActivityPerRoom),
+		SessionRoom:     map[string]string{},
+		Personas:        map[string]*Persona{},
+		McpConnectors:   map[string]*McpConnector{},
+		CloudAgents:     map[string]*CloudAgentJob{},
+		live:            map[string]liveRoom{},
+		knownUsers:      map[string]struct{}{},
+		grants:          map[string]*grantRecord{},
+		subs:            map[string]map[*subscriber]struct{}{},
+		clientStreams:   map[string]int{},
+		freedLogs:       map[string]struct{}{},
+		Limits:          DefaultLimits(),
+	}
 }
 
 func id(prefix string) string {
@@ -151,60 +255,179 @@ func id(prefix string) string {
 
 func now() string { return time.Now().UTC().Format(time.RFC3339Nano) }
 
-func (a *App) CreateRoom(ctx context.Context, input CreateRoomInput) (*Room, error) {
+func stamp(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
+
+func roomFromRecord(rec store.RoomRecord) *Room {
+	room := &Room{
+		ID:               rec.ID,
+		Kind:             rec.Kind,
+		Title:            rec.Title,
+		State:            RoomState(rec.State),
+		PermissionPreset: rec.PermissionPreset,
+		SessionID:        rec.SessionID,
+		CreatedAt:        stamp(rec.CreatedAt),
+	}
+	_ = json.Unmarshal(rec.Runtime, &room.Runtime)
+	return room
+}
+
+func messageFromRecord(rec store.MessageRecord) Message {
+	return Message{ID: rec.ID, RoomID: rec.TaskID, Role: rec.Role, Type: rec.Type, Text: rec.Text, CreatedAt: stamp(rec.CreatedAt)}
+}
+
+func approvalFromRecord(rec store.ApprovalRecord) *Approval {
+	return &Approval{
+		ID:                rec.ID,
+		RoomID:            rec.TaskID,
+		SessionID:         rec.SessionID,
+		ApprovalRequestID: rec.ApprovalRequestID,
+		ToolName:          rec.ToolName,
+		Reason:            rec.Reason,
+		Status:            rec.Status,
+		Decision:          rec.Decision,
+		CreatedAt:         stamp(rec.CreatedAt),
+	}
+}
+
+// remember caches what publish() and internal ingest need about a live room.
+func (a *App) remember(rec store.RoomRecord) {
+	room := roomFromRecord(rec)
+	a.mu.Lock()
+	a.live[rec.ID] = liveRoom{TenantID: rec.TenantID, Runtime: room.Runtime, PermissionPreset: rec.PermissionPreset, Closed: room.State == RoomClosed}
+	if rec.SessionID != "" {
+		a.SessionRoom[rec.SessionID] = rec.ID
+	}
+	a.mu.Unlock()
+}
+
+// forget drops the in-process projection of a deleted room. SessionRoom is
+// kept so late session-only worker events still resolve to the room and get
+// the same 404 as events that carry roomId.
+func (a *App) forget(roomID string) {
+	a.mu.Lock()
+	delete(a.live, roomID)
+	_ = a.Events.Drop(roomID)
+	a.mu.Unlock()
+}
+
+func (a *App) ensureUser(ctx context.Context, p Principal) error {
+	key := p.TenantID + "\x00" + p.UserID
+	a.mu.Lock()
+	_, ok := a.knownUsers[key]
+	a.mu.Unlock()
+	if ok {
+		return nil
+	}
+	if err := a.Repo.UpsertUser(ctx, p.TenantID, store.UserRecord{ID: p.UserID, Issuer: LocalIssuer, Subject: p.UserID}); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	a.knownUsers[key] = struct{}{}
+	a.mu.Unlock()
+	return nil
+}
+
+func (a *App) getRoom(ctx context.Context, p Principal, roomID string) (store.RoomRecord, error) {
+	rec, err := a.Repo.GetRoom(ctx, p.TenantID, p.UserID, roomID)
+	if err != nil {
+		return store.RoomRecord{}, err
+	}
+	a.remember(rec)
+	return rec, nil
+}
+
+func (a *App) setRoomState(ctx context.Context, tenantID string, room *Room, state RoomState, sessionID string) error {
+	if err := a.Repo.UpdateRoomState(ctx, tenantID, room.ID, string(state), sessionID); err != nil {
+		return err
+	}
+	room.State = state
+	if sessionID != "" {
+		room.SessionID = sessionID
+		a.mu.Lock()
+		a.SessionRoom[sessionID] = room.ID
+		a.mu.Unlock()
+	}
+	return nil
+}
+
+func createRequestHash(kind, title, preset, personaID, grantID string) []byte {
+	raw, _ := json.Marshal([]string{kind, title, preset, personaID, grantID})
+	sum := sha256.Sum256(raw)
+	return sum[:]
+}
+
+// CreateRoom returns replayed=true when the Idempotency-Key matched an
+// existing live room; no workflow is started in that case.
+func (a *App) CreateRoom(ctx context.Context, p Principal, input CreateRoomInput) (*Room, bool, error) {
 	kind := strings.TrimSpace(input.Kind)
 	if kind == "" {
 		kind = "solo"
 	}
 	if kind != "solo" && kind != "collab" {
-		return nil, fmt.Errorf("kind must be solo or collab")
+		return nil, false, invalidf("kind must be solo or collab")
 	}
 	permissionPreset, err := normalizePermissionPreset(input.PermissionPreset)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	room := &Room{
+	if len(input.IdempotencyKey) > MaxIdempotencyKeyLen {
+		return nil, false, invalidf("Idempotency-Key must be at most %d characters", MaxIdempotencyKeyLen)
+	}
+	if err := a.ensureUser(ctx, p); err != nil {
+		return nil, false, err
+	}
+	title := strings.TrimSpace(input.Title)
+	personaID := strings.TrimSpace(input.PersonaID)
+	grantID := strings.TrimSpace(input.GrantID)
+	runtime, _ := json.Marshal(RuntimeSnapshot{Kernel: RuntimeKernel, Isolation: "process"})
+	rec := store.RoomRecord{
 		ID:               id("rm_"),
+		CreatedBy:        p.UserID,
 		Kind:             kind,
-		Title:            strings.TrimSpace(input.Title),
-		State:            RoomIdle,
+		Title:            title,
+		State:            string(RoomIdle),
 		PermissionPreset: permissionPreset,
-		Runtime: RuntimeSnapshot{
-			Kernel:    RuntimeKernel,
-			Isolation: "process",
-		},
-		CreatedAt: now(),
+		Runtime:          runtime,
+		PersonaID:        personaID,
+		CreatedAt:        time.Now().UTC(),
 	}
-	a.mu.Lock()
-	a.Rooms[room.ID] = room
-	a.Messages[room.ID] = nil
-	a.mu.Unlock()
+	var idem *store.IdempotencyRecord
+	if input.IdempotencyKey != "" {
+		keyHash := sha256.Sum256([]byte(input.IdempotencyKey))
+		idem = &store.IdempotencyRecord{
+			CreatedBy:   p.UserID,
+			KeyHash:     keyHash[:],
+			RequestHash: createRequestHash(kind, title, permissionPreset, personaID, grantID),
+			ExpiresAt:   time.Now().UTC().Add(idempotencyTTL),
+		}
+	}
+	saved, replayed, err := a.Repo.CreateRoom(ctx, p.TenantID, rec, idem)
+	if err != nil {
+		return nil, false, err
+	}
+	a.remember(saved)
+	room := roomFromRecord(saved)
+	if replayed {
+		return room, true, nil
+	}
 
 	if a.Orch != nil {
 		view, err := a.Orch.StartRoom(ctx, room.ID, kind, permissionPreset)
 		if err != nil {
-			a.mu.Lock()
-			room.State = RoomClosed
-			a.mu.Unlock()
-			return room, fmt.Errorf("temporal StartRoom: %w", err)
+			_ = a.setRoomState(ctx, p.TenantID, room, RoomClosed, "")
+			return room, false, fmt.Errorf("temporal StartRoom: %w", err)
 		}
-		a.mu.Lock()
-		room.SessionID = view.SessionID
-		room.State = RoomRunning
-		a.SessionRoom[view.SessionID] = room.ID
-		a.mu.Unlock()
+		if err := a.setRoomState(ctx, p.TenantID, room, RoomRunning, view.SessionID); err != nil {
+			return room, false, err
+		}
 		a.Publish(room.ID, Event{"type": "session.status", "roomId": room.ID, "sessionId": view.SessionID, "status": "running"})
-		return room, nil
+		return room, false, nil
 	}
 
-	personaID := strings.TrimSpace(input.PersonaID)
-	grantID := strings.TrimSpace(input.GrantID)
 	persona, connectors, grantEnv, err := a.CompositionForRoom(personaID, grantID)
 	if err != nil {
-		a.mu.Lock()
-		room.State = RoomClosed
-		a.mu.Unlock()
-		return room, err
+		_ = a.setRoomState(ctx, p.TenantID, room, RoomClosed, "")
+		return room, false, err
 	}
 	payload := map[string]any{
 		"roomId":           room.ID,
@@ -240,75 +463,73 @@ func (a *App) CreateRoom(ctx context.Context, input CreateRoomInput) (*Room, err
 	var out worker.OpenSessionOut
 	err = a.Worker.Call(ctx, "openSession", payload, &out)
 	if err != nil {
-		a.mu.Lock()
-		room.State = RoomClosed
-		a.mu.Unlock()
-		return room, fmt.Errorf("openSession: %w", err)
+		_ = a.setRoomState(ctx, p.TenantID, room, RoomClosed, "")
+		return room, false, fmt.Errorf("openSession: %w", err)
 	}
-	a.mu.Lock()
-	room.SessionID = out.SessionID
-	room.State = RoomRunning
-	a.SessionRoom[out.SessionID] = room.ID
-	a.mu.Unlock()
+	if err := a.setRoomState(ctx, p.TenantID, room, RoomRunning, out.SessionID); err != nil {
+		return room, false, err
+	}
 	a.Publish(room.ID, Event{"type": "session.status", "roomId": room.ID, "sessionId": out.SessionID, "status": "running"})
-	return room, nil
+	return room, false, nil
 }
 
-func (a *App) ListRooms() []*Room {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	out := make([]*Room, 0, len(a.Rooms))
-	for _, r := range a.Rooms {
-		cp := *r
-		out = append(out, &cp)
+func (a *App) ListRooms(ctx context.Context, p Principal) ([]*Room, error) {
+	recs, err := a.Repo.ListRooms(ctx, p.TenantID, p.UserID)
+	if err != nil {
+		return nil, err
 	}
-	return out
-}
-
-func (a *App) GetRoom(id string) (*Room, bool) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	r, ok := a.Rooms[id]
-	if !ok {
-		return nil, false
+	out := make([]*Room, 0, len(recs))
+	for _, rec := range recs {
+		out = append(out, roomFromRecord(rec))
 	}
-	cp := *r
-	return &cp, true
+	return out, nil
 }
 
-func (a *App) ListMessages(roomID string) []Message {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	src := a.Messages[roomID]
-	out := make([]Message, len(src))
-	copy(out, src)
-	return out
-}
-
-func (a *App) ListActivity(roomID string) []Envelope {
-	out, _ := a.Events.After(roomID, 0)
-	return out
-}
-
-func (a *App) appendMessage(m Message) {
-	a.Messages[m.RoomID] = append(a.Messages[m.RoomID], m)
-}
-
-func (a *App) PostMessage(ctx context.Context, roomID, text string) (*Room, *Approval, error) {
-	a.mu.Lock()
-	room, ok := a.Rooms[roomID]
-	if !ok {
-		a.mu.Unlock()
-		return nil, nil, fmt.Errorf("room not found")
+func (a *App) GetRoom(ctx context.Context, p Principal, roomID string) (*Room, error) {
+	rec, err := a.getRoom(ctx, p, roomID)
+	if err != nil {
+		return nil, err
 	}
-	if room.State != RoomRunning {
-		a.mu.Unlock()
-		return nil, nil, fmt.Errorf("room is %s", room.State)
+	return roomFromRecord(rec), nil
+}
+
+func (a *App) ListMessages(ctx context.Context, p Principal, roomID string) ([]Message, error) {
+	recs, err := a.Repo.ListMessages(ctx, p.TenantID, p.UserID, roomID)
+	if err != nil {
+		return nil, err
 	}
-	sessionID := room.SessionID
-	user := Message{ID: id("msg_"), RoomID: roomID, Role: "user", Text: text, CreatedAt: now()}
-	a.appendMessage(user)
-	a.mu.Unlock()
+	out := make([]Message, 0, len(recs))
+	for _, rec := range recs {
+		out = append(out, messageFromRecord(rec))
+	}
+	return out, nil
+}
+
+func (a *App) ListActivity(ctx context.Context, p Principal, roomID string) ([]Envelope, error) {
+	if _, err := a.getRoom(ctx, p, roomID); err != nil {
+		return nil, err
+	}
+	return a.Events.After(roomID, 0)
+}
+
+func (a *App) appendMessage(ctx context.Context, tenantID, roomID, role, text string) error {
+	return a.Repo.AppendMessage(ctx, tenantID, store.MessageRecord{
+		ID: id("msg_"), TaskID: roomID, Role: role, Text: text, CreatedAt: time.Now().UTC(),
+	})
+}
+
+func (a *App) PostMessage(ctx context.Context, p Principal, roomID, text string) (*Room, *Approval, error) {
+	rec, err := a.getRoom(ctx, p, roomID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if RoomState(rec.State) != RoomRunning {
+		return nil, nil, invalidf("room is %s", rec.State)
+	}
+	sessionID := rec.SessionID
+	if err := a.appendMessage(ctx, p.TenantID, roomID, "user", text); err != nil {
+		return nil, nil, err
+	}
 	a.Publish(roomID, Event{"type": "assistant.message", "roomId": roomID, "role": "user", "text": text})
 
 	if a.Orch != nil {
@@ -317,11 +538,11 @@ func (a *App) PostMessage(ctx context.Context, roomID, text string) (*Room, *App
 		if err != nil {
 			return nil, nil, err
 		}
-		return a.applyTurnResult(ctx, roomID, sessionID, runTurnFromOrch(res))
+		return a.applyTurnResult(ctx, p.TenantID, roomID, runTurnFromOrch(res))
 	}
 
 	var out worker.RunTurnOut
-	err := a.Worker.Call(ctx, "runTurn", map[string]any{
+	err = a.Worker.Call(ctx, "runTurn", map[string]any{
 		"roomId":    roomID,
 		"sessionId": sessionID,
 		"turnId":    id("tn_"),
@@ -330,128 +551,135 @@ func (a *App) PostMessage(ctx context.Context, roomID, text string) (*Room, *App
 	if err != nil {
 		return nil, nil, err
 	}
-	return a.applyTurnResult(ctx, roomID, sessionID, out)
+	return a.applyTurnResult(ctx, p.TenantID, roomID, out)
 }
 
-func (a *App) persistAssistantTexts(roomID string, texts []string) {
+func (a *App) persistAssistantTexts(ctx context.Context, tenantID, roomID string, texts []string) error {
 	for _, text := range texts {
 		if text == "" {
 			continue
 		}
-		a.appendMessage(Message{
-			ID: id("msg_"), RoomID: roomID, Role: "assistant", Text: text, CreatedAt: now(),
-		})
+		if err := a.appendMessage(ctx, tenantID, roomID, "assistant", text); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
-func (a *App) applyTurnResult(ctx context.Context, roomID, sessionID string, out worker.RunTurnOut) (*Room, *Approval, error) {
-	_ = ctx
-	a.mu.Lock()
-	room := a.Rooms[roomID]
-	if room == nil {
-		a.mu.Unlock()
-		return nil, nil, fmt.Errorf("room not found")
+func (a *App) applyTurnResult(ctx context.Context, tenantID, roomID string, out worker.RunTurnOut) (*Room, *Approval, error) {
+	if err := a.persistAssistantTexts(ctx, tenantID, roomID, out.Texts); err != nil {
+		return nil, nil, err
 	}
-	a.persistAssistantTexts(roomID, out.Texts)
-
+	state := RoomRunning
+	var appr *store.ApprovalRecord
 	if out.Status == "needs_approval" {
-		room.State = RoomAwaitingApproval
-		ask := out.Approval
-		appr := &Approval{
-			ID:        id("ap_"),
-			RoomID:    roomID,
-			SessionID: sessionID,
-			Status:    "pending",
-			CreatedAt: now(),
-		}
-		if ask != nil {
+		state = RoomAwaitingApproval
+		appr = &store.ApprovalRecord{ID: id("ap_"), TaskID: roomID, Status: "pending", CreatedAt: time.Now().UTC()}
+		if ask := out.Approval; ask != nil {
 			appr.ApprovalRequestID = ask.ApprovalRequestID
+			appr.CallID = ask.CallID
 			appr.ToolName = ask.ToolName
 			appr.Reason = ask.Reason
 		}
-		a.Approvals[appr.ID] = appr
-		cpRoom := *room
-		cpAppr := *appr
-		a.mu.Unlock()
-		a.Publish(roomID, Event{"type": "approval.asked", "roomId": roomID, "approvalId": appr.ID, "toolName": appr.ToolName, "reason": appr.Reason})
-		return &cpRoom, &cpAppr, nil
+		if err := a.Repo.CreateApproval(ctx, tenantID, *appr); err != nil {
+			return nil, nil, err
+		}
 	}
-
-	// completed / continue: keep the ACP session open so the user can send again.
-	room.State = RoomRunning
-	cp := *room
-	a.mu.Unlock()
-	return &cp, nil, nil
+	if err := a.Repo.UpdateRoomState(ctx, tenantID, roomID, string(state), ""); err != nil {
+		return nil, nil, err
+	}
+	rec, err := a.Repo.GetRoomForWorker(ctx, tenantID, roomID)
+	if err != nil {
+		return nil, nil, err
+	}
+	room := roomFromRecord(rec)
+	if appr == nil {
+		// completed / continue: keep the session open so the user can send again.
+		return room, nil, nil
+	}
+	appr.SessionID = rec.SessionID
+	a.Publish(roomID, Event{"type": "approval.asked", "roomId": roomID, "approvalId": appr.ID, "toolName": appr.ToolName, "reason": appr.Reason})
+	return room, approvalFromRecord(*appr), nil
 }
 
-func (a *App) Decide(ctx context.Context, approvalID, decision string) (*Approval, error) {
-	a.mu.Lock()
-	appr, ok := a.Approvals[approvalID]
-	if !ok {
-		a.mu.Unlock()
-		return nil, fmt.Errorf("approval not found")
+// Decide claims the approval with a conditional UPDATE (status = 'pending')
+// before anything is sent to the workflow, so concurrent decisions produce
+// exactly one delivery; the loser gets ErrApprovalNotPending (409). A decided
+// approval is final: if delivery fails the error is returned and the claim
+// stays, because a timed-out delivery may already have been applied.
+func (a *App) Decide(ctx context.Context, p Principal, approvalID, decision string) (*Approval, error) {
+	appr, err := a.Repo.GetApproval(ctx, p.TenantID, p.UserID, approvalID)
+	if err != nil {
+		return nil, err
 	}
 	if appr.Status != "pending" {
-		a.mu.Unlock()
-		return nil, fmt.Errorf("approval already decided")
+		return nil, store.ErrApprovalNotPending
 	}
-	room := a.Rooms[appr.RoomID]
 	sessionID := appr.SessionID
 	reqID := appr.ApprovalRequestID
-	roomID := appr.RoomID
-	a.mu.Unlock()
+	roomID := appr.TaskID
+	value := decision
+	if a.Orch == nil && decision != "reject" {
+		value = "allow"
+	}
+	if err := a.Repo.DecideApproval(ctx, p.TenantID, approvalID, "decided", value); err != nil {
+		return nil, err
+	}
+	appr.Status = "decided"
+	appr.Decision = value
+	out := approvalFromRecord(appr)
+	closeRoom := func() error {
+		if err := a.Repo.UpdateRoomState(ctx, p.TenantID, roomID, string(RoomClosed), ""); err != nil {
+			return err
+		}
+		a.Publish(roomID, Event{"type": "session.status", "roomId": roomID, "status": "closed"})
+		a.roomClosed(roomID)
+		return nil
+	}
 
 	if a.Orch != nil {
-		turnID := id("tn_")
-		res, err := a.Orch.Decide(ctx, roomID, turnID, reqID, decision, id("tn_"))
+		// Delivery is acceptance of the Update; the resumed turn that follows
+		// runs under the request context, not the delivery timeout (FM-60).
+		dctx, cancel := context.WithTimeout(ctx, a.DeliveryTimeout)
+		upd, err := a.Orch.Decide(dctx, roomID, approvalID, id("tn_"), reqID, decision, id("tn_"))
+		timedOut := errors.Is(dctx.Err(), context.DeadlineExceeded)
+		cancel()
 		if err != nil {
-			return nil, err
+			return nil, a.deliveryFailed(approvalID, timedOut)
 		}
-		a.mu.Lock()
-		appr.Status = "decided"
-		appr.Decision = decision
-		if decision == "reject" && room != nil {
-			room.State = RoomClosed
+		res, err := upd.Result(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("orch decide result: %w", err)
 		}
-		cp := *appr
-		a.mu.Unlock()
 		if decision == "reject" {
-			a.Publish(roomID, Event{"type": "session.status", "roomId": roomID, "status": "closed"})
-			a.roomClosed(roomID)
-			return &cp, nil
+			return out, closeRoom()
 		}
 		if res.Turn != nil {
-			_, _, err = a.applyTurnResult(ctx, roomID, sessionID, runTurnFromOrch(*res.Turn))
+			_, _, err = a.applyTurnResult(ctx, p.TenantID, roomID, runTurnFromOrch(*res.Turn))
 		}
-		return &cp, err
+		return out, err
 	}
 
 	if decision == "reject" {
 		_ = a.Worker.Call(ctx, "abort", map[string]any{
 			"roomId": roomID, "sessionId": sessionID, "turnId": id("tn_"), "reason": "rejected",
 		}, &worker.AbortedOut{})
-		a.mu.Lock()
-		appr.Status = "decided"
-		appr.Decision = "reject"
-		if room != nil {
-			room.State = RoomClosed
-		}
-		cp := *appr
-		a.mu.Unlock()
-		a.Publish(roomID, Event{"type": "session.status", "roomId": roomID, "status": "closed"})
-		a.roomClosed(roomID)
-		return &cp, nil
+		return out, closeRoom()
 	}
 
 	var applied worker.AppliedOut
-	if err := a.Worker.Call(ctx, "resolveApproval", map[string]any{
+	dctx, cancel := context.WithTimeout(ctx, a.DeliveryTimeout)
+	err = a.Worker.Call(dctx, "resolveApproval", map[string]any{
 		"roomId":            roomID,
 		"sessionId":         sessionID,
 		"turnId":            id("tn_"),
 		"approvalRequestId": reqID,
 		"outcome":           "allowed-once",
-	}, &applied); err != nil {
-		return nil, err
+	}, &applied)
+	timedOut := errors.Is(dctx.Err(), context.DeadlineExceeded)
+	cancel()
+	if err != nil {
+		return nil, a.deliveryFailed(approvalID, timedOut)
 	}
 	var turn worker.RunTurnOut
 	if err := a.Worker.Call(ctx, "runTurn", map[string]any{
@@ -463,67 +691,104 @@ func (a *App) Decide(ctx context.Context, approvalID, decision string) (*Approva
 	}, &turn); err != nil {
 		return nil, err
 	}
-	a.mu.Lock()
-	appr.Status = "decided"
-	appr.Decision = "allow"
-	a.mu.Unlock()
-	_, _, err := a.applyTurnResult(ctx, roomID, sessionID, turn)
-	a.mu.Lock()
-	cp := *appr
-	a.mu.Unlock()
-	return &cp, err
+	_, _, err = a.applyTurnResult(ctx, p.TenantID, roomID, turn)
+	return out, err
 }
 
-func (a *App) ListApprovals() []*Approval {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	out := make([]*Approval, 0, len(a.Approvals))
-	for _, v := range a.Approvals {
-		cp := *v
-		out = append(out, &cp)
+// deliveryFailed logs a failed decision delivery and returns
+// ErrDecisionDeliveryFailed. The approval stays decided: a timed-out delivery
+// may already have been applied, so it is never re-delivered (FM-59).
+func (a *App) deliveryFailed(approvalID string, timedOut bool) error {
+	reason := "error"
+	if timedOut {
+		reason = "timeout"
 	}
-	return out
+	a.Log.Printf("WARN alert=decision_delivery_failed approval=%s reason=%s", approvalID, reason)
+	return ErrDecisionDeliveryFailed
 }
 
-func (a *App) AbortRoom(ctx context.Context, roomID string) error {
-	a.mu.Lock()
-	room, ok := a.Rooms[roomID]
-	if !ok {
-		a.mu.Unlock()
-		return fmt.Errorf("room not found")
+func (a *App) ListApprovals(ctx context.Context, p Principal) ([]*Approval, error) {
+	recs, err := a.Repo.ListApprovals(ctx, p.TenantID, p.UserID)
+	if err != nil {
+		return nil, err
 	}
-	sessionID := room.SessionID
-	a.mu.Unlock()
+	out := make([]*Approval, 0, len(recs))
+	for _, rec := range recs {
+		out = append(out, approvalFromRecord(rec))
+	}
+	return out, nil
+}
+
+func (a *App) abortWorkflow(ctx context.Context, roomID, sessionID, reason string) error {
 	if a.Orch != nil {
-		_ = a.Orch.Abort(ctx, roomID, id("tn_"), "abort")
-	} else {
-		_ = a.Worker.Call(ctx, "abort", map[string]any{"roomId": roomID, "sessionId": sessionID, "turnId": id("tn_")}, &worker.AbortedOut{})
+		return a.Orch.Abort(ctx, roomID, id("tn_"), reason)
 	}
-	a.mu.Lock()
-	room.State = RoomClosed
-	a.mu.Unlock()
+	return a.Worker.Call(ctx, "abort", map[string]any{
+		"roomId": roomID, "sessionId": sessionID, "turnId": id("tn_"), "reason": reason,
+	}, &worker.AbortedOut{})
+}
+
+func (a *App) AbortRoom(ctx context.Context, p Principal, roomID string) error {
+	rec, err := a.getRoom(ctx, p, roomID)
+	if err != nil {
+		return err
+	}
+	_ = a.abortWorkflow(ctx, roomID, rec.SessionID, "abort")
+	if err := a.Repo.UpdateRoomState(ctx, p.TenantID, roomID, string(RoomClosed), ""); err != nil {
+		return err
+	}
 	a.Publish(roomID, Event{"type": "session.status", "roomId": roomID, "status": "closed"})
 	a.roomClosed(roomID)
 	return nil
 }
 
-func (a *App) SteerRoom(ctx context.Context, roomID, instruction string) (bool, error) {
+// DeleteRoom soft-deletes a room created by p (§18.7a). The workflow abort is
+// sent first; if it fails or times out the delete still happens and a
+// warning is logged, because users must always be able to delete a task.
+// Live SSE connections for the room are closed afterwards.
+func (a *App) DeleteRoom(ctx context.Context, p Principal, roomID string) error {
+	rec, err := a.getRoom(ctx, p, roomID)
+	if err != nil {
+		return err
+	}
+	abortCtx, cancel := context.WithTimeout(ctx, a.AbortTimeout)
+	abortErr := a.abortWorkflow(abortCtx, roomID, rec.SessionID, "deleted")
+	timedOut := errors.Is(abortCtx.Err(), context.DeadlineExceeded)
+	cancel()
+	if abortErr != nil {
+		reason := "error"
+		if timedOut || errors.Is(abortErr, context.DeadlineExceeded) {
+			reason = "timeout"
+		}
+		// Only the task id and a fixed reason: worker/Temporal error text is
+		// not logged here because it may echo request payloads.
+		a.Log.Printf("WARN alert=room_delete_abort_failed task=%s reason=%s", roomID, reason)
+	}
+	n, err := a.Repo.SoftDeleteRoom(context.WithoutCancel(ctx), p.TenantID, p.UserID, roomID)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	a.forget(roomID)
+	a.closeSubscribers(roomID)
+	return nil
+}
+
+func (a *App) SteerRoom(ctx context.Context, p Principal, roomID, instruction string) (bool, error) {
 	instruction = strings.TrimSpace(instruction)
 	if instruction == "" {
-		return false, fmt.Errorf("instruction is required")
+		return false, invalidf("instruction is required")
 	}
-	a.mu.Lock()
-	room, ok := a.Rooms[roomID]
-	if !ok {
-		a.mu.Unlock()
-		return false, fmt.Errorf("room not found")
+	rec, err := a.getRoom(ctx, p, roomID)
+	if err != nil {
+		return false, err
 	}
-	if room.State != RoomRunning {
-		a.mu.Unlock()
-		return false, fmt.Errorf("room is %s", room.State)
+	if RoomState(rec.State) != RoomRunning {
+		return false, invalidf("room is %s", rec.State)
 	}
-	sessionID := room.SessionID
-	a.mu.Unlock()
+	sessionID := rec.SessionID
 
 	accepted := true
 	if a.Orch != nil {
@@ -578,11 +843,13 @@ func eventString(ev Event, key string) string {
 }
 
 // Ingest validates a worker event's routing fields and stores or streams the
-// body unchanged as the envelope payload.
-func (a *App) Ingest(raw []byte) error {
+// body unchanged as the envelope payload. The room (and its tenant) is
+// resolved by control, never taken from the event; a missing or soft-deleted
+// room yields ErrNotFound (404, non-retryable for the worker).
+func (a *App) Ingest(ctx context.Context, raw []byte) error {
 	var payload bytes.Buffer
 	if err := json.Compact(&payload, raw); err != nil || payload.Len() == 0 || payload.Bytes()[0] != '{' {
-		return fmt.Errorf("event must be a JSON object")
+		return invalidf("event must be a JSON object")
 	}
 	var head struct {
 		Type       string `json:"type"`
@@ -591,16 +858,16 @@ func (a *App) Ingest(raw []byte) error {
 		OccurredAt string `json:"occurredAt"`
 	}
 	if err := json.Unmarshal(payload.Bytes(), &head); err != nil {
-		return fmt.Errorf("event type, roomId, sessionId, and occurredAt must be strings")
+		return invalidf("event type, roomId, sessionId, and occurredAt must be strings")
 	}
 	eventType := head.Type
 	if _, ok := workerEventTypes[eventType]; !ok {
-		return fmt.Errorf("unsupported Orbit event type %q", eventType)
+		return invalidf("unsupported Orbit event type %q", eventType)
 	}
 	ts := head.OccurredAt
 	if ts != "" {
 		if _, err := time.Parse(time.RFC3339Nano, ts); err != nil {
-			return fmt.Errorf("occurredAt must be RFC3339")
+			return invalidf("occurredAt must be RFC3339")
 		}
 	} else {
 		ts = now()
@@ -614,14 +881,22 @@ func (a *App) Ingest(raw []byte) error {
 	if roomID == "" && sessionID != "" {
 		roomID = mappedRoomID
 	}
-	_, roomExists := a.Rooms[roomID]
+	tenantID := a.live[roomID].TenantID
 	a.mu.Unlock()
 	if mappedRoomID != "" && roomID != mappedRoomID {
-		return fmt.Errorf("event roomId does not match its session")
+		return invalidf("event roomId does not match its session")
 	}
-	if roomID == "" || !roomExists {
-		return fmt.Errorf("event is not associated with a known room")
+	if roomID == "" {
+		return invalidf("event is not associated with a known room")
 	}
+	if tenantID == "" {
+		tenantID = a.DefaultTenant
+	}
+	rec, err := a.Repo.GetRoomForWorker(ctx, tenantID, roomID)
+	if err != nil {
+		return err
+	}
+	a.remember(rec)
 	env := Envelope{Type: eventType, TaskID: roomID, TS: ts, Source: "worker", Payload: payload.Bytes()}
 	if _, ok := liveOnlyEventTypes[eventType]; ok {
 		a.publishLive(env)
@@ -637,13 +912,9 @@ func (a *App) Ingest(raw []byte) error {
 // fills in room context the worker would otherwise supply.
 func (a *App) Publish(roomID string, ev Event) {
 	a.mu.Lock()
-	room := a.Rooms[roomID]
-	var preset, kernel string
-	if room != nil {
-		preset, kernel = room.PermissionPreset, room.Runtime.Kernel
-	}
+	room, ok := a.live[roomID]
 	a.mu.Unlock()
-	if room == nil {
+	if !ok {
 		return
 	}
 	payload := make(Event, len(ev)+4)
@@ -653,8 +924,8 @@ func (a *App) Publish(roomID string, ev Event) {
 	defaults := map[string]string{
 		"roomId":           roomID,
 		"occurredAt":       now(),
-		"runtime":          kernel,
-		"permissionPreset": preset,
+		"runtime":          room.Runtime.Kernel,
+		"permissionPreset": room.PermissionPreset,
 	}
 	for k, v := range defaults {
 		if eventString(payload, k) == "" && v != "" {
@@ -679,9 +950,9 @@ func (a *App) publishDurable(env Envelope) {
 		return
 	}
 	a.mu.Lock()
-	room := a.Rooms[env.TaskID]
+	_, ok := a.live[env.TaskID]
 	_, freed := a.freedLogs[env.TaskID]
-	if room == nil || freed {
+	if !ok || freed {
 		a.mu.Unlock()
 		return
 	}
@@ -693,14 +964,12 @@ func (a *App) publishDurable(env Envelope) {
 		a.mu.Unlock()
 		return
 	}
-	snapshot := *room
 	raw := append([]byte(`{"id":`+strconv.FormatUint(env.ID, 10)+`,`), body[1:]...)
 	a.broadcastLocked(env.TaskID, StreamFrame{Seq: env.ID, Durable: true, Data: raw})
 	a.mu.Unlock()
-	// Audit and room files are written outside a.mu; concurrent publishes may
-	// append audit lines out of id order, so readers sort by id.
+	// Audit files are written outside a.mu; concurrent publishes may append
+	// audit lines out of id order, so readers sort by id.
 	a.persistActivity(env.TaskID, env)
-	a.persistRoom(&snapshot)
 }
 
 func runTurnFromOrch(res orch.RunTurnResult) worker.RunTurnOut {
