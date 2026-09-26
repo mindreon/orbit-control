@@ -1,7 +1,11 @@
-# Persistence failure modes (contract §18, C32 rev2)
+# Persistence failure modes (contract §18, C32 rev3)
 
-Signed contract: `orbit-contract-draft-v2.md` §18, sha256
-`053a37bb093e06602a50f6412cd57eb3491161f039b567880ba6650ec6965229`.
+Contract: `orbit-contract-draft-v2.md` §18.
+
+- **C32 rev3** (Celestial: rooms DELETE revoked from `orbit_app`). sha256
+  relayed as `113aebd8…f90b`; the full value is pending.
+- Previous signed version (C32 rev2): sha256
+  `053a37bb093e06602a50f6412cd57eb3491161f039b567880ba6650ec6965229`.
 
 ## How persistence is verified
 
@@ -78,7 +82,7 @@ below has a written reason; a new grant needs a new line here first.
 | Table | orbit_app | Reason for anything beyond SELECT/INSERT |
 |---|---|---|
 | `tenants` | SELECT | Tenants are created by the ops role `orbit_ops`, which has access to `tenants` only, via `deploy/postgres/ensure-tenant.sql`. Control only checks at startup that its default tenant exists, and refuses to start if it does not. |
-| `rooms` | SELECT, INSERT, UPDATE on some columns, DELETE | UPDATE covers only `kind, title, state, permission_preset, runtime, session_id, persona_id, delegation, failure, last_event_seq, updated_at`. The excluded columns are `id`, `tenant_id`, `created_by`, `created_at`, `deleted_at` and `deleted_by`; soft delete writes the last two only through `orbit_soft_delete_room`. DELETE stays granted only because S-DB-13 (i) (signed text) requires `DELETE FROM rooms` by the app role to *affect 0 rows*, which RLS guarantees because there is no DELETE policy. Revoking it would turn that into a privilege error. That is an owner decision; the rest of this file assumes the contract text. |
+| `rooms` | SELECT, INSERT, UPDATE on some columns; **no DELETE** | UPDATE covers only `kind, title, state, permission_preset, runtime, session_id, persona_id, delegation, failure, last_event_seq, updated_at`. The excluded columns are `id`, `tenant_id`, `created_by`, `created_at`, `deleted_at` and `deleted_by`. **C32 rev3 (Celestial):** no DELETE privilege and no DELETE policy, so `DELETE FROM rooms` by `orbit_app` fails with `42501 permission denied`. Soft delete writes `deleted_at` / `deleted_by` only through `orbit_soft_delete_room`, which runs as `orbit_definer` and needs no DELETE. |
 | `events`, `messages`, `turns`, `approvals`, `artifacts`, `artifact_versions` | SELECT, INSERT, UPDATE; **no DELETE** | Task history. P0 never deletes it (§18.7a, no purge). |
 | `users`, `personas`, `mcp_connectors`, `cloud_agent_jobs` | SELECT, INSERT, UPDATE; **no DELETE** | No P0 code path deletes these rows. A future delete API must add its reason here first. |
 | `approval_rules` | SELECT, INSERT, UPDATE, DELETE | Revoking a rule deletes its row (§18.3; C23 / S-Rb-8). |
@@ -211,11 +215,15 @@ Move this to E2E when that route lands.
   NOLOGIN, BYPASSRLS and not a superuser. `proconfig` is exactly
   `search_path=pg_catalog, public`. The ACL is non-NULL and has no PUBLIC
   entry. `orbit_app` has EXECUTE.
-- Calling the function as `orbit_owner`, or as `orbit_definer` (via
-  `SET ROLE`), fails with `42501 insufficient_privilege`.
+- Calling the function as any role other than `orbit_app` fails with
+  `42501 permission denied`. The roles tried are `orbit_owner`,
+  `orbit_definer` (via `SET ROLE`) and `orbit_ops`.
 - Called as `orbit_app`, it returns 0 when there is no tenant, a foreign
   tenant, a non-creator user, or an already-deleted room.
-- As `orbit_app`, `DELETE FROM rooms` affects 0 rows.
+- As `orbit_app`, `DELETE FROM rooms` fails with `42501 permission denied`
+  (C32 rev3), and the owner's room count is unchanged.
+- Soft delete through the function keeps working: `S-DB-13/delete` returns
+  204 and `S-DB-13(k)/*` pass.
 
 Failure modes:
 
@@ -233,8 +241,9 @@ Failure modes:
   `rooms`, and the definer would operate on the attacker's object.
 - **FM-21.** The function skips one of its own checks (tenant GUC,
   `created_by = p_user`, `deleted_at IS NULL`) and relies on the caller.
-- **FM-22.** A DELETE policy is added to `rooms`, which makes physical
-  deletes by `orbit_app` possible.
+- **FM-22.** DELETE is re-granted on `rooms`, or a DELETE policy is added.
+  Either one moves `orbit_app` one step closer to physical deletes. With
+  both, deletes of rooms without children succeed.
 
 Why HTTP cannot catch these: HTTP always calls the function correctly, as
 `orbit_app` and with the session user. The failures above are about who
@@ -371,10 +380,10 @@ phase 2. The constraint is the storage-level guarantee in the meantime.
 
 ### ISO-14 — review M1: history cannot be deleted by `orbit_app`
 
-As `orbit_app`, with the owning tenant set, `DELETE` on `events`, `messages`,
-`turns`, `approvals`, `artifacts`, `artifact_versions`, `users`, `personas`,
-`mcp_connectors`, `cloud_agent_jobs` and `tenants` fails with `42501`, and
-the owner's row count is unchanged.
+As `orbit_app`, with the owning tenant set, `DELETE` on `rooms` (C32 rev3),
+`events`, `messages`, `turns`, `approvals`, `artifacts`, `artifact_versions`,
+`users`, `personas`, `mcp_connectors`, `cloud_agent_jobs` and `tenants` fails
+with `42501 permission denied`, and the owner's row count is unchanged.
 
 As a positive control, DELETE still works where it is kept for cleanup:
 `idempotency_keys`, `sessions`, `oidc_login_state` and `approval_rules`.
