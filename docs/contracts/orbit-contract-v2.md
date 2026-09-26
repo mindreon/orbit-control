@@ -788,7 +788,7 @@ orbit-infra 只需要更新 submodule 指针；部署时确认 `ORBIT_INTERNAL_T
 8. （v2.1 新增）AgentScope 能否接受部分 `confirm_results`（§2.2）；不能的话，需要在包装层单独执行被批准的调用，实现复杂度上升。
 9. （v2.1 新增）调研建议 spawn 时**冻结**子 Agent 快照（AS §6.4），本草案按 Sentinel M2 改成"随 room 刷新，并且每次重新取交集"。两者冲突的地方已经按 M2 处理，请调研作者确认没有遗漏的风险。
 7. （v2 新增）控制面 decide 前的 query 最多重试 2 秒。如果 worker 到 workflow 的延迟更大，会误报 409。需要在 PR-B 压测里确认这个阈值。
-10. （C34 新增，待 Nexus 确认）`MAX_DECIDED_APPROVALS=1024` 配合 24 小时 TTL：一个 room 在 24 小时内决定超过 1024 个审批，就会以 `DECIDED_APPROVALS_LIMIT` 永久失败。备选方案是缩短 TTL，或者只保存已决定 id 的摘要来提高上限。
+10. （C34，**Nexus 已确认 P0 接受**，TTL 不缩短）`MAX_DECIDED_APPROVALS=1024` 配合 24 小时 TTL：一个 room 在 24 小时内决定超过 1024 个审批，就会以 `failure.code=DECIDED_APPROVALS_LIMIT` 永久失败。配套：(1) 体验和 `state_unreadable` 相同（记录和产物可读、只读、输入框禁用、无重试），但错误码独立，固定文案「此任务的审批次数已达上限，无法继续。你可以查看记录，或新建任务继续工作。」；(2) 同一个 room 未过期的已决定条目数达到 512 时，workflow 记一条 WARN 日志 `decided_approvals_high_watermark{roomId,count}`，每个 run 只记一次，不展示给前端；(3) 滑动窗口或提高上限放到 P1 评估。
 
 ## 14. orbit-web 兼容与迁移
 
