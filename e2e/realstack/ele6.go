@@ -6,9 +6,12 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/mindreon/orbit-control/internal/app"
 )
 
 // Limits the real pair's control runs with (controlLimits).
@@ -17,6 +20,48 @@ const (
 	ele6PerClient = 4
 	ele6IngestMax = 64 << 10
 )
+
+var limitEnvVars = []string{
+	"ORBIT_SSE_MAX_STREAMS_PER_ROOM", "ORBIT_SSE_MAX_STREAMS_PER_CLIENT", "ORBIT_SSE_WRITE_TIMEOUT",
+	"ORBIT_SSE_MAX_CONSECUTIVE_LAGS", "ORBIT_INGEST_MAX_BYTES", "ORBIT_CLOSED_ROOM_LOG_TTL",
+}
+
+// runLimits resolves env the way the control binary does at startup
+// (app.LimitsFromEnv), with only env set among the limit variables.
+func runLimits(env []string) app.Limits {
+	saved := map[string]string{}
+	for _, name := range limitEnvVars {
+		if v, ok := os.LookupEnv(name); ok {
+			saved[name] = v
+		}
+		os.Unsetenv(name)
+	}
+	for _, kv := range env {
+		if name, value, ok := strings.Cut(kv, "="); ok {
+			os.Setenv(name, value)
+		}
+	}
+	l := app.LimitsFromEnv()
+	for _, name := range limitEnvVars {
+		os.Unsetenv(name)
+		if v, ok := saved[name]; ok {
+			os.Setenv(name, v)
+		}
+	}
+	return l
+}
+
+// limitsByEnv renders limits keyed by the env var that sets each one.
+func limitsByEnv(l app.Limits) map[string]string {
+	return map[string]string{
+		"ORBIT_SSE_MAX_STREAMS_PER_ROOM":   strconv.Itoa(l.MaxStreamsPerRoom),
+		"ORBIT_SSE_MAX_STREAMS_PER_CLIENT": strconv.Itoa(l.MaxStreamsPerClient),
+		"ORBIT_SSE_WRITE_TIMEOUT":          l.SSEWriteTimeout.String(),
+		"ORBIT_SSE_MAX_CONSECUTIVE_LAGS":   strconv.Itoa(l.MaxConsecutiveLags),
+		"ORBIT_INGEST_MAX_BYTES":           strconv.FormatInt(l.IngestMaxBytes, 10),
+		"ORBIT_CLOSED_ROOM_LOG_TTL":        l.ClosedRoomLogTTL.String(),
+	}
+}
 
 func caseELE6(st *stack) caseRow {
 	row := caseRow{
@@ -30,6 +75,12 @@ func caseELE6(st *stack) caseRow {
 			"POST /internal/events (internal token) a tool.result for S1 whose body is over " + strconv.Itoa(ele6IngestMax) + " bytes, then one just under it; read S1's activity and its open stream.",
 			"POST /v1/rooms/S1/abort: S1's open stream delivers a session.status and then ends; a new stream on the closed room ends at once.",
 		},
+	}
+	row.Config = map[string]any{
+		"limitsForRun":   limitsByEnv(runLimits(controlLimits["real"])),
+		"runSource":      "app.LimitsFromEnv() over the env the E-LE-6 control was started with",
+		"limitsDefaults": limitsByEnv(app.DefaultLimits()),
+		"defaultsSource": "app.DefaultLimits() in internal/app/limits.go (documented in README 'Resource limits')",
 	}
 	c := st.controls["real"]
 	// Streams from earlier cases on this control finish closing server-side.

@@ -71,12 +71,14 @@ var controlLimits = map[string][]string{
 }
 
 type caseRow struct {
-	ID       string   `json:"id"`
-	Title    string   `json:"title"`
-	Steps    []string `json:"steps"`
-	Expected any      `json:"expected"`
-	Actual   any      `json:"actual"`
-	Pass     bool     `json:"pass"`
+	ID    string   `json:"id"`
+	Title string   `json:"title"`
+	Steps []string `json:"steps"`
+	// Config records settings the case ran with, for comparison across runs.
+	Config   any  `json:"config,omitempty"`
+	Expected any  `json:"expected"`
+	Actual   any  `json:"actual"`
+	Pass     bool `json:"pass"`
 }
 
 func main() {

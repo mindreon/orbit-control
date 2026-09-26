@@ -118,7 +118,11 @@ does not preserve client IPs, every browser shares the proxy's IP, so size
 the per-client cap for the proxy). Each stream holds a 256-event live buffer.
 The real-stack E2E (E-LE-6) runs one control with small values
 (`ORBIT_SSE_MAX_STREAMS_PER_ROOM=2`, `ORBIT_SSE_MAX_STREAMS_PER_CLIENT=4`,
-`ORBIT_INGEST_MAX_BYTES=65536`) to exercise the 429 and 413 paths.
+`ORBIT_INGEST_MAX_BYTES=65536`) to exercise the 429 and 413 paths. Its report
+row's `config` records the limits that run used (resolved by
+`app.LimitsFromEnv`, as the binary does) and the defaults below (read from
+`app.DefaultLimits`, the code's source of truth), so a default change shows
+up in the report.
 
 | Variable | Default | Effect |
 | --- | --- | --- |
