@@ -455,6 +455,16 @@ func checkSoftDeleteFunction(t *testing.T, ownerPool, appPool *pgxpool.Pool, ten
 		map[string]any{"sqlstate": sqlState(delErr), "error": privilegeDenied(delErr), "rowsAffected": affected, "roomsBefore": roomsBefore, "roomsAfter": roomsAfter, "roomBLive": bLive},
 		sqlState(delErr) == "42501" && privilegeDenied(delErr) == "permission denied" && roomsAfter == roomsBefore && roomsBefore >= 2 && bLive)
 
+	allRooms := func() int { return ownerScalar[int](t, ownerPool, `SELECT count(*) FROM rooms`) }
+	truncBefore := allRooms()
+	_, truncErr := execAsApp(ctx, appPool, tenant, `TRUNCATE rooms`)
+	truncAfter := allRooms()
+	iso(t, "S-DB-13(i)/app-truncate-denied", c, []string{"FM-52"}, "orbit_app TRUNCATE rooms (which bypasses RLS) fails with 42501 permission denied; row count unchanged",
+		sqlReq{Role: "orbit_app", Tenant: tenant, SQL: "TRUNCATE rooms"},
+		map[string]any{"sqlstate": "42501", "error": "permission denied", "rowCountUnchanged": true},
+		map[string]any{"sqlstate": sqlState(truncErr), "error": privilegeDenied(truncErr), "rowCountUnchanged": truncAfter == truncBefore, "rowsBeforeAtLeast2": truncBefore >= 2},
+		sqlState(truncErr) == "42501" && privilegeDenied(truncErr) == "permission denied" && truncAfter == truncBefore && truncBefore >= 2)
+
 	var appBypass, appOwnsRooms, rls, force bool
 	roleSQL := `SELECT r.rolbypassrls, c.relowner = r.oid, c.relrowsecurity, c.relforcerowsecurity
 	              FROM pg_class c, pg_roles r WHERE c.oid = 'public.rooms'::regclass AND r.rolname = 'orbit_app'`

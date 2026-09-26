@@ -19,7 +19,13 @@ const (
 	sdb14RLSSQL  = `SELECT c.relname, c.relforcerowsecurity FROM pg_class c
 	                  WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r', 'p') AND c.relrowsecurity
 	                  ORDER BY 1`
-	sdb14MemberSQL = `SELECT r.rolname FROM pg_roles r
+	sdb14TablePrivSQL = `SELECT c.relname || ':' || p.priv FROM pg_class c
+	                       CROSS JOIN unnest(ARRAY['TRUNCATE', 'REFERENCES', 'TRIGGER']) AS p(priv)
+	                      WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r', 'p')
+	                        AND has_table_privilege(current_user, c.oid, p.priv)
+	                      ORDER BY 1`
+	sdb14TableCountSQL = `SELECT count(*) FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relkind IN ('r', 'p')`
+	sdb14MemberSQL     = `SELECT r.rolname FROM pg_roles r
 	                   WHERE r.rolname <> current_user
 	                     AND (r.rolsuper OR r.rolbypassrls
 	                          OR EXISTS (SELECT 1 FROM pg_class c
@@ -106,6 +112,15 @@ func TestSDB14AppRoleCannotEscapeRLS(t *testing.T) {
 		map[string]any{"rlsWithoutForce": []string{}, "tenantTablesWithoutRLS": []string{}, "rlsTablesAtLeast": len(tenantTables), "sqlstate": "ok"},
 		map[string]any{"rlsWithoutForce": noForce, "tenantTablesWithoutRLS": missing, "rlsTables": rlsTables, "sqlstate": sqlState(rlsErr)},
 		rlsErr == nil && len(noForce) == 0 && len(missing) == 0 && len(rlsTables) >= len(tenantTables))
+
+	granted, privErr := queryNames(ctx, conn, sdb14TablePrivSQL)
+	var tablesChecked int
+	countErr := conn.QueryRow(ctx, sdb14TableCountSQL).Scan(&tablesChecked)
+	iso(t, "S-DB-14/no-truncate-references-trigger", c, []string{"FM-52", "FM-53"}, "has_table_privilege: orbit_app has no TRUNCATE, REFERENCES or TRIGGER on any public table",
+		sqlReq{Role: "orbit_app", SQL: sdb14TablePrivSQL},
+		map[string]any{"granted": []string{}, "tablesCheckedAtLeast": 16, "sqlstate": "ok"},
+		map[string]any{"granted": granted, "tablesChecked": tablesChecked, "sqlstate": sqlState(firstErr(privErr, countErr))},
+		privErr == nil && countErr == nil && len(granted) == 0 && tablesChecked >= 16)
 
 	members, memberErr := queryNames(ctx, conn, sdb14MemberSQL)
 	iso(t, "S-DB-14/no-privileged-membership", c, []string{"FM-51"}, "orbit_app is not a member of any role that owns a public table or has BYPASSRLS/SUPERUSER",
