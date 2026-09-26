@@ -69,6 +69,33 @@ No unit tests are added for persistence.
 | S-DB-12 | — | `/internal/artifact-blobs` and the internal listener: phase 2 |
 | S-DB-13 | E2E + ISO-3…8 | none at the storage level; see ISO-6 for routes control does not have yet |
 
+## Privilege decisions (review M1, M2, L1)
+
+`orbit_app` gets the least DML that the code paths need. Every exception
+below has a written reason; a new grant needs a new line here first.
+
+| Table | orbit_app | Reason for anything beyond SELECT/INSERT |
+|---|---|---|
+| `tenants` | SELECT | Tenants are created by the ops role `orbit_ops`, which has access to `tenants` only, via `deploy/postgres/ensure-tenant.sql`. Control only checks at startup that its default tenant exists, and refuses to start if it does not. |
+| `rooms` | SELECT, INSERT, UPDATE on some columns, DELETE | UPDATE covers only `kind, title, state, permission_preset, runtime, session_id, persona_id, delegation, failure, last_event_seq, updated_at`. The excluded columns are `id`, `tenant_id`, `created_by`, `created_at`, `deleted_at` and `deleted_by`; soft delete writes the last two only through `orbit_soft_delete_room`. DELETE stays granted only because S-DB-13 (i) (signed text) requires `DELETE FROM rooms` by the app role to *affect 0 rows*, which RLS guarantees because there is no DELETE policy. Revoking it would turn that into a privilege error. That is an owner decision; the rest of this file assumes the contract text. |
+| `events`, `messages`, `turns`, `approvals`, `artifacts`, `artifact_versions` | SELECT, INSERT, UPDATE; **no DELETE** | Task history. P0 never deletes it (§18.7a, no purge). |
+| `users`, `personas`, `mcp_connectors`, `cloud_agent_jobs` | SELECT, INSERT, UPDATE; **no DELETE** | No P0 code path deletes these rows. A future delete API must add its reason here first. |
+| `approval_rules` | SELECT, INSERT, UPDATE, DELETE | Revoking a rule deletes its row (§18.3; C23 / S-Rb-8). |
+| `idempotency_keys` | SELECT, INSERT, UPDATE, DELETE | Expiry cleanup: an expired key for the same user is deleted before it is reused (`pgstore.createRoomOnce`). The `EXISTS(live room)` policy still hides keys of deleted tasks, so M1-1 is unaffected. |
+| `sessions` | SELECT, INSERT, UPDATE, DELETE | Logout destroys the server session (§17.3), and expired sessions are cleaned up by `expires_at`. |
+| `oidc_login_state` | SELECT, INSERT, UPDATE, DELETE | One-time use: the callback consumes the row with `DELETE … RETURNING` (§18.3), and expired rows are cleaned up. |
+
+**Decision: `sessions` and `oidc_login_state` have no RLS.** A session is
+looked up before the tenant is known, and login state belongs to no tenant
+(§18.5). This is acceptable only because both tables hold hashes, never
+raw tokens:
+
+- `sessions.id_hash` is `sha256(session id)`, and `pre_session_hash` is
+  sha256 as well. Both are 32 bytes and enforced by CHECK.
+- The only code that touches these tables is `internal/store/auth`. It
+  hashes the raw id inside the package, so a raw token never reaches SQL.
+  S-DB-1 enforces both the allowlist and the package boundary.
+
 ## Isolated checks and the failures they catch
 
 ### ISO-1 — S-DB-11 (a): static scan of SQL shapes
@@ -340,3 +367,93 @@ accepted.
 
 Why HTTP cannot catch this yet: control does not persist events until
 phase 2. The constraint is the storage-level guarantee in the meantime.
+
+### ISO-14 — review M1: history cannot be deleted by `orbit_app`
+
+As `orbit_app`, with the owning tenant set, `DELETE` on `events`, `messages`,
+`turns`, `approvals`, `artifacts`, `artifact_versions`, `users`, `personas`,
+`mcp_connectors`, `cloud_agent_jobs` and `tenants` fails with `42501`, and
+the owner's row count is unchanged.
+
+As a positive control, DELETE still works where it is kept for cleanup:
+`idempotency_keys`, `sessions`, `oidc_login_state` and `approval_rules`.
+
+- **FM-39.** A bug or an injected statement in control deletes task history.
+  The only thing standing in the way is the absence of a code path.
+- **FM-40.** DELETE is granted on a table without a documented cleanup
+  reason (grant creep, for example `GRANT … ON ALL TABLES`).
+
+Why HTTP cannot catch these: no API deletes these rows, so only the
+privilege itself can be observed.
+
+### ISO-15 — review M2: tenants are created by ops, not by control
+
+- As `orbit_app`, `INSERT`, `UPDATE` and `DELETE` on `tenants` fail with
+  `42501`; `SELECT` works.
+- `orbit_ops` can insert a tenant (through the real
+  `deploy/postgres/ensure-tenant.sql`). It cannot read `rooms`, and it is
+  neither owner nor BYPASSRLS.
+- E2E through the binary: with its default tenant missing, control exits
+  non-zero with a clear message and the tenant count is unchanged. After ops
+  creates the tenant, control starts.
+
+Failure modes:
+
+- **FM-41.** The app role can create or rename tenants. A compromised
+  control could then mint tenant ids and set `app.tenant_id` to them.
+- **FM-42.** Control silently creates its default tenant at startup, so a
+  typo in `ORBIT_DEFAULT_TENANT` yields a fresh empty tenant instead of an
+  error.
+- **FM-43.** The ops role has access beyond `tenants`.
+
+Why HTTP cannot catch these: they are privilege and startup behaviour. The
+startup part *is* E2E, through the binary.
+
+### ISO-16 — review M2: raw tokens are not findable in the database
+
+The owner role scans every text, varchar, jsonb, array and bytea column of
+every table in `public` for a raw value.
+
+- **Idempotency-Key (E2E).** After `POST /v1/rooms` with a planted
+  `Idempotency-Key`, the raw key is found nowhere. Its sha256 is found in
+  exactly one place, `idempotency_keys.key_hash` (positive control).
+- **Session id (isolated).** After creating a session through
+  `internal/store/auth` with a planted raw id, the raw id is found nowhere.
+  Its sha256 is found in exactly one place, `sessions.id_hash`, and
+  `Lookup`/`Delete` work by raw id. There is no HTTP login until the auth
+  PR, so this part stays isolated. The HTTP-login variant stays blocked
+  (S-DB-4).
+- **Scanner control.** A planted room title is found by the scanner, which
+  proves the scan can find a raw value.
+
+Failure modes:
+
+- **FM-44.** A raw session id or raw Idempotency-Key is persisted in some
+  column (a new column, a JSON payload, a log table). Anyone with DB read
+  access could then replay it.
+- **FM-45.** A value passes the 32-byte CHECK but is not the sha256 of the
+  raw token. For example, a 32-character raw token stored as bytes would
+  satisfy the CHECK.
+
+### ISO-17 — review L1: `orbit_app` cannot rewrite ownership columns
+
+As `orbit_app`, `UPDATE rooms SET` any of `created_by`, `tenant_id`,
+`deleted_at`, `deleted_by`, `id` or `created_at` fails with `42501`, and
+the owner reads the old value. `UPDATE rooms SET state` (a granted
+column) succeeds.
+
+- **FM-46.** Control can move a task to another creator (ownership
+  takeover) or another tenant, or can un-delete or forge a delete outside
+  `orbit_soft_delete_room`.
+
+Why HTTP cannot catch this: the API never writes these columns, because
+request bodies are ignored.
+
+### ISO-9 addendum — pre-login table boundary (S-DB-1)
+
+- **FM-47.** `sessions` or `oidc_login_state` is read or written outside
+  `internal/store/auth` (the tables have no RLS, so every access path must
+  be in the reviewed package). The S-DB-1 static check rejects SQL naming
+  these tables in any other non-test Go package under `internal/`. The
+  `auth.Sessions` methods are the allowlisted exceptions to the `tenantID`
+  rule.
