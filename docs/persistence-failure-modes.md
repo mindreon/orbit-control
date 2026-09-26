@@ -819,7 +819,7 @@ and the room becomes `failed` with
   leaves no temp file. On the public listener every `/internal/*` path,
   including `/internal/events` and `/internal/artifact-blobs`, is **404**.
 
-## R1: C35 delivery follow-up (FM-65 … FM-75)
+## R1: C35 delivery follow-up (FM-65 … FM-76)
 
 Contract of record: `docs/contracts/orbit-contract-v2.md` at the merged
 commit `53ee38c053b48a58e7035940bbf050510554eac2` (C35). The suite hashes
@@ -895,8 +895,13 @@ the text `NOT_DELIVERED`.
   `decided_at` is inside 24 hours (T12 when `decideOutcome` is found).
   Abort cancels pending approvals (T10) and does not cancel `in_flight`.
   A restarted control applies a saved `result_body` for every tenant.
+  A leftover `not_delivered` row (T4 committed without the same-transaction
+  T9) is reopened by that pass: status `pending`, `decision` empty,
+  `decided_at` null, `delivery_state` null, and one
+  `approval.delivery_updated` event whose `deliveryState` is empty.
   E2E: `FM-71/restart-reconcile-from-database` (assertions read only the
-  database), `FM-71/all-tenants`, `S-ID-12/t10-abort`.
+  database), `FM-71/all-tenants`, `FM-71/leftover-not-delivered-t9`,
+  `S-ID-12/t10-abort`.
 - **FM-72.** A **400** body uses a fixed message. It does not return
   `err.Error()`. Operators use `docs/runbooks/stuck-room.md` when a room
   or approval stops moving. E2E: `FM-72/bad-request-hides-cause`.
@@ -907,10 +912,17 @@ the text `NOT_DELIVERED`.
   `orbit_approvals_delivery_transition` (SQLSTATE `42501`). E2E:
   `FM-74/disable-trigger`, `FM-74/drop-trigger`.
 - **FM-75.** `ORBIT_E2E_FAULTS` and the symbol `orbitE2EFaults` exist only
-  in a build with `-tags e2e`. The production binary does not contain that
-  symbol. CI builds both and checks. `POST /internal/e2e/reconcile` is
-  registered only in the e2e build. E2E: `FM-75/production-binary-has-no-fault-symbol`
+  in a build with `-tags e2e`. `WriteResultAgain` is compiled only in that
+  same build. The production binary contains neither symbol. CI builds
+  both binaries and checks both symbols. `POST /internal/e2e/reconcile` is
+  registered only in the e2e build. E2E: `FM-75/production-binary-has-no-fault-symbol`,
+  `FM-75/production-binary-has-no-write-result-again`,
   and `REVIEW-F2/delivered-but-timeout-once`.
+- **FM-76.** In-request retries of an `Unknown` accept use bounded backoff.
+  The first wait is 20ms. Each later wait doubles, and no wait is longer
+  than 200ms. The loop stops when the delivery context ends. That context
+  is `ORBIT_DECISION_DELIVERY_TIMEOUT`. The waits, added together, do not
+  run past that timeout. E2E: `FM-76/retry-bounded-by-delivery-timeout`.
 
 S-ID cases this process runs through application code:
 
