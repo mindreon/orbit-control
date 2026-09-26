@@ -60,6 +60,16 @@ const (
 
 var queues = map[string]string{"mock": "orbit-e2e-mock", "real": "orbit-e2e-real"}
 
+// controlLimits are extra control settings per pair. E-LE-6 exercises the
+// real pair's tight limits; the mock pair keeps the defaults.
+var controlLimits = map[string][]string{
+	"real": {
+		"ORBIT_SSE_MAX_STREAMS_PER_ROOM=" + strconv.Itoa(ele6PerRoom),
+		"ORBIT_SSE_MAX_STREAMS_PER_CLIENT=" + strconv.Itoa(ele6PerClient),
+		"ORBIT_INGEST_MAX_BYTES=" + strconv.Itoa(ele6IngestMax),
+	},
+}
+
 type caseRow struct {
 	ID       string   `json:"id"`
 	Title    string   `json:"title"`
@@ -114,7 +124,7 @@ func runCmd(args []string) int {
 		all := []struct {
 			id string
 			fn func(*stack) caseRow
-		}{{"E-LE-1", caseELE1}, {"E-LE-2", caseELE2}, {"E-LE-3", caseELE3}, {"E-LE-4", caseELE4}}
+		}{{"E-LE-1", caseELE1}, {"E-LE-2", caseELE2}, {"E-LE-3", caseELE3}, {"E-LE-4", caseELE4}, {"E-LE-6", caseELE6}}
 		for _, c := range all {
 			if *only != "" && !strings.Contains(","+*only+",", ","+c.id+",") {
 				continue
@@ -458,6 +468,7 @@ func startControl(bin, work, logs, mode, temporalAddr string) (*control, error) 
 		"TEMPORAL_NAMESPACE=default",
 		"TEMPORAL_TASK_QUEUE="+queues[mode],
 	)
+	env = append(env, controlLimits[mode]...)
 	c.cmd, err = startProcess(bin, nil, env, logs, "orbit-control-"+mode)
 	if err != nil {
 		return nil, err
@@ -652,9 +663,14 @@ func (c *control) open(roomID, lastEventID string) (*stream, error) {
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		cancel()
-		return nil, fmt.Errorf("SSE status %d", resp.StatusCode)
+		var body struct {
+			Code string `json:"code"`
+		}
+		_ = json.Unmarshal(raw, &body)
+		return nil, &openError{Status: resp.StatusCode, Code: body.Code, ContentType: resp.Header.Get("Content-Type")}
 	}
 	s := &stream{header: resp.Header, frames: make(chan frame, 8192), cancel: cancel}
 	go func() {
@@ -688,6 +704,15 @@ func (c *control) open(roomID, lastEventID string) (*stream, error) {
 }
 
 func (s *stream) close() { s.cancel() }
+
+// openError is a refused SSE request: the status and ErrorBody code.
+type openError struct {
+	Status      int
+	Code        string
+	ContentType string
+}
+
+func (e *openError) Error() string { return fmt.Sprintf("SSE status %d %s", e.Status, e.Code) }
 
 var errIdle = errors.New("timed out waiting for an SSE message")
 
