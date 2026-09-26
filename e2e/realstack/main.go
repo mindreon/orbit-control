@@ -67,6 +67,13 @@ var controlLimits = map[string][]string{
 		"ORBIT_SSE_MAX_STREAMS_PER_ROOM=" + strconv.Itoa(ele6PerRoom),
 		"ORBIT_SSE_MAX_STREAMS_PER_CLIENT=" + strconv.Itoa(ele6PerClient),
 		"ORBIT_INGEST_MAX_BYTES=" + strconv.Itoa(ele6IngestMax),
+		"ORBIT_SSE_WRITE_TIMEOUT=" + ele6WriteTimeout,
+		"ORBIT_CLOSED_ROOM_LOG_TTL=" + ele6ClosedRoomLogTTL,
+	},
+	// The lag path needs a stalled write that the write timeout does not end,
+	// so it runs on the mock control, which keeps the default write timeout.
+	"mock": {
+		"ORBIT_SSE_MAX_CONSECUTIVE_LAGS=" + strconv.Itoa(ele6MaxLags),
 	},
 }
 
@@ -694,34 +701,37 @@ func (c *control) open(roomID, lastEventID string) (*stream, error) {
 		return nil, &openError{Status: resp.StatusCode, Code: body.Code, ContentType: resp.Header.Get("Content-Type")}
 	}
 	s := &stream{header: resp.Header, frames: make(chan frame, 8192), cancel: cancel}
-	go func() {
-		defer close(s.frames)
-		defer resp.Body.Close()
-		br := bufio.NewReaderSize(resp.Body, 1<<20)
-		var f frame
-		for {
-			line, err := br.ReadString('\n')
-			if err != nil {
-				return
-			}
-			line = strings.TrimSuffix(line, "\n")
-			switch {
-			case line == "":
-				if f.data != nil {
-					_ = json.Unmarshal(f.data, &f.env)
-					s.frames <- f
-				}
-				f = frame{}
-			case strings.HasPrefix(line, ":"):
-				f.comment = strings.TrimSpace(line[1:])
-			case strings.HasPrefix(line, "id: "):
-				f.id, f.hasID = line[len("id: "):], true
-			case strings.HasPrefix(line, "data: "):
-				f.data = []byte(line[len("data: "):])
-			}
-		}
-	}()
+	go readSSE(resp.Body, s.frames)
 	return s, nil
+}
+
+// readSSE parses SSE messages from body into frames until body ends.
+func readSSE(body io.ReadCloser, frames chan<- frame) {
+	defer close(frames)
+	defer body.Close()
+	br := bufio.NewReaderSize(body, 1<<20)
+	var f frame
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil {
+			return
+		}
+		line = strings.TrimSuffix(line, "\n")
+		switch {
+		case line == "":
+			if f.data != nil {
+				_ = json.Unmarshal(f.data, &f.env)
+				frames <- f
+			}
+			f = frame{}
+		case strings.HasPrefix(line, ":"):
+			f.comment = strings.TrimSpace(line[1:])
+		case strings.HasPrefix(line, "id: "):
+			f.id, f.hasID = line[len("id: "):], true
+		case strings.HasPrefix(line, "data: "):
+			f.data = []byte(line[len("data: "):])
+		}
+	}
 }
 
 func (s *stream) close() { s.cancel() }
