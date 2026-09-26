@@ -81,14 +81,16 @@ below has a written reason; a new grant needs a new line here first.
 
 | Table | orbit_app | Reason for anything beyond SELECT/INSERT |
 |---|---|---|
-| `tenants` | SELECT | Tenants are created by the ops role `orbit_ops`, which has access to `tenants` only, via `deploy/postgres/ensure-tenant.sql`. Control only checks at startup that its default tenant exists, and refuses to start if it does not. |
-| `rooms` | SELECT, INSERT, UPDATE on some columns; **no DELETE** | UPDATE covers only `kind, title, state, permission_preset, runtime, session_id, persona_id, delegation, failure, last_event_seq, updated_at`. The excluded columns are `id`, `tenant_id`, `created_by`, `created_at`, `deleted_at` and `deleted_by`. **C32 rev3 (Celestial):** no DELETE privilege and no DELETE policy, so `DELETE FROM rooms` by `orbit_app` fails with `42501 permission denied`. Soft delete writes `deleted_at` / `deleted_by` only through `orbit_soft_delete_room`, which runs as `orbit_definer` and needs no DELETE. |
-| `events`, `messages`, `turns`, `approvals`, `artifacts`, `artifact_versions` | SELECT, INSERT, UPDATE; **no DELETE** | Task history. P0 never deletes it (§18.7a, no purge). |
-| `users`, `personas`, `mcp_connectors`, `cloud_agent_jobs` | SELECT, INSERT, UPDATE; **no DELETE** | No P0 code path deletes these rows. A future delete API must add its reason here first. |
-| `approval_rules` | SELECT, INSERT, UPDATE, DELETE | Revoking a rule deletes its row (§18.3; C23 / S-Rb-8). |
-| `idempotency_keys` | SELECT, INSERT, UPDATE, DELETE | Expiry cleanup: an expired key for the same user is deleted before it is reused (`pgstore.createRoomOnce`). The `EXISTS(live room)` policy still hides keys of deleted tasks, so M1-1 is unaffected. |
-| `sessions` | SELECT, INSERT, UPDATE, DELETE | Logout destroys the server session (§17.3), and expired sessions are cleaned up by `expires_at`. |
-| `oidc_login_state` | SELECT, INSERT, UPDATE, DELETE | One-time use: the callback consumes the row with `DELETE … RETURNING` (§18.3), and expired rows are cleaned up. |
+| `tenants` | SELECT | Tenants are created by the ops role `orbit_ops`, which has **SELECT and INSERT only** (no UPDATE, review L-a), via `deploy/postgres/ensure-tenant.sql` (`INSERT … ON CONFLICT DO NOTHING`). `tenants.id` has `CHECK (id <> '')`. Control only checks at startup that its default tenant exists, and refuses to start if it does not. |
+| `rooms` | SELECT, INSERT, UPDATE (`state, session_id, updated_at`); **no DELETE** | UPDATE covers only the columns `pgstore.UpdateRoomState` writes (review M-c); phase 2 adds `last_event_seq` with its own line here. **C32 rev3 (Celestial):** no DELETE privilege and no DELETE policy, so `DELETE FROM rooms` fails with `42501 permission denied`. Soft delete writes `deleted_at` / `deleted_by` only through `orbit_soft_delete_room`, which runs as `orbit_definer`. |
+| `approvals` | SELECT, INSERT, UPDATE (`status, decision, decided_at`); **no DELETE** | UPDATE covers exactly what `pgstore.DecideApproval` / `ReopenApproval` write. The decision UPDATE is conditional on `status = 'pending'` (review M-d). |
+| `sessions` | SELECT, INSERT, UPDATE (`last_seen_at`), DELETE | `auth.Sessions.Lookup` refreshes `last_seen_at`. DELETE is kept because logout destroys the server session (§17.3) and expired sessions are cleaned up. |
+| `events`, `messages`, `artifact_versions` | SELECT, INSERT; **no UPDATE, no DELETE** | Immutable history (review M-c): a written event, message or artifact version is never rewritten. |
+| `turns`, `artifacts` | SELECT, INSERT; **no UPDATE, no DELETE** | No P0 code path updates them. Phase 2 / the §16 PR add their columns here first (`turns.status`/`finished_at`, `artifacts.latest_version`/`updated_at`). |
+| `users`, `personas`, `mcp_connectors`, `cloud_agent_jobs` | SELECT, INSERT; **no UPDATE, no DELETE** | No P0 code path updates or deletes these rows (`UpsertUser` is `INSERT … ON CONFLICT DO NOTHING`). |
+| `approval_rules` | SELECT, INSERT, DELETE; **no UPDATE** | Revoking a rule deletes its row (§18.3; C23 / S-Rb-8). Rules are never edited in place. |
+| `idempotency_keys` | SELECT, INSERT, DELETE; **no UPDATE** | Expiry cleanup: an expired key for the same user is deleted before it is reused (`pgstore.createRoomOnce`). The `EXISTS(live room)` policy still hides keys of deleted tasks, so M1-1 is unaffected. |
+| `oidc_login_state` | SELECT, INSERT, DELETE; **no UPDATE** | One-time use: the callback consumes the row with `DELETE … RETURNING` (§18.3), and expired rows are cleaned up. |
 
 **No TRUNCATE, REFERENCES or TRIGGER for `orbit_app` on any table.** The
 migration revokes them explicitly from `orbit_app` and `PUBLIC`. The
@@ -109,6 +111,60 @@ raw tokens:
 - The only code that touches these tables is `internal/store/auth`. It
   hashes the raw id inside the package, so a raw token never reaches SQL.
   S-DB-1 enforces both the allowlist and the package boundary.
+
+## Auth PR security requirements (review L-b; documented, not implemented here)
+
+- **Session ids.** The auth PR switches from `sha256(id)` to:
+  - a server-generated 32-byte random id (`crypto/rand`), base64url in
+    the `orbit_session` cookie;
+  - stored as `HMAC-SHA256(server_key, id)`. The key comes from a
+    control-only secret (for example `ORBIT_SESSION_HMAC_KEY`), never from
+    the database, and is rotated by keeping the previous key for lookups
+    during one absolute session lifetime.
+
+  The output is still 32 bytes, so `sessions_id_hash_sha256` holds. A DB
+  dump alone no longer allows offline id confirmation.
+  `internal/store/auth` is the only place that computes it. Client-chosen
+  ids are never accepted.
+- **Session lifetime.**
+  - Idle timeout 12 h: the row is rejected when `last_seen_at` is older.
+  - Absolute timeout 7 d: `expires_at`.
+  - Logout deletes the row.
+  - A periodic cleanup runs `DELETE FROM sessions WHERE expires_at < now()`
+    (index `sessions_expires_at_idx`).
+- **`oidc_login_state.pkce_verifier` and `nonce`.** These are the only
+  secrets stored in clear, because the callback must present the verifier to
+  the IdP and compare the nonce.
+  - Lifetime is 10 minutes (`expires_at`, §17.2).
+  - The row is consumed exactly once on callback (`DELETE … RETURNING`), on
+    success or failure.
+  - Expired rows are removed by the same periodic cleanup
+    (`DELETE FROM oidc_login_state WHERE expires_at < now()`, index
+    `oidc_login_state_expires_at_idx`).
+  - Neither value is ever logged.
+  - `pre_session_hash` follows the same HMAC rule as session ids.
+
+## Bootstrap passwords (review L-c)
+
+`deploy/postgres/bootstrap-roles.sql` sets these session-local before any
+`CREATE ROLE … PASSWORD`:
+
+- `log_statement = 'none'`
+- `log_min_error_statement = 'panic'`
+- `log_min_duration_statement = -1`
+
+That way even a failing statement is not written to the server log with
+the password.
+
+Operators should pass **SCRAM-SHA-256 verifiers** instead of plaintext:
+
+- `deploy/postgres/scram-verifier.py` computes a verifier locally.
+- Postgres stores a value already in `SCRAM-SHA-256$…` form as-is.
+- The plaintext therefore never reaches the server.
+
+CI does exactly this. It also runs Postgres with `log_statement = 'ddl'`
+and scans the server log, so a regression that sends a plaintext password
+would be caught.
 
 ## Isolated checks and the failures they catch
 
@@ -521,3 +577,46 @@ Why HTTP cannot catch these: every API response looks identical until
 someone exploits the bypass. The check deliberately runs as `orbit_app`, so
 it verifies what the running service can do, not what the migrator
 believes.
+
+### ISO-19 — review M-c: history cannot be rewritten; UPDATE is column-scoped
+
+As `orbit_app`, with the owning tenant set, every table gets an UPDATE of a
+column **outside** its grant. The new value is a real, valid value, so no FK,
+RLS policy or CHECK could reject it first. Every such UPDATE fails with
+`42501 permission denied`, and the owner reads the old value.
+
+| Tables | Column updated |
+|---|---|
+| `events`, `messages`, `artifact_versions` | any column (no UPDATE at all) |
+| `rooms` | `title` |
+| `approvals` | `tool_name` |
+| `sessions` | `expires_at` |
+| `turns`, `artifacts`, `users`, `personas`, `mcp_connectors`, `cloud_agent_jobs`, `approval_rules`, `idempotency_keys`, `oidc_login_state`, `tenants` | a plain column |
+
+Granted columns keep working: `rooms.state` (REVIEW-L1), approval decisions
+(E2E M-d), and `sessions.last_seen_at` (auth `Lookup`).
+
+- **FM-54.** A bug or an injected statement in control rewrites history (an
+  event payload, a message text, an artifact digest or storage ref). The
+  append-only story of §18 then silently breaks.
+- **FM-55.** UPDATE is granted table-wide, so control can change columns that
+  no code path writes: tool names on approvals, a room's title or preset,
+  session expiry.
+
+Why HTTP cannot catch these: no API writes these columns, so only the
+privilege can be observed.
+
+### ISO-15 addendum — review L-a: ops cannot rename tenants; empty id refused
+
+- As `orbit_ops`, `UPDATE tenants SET name = …` fails with
+  `42501 permission denied`. `INSERT` still works, via `ensure-tenant.sql`.
+- Inserting a tenant with `id = ''` fails with `23514`.
+
+Failure modes:
+
+- **FM-56.** The ops role can rename or re-key tenants after creation.
+  Tenant identity should be immutable once rows reference it.
+- **FM-57.** A tenant with an empty id exists. After a transaction-local
+  `set_config` ends, `current_setting('app.tenant_id', true)` returns `''`.
+  Rows of an empty-id tenant would then match every "unset" query and break
+  the "no GUC → 0 rows" guarantee.
