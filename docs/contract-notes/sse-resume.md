@@ -70,6 +70,9 @@ Every message is a default SSE `message` event; clients switch on
   events take the ids in between).
 - The store sits behind `app.EventLog` (`MemoryEventLog` in W1). From §18 on,
   ids are a per-task increasing `seq`; ids are not comparable across tasks.
+- **Traffic exposure (W1 only).** Because the counter is shared, the gaps
+  between one room's ids reveal how many events all other rooms produced in
+  between. This goes away with the per-task `seq` of §18.
 - **Restart.** The counter lives only in the control process. After a restart
   every previously issued id is `unknown` and yields `reset`. Rooms are in
   memory too, so today the room itself is usually gone after a restart and the
@@ -111,14 +114,28 @@ Sent as the first message when the cursor cannot be honoured:
 | `payload.reason` | When |
 | --- | --- |
 | `malformed` | Not a canonical decimal id (e.g. `abc`, `042`, `-1`, `rm_x:5`). |
-| `unknown` | Not an event of this room: another room's id, beyond the latest issued id, or issued before a control restart. |
-| `expired` | Older than this room's earliest retained event (activity keeps the last 500 per room). |
+| `unknown` | Not an event of this room: another room's id (whatever its age), beyond the latest issued id, or issued before a control restart. |
+| `expired` | One of this room's own events that has been evicted from the retained window (activity keeps the last 500 per room). |
+| `lagging` | The reader overflowed its live buffer `ORBIT_SSE_MAX_CONSECUTIVE_LAGS` times in a row; the stream closes after this frame. |
 
 `payload.lastId` is this room's latest event id (0 if none) and the frame's
 SSE `id:`. Client action: drop local room state, refetch
 `GET /v1/rooms/{roomId}`, `/messages`, and `/activity`, then keep reading the
-same connection. It continues live after `lastId`; dedupe the refetch against
-the stream by `id`.
+same connection (for `lagging`, reconnect with `Last-Event-ID: lastId`). It
+continues live after `lastId`; dedupe the refetch against the stream by `id`.
+
+## When a stream ends or is refused
+
+- `429` `STREAM_LIMIT_ROOM` / `STREAM_LIMIT_CLIENT` before any stream opens,
+  when the room or the client (peer IP) is at its stream cap.
+- The room closes (abort, or a reject that closes it): buffered frames are
+  delivered, then the stream ends. A stream opened on a closed room replays
+  and ends.
+- A write stalls longer than `ORBIT_SSE_WRITE_TIMEOUT`: the stream is closed.
+- `reset` `lagging`, above.
+- An event store error: control sends `retry: 10000` (reconnect in 10 s)
+  and closes, instead of dropping the connection for an immediate reconnect
+  with the same id.
 
 ## `assistant.delta`
 
@@ -127,13 +144,21 @@ no slot in the 500-event window (so it cannot evict tool or approval
 records), and is never replayed. After a reconnect the client clears partial
 drafts; the final text arrives as a durable `assistant.message`. A delta that
 was buffered behind durable events already delivered by replay is dropped
-rather than shown out of order.
+rather than shown out of order, and deltas dropped while a stream catches up
+after a buffer overflow are gone too. **Neither drop is signalled**: clients
+must treat deltas as best-effort and the persisted `assistant.message` as the
+authoritative text of a turn.
 
 ## Auth (§17)
 
-Not in this change. `authorizeRoomStream` in `internal/httpapi/events.go` is
-where authentication (401) and authorization (404) will run, before the room
-lookup, before any `text/event-stream` header, and before replay. CORS is
-unchanged. The browser `EventSource` API cannot set headers on a new
+Not in this change, so replay has **no authorization** today: any caller can
+list room ids (`GET /v1/rooms`) and replay any room, and CORS is `*`. Until
+the §17 auth PR merges this endpoint must not be externally reachable;
+control refuses to start on a non-loopback public bind (README "Deploy
+gate"). `authorizeRoomStream` in `internal/httpapi/events.go` is where
+authentication (401) and authorization (403/404) will run, before the room
+lookup, before any `text/event-stream` header, and before replay. The auth PR
+must add E-LE-5: reconnect without a session → 401; another tenant's session
+→ 403/404; zero events replayed in both. CORS is unchanged here. The browser `EventSource` API cannot set headers on a new
 connection, so a client that recreates its `EventSource` passes the cursor as
 `?lastEventId=`.

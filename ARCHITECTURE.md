@@ -112,6 +112,23 @@ P0 supports a single control instance only; for multiple replicas, live
 fan-out moves to Postgres LISTEN/NOTIFY or NATS, while replay logic stays
 unchanged.
 
+Streams and ingest are bounded (README "Resource limits"): per-room and
+per-client stream caps (429 before any stream opens), a per-write SSE
+deadline, a consecutive-lag limit that ends a stream with `reset` `lagging`,
+a 413 ingest body cap, and closed rooms' streams ending and their logs being
+freed after a TTL. `EventsAfter` copies events under the App lock and encodes
+them outside it; audit and room files are written outside the lock.
+
+### 5a. No user auth yet — deploy gate
+
+Until the §17 auth PR merges, no `/v1` path is authenticated or authorized
+(`authorizeRoomStream` allows everyone, `GET /v1/rooms` lists every id, CORS
+is `*`). Control must not be externally reachable: it refuses to start on a
+non-loopback public bind unless `ORBIT_ALLOW_UNAUTHENTICATED_BIND=1`, which is
+only for networks not reachable from outside. The auth PR must add E-LE-5
+(reconnect without a session → 401, another tenant's session → 403/404, zero
+events replayed) and remove that switch.
+
 ### 6. Permission selection is an execution snapshot
 
 - Public callers select one closed preset on that room or cloud-agent job:

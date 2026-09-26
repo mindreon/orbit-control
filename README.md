@@ -75,13 +75,51 @@ curl -s http://127.0.0.1:8080/health
 # {"status":"ok"}
 ```
 
-Default listen address is `:8080` (override with `PORT`). Worker → control
-routes (`/internal/*`, e.g. `POST /internal/events`) are served only on a
-separate internal listener, `ORBIT_INTERNAL_ADDR` (default `127.0.0.1:8081`);
-the public listener answers `/internal/*` with `404`. Point the worker's
+The public listener binds `127.0.0.1:$PORT` (default port `8080`);
+`ORBIT_PUBLIC_ADDR` overrides the full address. Worker → control routes
+(`/internal/*`, e.g. `POST /internal/events`) are served only on a separate
+internal listener, `ORBIT_INTERNAL_ADDR` (default `127.0.0.1:8081`); the public
+listener answers `/internal/*` with `404`. Point the worker's
 `ORBIT_EVENT_INGEST_URL` at the internal address (in Compose, set
 `ORBIT_INTERNAL_ADDR=:8081` on control and use `http://control:8081/internal/events`),
 and do not publish that port.
+
+## Deploy gate: no external exposure before user auth (§17)
+
+Control has **no user authentication or authorization yet**. Every `/v1`
+path is open to anyone who can reach it: `GET /v1/rooms` lists every room id,
+`authorizeRoomStream` allows every caller, SSE replay returns any room's
+history, and CORS is `*`.
+
+- **(a)** This service must **not** be deployed to any externally reachable
+  environment until the §17 auth PR has merged.
+- **(b)** The §17 auth PR must add **E-LE-5** to the real-stack E2E: an SSE
+  reconnect with `Last-Event-ID` and no session gets `401`, one with another
+  tenant's session gets `403`/`404`, and in both cases zero events are
+  replayed (no `text/event-stream` response is opened).
+
+The gate is enforced at startup: `orbit-control` **refuses to start** when the
+public listener's address is not loopback (`127.0.0.1`, `::1`, `localhost`).
+The container image therefore does not serve outside itself by default. For an
+environment that is not externally reachable (e.g. a local Compose network),
+set `ORBIT_PUBLIC_ADDR=:8080` **and** `ORBIT_ALLOW_UNAUTHENTICATED_BIND=1`;
+control logs a warning at startup. Production configuration must never set
+`ORBIT_ALLOW_UNAUTHENTICATED_BIND`; the §17 auth PR replaces this switch with
+a real auth check.
+
+## Resource limits
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `ORBIT_SSE_MAX_STREAMS_PER_ROOM` | `32` | Further SSE connections to that room get `429 STREAM_LIMIT_ROOM` before any stream opens. |
+| `ORBIT_SSE_MAX_STREAMS_PER_CLIENT` | `16` | Per peer IP (proxy headers are not trusted); over it, `429 STREAM_LIMIT_CLIENT`. |
+| `ORBIT_SSE_WRITE_TIMEOUT` | `10s` | Deadline for each SSE write; a stalled reader's stream is closed. |
+| `ORBIT_SSE_MAX_CONSECUTIVE_LAGS` | `3` | A reader that overflows its live buffer this many times in a row gets `reset` (`lagging`) and the stream closes. |
+| `ORBIT_INGEST_MAX_BYTES` | `1048576` | Larger `POST /internal/events` bodies get `413 PAYLOAD_TOO_LARGE`; nothing is stored. |
+| `ORBIT_CLOSED_ROOM_LOG_TTL` | `15m` | A closed room's event log (activity and replay) is freed this long after it closes; `0` frees it at once. |
+
+When a room closes (abort, or a reject that closes it), its open SSE streams
+deliver what is buffered and end.
 
 ## Room events (SSE) and resume
 
@@ -128,7 +166,8 @@ curl -N -H 'Last-Event-ID: 42' \
 
 ### End-to-end checks
 
-QA sign-off (E-LE-1 to E-LE-4) runs against the real stack: a Temporal dev
+QA sign-off (E-LE-1 to E-LE-4 and E-LE-6; E-LE-5 comes with the §17 auth PR)
+runs against the real stack: a Temporal dev
 server, `orbit-orch` and `orbit-worker` as containers of the
 [orbit-runtime](https://github.com/mindreon/orbit-runtime) image published for
 a pinned runtime commit (run by digest), and two `orbit-control` processes

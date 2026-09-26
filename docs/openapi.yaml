@@ -292,7 +292,19 @@ paths:
         `id`, never replayed, and never counted against the 500-event
         window. Their SSE `id:` repeats the id of the last durable event
         delivered on this connection. Clients drop partial drafts on
-        reconnect.
+        reconnect. Deltas can be dropped (behind replayed events, or while a
+        stream catches up after a buffer overflow) without any signal; the
+        persisted `assistant.message` is authoritative.
+
+        **No authorization yet.** Until the §17 auth PR, any caller can
+        replay any room. Control refuses to start on a non-loopback public
+        bind unless `ORBIT_ALLOW_UNAUTHENTICATED_BIND=1` (not externally
+        reachable environments only).
+
+        **Stream end.** The stream ends when its room closes (after buffered
+        frames), when a write stalls past `ORBIT_SSE_WRITE_TIMEOUT`, after a
+        `lagging` reset, or on an event store error (preceded by
+        `retry: 10000`).
 
         Comment lines `: connected` and `: heartbeat` (about every 15s) keep
         proxies from idling the connection; they carry no id.
@@ -341,6 +353,20 @@ paths:
                 error: not found
                 code: NOT_FOUND
                 message: room not found
+        "429":
+          description: |
+            The room (`STREAM_LIMIT_ROOM`, `ORBIT_SSE_MAX_STREAMS_PER_ROOM`) or
+            the client IP (`STREAM_LIMIT_CLIENT`,
+            `ORBIT_SSE_MAX_STREAMS_PER_CLIENT`) is at its SSE stream cap.
+            Returned before any stream is opened.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+              example:
+                error: stream limit room
+                code: STREAM_LIMIT_ROOM
+                message: too many streams on this room
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -917,12 +943,14 @@ components:
       properties:
         reason:
           type: string
-          enum: [malformed, unknown, expired]
+          enum: [malformed, unknown, expired, lagging]
           description: |
             `malformed` — not a canonical decimal id. `unknown` — not an event
             of this room: another room's id, beyond the latest issued id, or
-            issued before a control restart. `expired` — older than the
-            earliest retained event of this room.
+            issued before a control restart. `expired` — one of this room's
+            own events, evicted from the retained window. `lagging` — the
+            reader fell behind its live buffer too many times in a row; the
+            stream closes after this frame (reconnect with `lastId`).
         lastId:
           type: integer
           format: int64
