@@ -26,17 +26,16 @@ jobs:
           --health-interval 2s
           --health-timeout 5s
           --health-retries 30
-    env:
-      # Throwaway CI-only credentials for the service container above.
-      ORBIT_TEST_DB_URL: postgres://orbit_app:ci-app@127.0.0.1:5432/orbit_control?sslmode=disable
-      ORBIT_TEST_MIGRATE_DB_URL: postgres://orbit_owner:ci-owner@127.0.0.1:5432/orbit_control?sslmode=disable
-      ORBIT_TEST_REQUIRE_DB: "1"
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+
+      - run: go vet ./...
+      - run: go vet -tags e2e ./...
+      - run: go test -race -count=1 ./...
 
       - name: Bootstrap control roles and database
         env:
@@ -47,8 +46,19 @@ jobs:
             -h 127.0.0.1 -U postgres -d postgres \
             -f deploy/postgres/bootstrap-roles.sql
 
-      - run: go vet ./...
+      # Contract §18 E2E: migrations up -> down -> up, then S-DB-11 and
+      # S-DB-13 through the HTTP API; writes the report even on failure.
+      - name: E2E persistence
+        env:
+          # Throwaway CI-only credentials for the service container above.
+          ORBIT_TEST_DB_URL: postgres://orbit_app:ci-app@127.0.0.1:5432/orbit_control?sslmode=disable
+          ORBIT_TEST_MIGRATE_DB_URL: postgres://orbit_owner:ci-owner@127.0.0.1:5432/orbit_control?sslmode=disable
+        run: go test -tags e2e -race -count=1 -v ./e2e/...
 
-      # Includes S-DB-11 and S-DB-13; the pgstore TestMain runs
-      # migrations up -> down -> up first (§18.2).
-      - run: go test -race -count=1 ./...
+      - name: Upload E2E report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-persistence-report
+          path: artifacts/e2e-persistence-report.json
+          if-no-files-found: error
