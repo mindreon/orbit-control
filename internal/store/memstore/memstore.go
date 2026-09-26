@@ -31,6 +31,11 @@ type messageRow struct {
 	rec      store.MessageRecord
 }
 
+type userRow struct {
+	tenantID string
+	rec      store.UserRecord
+}
+
 type idemRow struct {
 	requestHash []byte
 	taskID      string
@@ -40,7 +45,7 @@ type idemRow struct {
 type Store struct {
 	mu        sync.Mutex
 	tenants   map[string]string
-	users     map[string]store.UserRecord
+	users     map[string]userRow
 	rooms     map[string]*roomRow
 	messages  map[string][]messageRow
 	approvals map[string]*approvalRow
@@ -52,7 +57,7 @@ var _ store.Repository = (*Store)(nil)
 func New() *Store {
 	return &Store{
 		tenants:   map[string]string{},
-		users:     map[string]store.UserRecord{},
+		users:     map[string]userRow{},
 		rooms:     map[string]*roomRow{},
 		messages:  map[string][]messageRow{},
 		approvals: map[string]*approvalRow{},
@@ -73,7 +78,7 @@ func (s *Store) UpsertUser(_ context.Context, tenantID string, u store.UserRecor
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.users[u.ID]; !ok {
-		s.users[u.ID] = u
+		s.users[u.ID] = userRow{tenantID: tenantID, rec: u}
 	}
 	return nil
 }

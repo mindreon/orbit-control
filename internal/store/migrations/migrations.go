@@ -28,20 +28,34 @@ func open(url string) (*sql.DB, error) {
 	return sql.Open("pgx", url)
 }
 
-// Up applies all pending migrations. Running it on an up-to-date database is
-// a no-op.
-func Up(ctx context.Context, migrateURL string) error {
+// Up applies all pending migrations and returns how many ran. Running it on
+// an up-to-date database is a no-op (0).
+func Up(ctx context.Context, migrateURL string) (int, error) {
 	db, err := open(migrateURL)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer db.Close()
 	p, err := provider(db)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	_, err = p.Up(ctx)
-	return err
+	res, err := p.Up(ctx)
+	return len(res), err
+}
+
+// Version returns the current schema version (0 when nothing is applied).
+func Version(ctx context.Context, migrateURL string) (int64, error) {
+	db, err := open(migrateURL)
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+	p, err := provider(db)
+	if err != nil {
+		return 0, err
+	}
+	return p.GetDBVersion(ctx)
 }
 
 // Reset rolls every migration back. CI and dev only.

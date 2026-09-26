@@ -41,7 +41,13 @@ func openRepository(ctx context.Context) (store.Repository, error) {
 		if migrateURL == "" {
 			return nil, errors.New("ORBIT_CONTROL_MIGRATE_ON_START=1 needs ORBIT_CONTROL_MIGRATE_DB_URL (owner role)")
 		}
-		if err := migrations.Up(ctx, migrateURL); err != nil {
+		if _, err := migrations.Up(ctx, migrateURL); err != nil {
+			// Connection failures carry the user and host; report only the
+			// placeholder and code (§18.6).
+			var connErr *pgconn.ConnectError
+			if errors.As(err, &connErr) {
+				return nil, pgstore.SanitizeConnError(err)
+			}
 			var pgErr *pgconn.PgError
 			if errors.As(err, &pgErr) {
 				return nil, fmt.Errorf("migrations failed: code=%s: %s", pgErr.Code, pgErr.Message)

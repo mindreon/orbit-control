@@ -44,7 +44,7 @@ CREATE INDEX users_tenant_id_idx ON users (tenant_id);
 
 -- Pre-login tables: no RLS (§18.5). Only sha256(session id) is stored.
 CREATE TABLE sessions (
-  id_hash      BYTEA PRIMARY KEY,
+  id_hash      BYTEA PRIMARY KEY CONSTRAINT sessions_id_hash_sha256 CHECK (octet_length(id_hash) = 32),
   user_id      TEXT NOT NULL REFERENCES users(id),
   tenant_id    TEXT NOT NULL,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -58,7 +58,8 @@ CREATE TABLE oidc_login_state (
   nonce            TEXT NOT NULL,
   pkce_verifier    TEXT NOT NULL,
   return_to        TEXT NOT NULL DEFAULT '/',
-  pre_session_hash BYTEA,
+  pre_session_hash BYTEA CONSTRAINT oidc_pre_session_hash_sha256
+                   CHECK (pre_session_hash IS NULL OR octet_length(pre_session_hash) = 32),
   expires_at       TIMESTAMPTZ NOT NULL
 );
 CREATE INDEX oidc_login_state_expires_at_idx ON oidc_login_state (expires_at);

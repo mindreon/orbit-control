@@ -42,14 +42,14 @@ func writeErr(w http.ResponseWriter, status int, code, message string) {
 
 // writeAppErr maps repository sentinels first; anything else keeps the
 // route's legacy status. Storage error text stays in server logs.
-func writeAppErr(w http.ResponseWriter, err error, notFound string, fallback int, fallbackCode string) {
+func writeAppErr(lg *log.Logger, w http.ResponseWriter, err error, notFound string, fallback int, fallbackCode string) {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		writeErr(w, http.StatusNotFound, "NOT_FOUND", notFound)
 	case errors.Is(err, store.ErrIdempotencyKeyReused):
 		writeErr(w, http.StatusConflict, "IDEMPOTENCY_KEY_REUSED", "Idempotency-Key was already used with a different request body")
 	case errors.Is(err, store.ErrStorage):
-		log.Printf("storage error: %v", err)
+		lg.Printf("storage error: %v", err)
 		writeErr(w, http.StatusInternalServerError, "INTERNAL", "internal error")
 	case errors.Is(err, app.ErrInvalid):
 		writeErr(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
@@ -179,7 +179,7 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 	mux.HandleFunc("GET /v1/rooms", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		rooms, err := runtime.ListRooms(r.Context(), p)
 		if err != nil {
-			writeAppErr(w, err, roomNotFound, http.StatusInternalServerError, "INTERNAL")
+			writeAppErr(runtime.Log, w, err, roomNotFound, http.StatusInternalServerError, "INTERNAL")
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"items": rooms})
@@ -207,10 +207,10 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 		})
 		if err != nil {
 			if room == nil {
-				writeAppErr(w, err, roomNotFound, http.StatusBadRequest, "BAD_REQUEST")
+				writeAppErr(runtime.Log, w, err, roomNotFound, http.StatusBadRequest, "BAD_REQUEST")
 				return
 			}
-			writeAppErr(w, err, roomNotFound, http.StatusBadGateway, "WORKER_ERROR")
+			writeAppErr(runtime.Log, w, err, roomNotFound, http.StatusBadGateway, "WORKER_ERROR")
 			return
 		}
 		if replayed {
@@ -221,7 +221,7 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 	mux.HandleFunc("GET /v1/rooms/{roomId}", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		room, err := runtime.GetRoom(r.Context(), p, r.PathValue("roomId"))
 		if err != nil {
-			writeAppErr(w, err, roomNotFound, http.StatusInternalServerError, "INTERNAL")
+			writeAppErr(runtime.Log, w, err, roomNotFound, http.StatusInternalServerError, "INTERNAL")
 			return
 		}
 		writeJSON(w, http.StatusOK, room)
@@ -230,7 +230,7 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 	// deleted_at / deleted_by can only come from the server.
 	mux.HandleFunc("DELETE /v1/rooms/{roomId}", authed(csrf(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		if err := runtime.DeleteRoom(r.Context(), p, r.PathValue("roomId")); err != nil {
-			writeAppErr(w, err, roomNotFound, http.StatusInternalServerError, "INTERNAL")
+			writeAppErr(runtime.Log, w, err, roomNotFound, http.StatusInternalServerError, "INTERNAL")
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -238,7 +238,7 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 	mux.HandleFunc("GET /v1/rooms/{roomId}/messages", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		items, err := runtime.ListMessages(r.Context(), p, r.PathValue("roomId"))
 		if err != nil {
-			writeAppErr(w, err, roomNotFound, http.StatusInternalServerError, "INTERNAL")
+			writeAppErr(runtime.Log, w, err, roomNotFound, http.StatusInternalServerError, "INTERNAL")
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"items": items})
@@ -250,14 +250,14 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		room, approval, err := runtime.PostMessage(r.Context(), p, r.PathValue("roomId"), body.Message)
 		if err != nil {
-			writeAppErr(w, err, roomNotFound, http.StatusBadRequest, "BAD_REQUEST")
+			writeAppErr(runtime.Log, w, err, roomNotFound, http.StatusBadRequest, "BAD_REQUEST")
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"room": room, "approval": approval})
 	}))
 	mux.HandleFunc("POST /v1/rooms/{roomId}/abort", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		if err := runtime.AbortRoom(r.Context(), p, r.PathValue("roomId")); err != nil {
-			writeAppErr(w, err, roomNotFound, http.StatusBadRequest, "BAD_REQUEST")
+			writeAppErr(runtime.Log, w, err, roomNotFound, http.StatusBadRequest, "BAD_REQUEST")
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"aborted": true})
@@ -272,7 +272,7 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 		}
 		accepted, err := runtime.SteerRoom(r.Context(), p, r.PathValue("roomId"), body.Instruction)
 		if err != nil {
-			writeAppErr(w, err, roomNotFound, http.StatusBadRequest, "BAD_REQUEST")
+			writeAppErr(runtime.Log, w, err, roomNotFound, http.StatusBadRequest, "BAD_REQUEST")
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"accepted": accepted})
@@ -280,7 +280,7 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 	mux.HandleFunc("GET /v1/rooms/{roomId}/activity", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		items, err := runtime.ListActivity(r.Context(), p, r.PathValue("roomId"))
 		if err != nil {
-			writeAppErr(w, err, roomNotFound, http.StatusInternalServerError, "INTERNAL")
+			writeAppErr(runtime.Log, w, err, roomNotFound, http.StatusInternalServerError, "INTERNAL")
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"items": items})
@@ -297,7 +297,7 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 		ch, cancel := runtime.Subscribe(roomID)
 		defer cancel()
 		if _, err := runtime.GetRoom(r.Context(), p, roomID); err != nil {
-			writeAppErr(w, err, roomNotFound, http.StatusInternalServerError, "INTERNAL")
+			writeAppErr(runtime.Log, w, err, roomNotFound, http.StatusInternalServerError, "INTERNAL")
 			return
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -321,7 +321,7 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 	mux.HandleFunc("GET /v1/approvals", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		items, err := runtime.ListApprovals(r.Context(), p)
 		if err != nil {
-			writeAppErr(w, err, approvalNotFound, http.StatusInternalServerError, "INTERNAL")
+			writeAppErr(runtime.Log, w, err, approvalNotFound, http.StatusInternalServerError, "INTERNAL")
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"items": items})
@@ -333,7 +333,7 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		appr, err := runtime.Decide(r.Context(), p, r.PathValue("approvalId"), body.Decision)
 		if err != nil {
-			writeAppErr(w, err, approvalNotFound, http.StatusBadRequest, "BAD_REQUEST")
+			writeAppErr(runtime.Log, w, err, approvalNotFound, http.StatusBadRequest, "BAD_REQUEST")
 			return
 		}
 		writeJSON(w, http.StatusOK, appr)
@@ -349,7 +349,7 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 			return
 		}
 		if err := runtime.Ingest(r.Context(), ev); err != nil {
-			writeAppErr(w, err, roomNotFound, http.StatusBadRequest, "BAD_REQUEST")
+			writeAppErr(runtime.Log, w, err, roomNotFound, http.StatusBadRequest, "BAD_REQUEST")
 			return
 		}
 		writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
