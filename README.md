@@ -120,6 +120,15 @@ curl -N -H 'Last-Event-ID: 42' \
   http://127.0.0.1:8080/v1/rooms/rm_0123456789abcdef/events
 ```
 
+End-to-end check (builds and starts the real binary, talks to it only over
+HTTP, writes `artifacts/e2e-last-event-id.json`; CI uploads it from the `e2e`
+workflow). What it covers, and what is isolation-tested instead, is in
+[docs/testing/last-event-id-failure-modes.md](./docs/testing/last-event-id-failure-modes.md).
+
+```bash
+go run ./e2e/lasteventid
+```
+
 ## Non-goals (W1)
 
 - Real OAuth / session auth
