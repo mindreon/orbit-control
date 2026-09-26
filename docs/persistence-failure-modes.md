@@ -68,6 +68,7 @@ No unit tests are added for persistence.
 | S-DB-11 | (a) static ISO-1; (b) E2E + ISO-2 | — |
 | S-DB-12 | — | `/internal/artifact-blobs` and the internal listener: phase 2 |
 | S-DB-13 | E2E + ISO-3…8 | none at the storage level; see ISO-6 for routes control does not have yet |
+| S-DB-14 (Sentinel follow-up on #16; not yet in the contract text) | ISO-18, connected as `orbit_app` | — |
 
 ## Privilege decisions (review M1, M2, L1)
 
@@ -457,3 +458,37 @@ request bodies are ignored.
   these tables in any other non-test Go package under `internal/`. The
   `auth.Sessions` methods are the allowlisted exceptions to the `tenantID`
   rule.
+
+### ISO-18 — S-DB-14: the app role cannot escape RLS (catalog self-check)
+
+Connected **as `orbit_app`** (the credentials control runs with), query
+`pg_class` / `pg_roles` / `pg_has_role` and assert all of the following:
+
+- `current_user` is `orbit_app`.
+- `orbit_app` owns no table in `public`.
+- `orbit_app` has neither BYPASSRLS nor SUPERUSER.
+- Every table in `public` with RLS enabled also has FORCE ROW LEVEL
+  SECURITY. The check also requires that at least the 13 [T] tables have
+  RLS, so it cannot pass vacuously.
+- `orbit_app` is not a member of any role that owns a `public` table or has
+  BYPASSRLS / SUPERUSER. Role attributes are not inherited, but `SET ROLE`
+  to such a role would bypass RLS all the same.
+
+Failure modes:
+
+- **FM-48.** A table becomes owned by `orbit_app`, for example because
+  migrations ran with the app credentials or an `ALTER TABLE … OWNER TO`
+  slipped in. RLS then relies on FORCE alone, and the owner can drop
+  policies or disable RLS.
+- **FM-49.** `orbit_app` gains BYPASSRLS or SUPERUSER (ops change, bootstrap
+  edit). Every policy is silently ignored.
+- **FM-50.** A table has RLS enabled without FORCE. That table is
+  unprotected against its owner, and the regression is invisible while the
+  app role is not the owner.
+- **FM-51.** `orbit_app` is granted membership in the owner, definer or a
+  superuser role, which gives the same bypass through `SET ROLE`.
+
+Why HTTP cannot catch these: every API response looks identical until
+someone exploits the bypass. The check deliberately runs as `orbit_app`, so
+it verifies what the running service can do, not what the migrator
+believes.
