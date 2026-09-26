@@ -409,7 +409,7 @@ func checkSoftDeleteFunction(t *testing.T, ownerPool, appPool *pgxpool.Pool, ten
 	for _, role := range []string{"orbit_owner", "orbit_definer"} {
 		err := call(ownerPool, role)
 		iso(t, "S-DB-13(i)/execute-denied-"+role, c, []string{"FM-18", "FM-19"}, "calling the function as "+role+" fails with insufficient_privilege",
-			sqlReq{Role: role, Tenant: tenant, SQL: "SELECT public.orbit_soft_delete_room($1, $2)", Args: []any{roomB, owner}}, "42501", sqlState(err), sqlState(err) == "42501")
+			sqlReq{Role: role, Tenant: tenant, SQL: "SELECT public.orbit_soft_delete_room($1, $2)", Args: []any{roomB, owner}}, "permission denied", privilegeDenied(err), privilegeDenied(err) == "permission denied")
 	}
 
 	fn := func(tenantID, room, u string) (int, error) {

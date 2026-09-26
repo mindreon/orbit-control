@@ -153,6 +153,22 @@ func sqlState(err error) string {
 	return "ok"
 }
 
+// privilegeDenied tells a privilege error apart from other 42501 errors
+// (RLS "new row violates row-level security policy" shares the code).
+func privilegeDenied(err error) string {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch {
+		case pgErr.Code == "42501" && strings.HasPrefix(pgErr.Message, "permission denied"):
+			return "permission denied"
+		case pgErr.Code == "42501" && strings.Contains(pgErr.Message, "row-level security"):
+			return "42501 row-level security (not a privilege error)"
+		}
+		return pgErr.Code
+	}
+	return sqlState(err)
+}
+
 type syncBuffer struct {
 	mu sync.Mutex
 	b  bytes.Buffer

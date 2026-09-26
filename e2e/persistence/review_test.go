@@ -59,9 +59,9 @@ func TestReviewM1HistoryNotDeletable(t *testing.T) {
 		after := ownerCount(tbl.name, tbl.col)
 		iso(t, "REVIEW-M1/delete-denied-"+tbl.name, c, []string{"FM-39", "FM-40"}, "orbit_app DELETE on "+tbl.name+" fails with a permission error; no row removed",
 			sqlReq{Role: "orbit_app", Tenant: tenant, SQL: "DELETE FROM " + tbl.name + " WHERE " + tbl.col + " = <tenant>"},
-			map[string]any{"sqlstate": "42501", "rowsBeforeAtLeast": 1, "rowsUnchanged": true},
-			map[string]any{"sqlstate": sqlState(err), "rowsBefore": before, "rowsAfter": after, "rowsAffected": n},
-			sqlState(err) == "42501" && before >= 1 && after == before)
+			map[string]any{"error": "permission denied", "rowsBeforeAtLeast": 1, "rowsUnchanged": true},
+			map[string]any{"error": privilegeDenied(err), "rowsBefore": before, "rowsAfter": after, "rowsAffected": n},
+			privilegeDenied(err) == "permission denied" && before >= 1 && after == before)
 	}
 
 	// DELETE kept where cleanup needs it (reasons in the failure-mode doc).
@@ -105,7 +105,7 @@ func TestReviewM2TenantsOpsOnly(t *testing.T) {
 	} {
 		_, err := appPool.Exec(ctx, p.sql)
 		iso(t, "REVIEW-M2/app-tenants-"+p.id+"-denied", c, []string{"FM-41"}, "orbit_app cannot "+p.id+" tenants",
-			sqlReq{Role: "orbit_app", SQL: p.sql}, "42501", sqlState(err), sqlState(err) == "42501")
+			sqlReq{Role: "orbit_app", SQL: p.sql}, "permission denied", privilegeDenied(err), privilegeDenied(err) == "permission denied")
 	}
 	err := sel(appPool, `SELECT count(*) FROM tenants`)
 	iso(t, "REVIEW-M2/app-tenants-select", c, []string{"FM-41"}, "orbit_app can read tenants (startup check)",
@@ -122,9 +122,9 @@ func TestReviewM2TenantsOpsOnly(t *testing.T) {
 	errUsers := sel(opsPool, `SELECT count(*) FROM users`)
 	iso(t, "REVIEW-M2/ops-role-scope", c, []string{"FM-43"}, "orbit_ops is not SUPERUSER/BYPASSRLS, owns nothing, and cannot read task tables",
 		sqlReq{Role: "orbit_ops", SQL: "SELECT count(*) FROM rooms; SELECT count(*) FROM users (+ pg_roles/pg_class)"},
-		map[string]any{"superuser": false, "bypassRLS": false, "ownedRelations": 0, "roomsSelect": "42501", "usersSelect": "42501"},
-		map[string]any{"superuser": opsSuper, "bypassRLS": opsBypass, "ownedRelations": opsOwns, "roomsSelect": sqlState(errRooms), "usersSelect": sqlState(errUsers)},
-		!opsSuper && !opsBypass && opsOwns == 0 && sqlState(errRooms) == "42501" && sqlState(errUsers) == "42501")
+		map[string]any{"superuser": false, "bypassRLS": false, "ownedRelations": 0, "roomsSelect": "permission denied", "usersSelect": "permission denied"},
+		map[string]any{"superuser": opsSuper, "bypassRLS": opsBypass, "ownedRelations": opsOwns, "roomsSelect": privilegeDenied(errRooms), "usersSelect": privilegeDenied(errUsers)},
+		!opsSuper && !opsBypass && opsOwns == 0 && privilegeDenied(errRooms) == "permission denied" && privilegeDenied(errUsers) == "permission denied")
 
 	// E2E through the binary: a missing default tenant is fatal, never created.
 	const tenant = "t-m2-startup"
@@ -278,26 +278,31 @@ func TestReviewL1RoomColumnPrivileges(t *testing.T) {
 		httpReq{Method: "POST", Path: "/v1/rooms", Headers: user(u), Body: `{"kind":"solo"}`}, httpExp{Status: 200}))
 	alias(room, "<room-l1>")
 
+	// Values that pass FKs and RLS on their own, so only the column
+	// privilege can stop them: an existing user, an existing tenant.
+	srv.check(t, "REVIEW-L1/setup/other-user", c, "a second user exists in the tenant (valid created_by target)",
+		httpReq{Method: "POST", Path: "/v1/rooms", Headers: user("u-l1-other"), Body: `{"kind":"solo"}`}, httpExp{Status: 200})
+	opsEnsureTenant(t, "t-l1-other")
 	snapshot := func() string {
 		var s string
-		if err := ownerPool.QueryRow(ctx, `SELECT concat_ws('|', id, tenant_id, created_by, created_at, deleted_at, deleted_by) FROM rooms WHERE id = $1`, room).Scan(&s); err != nil {
-			t.Fatal(err)
+		if err := ownerPool.QueryRow(ctx, `SELECT concat_ws('|', id, tenant_id, created_by, created_at, coalesce(deleted_at::text, '-'), coalesce(deleted_by, '-')) FROM rooms WHERE id = $1`, room).Scan(&s); err != nil {
+			return "row missing"
 		}
 		return s
 	}
 	before := snapshot()
 	for _, col := range []struct{ name, value string }{
-		{"created_by", "'u-evil'"}, {"tenant_id", "'t-evil'"}, {"deleted_at", "now()"},
-		{"deleted_by", "'u-evil'"}, {"id", "'rm_evil'"}, {"created_at", "now()"},
+		{"created_by", "'u-l1-other'"}, {"tenant_id", "'t-l1-other'"}, {"deleted_at", "now()"},
+		{"deleted_by", "'u-l1-other'"}, {"id", "'rm_l1_renamed'"}, {"created_at", "now() - interval '1 day'"},
 	} {
 		sql := `UPDATE rooms SET ` + col.name + ` = ` + col.value + ` WHERE id = $1`
 		_, err := execAsApp(ctx, srv.appPool, tenant, sql, room)
 		after := snapshot()
 		iso(t, "REVIEW-L1/update-denied-"+col.name, c, []string{"FM-46"}, "orbit_app UPDATE of rooms."+col.name+" fails with a permission error; ownership columns unchanged",
 			sqlReq{Role: "orbit_app", Tenant: tenant, SQL: sql},
-			map[string]any{"sqlstate": "42501", "ownershipColumnsUnchanged": true},
-			map[string]any{"sqlstate": sqlState(err), "ownershipColumnsUnchanged": after == before},
-			sqlState(err) == "42501" && after == before)
+			map[string]any{"error": "permission denied", "ownershipColumnsUnchanged": true},
+			map[string]any{"error": privilegeDenied(err), "ownershipColumnsUnchanged": after == before},
+			privilegeDenied(err) == "permission denied" && after == before)
 	}
 	n, err := execAsApp(ctx, srv.appPool, tenant, `UPDATE rooms SET state = 'closed' WHERE id = $1`, room)
 	var state string
