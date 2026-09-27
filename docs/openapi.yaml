@@ -42,7 +42,9 @@ tags:
   - name: approvals
     description: Human-in-the-loop approvals (W1 in-memory)
   - name: personas
-    description: Agent personas (W2 in-memory catalog)
+    description: Agent personas. Stored in Postgres when ORBIT_CONTROL_DB_URL is set.
+  - name: mcp-connectors
+    description: MCP connector launchers. Environment references are names only.
   - name: secrets
     description: Tenant secrets metadata only (unimplemented; plaintext never in API)
   - name: cloud-agents
@@ -616,8 +618,12 @@ paths:
       summary: List personas
       x-unimplemented: false
       responses:
-        "501":
-          $ref: "#/components/responses/NotImplemented"
+        "200":
+          description: Personas for the caller's tenant, newest first
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PersonaList"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -625,10 +631,10 @@ paths:
     post:
       tags: [personas]
       operationId: createPersona
-      summary: Create a persona (unimplemented)
+      summary: Create a persona
       description: |
-        Stored here. The worker renders it into a dsh agent preset at
-        openSession. This API never accepts secret plaintext inside a persona.
+        Stored for the caller's tenant. The worker renders instructions into
+        an agent preset at openSession. This API never accepts secret plaintext.
       x-unimplemented: false
       requestBody:
         required: true
@@ -637,8 +643,18 @@ paths:
             schema:
               $ref: "#/components/schemas/CreatePersonaRequest"
       responses:
-        "501":
-          $ref: "#/components/responses/NotImplemented"
+        "200":
+          description: Created persona
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Persona"
+        "400":
+          description: Missing name, or a connector id that includes a value
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -654,6 +670,54 @@ paths:
       responses:
         "501":
           $ref: "#/components/responses/NotImplemented"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/mcp-connectors:
+    get:
+      tags: [mcp-connectors]
+      operationId: listMcpConnectors
+      summary: List MCP connectors
+      x-unimplemented: false
+      responses:
+        "200":
+          description: Connectors for the caller's tenant, newest first
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/McpConnectorList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags: [mcp-connectors]
+      operationId: createMcpConnector
+      summary: Create an MCP connector
+      description: |
+        Stores the launch command and argument list. `envRefs` are environment
+        variable names. Values are rejected. Plaintext secrets are never accepted.
+      x-unimplemented: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMcpConnectorRequest"
+      responses:
+        "200":
+          description: Created connector
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/McpConnector"
+        "400":
+          description: Missing name or command, or an env ref that includes a value
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -1200,16 +1264,95 @@ components:
     CreatePersonaRequest:
       type: object
       additionalProperties: false
+      required: [name]
       properties:
         name:
           type: string
         instructions:
           type: string
-          description: Rendered by the worker into a dsh persona prefix. No secrets.
-        mcpServerIds:
+          description: Rendered by the worker into a persona prefix. No secrets.
+        mcpConnectorIds:
           type: array
           items:
             type: string
+          description: Ids of MCP connectors already created for this tenant.
+    Persona:
+      type: object
+      additionalProperties: false
+      required: [id, name, instructions, createdAt]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        instructions:
+          type: string
+        mcpConnectorIds:
+          type: array
+          items:
+            type: string
+        createdAt:
+          type: string
+          format: date-time
+    PersonaList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Persona"
+    CreateMcpConnectorRequest:
+      type: object
+      additionalProperties: false
+      required: [name, command]
+      properties:
+        name:
+          type: string
+        command:
+          type: string
+          description: Executable used to start the MCP server. Not run by this API.
+        args:
+          type: array
+          items:
+            type: string
+        envRefs:
+          type: array
+          items:
+            type: string
+          description: Environment variable names. Do not send values.
+    McpConnector:
+      type: object
+      additionalProperties: false
+      required: [id, name, command, createdAt]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        command:
+          type: string
+        args:
+          type: array
+          items:
+            type: string
+        envRefs:
+          type: array
+          items:
+            type: string
+        createdAt:
+          type: string
+          format: date-time
+    McpConnectorList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/McpConnector"
     CreateCloudAgentRequest:
       type: object
       additionalProperties: false

@@ -77,72 +77,152 @@ func (a *App) ensureCatalog() {
 	}
 }
 
-func (a *App) ListPersonas() []*Persona {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.ensureCatalog()
-	out := make([]*Persona, 0, len(a.Personas))
-	for _, p := range a.Personas {
-		cp := *p
-		out = append(out, &cp)
+func trimNonEmpty(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, item := range in {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			out = append(out, item)
+		}
 	}
 	return out
 }
 
-func (a *App) CreatePersona(name, instructions string, mcpIDs []string) (*Persona, error) {
+func cleanNames(in []string) ([]string, error) {
+	out := trimNonEmpty(in)
+	for _, item := range out {
+		// A name that contains "=" is a pasted KEY=value, which must not be stored.
+		if strings.Contains(item, "=") {
+			return nil, fmt.Errorf("name must not include a value")
+		}
+	}
+	return out, nil
+}
+
+func personaFromRecord(rec store.PersonaRecord) *Persona {
+	return &Persona{
+		ID:              rec.ID,
+		Name:            rec.Name,
+		Instructions:    rec.Instructions,
+		McpConnectorIDs: append([]string(nil), rec.McpConnectorIDs...),
+		CreatedAt:       stamp(rec.CreatedAt),
+	}
+}
+
+func connectorFromRecord(rec store.McpConnectorRecord) *McpConnector {
+	return &McpConnector{
+		ID:        rec.ID,
+		Name:      rec.Name,
+		Command:   rec.Command,
+		Args:      append([]string(nil), rec.Args...),
+		EnvRefs:   append([]string(nil), rec.EnvRefs...),
+		CreatedAt: stamp(rec.CreatedAt),
+	}
+}
+
+func (a *App) ListPersonas(ctx context.Context, tenantID string) ([]*Persona, error) {
+	recs, err := a.Repo.ListPersonas(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*Persona, 0, len(recs))
+	next := map[string]*Persona{}
+	for _, rec := range recs {
+		p := personaFromRecord(rec)
+		next[p.ID] = p
+		cp := *p
+		out = append(out, &cp)
+	}
+	a.mu.Lock()
+	a.ensureCatalog()
+	a.Personas = next
+	a.mu.Unlock()
+	return out, nil
+}
+
+func (a *App) CreatePersona(ctx context.Context, tenantID, name, instructions string, mcpIDs []string) (*Persona, error) {
 	name = strings.TrimSpace(name)
 	instructions = strings.TrimSpace(instructions)
 	if name == "" {
 		return nil, fmt.Errorf("name is required")
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.ensureCatalog()
+	ids, err := cleanNames(mcpIDs)
+	if err != nil {
+		return nil, err
+	}
+	created := time.Now().UTC()
 	p := &Persona{
 		ID:              id("persona_"),
 		Name:            name,
 		Instructions:    instructions,
-		McpConnectorIDs: append([]string(nil), mcpIDs...),
-		CreatedAt:       now(),
+		McpConnectorIDs: ids,
+		CreatedAt:       stamp(created),
 	}
+	if err := a.Repo.CreatePersona(ctx, tenantID, store.PersonaRecord{
+		ID: p.ID, Name: p.Name, Instructions: p.Instructions, McpConnectorIDs: ids, CreatedAt: created,
+	}); err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	a.ensureCatalog()
 	a.Personas[p.ID] = p
 	_ = a.Store.WriteJSON("personas/"+p.ID+".json", p)
 	cp := *p
+	a.mu.Unlock()
 	return &cp, nil
 }
 
-func (a *App) ListMcpConnectors() []*McpConnector {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.ensureCatalog()
-	out := make([]*McpConnector, 0, len(a.McpConnectors))
-	for _, c := range a.McpConnectors {
+func (a *App) ListMcpConnectors(ctx context.Context, tenantID string) ([]*McpConnector, error) {
+	recs, err := a.Repo.ListMcpConnectors(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*McpConnector, 0, len(recs))
+	next := map[string]*McpConnector{}
+	for _, rec := range recs {
+		c := connectorFromRecord(rec)
+		next[c.ID] = c
 		cp := *c
 		out = append(out, &cp)
 	}
-	return out
+	a.mu.Lock()
+	a.ensureCatalog()
+	a.McpConnectors = next
+	a.mu.Unlock()
+	return out, nil
 }
 
-func (a *App) CreateMcpConnector(name, command string, args, envRefs []string) (*McpConnector, error) {
+func (a *App) CreateMcpConnector(ctx context.Context, tenantID, name, command string, args, envRefs []string) (*McpConnector, error) {
 	name = strings.TrimSpace(name)
 	command = strings.TrimSpace(command)
 	if name == "" || command == "" {
 		return nil, fmt.Errorf("name and command are required")
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.ensureCatalog()
+	cleanArgs := trimNonEmpty(args)
+	refs, err := cleanNames(envRefs)
+	if err != nil {
+		return nil, err
+	}
+	created := time.Now().UTC()
 	c := &McpConnector{
 		ID:        id("mcp_"),
 		Name:      name,
 		Command:   command,
-		Args:      append([]string(nil), args...),
-		EnvRefs:   append([]string(nil), envRefs...),
-		CreatedAt: now(),
+		Args:      cleanArgs,
+		EnvRefs:   refs,
+		CreatedAt: stamp(created),
 	}
+	if err := a.Repo.CreateMcpConnector(ctx, tenantID, store.McpConnectorRecord{
+		ID: c.ID, Name: c.Name, Command: c.Command, Args: cleanArgs, EnvRefs: refs, CreatedAt: created,
+	}); err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	a.ensureCatalog()
 	a.McpConnectors[c.ID] = c
 	_ = a.Store.WriteJSON("mcp/"+c.ID+".json", c)
 	cp := *c
+	a.mu.Unlock()
 	return &cp, nil
 }
 
@@ -230,6 +310,18 @@ func (a *App) CreateCloudAgent(ctx context.Context, input CreateCloudAgentInput)
 }
 
 func (a *App) CompositionForRoom(personaID, grantID string) (*Persona, []*McpConnector, map[string]string, error) {
+	if personaID != "" {
+		a.mu.Lock()
+		a.ensureCatalog()
+		_, cached := a.Personas[personaID]
+		a.mu.Unlock()
+		if !cached {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			_, _ = a.ListPersonas(ctx, a.DefaultTenant)
+			_, _ = a.ListMcpConnectors(ctx, a.DefaultTenant)
+			cancel()
+		}
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.ensureCatalog()

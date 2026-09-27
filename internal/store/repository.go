@@ -65,6 +65,15 @@ type Repository interface {
 	// (not_delivered back to pending), and only through DeliveryStore.
 	DecideApproval(ctx context.Context, tenantID, approvalID, status, decision string) error
 
+	// ListPersonas returns this tenant's assistants, newest first.
+	ListPersonas(ctx context.Context, tenantID string) ([]PersonaRecord, error)
+	// CreatePersona inserts one assistant. Rows are not updated or deleted.
+	CreatePersona(ctx context.Context, tenantID string, p PersonaRecord) error
+	// ListMcpConnectors returns this tenant's connectors, newest first.
+	ListMcpConnectors(ctx context.Context, tenantID string) ([]McpConnectorRecord, error)
+	// CreateMcpConnector inserts one connector. EnvRefs are names, never values.
+	CreateMcpConnector(ctx context.Context, tenantID string, c McpConnectorRecord) error
+
 	Close()
 }
 
@@ -149,4 +158,23 @@ type IdempotencyRecord struct {
 	KeyHash     []byte
 	RequestHash []byte
 	ExpiresAt   time.Time
+}
+
+// PersonaRecord is one assistant persona. Env secrets are never stored here.
+type PersonaRecord struct {
+	ID              string
+	Name            string
+	Instructions    string
+	McpConnectorIDs []string
+	CreatedAt       time.Time
+}
+
+// McpConnectorRecord is one MCP launcher. EnvRefs are variable names only.
+type McpConnectorRecord struct {
+	ID        string
+	Name      string
+	Command   string
+	Args      []string
+	EnvRefs   []string
+	CreatedAt time.Time
 }

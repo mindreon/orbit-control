@@ -15,7 +15,8 @@ func TestPersonaGrantCompositionAndAuditPersist(t *testing.T) {
 	a := New(worker.New(""))
 	a.Store = store.New(dir)
 
-	persona, err := a.CreatePersona("Reviewer", "Be careful", nil)
+	ctx := context.Background()
+	persona, err := a.CreatePersona(ctx, DefaultTenantID, "Reviewer", "Be careful", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,5 +55,45 @@ func TestPersonaGrantCompositionAndAuditPersist(t *testing.T) {
 	}
 	if len(raw) == 0 {
 		t.Fatal("expected audit jsonl bytes")
+	}
+}
+
+func TestCatalogSurvivesNewProcessAndStaysInTenant(t *testing.T) {
+	a := New(worker.New(""))
+	ctx := context.Background()
+	persona, err := a.CreatePersona(ctx, DefaultTenantID, "Reviewer", "Be careful", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connector, err := a.CreateMcpConnector(ctx, DefaultTenantID, "Docs", "npx", []string{"--header=demo"}, []string{"DOCS_TOKEN"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.CreateMcpConnector(ctx, DefaultTenantID, "Bad", "true", nil, []string{"TOKEN=secret"}); err == nil {
+		t.Fatal("env ref with a value was accepted")
+	}
+	if _, err := a.CreatePersona(ctx, "other", "Hidden", "no", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	b := NewWithOptions(Options{Repo: a.Repo, Worker: worker.New(""), DefaultTenant: DefaultTenantID})
+	items, err := b.ListPersonas(ctx, DefaultTenantID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ID != persona.ID || items[0].Name != "Reviewer" {
+		t.Fatalf("default personas = %+v", items)
+	}
+	hidden, err := b.ListPersonas(ctx, "other")
+	if err != nil || len(hidden) != 1 || hidden[0].Name != "Hidden" {
+		t.Fatalf("other tenant = %+v err=%v", hidden, err)
+	}
+	connectors, err := b.ListMcpConnectors(ctx, DefaultTenantID)
+	if err != nil || len(connectors) != 1 || connectors[0].ID != connector.ID || connectors[0].Args[0] != "--header=demo" {
+		t.Fatalf("connectors = %+v err=%v", connectors, err)
+	}
+	loaded, _, _, err := b.CompositionForRoom(persona.ID, "")
+	if err != nil || loaded == nil || loaded.Name != "Reviewer" {
+		t.Fatalf("composition = %+v err=%v", loaded, err)
 	}
 }
