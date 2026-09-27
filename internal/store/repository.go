@@ -109,8 +109,11 @@ type Repository interface {
 	// ListMcpMarketCategories returns plaza labels with counts for the same
 	// needsOnline filter as the list. A category with no rows is omitted.
 	ListMcpMarketCategories(ctx context.Context, tenantID string, needsOnline string) ([]McpMarketCategoryCount, error)
+	// GetMcpMarket returns one stored server and its display detail.
+	// A missing detail row still returns the card, with an empty readme.
+	GetMcpMarket(ctx context.Context, tenantID, id string) (McpMarketDetail, error)
 	// ReplaceMcpMarket replaces the shared snapshot. It does not call ModelScope.
-	ReplaceMcpMarket(ctx context.Context, tenantID string, servers []McpMarketRecord, categories []McpMarketCategoryRecord) error
+	ReplaceMcpMarket(ctx context.Context, tenantID string, servers []McpMarketRecord, categories []McpMarketCategoryRecord, details []McpMarketDetailRecord) error
 
 	Close()
 }
@@ -335,6 +338,40 @@ type McpMarketRecord struct {
 	Hosted       bool
 	NeedsOnline  bool
 	Rank         int
+}
+
+// McpMarketTool is one tool shown on the detail page. Parameter defaults and
+// secret values are not stored.
+type McpMarketTool struct {
+	Name        string               `json:"name"`
+	Description string               `json:"description"`
+	Params      []McpMarketToolParam `json:"params"`
+}
+
+// McpMarketToolParam is one input field of a tool.
+type McpMarketToolParam struct {
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	Required    bool   `json:"required"`
+	Description string `json:"description"`
+}
+
+// McpMarketDetailRecord is the text stored beside a plaza card.
+type McpMarketDetailRecord struct {
+	ID        string          `json:"id"`
+	License   string          `json:"license"`
+	UpdatedOn string          `json:"updatedOn"`
+	Readme    string          `json:"readme"`
+	Tools     []McpMarketTool `json:"tools"`
+}
+
+// McpMarketDetail is a card plus that text.
+type McpMarketDetail struct {
+	McpMarketRecord
+	License   string
+	UpdatedOn string
+	Readme    string
+	Tools     []McpMarketTool
 }
 
 // McpMarketCategoryRecord is a plaza sidebar label.

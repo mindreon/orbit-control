@@ -2,6 +2,8 @@ package pgstore
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -102,11 +104,53 @@ func (s *Store) ListMcpMarketCategories(ctx context.Context, tenantID string, ne
 	return out, err
 }
 
-func (s *Store) ReplaceMcpMarket(ctx context.Context, tenantID string, servers []store.McpMarketRecord, categories []store.McpMarketCategoryRecord) error {
+func (s *Store) GetMcpMarket(ctx context.Context, tenantID, id string) (store.McpMarketDetail, error) {
+	if tenantID == "" || id == "" {
+		return store.McpMarketDetail{}, store.ErrNotFound
+	}
+	var out store.McpMarketDetail
+	var toolsRaw []byte
+	err := s.withTx(ctx, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+			SELECT s.id, s.name, s.summary, s.author, s.category, COALESCE(c.name, ''),
+			       s.category_more, s.calls, s.views, s.stars, s.verified, s.hosted, s.needs_online, s.rank,
+			       COALESCE(d.license, ''), COALESCE(d.updated_on, ''), COALESCE(d.readme, ''),
+			       COALESCE(d.tools, '[]'::jsonb)
+			FROM mcp_market_servers s
+			LEFT JOIN mcp_market_categories c ON c.key = s.category
+			LEFT JOIN mcp_market_details d ON d.id = s.id
+			WHERE s.id = $1`, id).Scan(
+			&out.ID, &out.Name, &out.Summary, &out.Author, &out.Category, &out.CategoryName,
+			&out.CategoryMore, &out.Calls, &out.Views, &out.Stars, &out.Verified, &out.Hosted, &out.NeedsOnline, &out.Rank,
+			&out.License, &out.UpdatedOn, &out.Readme, &toolsRaw,
+		)
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return store.McpMarketDetail{}, store.ErrNotFound
+		}
+		return store.McpMarketDetail{}, err
+	}
+	out.Tools = []store.McpMarketTool{}
+	if len(toolsRaw) > 0 {
+		if err := json.Unmarshal(toolsRaw, &out.Tools); err != nil {
+			return store.McpMarketDetail{}, storageErr("decode mcp market tools", err)
+		}
+	}
+	if out.Tools == nil {
+		out.Tools = []store.McpMarketTool{}
+	}
+	return out, nil
+}
+
+func (s *Store) ReplaceMcpMarket(ctx context.Context, tenantID string, servers []store.McpMarketRecord, categories []store.McpMarketCategoryRecord, details []store.McpMarketDetailRecord) error {
 	if tenantID == "" {
 		return store.ErrNotFound
 	}
 	return s.withTx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `DELETE FROM mcp_market_details`); err != nil {
+			return storageErr("clear mcp market details", err)
+		}
 		if _, err := tx.Exec(ctx, `DELETE FROM mcp_market_servers`); err != nil {
 			return storageErr("clear mcp market", err)
 		}
@@ -136,6 +180,45 @@ func (s *Store) ReplaceMcpMarket(ctx context.Context, tenantID string, servers [
 				continue
 			}
 			if err := execBatch(ctx, tx, batch, "insert mcp market"); err != nil {
+				return err
+			}
+		}
+		known := map[string]struct{}{}
+		for _, row := range servers {
+			if row.ID != "" {
+				known[row.ID] = struct{}{}
+			}
+		}
+		for start := 0; start < len(details); start += chunk {
+			end := start + chunk
+			if end > len(details) {
+				end = len(details)
+			}
+			batch := &pgx.Batch{}
+			for _, row := range details[start:end] {
+				if row.ID == "" {
+					continue
+				}
+				if _, ok := known[row.ID]; !ok {
+					continue
+				}
+				tools := row.Tools
+				if tools == nil {
+					tools = []store.McpMarketTool{}
+				}
+				raw, err := json.Marshal(tools)
+				if err != nil {
+					return storageErr("encode mcp market tools", err)
+				}
+				batch.Queue(`
+					INSERT INTO mcp_market_details (id, license, updated_on, readme, tools)
+					VALUES ($1, $2, $3, $4, $5::jsonb)`,
+					row.ID, row.License, row.UpdatedOn, row.Readme, raw)
+			}
+			if batch.Len() == 0 {
+				continue
+			}
+			if err := execBatch(ctx, tx, batch, "insert mcp market details"); err != nil {
 				return err
 			}
 		}

@@ -784,6 +784,39 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+  /v1/mcp-market/{id}:
+    get:
+      tags: [mcp-market]
+      operationId: getMcpMarket
+      summary: Read one stored MCP server
+      description: |
+        Reads one plaza server and its readme and tool list from this service.
+        The handler does not call modelscope.cn. Hosted connection URLs and
+        discussion threads are not stored.
+      x-unimplemented: false
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The stored server. readme and tools may be empty.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/McpMarketDetail"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: No stored server has this id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
   /v1/mcp-market-categories:
     get:
       tags: [mcp-market]
@@ -1730,6 +1763,75 @@ components:
         needsOnline:
           type: boolean
           description: True when the server cannot be used without a network.
+    McpMarketToolParam:
+      type: object
+      additionalProperties: false
+      required: [name, type, required, description]
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+        required:
+          type: boolean
+        description:
+          type: string
+    McpMarketTool:
+      type: object
+      additionalProperties: false
+      required: [name, description, params]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        params:
+          type: array
+          items:
+            $ref: "#/components/schemas/McpMarketToolParam"
+    McpMarketDetail:
+      type: object
+      additionalProperties: false
+      required: [id, name, summary, author, category, categoryName, categoryMore, calls, views, stars, verified, hosted, needsOnline, license, updatedOn, readme, tools]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        summary:
+          type: string
+        author:
+          type: string
+        category:
+          type: string
+        categoryName:
+          type: string
+        categoryMore:
+          type: integer
+        calls:
+          type: integer
+        views:
+          type: integer
+        stars:
+          type: integer
+        verified:
+          type: boolean
+        hosted:
+          type: boolean
+        needsOnline:
+          type: boolean
+        license:
+          type: string
+        updatedOn:
+          type: string
+          description: Calendar day copied from the plaza, formatted YYYY.MM.DD.
+        readme:
+          type: string
+          description: Display text for the server. URLs are not stored as links.
+        tools:
+          type: array
+          items:
+            $ref: "#/components/schemas/McpMarketTool"
     McpMarketList:
       type: object
       additionalProperties: false

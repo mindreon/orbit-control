@@ -92,6 +92,7 @@ below has a written reason; a new grant needs a new line here first.
 | `users`, `personas`, `mcp_connectors`, `cloud_agent_jobs` | SELECT, INSERT; **no UPDATE, no DELETE** | No P0 code path updates or deletes these rows (`UpsertUser` is `INSERT … ON CONFLICT DO NOTHING`). |
 | `mcp_market_servers` | SELECT, INSERT, UPDATE, DELETE | Shared plaza display rows, not tenant history and not under RLS. Process start replaces the shipped snapshot: `DELETE` the previous rows, then `INSERT` the new copy. No launch command, hosted URL, or secret is stored. |
 | `mcp_market_categories` | SELECT, INSERT, UPDATE | The fourteen plaza labels. Startup upserts them. Rows are not deleted. |
+| `mcp_market_details` | SELECT, INSERT, UPDATE, DELETE | Readme and tool list for one plaza card. Startup replaces the whole table with the shipped snapshot. No hosted URL, launch secret, or discussion thread is stored. |
 | `approval_rules` | SELECT, INSERT, DELETE; **no UPDATE** | Revoking a rule deletes its row (§18.3; C23 / S-Rb-8). Rules are never edited in place. |
 | `idempotency_keys` | SELECT, INSERT, DELETE; **no UPDATE** | Expiry cleanup: an expired key for the same user is deleted before it is reused (`pgstore.createRoomOnce`). The `EXISTS(live room)` policy still hides keys of deleted tasks, so M1-1 is unaffected. |
 | `oidc_login_state` | SELECT, INSERT, DELETE; **no UPDATE** | One-time use: the callback consumes the row with `DELETE … RETURNING` (§18.3), and expired rows are cleaned up. |
