@@ -412,10 +412,15 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 	mux.HandleFunc("/internal/", func(w http.ResponseWriter, _ *http.Request) {
 		writeErr(w, http.StatusNotFound, "NOT_FOUND", "not found")
 	})
-	mux.HandleFunc("GET /v1/personas", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"items": runtime.ListPersonas()})
-	})
-	mux.HandleFunc("POST /v1/personas", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /v1/personas", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		items, err := runtime.ListPersonas(r.Context(), p.TenantID)
+		if err != nil {
+			writeAppErr(runtime.Log, w, err, "persona not found", http.StatusInternalServerError, "INTERNAL")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	}))
+	mux.HandleFunc("POST /v1/personas", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		var body struct {
 			Name         string   `json:"name"`
 			Instructions string   `json:"instructions"`
@@ -425,18 +430,22 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "request body must be valid JSON")
 			return
 		}
-		persona, err := runtime.CreatePersona(body.Name, body.Instructions, body.McpIds)
+		persona, err := runtime.CreatePersona(r.Context(), p.TenantID, body.Name, body.Instructions, body.McpIds)
 		if err != nil {
-			runtime.Log.Printf("bad request: %v", err)
-			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "the request is invalid")
+			writeAppErr(runtime.Log, w, err, "persona not found", http.StatusBadRequest, "BAD_REQUEST")
 			return
 		}
 		writeJSON(w, http.StatusOK, persona)
-	})
-	mux.HandleFunc("GET /v1/mcp-connectors", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"items": runtime.ListMcpConnectors()})
-	})
-	mux.HandleFunc("POST /v1/mcp-connectors", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.HandleFunc("GET /v1/mcp-connectors", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		items, err := runtime.ListMcpConnectors(r.Context(), p.TenantID)
+		if err != nil {
+			writeAppErr(runtime.Log, w, err, "connector not found", http.StatusInternalServerError, "INTERNAL")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	}))
+	mux.HandleFunc("POST /v1/mcp-connectors", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		var body struct {
 			Name    string   `json:"name"`
 			Command string   `json:"command"`
@@ -447,14 +456,13 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "request body must be valid JSON")
 			return
 		}
-		connector, err := runtime.CreateMcpConnector(body.Name, body.Command, body.Args, body.EnvRefs)
+		connector, err := runtime.CreateMcpConnector(r.Context(), p.TenantID, body.Name, body.Command, body.Args, body.EnvRefs)
 		if err != nil {
-			runtime.Log.Printf("bad request: %v", err)
-			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "the request is invalid")
+			writeAppErr(runtime.Log, w, err, "connector not found", http.StatusBadRequest, "BAD_REQUEST")
 			return
 		}
 		writeJSON(w, http.StatusOK, connector)
-	})
+	}))
 	mux.HandleFunc("POST /v1/grants", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Env        map[string]string `json:"env"`
