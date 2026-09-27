@@ -53,27 +53,31 @@ type connectorRow struct {
 }
 
 type Store struct {
-	mu         sync.Mutex
-	users      map[string]userRow
-	rooms      map[string]*roomRow
-	messages   map[string][]messageRow
-	approvals  map[string]*approvalRow
-	idem       map[string]idemRow
-	personas   map[string]personaRow
-	connectors map[string]connectorRow
+	mu              sync.Mutex
+	users           map[string]userRow
+	rooms           map[string]*roomRow
+	messages        map[string][]messageRow
+	approvals       map[string]*approvalRow
+	idem            map[string]idemRow
+	personas        map[string]personaRow
+	connectors      map[string]connectorRow
+	skills          map[string]store.SkillRecord
+	skillCategories map[string]store.SkillCategoryRecord
 }
 
 var _ store.Repository = (*Store)(nil)
 
 func New() *Store {
 	return &Store{
-		users:      map[string]userRow{},
-		rooms:      map[string]*roomRow{},
-		messages:   map[string][]messageRow{},
-		approvals:  map[string]*approvalRow{},
-		idem:       map[string]idemRow{},
-		personas:   map[string]personaRow{},
-		connectors: map[string]connectorRow{},
+		users:           map[string]userRow{},
+		rooms:           map[string]*roomRow{},
+		messages:        map[string][]messageRow{},
+		approvals:       map[string]*approvalRow{},
+		idem:            map[string]idemRow{},
+		personas:        map[string]personaRow{},
+		connectors:      map[string]connectorRow{},
+		skills:          map[string]store.SkillRecord{},
+		skillCategories: map[string]store.SkillCategoryRecord{},
 	}
 }
 

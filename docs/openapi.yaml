@@ -45,6 +45,11 @@ tags:
     description: Agent personas. Stored in Postgres when ORBIT_CONTROL_DB_URL is set.
   - name: mcp-connectors
     description: MCP connector launchers. Environment references are names only.
+  - name: skills
+    description: |
+      Shared SkillHub catalog stored in this service. Listing reads the local
+      copy. A background sync refreshes it. Skill packages are not downloaded
+      and this API does not install them.
   - name: secrets
     description: Tenant secrets metadata only (unimplemented; plaintext never in API)
   - name: cloud-agents
@@ -722,6 +727,86 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+  /v1/skills:
+    get:
+      tags: [skills]
+      operationId: listSkills
+      summary: List the local SkillHub catalog
+      description: |
+        Reads the catalog stored by this service. The handler does not call
+        SkillHub. A background sync copies public skill metadata (name,
+        description, counts). Skill packages are not downloaded and this
+        operation does not install a skill.
+      x-unimplemented: false
+      parameters:
+        - name: sortBy
+          in: query
+          schema:
+            type: string
+            enum: [score, downloads, updated_at, stars, trending]
+        - name: category
+          in: query
+          schema:
+            type: string
+        - name: source
+          in: query
+          schema:
+            type: string
+            enum: [clawhub, community, enterprise]
+        - name: keyword
+          in: query
+          schema:
+            type: string
+        - name: requiresApiKey
+          in: query
+          schema:
+            type: string
+            enum: ["true", "false"]
+        - name: paid
+          in: query
+          schema:
+            type: string
+            enum: ["true", "false"]
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+        - name: pageSize
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 48
+      responses:
+        "200":
+          description: One page of the stored catalog. items is empty until the first sync writes rows.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/skill-categories:
+    get:
+      tags: [skills]
+      operationId: listSkillCategories
+      summary: List stored skill category labels
+      description: Reads labels stored with the local catalog. Does not call SkillHub.
+      x-unimplemented: false
+      responses:
+        "200":
+          description: Category labels, ordered by sortOrder
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillCategoryList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
   /v1/secrets:
     get:
       tags: [secrets]
@@ -1353,6 +1438,87 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/McpConnector"
+    Skill:
+      type: object
+      additionalProperties: false
+      required: [id, slug, handle, name, description, category, categoryName, iconUrl, downloads, stars, source, version, requiresApiKey, paid, score, updatedAt, trendingRank]
+      properties:
+        id:
+          type: string
+        slug:
+          type: string
+        handle:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+        categoryName:
+          type: string
+        iconUrl:
+          type: string
+          description: Empty, or an https URL on an allowlisted image host.
+        downloads:
+          type: integer
+        stars:
+          type: integer
+        source:
+          type: string
+        version:
+          type: string
+        requiresApiKey:
+          type: boolean
+        paid:
+          type: boolean
+        score:
+          type: number
+        updatedAt:
+          type: string
+          format: date-time
+        trendingRank:
+          type: integer
+    SkillList:
+      type: object
+      additionalProperties: false
+      required: [items, total, page, pageSize, syncedAt]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Skill"
+        total:
+          type: integer
+        page:
+          type: integer
+        pageSize:
+          type: integer
+        syncedAt:
+          type: string
+          description: RFC3339 time of the newest stored row, or empty before the first sync.
+    SkillCategory:
+      type: object
+      additionalProperties: false
+      required: [key, name, nameEn, sortOrder]
+      properties:
+        key:
+          type: string
+        name:
+          type: string
+        nameEn:
+          type: string
+        sortOrder:
+          type: integer
+    SkillCategoryList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SkillCategory"
     CreateCloudAgentRequest:
       type: object
       additionalProperties: false
