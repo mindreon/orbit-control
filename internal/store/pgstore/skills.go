@@ -14,7 +14,7 @@ import (
 
 const skillSelect = `s.id, s.slug, s.handle, s.name, s.description, s.category,
 	COALESCE(c.name, ''), s.icon_url, s.downloads, s.stars, s.source,
-	s.version, s.requires_api_key, s.paid, s.score, s.updated_at, s.trending_rank`
+	s.version, s.needs_upstream_auth, s.paid, s.score, s.updated_at, s.trending_rank`
 
 // skill_catalog and skill_categories are shared marketplace metadata. They
 // are not [T] tables: statements do not filter by tenant_id. tenantID is
@@ -193,7 +193,7 @@ func (s *Store) queueSkills(ctx context.Context, tx pgx.Tx, rows []store.SkillRe
 			batch.Queue(`
 				INSERT INTO skill_catalog (
 				  id, slug, handle, name, description, category, icon_url,
-				  downloads, stars, source, version, requires_api_key, paid,
+				  downloads, stars, source, version, needs_upstream_auth, paid,
 				  score, updated_at, synced_at, trending_rank
 				) VALUES (
 				  $1, $2, $3, $4, $5, $6, $7,
@@ -211,7 +211,7 @@ func (s *Store) queueSkills(ctx context.Context, tx pgx.Tx, rows []store.SkillRe
 				  stars = EXCLUDED.stars,
 				  source = EXCLUDED.source,
 				  version = EXCLUDED.version,
-				  requires_api_key = EXCLUDED.requires_api_key,
+				  needs_upstream_auth = EXCLUDED.needs_upstream_auth,
 				  paid = EXCLUDED.paid,
 				  score = EXCLUDED.score,
 				  updated_at = EXCLUDED.updated_at,
@@ -225,7 +225,7 @@ func (s *Store) queueSkills(ctx context.Context, tx pgx.Tx, rows []store.SkillRe
 		batch.Queue(`
 			INSERT INTO skill_catalog (
 			  id, slug, handle, name, description, category, icon_url,
-			  downloads, stars, source, version, requires_api_key, paid,
+			  downloads, stars, source, version, needs_upstream_auth, paid,
 			  score, updated_at, synced_at
 			) VALUES (
 			  $1, $2, $3, $4, $5, $6, $7,
@@ -243,7 +243,7 @@ func (s *Store) queueSkills(ctx context.Context, tx pgx.Tx, rows []store.SkillRe
 			  stars = EXCLUDED.stars,
 			  source = EXCLUDED.source,
 			  version = EXCLUDED.version,
-			  requires_api_key = EXCLUDED.requires_api_key,
+			  needs_upstream_auth = EXCLUDED.needs_upstream_auth,
 			  paid = EXCLUDED.paid,
 			  score = EXCLUDED.score,
 			  updated_at = EXCLUDED.updated_at,
@@ -298,7 +298,7 @@ func skillWhere(q store.SkillCatalogQuery) (string, []any) {
 	}
 	if q.RequiresAPIKey != "" {
 		args = append(args, q.RequiresAPIKey == "true")
-		cond = append(cond, fmt.Sprintf("s.requires_api_key = $%d", len(args)))
+		cond = append(cond, fmt.Sprintf("s.needs_upstream_auth = $%d", len(args)))
 	}
 	if q.Paid != "" {
 		args = append(args, q.Paid == "true")

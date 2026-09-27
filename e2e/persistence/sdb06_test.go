@@ -130,15 +130,15 @@ func runSDB06Migrations(ctx context.Context) bool {
 	first := up()
 	step("S-DB-6/up-on-empty", "up on an empty database succeeds and applies every migration",
 		[]string{"goose up", "read version", "snapshot schema"},
-		map[string]any{"applied": 6, "version": 6, "error": ""}, first,
-		first.Error == "" && first.Applied == 6 && first.Version == 6 && first.Schema.Fingerprint != "")
+		map[string]any{"applied": 7, "version": 7, "error": ""}, first,
+		first.Error == "" && first.Applied == 7 && first.Version == 7 && first.Schema.Fingerprint != "")
 
 	second := up()
 	step("S-DB-6/up-again-noop", "up on an already migrated database succeeds and changes nothing",
 		[]string{"goose up", "read version", "snapshot schema", "compare with the previous snapshot"},
-		map[string]any{"applied": 0, "version": 6, "error": "", "schemaFingerprint": first.Schema.Fingerprint},
+		map[string]any{"applied": 0, "version": 7, "error": "", "schemaFingerprint": first.Schema.Fingerprint},
 		map[string]any{"applied": second.Applied, "version": second.Version, "error": second.Error, "schemaFingerprint": second.Schema.Fingerprint},
-		second.Error == "" && second.Applied == 0 && second.Version == 6 && second.Schema.Fingerprint == first.Schema.Fingerprint)
+		second.Error == "" && second.Applied == 0 && second.Version == 7 && second.Schema.Fingerprint == first.Schema.Fingerprint)
 
 	downErr := migrations.Reset(ctx, ownerURL)
 	down, derr := snapshot(ctx)
@@ -151,9 +151,9 @@ func runSDB06Migrations(ctx context.Context) bool {
 	third := up()
 	step("S-DB-6/up-after-down", "up after down reproduces the fresh schema exactly",
 		[]string{"goose up", "snapshot schema", "compare with the fresh-up snapshot"},
-		map[string]any{"applied": 6, "version": 6, "error": "", "schemaFingerprint": first.Schema.Fingerprint},
+		map[string]any{"applied": 7, "version": 7, "error": "", "schemaFingerprint": first.Schema.Fingerprint},
 		map[string]any{"applied": third.Applied, "version": third.Version, "error": third.Error, "schemaFingerprint": third.Schema.Fingerprint},
-		third.Error == "" && third.Applied == 6 && third.Version == 6 && third.Schema.Fingerprint == first.Schema.Fingerprint)
+		third.Error == "" && third.Applied == 7 && third.Version == 7 && third.Schema.Fingerprint == first.Schema.Fingerprint)
 	return ok
 }
 
