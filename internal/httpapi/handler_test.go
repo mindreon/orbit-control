@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -121,9 +122,9 @@ func TestRoomHITLAllowCompletesTurn(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("decide %d %s", rec.Code, rec.Body.String())
 	}
-	got, ok := runtime.GetRoom(room.ID)
-	if !ok || got.State != app.RoomRunning {
-		t.Fatalf("room after allow = %+v ok=%v", got, ok)
+	got, err := runtime.GetRoom(context.Background(), app.Principal{TenantID: app.DefaultTenantID, UserID: LocalUserID}, room.ID)
+	if err != nil || got.State != app.RoomRunning {
+		t.Fatalf("room after allow = %+v err=%v", got, err)
 	}
 	if turns < 2 {
 		t.Fatalf("expected resume runTurn, turns=%d", turns)

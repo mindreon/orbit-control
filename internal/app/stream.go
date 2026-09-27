@@ -1,9 +1,12 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"strconv"
 	"time"
+
+	"github.com/mindreon/orbit-control/internal/store"
 )
 
 // StreamFrame is one SSE-bound event for a room.
@@ -63,7 +66,7 @@ func (a *App) SubscribeRoom(roomID, client string) (*Subscription, error) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	room, ok := a.Rooms[roomID]
+	room, ok := a.live[roomID]
 	if !ok {
 		return nil, ErrRoomNotFound
 	}
@@ -73,7 +76,7 @@ func (a *App) SubscribeRoom(roomID, client string) (*Subscription, error) {
 	if a.clientStreams[client] >= a.Limits.MaxStreamsPerClient {
 		return nil, ErrClientStreamLimit
 	}
-	head, err := a.Events.Head(roomID)
+	head, err := a.headLocked(roomID)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +85,7 @@ func (a *App) SubscribeRoom(roomID, client string) (*Subscription, error) {
 	}
 	a.subs[roomID][sub] = struct{}{}
 	a.clientStreams[client]++
-	if room.State == RoomClosed {
+	if room.Closed {
 		sub.end()
 	}
 	return &Subscription{
@@ -119,6 +122,10 @@ func (s *subscriber) end() {
 // room's closing session.status has been published.
 func (a *App) roomClosed(roomID string) {
 	a.mu.Lock()
+	if room, ok := a.live[roomID]; ok {
+		room.Closed = true
+		a.live[roomID] = room
+	}
 	for sub := range a.subs[roomID] {
 		sub.end()
 	}
@@ -127,7 +134,7 @@ func (a *App) roomClosed(roomID string) {
 	free := func() {
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		if room, ok := a.Rooms[roomID]; ok && room.State == RoomClosed {
+		if room, ok := a.live[roomID]; ok && room.Closed {
 			_ = a.Events.Drop(roomID)
 			a.freedLogs[roomID] = struct{}{}
 		}
@@ -139,11 +146,20 @@ func (a *App) roomClosed(roomID string) {
 	time.AfterFunc(ttl, free)
 }
 
+// closeSubscribers ends every live SSE stream of a deleted room.
+func (a *App) closeSubscribers(roomID string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for sub := range a.subs[roomID] {
+		sub.end()
+	}
+}
+
 // RoomHead is the room's latest event id (0 if none).
 func (a *App) RoomHead(roomID string) (uint64, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.Events.Head(roomID)
+	return a.headLocked(roomID)
 }
 
 func (a *App) broadcastLocked(roomID string, frame StreamFrame) {
@@ -198,6 +214,30 @@ func ParseEventID(raw string) (uint64, error) {
 // events and has been evicted, and ResetUnknown in every other case: another
 // room's id, an id beyond LastID, or an id issued before a control restart.
 func (a *App) EventsAfter(roomID string, after uint64) ([]StreamFrame, uint64, error) {
+	if es, ok := a.Repo.(store.EventStore); ok {
+		a.mu.Lock()
+		tenantID := a.live[roomID].TenantID
+		a.mu.Unlock()
+		if tenantID == "" {
+			tenantID = a.DefaultTenant
+		}
+		rows, head, cursorOK, err := es.EventsAfter(context.Background(), tenantID, roomID, int64(after))
+		if err != nil {
+			return nil, uint64(head), err
+		}
+		if !cursorOK {
+			return nil, uint64(head), &CursorError{Reason: ResetUnknown}
+		}
+		frames := make([]StreamFrame, 0, len(rows))
+		for _, row := range rows {
+			raw, err := EncodeEnvelope(envelopeFromEvent(row))
+			if err != nil {
+				return nil, uint64(head), err
+			}
+			frames = append(frames, StreamFrame{Seq: uint64(row.Seq), Durable: true, Data: raw})
+		}
+		return frames, uint64(head), nil
+	}
 	a.mu.Lock()
 	head, err := a.Events.Head(roomID)
 	if err == nil {
@@ -261,9 +301,28 @@ func (a *App) publishLive(env Envelope) {
 	if err != nil {
 		return
 	}
+	if es, ok := a.Repo.(store.EventStore); ok {
+		a.mu.Lock()
+		tenantID := a.live[env.TaskID].TenantID
+		a.mu.Unlock()
+		if tenantID == "" {
+			tenantID = a.DefaultTenant
+		}
+		head, err := es.RoomEventHead(context.Background(), tenantID, env.TaskID)
+		if err != nil {
+			return
+		}
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		if _, ok := a.live[env.TaskID]; !ok {
+			return
+		}
+		a.broadcastLocked(env.TaskID, StreamFrame{Seq: uint64(head), Data: raw})
+		return
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if _, ok := a.Rooms[env.TaskID]; !ok {
+	if _, ok := a.live[env.TaskID]; !ok {
 		return
 	}
 	last, err := a.Events.LastID()

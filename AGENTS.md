@@ -12,7 +12,14 @@ The agent loop is **dsh on orbit-worker**, not this process. Do not add dsh, Pi,
 
 ## W1 rules
 
-- In-memory rooms, messages, HITL, and SSE are allowed. Still no OAuth or DB.
+- In-memory rooms, messages, HITL, and SSE are allowed. Still no OAuth.
+- Postgres persistence follows contract §18 only: pgx + goose, behind
+  `store.Repository`. No data backward-compatibility shims.
+- Persistence is verified by E2E (`e2e/persistence`, build tag `e2e`) through
+  the HTTP API against real Postgres, producing
+  `artifacts/e2e-persistence-report.json`. No unit tests for it. An isolated
+  SQL/role/static check needs an entry in
+  `docs/persistence-failure-modes.md` committed before the check.
 - Temporal is optional: set `TEMPORAL_ADDRESS` to drive `RoomWorkflow` (orbit-orch); otherwise control calls orbit-worker over HTTP.
 - **No tenant secret plaintext** in logs, fixtures, or OpenAPI examples.
 - Do not import dsh, Pi, or LLM SDKs here.
@@ -32,8 +39,11 @@ The agent loop is **dsh on orbit-worker**, not this process. Do not add dsh, Pi,
 
 1. Mark new public paths `501` / unimplemented until a later wave implements them.
 2. Keep `401` / `403` stub schemas stable — Sentinel will assert them.
-3. `go test ./...` must stay dependency-free (stdlib only).
-4. Do not add `go.mod` requires for Temporal, dsh, Pi, LLM SDKs, or database drivers in W0.
+3. `go test ./...` must pass without external services (the Postgres E2E
+   suite is behind the `e2e` build tag).
+4. Do not add `go.mod` requires for dsh, Pi, or LLM SDKs. The only
+   infrastructure dependencies are the Temporal SDK (optional path) and pgx +
+   goose (contract §18).
 
 ## Cross-links
 

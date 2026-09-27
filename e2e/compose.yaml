@@ -1,0 +1,30 @@
+# Local Postgres for the §18 E2E suite (CI uses a service container instead).
+#
+#   docker compose -f e2e/compose.yaml up -d --wait
+#   ORBIT_TEST_DB_URL=postgres://orbit_app:e2e-app@127.0.0.1:55432/orbit_control?sslmode=disable \
+#   ORBIT_TEST_MIGRATE_DB_URL=postgres://orbit_owner:e2e-owner@127.0.0.1:55432/orbit_control?sslmode=disable \
+#   ORBIT_TEST_OPS_DB_URL=postgres://orbit_ops:e2e-ops@127.0.0.1:55432/orbit_control?sslmode=disable \
+#   go test -tags e2e -count=1 ./e2e/...
+#
+# Passwords here are throwaway local values for this container only.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: e2e-superuser
+      ORBIT_OWNER_PASSWORD: e2e-owner
+      ORBIT_APP_PASSWORD: e2e-app
+      ORBIT_OPS_PASSWORD: e2e-ops
+    ports:
+      - "55432:5432"
+    volumes:
+      - ../deploy/postgres/bootstrap-roles.sql:/bootstrap/bootstrap-roles.sql:ro
+      - ./postgres-init.sh:/docker-entrypoint-initdb.d/10-orbit-roles.sh:ro
+    healthcheck:
+      # TCP check: the init-time server listens on the socket only, so this
+      # turns healthy after the bootstrap script has run.
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 30

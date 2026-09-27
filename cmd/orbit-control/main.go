@@ -17,7 +17,11 @@ func main() {
 		log.Fatal(err)
 	}
 	internalAddr := internalListenAddr()
-	public, internal := httpapi.Handlers()
+	public, internal, closeStore, err := httpapi.Handlers()
+	if err != nil {
+		log.Fatalf("orbit-control: %v", err)
+	}
+	defer closeStore()
 	go func() {
 		log.Printf("orbit-control internal listener on %s (/internal/*)", internalAddr)
 		if err := server(internalAddr, internal).ListenAndServe(); err != nil {

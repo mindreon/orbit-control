@@ -4,9 +4,12 @@ info:
   version: 0.2.0-w1
   description: |
     W1 **live rooms**. Health, rooms, messages, approvals, room activity history,
-    steer, and SSE events are implemented in-memory. Control calls orbit-worker
-    HTTP activities directly, or RoomWorkflow when Temporal is configured. It
-    still has no database or OAuth.
+    steer, and SSE events are implemented. Rooms, messages, approvals and
+    idempotency keys are stored in Postgres when `ORBIT_CONTROL_DB_URL` is set
+    (in-memory otherwise, dev/test only). Durable events use a per-task seq
+    in that database; live SSE fan-out stays in-process. Control calls
+    orbit-worker HTTP activities directly, or
+    RoomWorkflow when Temporal is configured. It still has no OAuth.
 
     Product surfaces:
 
@@ -100,6 +103,8 @@ paths:
         room, not as a global client switch. `kind=collab` is accepted but
         still one parent session in W1.
       x-unimplemented: false
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -108,11 +113,33 @@ paths:
               $ref: "#/components/schemas/CreateRoomRequest"
       responses:
         "200":
-          description: Created room
+          description: |
+            Created room, or the original room when the same
+            `Idempotency-Key` and body are replayed.
+          headers:
+            Idempotent-Replayed:
+              description: "`true` when this response is a replay."
+              schema:
+                type: string
+                enum: ["true"]
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Room"
+        "404":
+          description: |
+            The `Idempotency-Key` belongs to a room that was deleted. The body
+            is identical to a missing room and never contains its id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+              example:
+                error: not found
+                code: NOT_FOUND
+                message: room not found
+        "409":
+          $ref: "#/components/responses/IdempotencyKeyReused"
         "502":
           $ref: "#/components/responses/NotImplemented"
         "401":
@@ -140,6 +167,33 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+    delete:
+      tags: [rooms]
+      operationId: deleteRoom
+      summary: Soft-delete a room (task)
+      description: |
+        Only the creator may delete. Checks run in order: unauthenticated →
+        401, CSRF (`Origin` not allowed or `X-Orbit-Request: 1` missing) →
+        403, not the creator / missing / already deleted → 404.
+
+        Control first sends `abort` to the room workflow, then marks the room
+        deleted. If the abort fails or times out, the room is still deleted
+        and 204 is returned. Open SSE streams for the room are closed; the
+        room, its messages, activity, events and approvals then return 404.
+        Any request body is ignored; `deleted_at` / `deleted_by` are set by
+        the server from the session. There is no restore or purge API.
+      x-unimplemented: false
+      parameters:
+        - $ref: "#/components/parameters/RoomId"
+      responses:
+        "204":
+          description: Room deleted
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/CsrfRejected"
+        "404":
+          $ref: "#/components/responses/NotFound"
   /v1/rooms/{roomId}/messages:
     get:
       tags: [messages]
@@ -456,6 +510,27 @@ paths:
         Public HITL verb. Control maps `allow` to worker `resolveApproval`
         (`allowed-once`) then `runTurn` resume. `reject` maps to worker `abort`.
         Temporal Update/Signal is the later stand-in target.
+
+        The approval is claimed with a conditional update (`status = pending`)
+        before anything is sent to the workflow, so concurrent decisions have
+        exactly one winner and the workflow receives exactly one decision.
+        The Temporal decide Update uses `UpdateID = approvalRequestId` and
+        does not send `resumeTurnId` (C35). A transition that matches 0 rows
+        is re-read and answered from that row; it is never 500. A room that
+        is already `failed` returns **409** `ROOM_FAILED`. `room.failed`
+        carries `failure: {code, message}` with the §10.2 sentence.
+        Deciding an approval that is already `delivered`, `unresolved`, or
+        `cancelled` returns **409** `APPROVAL_NOT_PENDING` (contract §2.0).
+        While `deliveryState` is `in_flight` or `unknown`, the same decision
+        again returns **202** and is not re-delivered; a different decision
+        returns **409** `APPROVAL_DELIVERY_PENDING` with the current
+        `approval` on the error body (C34 §2.4). An unconfirmed delivery
+        (timeout or any ambiguous error) returns **202**
+        `{approval, deliveryState: "unknown"}`. A confirmed
+        `DECIDED_APPROVALS_LIMIT` returns **409** `ROOM_FAILED`. Delivery
+        ends when the decision is accepted; the resumed turn is written back
+        on a background context, so a slow turn is **200** and a client
+        disconnect does not drop that write (FM-61).
       x-unimplemented: false
       parameters:
         - $ref: "#/components/parameters/ApprovalId"
@@ -473,7 +548,63 @@ paths:
               schema:
                 $ref: "#/components/schemas/Approval"
         "400":
-          $ref: "#/components/responses/NotImplemented"
+          description: |
+            The decision was delivered, but resuming the turn afterwards
+            failed: the worker `runTurn` resume on the direct path, or waiting
+            for the result of the accepted `decide` Update on the Temporal
+            path. The message carries the error. The approval stays decided.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+              example:
+                error: bad request
+                code: BAD_REQUEST
+                message: "worker runTurn: HTTP 500"
+        "404":
+          description: Missing, not owned by the caller, in another tenant, or its task was deleted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+              example:
+                error: not found
+                code: NOT_FOUND
+                message: approval not found
+        "202":
+          description: |
+            Delivery outcome is not confirmed (`deliveryState` `unknown`), or
+            the caller repeated the same decision while delivery is `in_flight`
+            or `unknown`. Not an error body. Nothing is re-delivered.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [approval, deliveryState]
+                properties:
+                  approval:
+                    $ref: "#/components/schemas/Approval"
+                  deliveryState:
+                    type: string
+                    enum: [in_flight, unknown]
+        "409":
+          description: |
+            `APPROVAL_NOT_PENDING` when the approval is no longer waiting on
+            delivery, or `APPROVAL_DELIVERY_PENDING` / `ROOM_FAILED` (both
+            include `approval`). See the component responses.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "503":
+          description: |
+            `APPROVAL_NOT_DELIVERED`. The decision was provably not delivered
+            and the approval is pending again.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -684,6 +815,16 @@ paths:
           $ref: "#/components/responses/Forbidden"
 components:
   parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: |
+        Optional, at most 128 characters. Scoped to the calling user and
+        kept for 24 hours; only its sha256 is stored.
+      schema:
+        type: string
+        maxLength: 128
     RoomId:
       name: roomId
       in: path
@@ -729,6 +870,11 @@ components:
         message:
           type: string
           description: Human-readable explanation (not a secret)
+        approval:
+          $ref: "#/components/schemas/Approval"
+          description: |
+            Optional. Set on `APPROVAL_DELIVERY_PENDING`, `ROOM_FAILED`, and
+            `APPROVAL_NOT_DELIVERED` (C34 §2.4).
       example:
         error: not implemented
         code: NOT_IMPLEMENTED
@@ -751,7 +897,7 @@ components:
         sets it — not a global client switch.
     RoomState:
       type: string
-      enum: [idle, running, awaiting_approval, closed]
+      enum: [idle, running, awaiting_approval, closed, failed]
     Room:
       type: object
       additionalProperties: false
@@ -771,6 +917,16 @@ components:
           $ref: "#/components/schemas/RuntimeSnapshot"
         sessionId:
           type: string
+        failure:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum: [WORKFLOW_START_FAILED, SESSION_TIMEOUT, DECIDED_APPROVALS_LIMIT]
+            message:
+              type: string
         createdAt:
           type: string
     RuntimeSnapshot:
@@ -849,6 +1005,9 @@ components:
           type: string
         decision:
           type: string
+        deliveryState:
+          type: string
+          description: C34 delivery state. Empty while the approval is pending.
         createdAt:
           type: string
     ApprovalList:
@@ -1156,3 +1315,81 @@ components:
             error: forbidden
             code: FORBIDDEN
             message: insufficient permissions
+    Unauthenticated:
+      description: |
+        No valid session (contract §17.6). Emitted before any storage lookup,
+        so the body is identical on every path.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+          example:
+            error: unauthenticated
+            code: UNAUTHENTICATED
+            message: authentication required
+    CsrfRejected:
+      description: |
+        State-changing request without an allowed `Origin` and
+        `X-Orbit-Request: 1` (contract §17.4).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+          example:
+            error: csrf rejected
+            code: CSRF_REJECTED
+            message: "state-changing requests need an allowed Origin and X-Orbit-Request: 1"
+    NotFound:
+      description: |
+        Missing, not owned by the caller, in another tenant, or deleted.
+        These cases share one body.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+          example:
+            error: not found
+            code: NOT_FOUND
+            message: room not found
+    ApprovalNotPending:
+      description: The approval was already decided (or lost a concurrent decision).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+          example:
+            error: approval not pending
+            code: APPROVAL_NOT_PENDING
+            message: approval is not pending
+    DecisionDeliveryFailed:
+      description: |
+        The decision is recorded, but delivering it to the workflow failed or
+        exceeded the delivery timeout. The delivery call is `resolveApproval`
+        on the direct worker path and the acceptance of the `decide` Update
+        (`UpdateID` = approval id) on the Temporal path; the resumed turn that
+        follows is not part of delivery.
+        The approval stays decided and is not re-delivered; a resubmit returns
+        409 `APPROVAL_NOT_PENDING`. The body is fixed and never includes
+        worker or Temporal error text.
+
+        The in-memory repository still returns this 502. When Postgres is
+        configured, an unconfirmed delivery is **202**
+        `{approval, deliveryState: "unknown"}` (C34 §2.4), not this response.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+          example:
+            error: decision delivery failed
+            code: DECISION_DELIVERY_FAILED
+            message: the decision is recorded but its delivery to the workflow failed or timed out; it is not retried
+    IdempotencyKeyReused:
+      description: The `Idempotency-Key` was already used with a different body.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+          example:
+            error: idempotency key reused
+            code: IDEMPOTENCY_KEY_REUSED
+            message: Idempotency-Key was already used with a different request body
