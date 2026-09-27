@@ -116,7 +116,7 @@ type Principal struct {
 // Orchestrator is the Temporal RoomWorkflow surface control drives.
 // *orch.Client implements it.
 type Orchestrator interface {
-	StartRoom(ctx context.Context, roomID, kind, permissionPreset string) (orch.RoomView, error)
+	StartRoom(ctx context.Context, roomID, kind, permissionPreset string, connectors []orch.McpConnectorSpec) (orch.RoomView, error)
 	RunTurn(ctx context.Context, roomID, turnID, message string) (orch.RunTurnResult, error)
 	Decide(ctx context.Context, roomID, approvalRequestID, turnID, decision string) (orch.DecideUpdate, error)
 	DecideConfig(ctx context.Context, roomID string) (orch.DecideConfig, error)
@@ -440,6 +440,27 @@ func (a *App) setRoomState(ctx context.Context, tenantID string, room *Room, sta
 	return nil
 }
 
+func mcpSpecs(connectors []*McpConnector) []orch.McpConnectorSpec {
+	out := make([]orch.McpConnectorSpec, 0, len(connectors))
+	for _, connector := range connectors {
+		refs := make([]orch.McpHeaderRef, 0, len(connector.HeaderRefs))
+		for _, ref := range connector.HeaderRefs {
+			refs = append(refs, orch.McpHeaderRef{Name: ref.Name, Env: ref.Env})
+		}
+		out = append(out, orch.McpConnectorSpec{
+			ID:         connector.ID,
+			Name:       connector.Name,
+			Transport:  connector.Transport,
+			Command:    connector.Command,
+			Args:       connector.Args,
+			EnvRefs:    connector.EnvRefs,
+			URL:        connector.URL,
+			HeaderRefs: refs,
+		})
+	}
+	return out
+}
+
 func createRequestHash(kind, title, preset, personaID, grantID string) []byte {
 	raw, _ := json.Marshal([]string{kind, title, preset, personaID, grantID})
 	sum := sha256.Sum256(raw)
@@ -501,8 +522,15 @@ func (a *App) CreateRoom(ctx context.Context, p Principal, input CreateRoomInput
 		return room, true, nil
 	}
 
+	selected, err := a.ConnectorsForRoom(ctx, p.TenantID, personaID)
+	if err != nil {
+		_ = a.setRoomState(ctx, p.TenantID, room, RoomClosed, "")
+		return room, false, err
+	}
+	specs := mcpSpecs(selected)
+
 	if a.Orch != nil {
-		view, err := a.Orch.StartRoom(ctx, room.ID, kind, permissionPreset)
+		view, err := a.Orch.StartRoom(ctx, room.ID, kind, permissionPreset, specs)
 		if err != nil {
 			_ = a.setRoomState(ctx, p.TenantID, room, RoomClosed, "")
 			return room, false, fmt.Errorf("temporal StartRoom: %w", err)
@@ -514,7 +542,7 @@ func (a *App) CreateRoom(ctx context.Context, p Principal, input CreateRoomInput
 		return room, false, nil
 	}
 
-	persona, connectors, grantEnv, err := a.CompositionForRoom(personaID, grantID)
+	persona, _, grantEnv, err := a.CompositionForRoom(personaID, grantID)
 	if err != nil {
 		_ = a.setRoomState(ctx, p.TenantID, room, RoomClosed, "")
 		return room, false, err
@@ -533,15 +561,8 @@ func (a *App) CreateRoom(ctx context.Context, p Principal, input CreateRoomInput
 			"mcpConnectorIds": persona.McpConnectorIDs,
 		}
 	}
-	if len(connectors) > 0 {
-		mcp := make([]map[string]any, 0, len(connectors))
-		for _, c := range connectors {
-			mcp = append(mcp, map[string]any{
-				"id": c.ID, "name": c.Name, "command": c.Command,
-				"args": c.Args, "envRefs": c.EnvRefs,
-			})
-		}
-		payload["mcpConnectors"] = mcp
+	if len(specs) > 0 {
+		payload["mcpConnectors"] = specs
 	}
 	if grantID != "" {
 		payload["grantId"] = grantID

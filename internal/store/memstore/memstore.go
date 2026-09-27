@@ -372,6 +372,7 @@ func (s *Store) ListMcpConnectors(_ context.Context, tenantID string) ([]store.M
 		rec := row.rec
 		rec.Args = copyStrings(row.rec.Args)
 		rec.EnvRefs = copyStrings(row.rec.EnvRefs)
+		rec.HeaderRefs = copyStrings(row.rec.HeaderRefs)
 		out = append(out, rec)
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -394,6 +395,10 @@ func (s *Store) CreateMcpConnector(_ context.Context, tenantID string, c store.M
 	}
 	c.Args = copyStrings(c.Args)
 	c.EnvRefs = copyStrings(c.EnvRefs)
+	c.HeaderRefs = copyStrings(c.HeaderRefs)
+	if c.Transport == "" {
+		c.Transport = "stdio"
+	}
 	s.connectors[c.ID] = connectorRow{tenantID: tenantID, rec: c}
 	return nil
 }

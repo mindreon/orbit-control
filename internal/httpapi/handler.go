@@ -481,16 +481,23 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 	}))
 	mux.HandleFunc("POST /v1/mcp-connectors", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		var body struct {
-			Name    string   `json:"name"`
-			Command string   `json:"command"`
-			Args    []string `json:"args"`
-			EnvRefs []string `json:"envRefs"`
+			Name        string          `json:"name"`
+			Transport   string          `json:"transport"`
+			Command     string          `json:"command"`
+			Args        []string        `json:"args"`
+			EnvRefs     []string        `json:"envRefs"`
+			URL         string          `json:"url"`
+			HeaderRefs  []app.HeaderRef `json:"headerRefs"`
+			DefaultOpen bool            `json:"defaultOpen"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "request body must be valid JSON")
 			return
 		}
-		connector, err := runtime.CreateMcpConnector(r.Context(), p.TenantID, body.Name, body.Command, body.Args, body.EnvRefs)
+		connector, err := runtime.CreateMcpConnector(r.Context(), p.TenantID, app.McpConnectorInput{
+			Name: body.Name, Transport: body.Transport, Command: body.Command, Args: body.Args,
+			EnvRefs: body.EnvRefs, URL: body.URL, HeaderRefs: body.HeaderRefs, DefaultOpen: body.DefaultOpen,
+		})
 		if err != nil {
 			writeAppErr(runtime.Log, w, err, "connector not found", http.StatusBadRequest, "BAD_REQUEST")
 			return
