@@ -191,7 +191,8 @@ is a shared local copy refreshed in the background. `GET /v1/skills`,
 and do not call SkillHub. The first request for a skill's text files copies
 safe text out of the public package into that row, and may also copy the
 public page fields (score, tags, versions, file names, evaluation summary)
-once. That download may follow one redirect onto the fixed SkillHub object
+once. A later open copies the package once more when a listed text file,
+including one under a subdirectory, was left out of that copy. That download may follow one redirect onto the fixed SkillHub object
 host. Later reads use the copy. Packages are not installed, and the page
 does not offer a download.
 Model and dsh execution remain outside this process.

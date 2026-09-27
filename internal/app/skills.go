@@ -3,8 +3,8 @@ package app
 import (
 	"context"
 	"encoding/json"
-	"strings"
 
+	"github.com/mindreon/orbit-control/internal/skillhub"
 	"github.com/mindreon/orbit-control/internal/store"
 )
 
@@ -152,15 +152,15 @@ func (a *App) SkillPage(ctx context.Context, tenantID, handle, slug string, fetc
 	if !json.Valid(raw) {
 		return files, nil, nil
 	}
-	files, raw = a.keepOverviewFile(ctx, tenantID, id, handle, slug, files, raw, fetchFiles)
-	return files, stripOverviewTried(raw), nil
+	files, raw = a.keepMissingText(ctx, tenantID, id, handle, slug, files, raw, fetchFiles)
+	return files, stripCopyFlags(raw), nil
 }
 
-// keepOverviewFile copies the package again when the file list names SKILL.md
-// but an earlier copy filled its budget before that file. One attempt is
-// remembered on the stored detail so a miss does not download on every view.
-func (a *App) keepOverviewFile(ctx context.Context, tenantID, id, handle, slug string, files []SkillTextFile, raw []byte, fetch func(context.Context, string, string) ([]store.SkillFile, error)) ([]SkillTextFile, []byte) {
-	if !overviewMissing(files, raw) || fetch == nil {
+// keepMissingText copies the package again when the file list names a text
+// file the saved copy does not have. One attempt is remembered on the stored
+// detail so a miss does not download on every view.
+func (a *App) keepMissingText(ctx context.Context, tenantID, id, handle, slug string, files []SkillTextFile, raw []byte, fetch func(context.Context, string, string) ([]store.SkillFile, error)) ([]SkillTextFile, []byte) {
+	if !textMissing(files, raw) || fetch == nil {
 		return files, raw
 	}
 	if fresh, err := fetch(ctx, handle, slug); err == nil {
@@ -171,47 +171,44 @@ func (a *App) keepOverviewFile(ctx context.Context, tenantID, id, handle, slug s
 			}
 		}
 	}
-	marked := markOverviewTried(raw)
+	marked := markCopyFlag(raw, "filesTried")
 	if err := a.Repo.SaveSkillDetail(ctx, tenantID, id, marked); err != nil {
 		return files, raw
 	}
 	return files, marked
 }
 
-func overviewMissing(files []SkillTextFile, raw []byte) bool {
+func textMissing(files []SkillTextFile, raw []byte) bool {
 	var meta struct {
 		FileIndex []struct {
 			Path string `json:"path"`
 		} `json:"fileIndex"`
-		OverviewTried bool `json:"overviewTried"`
+		FilesTried bool `json:"filesTried"`
 	}
-	if json.Unmarshal(raw, &meta) != nil || meta.OverviewTried {
+	if json.Unmarshal(raw, &meta) != nil || meta.FilesTried {
 		return false
 	}
-	listed := false
-	for _, file := range meta.FileIndex {
-		if strings.EqualFold(file.Path, "SKILL.md") {
-			listed = true
-			break
-		}
-	}
-	if !listed {
-		return false
-	}
+	have := make(map[string]struct{}, len(files))
 	for _, file := range files {
-		if strings.EqualFold(file.Path, "SKILL.md") {
-			return false
+		have[file.Path] = struct{}{}
+	}
+	for _, file := range meta.FileIndex {
+		if !skillhub.Previewable(file.Path) {
+			continue
+		}
+		if _, ok := have[file.Path]; !ok {
+			return true
 		}
 	}
-	return true
+	return false
 }
 
-func markOverviewTried(raw []byte) []byte {
+func markCopyFlag(raw []byte, key string) []byte {
 	var meta map[string]json.RawMessage
 	if json.Unmarshal(raw, &meta) != nil {
 		return raw
 	}
-	meta["overviewTried"] = []byte("true")
+	meta[key] = []byte("true")
 	out, err := json.Marshal(meta)
 	if err != nil {
 		return raw
@@ -219,15 +216,18 @@ func markOverviewTried(raw []byte) []byte {
 	return out
 }
 
-func stripOverviewTried(raw []byte) []byte {
+func stripCopyFlags(raw []byte) []byte {
 	var meta map[string]json.RawMessage
 	if json.Unmarshal(raw, &meta) != nil {
 		return raw
 	}
-	if _, ok := meta["overviewTried"]; !ok {
+	_, overview := meta["overviewTried"]
+	_, files := meta["filesTried"]
+	if !overview && !files {
 		return raw
 	}
 	delete(meta, "overviewTried")
+	delete(meta, "filesTried")
 	out, err := json.Marshal(meta)
 	if err != nil {
 		return raw
