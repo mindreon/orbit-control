@@ -63,6 +63,8 @@ type Store struct {
 	connectors      map[string]connectorRow
 	skills          map[string]store.SkillRecord
 	skillCategories map[string]store.SkillCategoryRecord
+	mcpMarket       map[string]store.McpMarketRecord
+	mcpCategories   map[string]store.McpMarketCategoryRecord
 }
 
 var _ store.Repository = (*Store)(nil)
@@ -78,6 +80,8 @@ func New() *Store {
 		connectors:      map[string]connectorRow{},
 		skills:          map[string]store.SkillRecord{},
 		skillCategories: map[string]store.SkillCategoryRecord{},
+		mcpMarket:       map[string]store.McpMarketRecord{},
+		mcpCategories:   map[string]store.McpMarketCategoryRecord{},
 	}
 }
 

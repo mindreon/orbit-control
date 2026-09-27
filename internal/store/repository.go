@@ -103,6 +103,15 @@ type Repository interface {
 	// that disappeared upstream.
 	UpsertSkillCategories(ctx context.Context, tenantID string, rows []SkillCategoryRecord) error
 
+	// ListMcpMarket reads the shared ModelScope snapshot. tenantID is required
+	// so only an authenticated caller can ask; rows are not scoped by tenant.
+	ListMcpMarket(ctx context.Context, tenantID string, q McpMarketQuery) (McpMarketPage, error)
+	// ListMcpMarketCategories returns plaza labels with counts for the same
+	// needsOnline filter as the list. A category with no rows is omitted.
+	ListMcpMarketCategories(ctx context.Context, tenantID string, needsOnline string) ([]McpMarketCategoryCount, error)
+	// ReplaceMcpMarket replaces the shared snapshot. It does not call ModelScope.
+	ReplaceMcpMarket(ctx context.Context, tenantID string, servers []McpMarketRecord, categories []McpMarketCategoryRecord) error
+
 	Close()
 }
 
@@ -302,6 +311,87 @@ func NormalizeSkillQuery(q SkillCatalogQuery) SkillCatalogQuery {
 	}
 	if q.PageSize < 1 {
 		q.PageSize = 24
+	}
+	if q.PageSize > 48 {
+		q.PageSize = 48
+	}
+	return q
+}
+
+// McpMarketRecord is one row of the shared ModelScope plaza snapshot.
+// It is display metadata only: no launch command, hosted URL, or secret.
+type McpMarketRecord struct {
+	ID           string
+	Name         string
+	Summary      string
+	Author       string
+	Category     string
+	CategoryName string
+	CategoryMore int
+	Calls        int64
+	Views        int64
+	Stars        int64
+	Verified     bool
+	Hosted       bool
+	NeedsOnline  bool
+	Rank         int
+}
+
+// McpMarketCategoryRecord is a plaza sidebar label.
+type McpMarketCategoryRecord struct {
+	Key       string
+	Name      string
+	SortOrder int
+}
+
+// McpMarketCategoryCount is a label plus how many stored servers use it.
+type McpMarketCategoryCount struct {
+	Key       string
+	Name      string
+	SortOrder int
+	Count     int
+}
+
+// McpMarketQuery selects a page of the stored plaza.
+// ServiceType is "", "hosted", or "local".
+// NeedsOnline is "", "true", or "false".
+type McpMarketQuery struct {
+	Keyword     string
+	Category    string
+	ServiceType string
+	NeedsOnline string
+	Page        int
+	PageSize    int
+}
+
+// McpMarketPage is one page. Stored is the catalog size after the needsOnline
+// filter and before keyword, category, and service type.
+type McpMarketPage struct {
+	Items    []McpMarketRecord
+	Total    int
+	Stored   int
+	Page     int
+	PageSize int
+}
+
+// NormalizeMcpMarketQuery clamps a plaza query to the values the stores implement.
+func NormalizeMcpMarketQuery(q McpMarketQuery) McpMarketQuery {
+	q.Keyword = clipText(q.Keyword, 80)
+	q.Category = clipToken(q.Category, 64)
+	switch q.ServiceType {
+	case "hosted", "local":
+	default:
+		q.ServiceType = ""
+	}
+	q.NeedsOnline = boolWord(q.NeedsOnline)
+	if q.Page < 1 {
+		q.Page = 1
+	}
+	if q.Page > 10000 {
+		q.Page = 10000
+	}
+	if q.PageSize < 1 {
+		q.PageSize = 30
 	}
 	if q.PageSize > 48 {
 		q.PageSize = 48

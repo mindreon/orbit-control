@@ -45,6 +45,12 @@ tags:
     description: Agent personas. Stored in Postgres when ORBIT_CONTROL_DB_URL is set.
   - name: mcp-connectors
     description: MCP connector launchers. Environment references are names only.
+  - name: mcp-market
+    description: |
+      Shared ModelScope plaza snapshot stored in this service. Listing reads
+      the local copy. Process start loads the shipped snapshot. This API does
+      not call modelscope.cn, does not store launch commands or hosted URLs,
+      and does not connect to a server.
   - name: skills
     description: |
       Shared SkillHub catalog stored in this service. Listing reads the local
@@ -724,6 +730,82 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorBody"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/mcp-market:
+    get:
+      tags: [mcp-market]
+      operationId: listMcpMarket
+      summary: List the stored ModelScope MCP plaza
+      description: |
+        Reads the plaza snapshot stored by this service. The handler does not
+        call modelscope.cn. Rows are display metadata only.
+      x-unimplemented: false
+      parameters:
+        - name: keyword
+          in: query
+          schema:
+            type: string
+        - name: category
+          in: query
+          schema:
+            type: string
+        - name: serviceType
+          in: query
+          schema:
+            type: string
+            enum: [hosted, local]
+        - name: needsOnline
+          in: query
+          schema:
+            type: string
+            enum: ["true", "false"]
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+        - name: pageSize
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 48
+      responses:
+        "200":
+          description: One page of the stored plaza. items is empty until startup stores the snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/McpMarketList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/mcp-market-categories:
+    get:
+      tags: [mcp-market]
+      operationId: listMcpMarketCategories
+      summary: List stored plaza categories
+      description: |
+        Reads category labels stored with the plaza snapshot. Counts follow
+        the needsOnline filter. Does not call modelscope.cn.
+      x-unimplemented: false
+      parameters:
+        - name: needsOnline
+          in: query
+          schema:
+            type: string
+            enum: ["true", "false"]
+      responses:
+        "200":
+          description: Category labels that have at least one stored server
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/McpMarketCategoryList"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -1616,6 +1698,81 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/McpConnector"
+    McpMarketServer:
+      type: object
+      additionalProperties: false
+      required: [id, name, summary, author, category, categoryName, categoryMore, calls, views, stars, verified, hosted, needsOnline]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        summary:
+          type: string
+        author:
+          type: string
+        category:
+          type: string
+        categoryName:
+          type: string
+        categoryMore:
+          type: integer
+        calls:
+          type: integer
+        views:
+          type: integer
+        stars:
+          type: integer
+        verified:
+          type: boolean
+        hosted:
+          type: boolean
+        needsOnline:
+          type: boolean
+          description: True when the server cannot be used without a network.
+    McpMarketList:
+      type: object
+      additionalProperties: false
+      required: [items, total, stored, plazaTotal, page, pageSize]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/McpMarketServer"
+        total:
+          type: integer
+        stored:
+          type: integer
+          description: Catalog size after the needsOnline filter, before keyword and category.
+        plazaTotal:
+          type: integer
+          description: Count labeled on the upstream plaza. The stored snapshot can be smaller.
+        page:
+          type: integer
+        pageSize:
+          type: integer
+    McpMarketCategory:
+      type: object
+      additionalProperties: false
+      required: [key, name, sortOrder, count]
+      properties:
+        key:
+          type: string
+        name:
+          type: string
+        sortOrder:
+          type: integer
+        count:
+          type: integer
+    McpMarketCategoryList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/McpMarketCategory"
     Skill:
       type: object
       additionalProperties: false

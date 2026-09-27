@@ -16,6 +16,7 @@ import (
 
 	"github.com/mindreon/orbit-control/internal/app"
 	"github.com/mindreon/orbit-control/internal/internalauth"
+	"github.com/mindreon/orbit-control/internal/mcpmarket"
 	"github.com/mindreon/orbit-control/internal/orch"
 	"github.com/mindreon/orbit-control/internal/skillhub"
 	"github.com/mindreon/orbit-control/internal/store"
@@ -211,6 +212,11 @@ func Handlers() (public, internal http.Handler, closeStore func(), err error) {
 	}
 	runtime := app.NewWithOptions(opts)
 	runtime.Limits = app.LimitsFromEnv()
+	// The plaza snapshot ships with this binary. GET /v1/mcp-market only reads
+	// the store. It does not call modelscope.cn.
+	if err := mcpmarket.Install(context.Background(), repo, defaultTenant); err != nil {
+		runtime.Log.Printf("mcp market: snapshot not stored: %v", err)
+	}
 	// The catalog is copied in the background. GET /v1/skills only reads the
 	// store. ORBIT_SKILLHUB_SYNC=0 turns the copy off.
 	if os.Getenv("ORBIT_SKILLHUB_SYNC") != "0" {
@@ -447,6 +453,32 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 		items, err := runtime.ListMcpConnectors(r.Context(), p.TenantID)
 		if err != nil {
 			writeAppErr(runtime.Log, w, err, "connector not found", http.StatusInternalServerError, "INTERNAL")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	}))
+	mux.HandleFunc("GET /v1/mcp-market", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		q := r.URL.Query()
+		page, _ := strconv.Atoi(q.Get("page"))
+		pageSize, _ := strconv.Atoi(q.Get("pageSize"))
+		list, err := runtime.ListMcpMarket(r.Context(), p.TenantID, store.McpMarketQuery{
+			Keyword:     q.Get("keyword"),
+			Category:    q.Get("category"),
+			ServiceType: q.Get("serviceType"),
+			NeedsOnline: q.Get("needsOnline"),
+			Page:        page,
+			PageSize:    pageSize,
+		})
+		if err != nil {
+			writeAppErr(runtime.Log, w, err, "market not found", http.StatusInternalServerError, "INTERNAL")
+			return
+		}
+		writeJSON(w, http.StatusOK, list)
+	}))
+	mux.HandleFunc("GET /v1/mcp-market-categories", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		items, err := runtime.ListMcpMarketCategories(r.Context(), p.TenantID, r.URL.Query().Get("needsOnline"))
+		if err != nil {
+			writeAppErr(runtime.Log, w, err, "market not found", http.StatusInternalServerError, "INTERNAL")
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"items": items})
