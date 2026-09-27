@@ -471,6 +471,14 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, list)
 	}))
+	mux.HandleFunc("GET /v1/skills/{handle}/{slug}", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		skill, err := runtime.GetSkill(r.Context(), p.TenantID, r.PathValue("handle"), r.PathValue("slug"))
+		if err != nil {
+			writeAppErr(runtime.Log, w, err, "skill not found", http.StatusInternalServerError, "INTERNAL")
+			return
+		}
+		writeJSON(w, http.StatusOK, skill)
+	}))
 	mux.HandleFunc("GET /v1/skill-categories", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		items, err := runtime.ListSkillCategories(r.Context(), p.TenantID)
 		if err != nil {

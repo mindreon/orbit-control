@@ -789,6 +789,43 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+  /v1/skills/{handle}/{slug}:
+    get:
+      tags: [skills]
+      operationId: getSkill
+      summary: Read one stored skill
+      description: |
+        Reads one row of the local catalog. The handler does not call
+        SkillHub, and it does not download or install the skill package.
+      x-unimplemented: false
+      parameters:
+        - name: handle
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The stored skill. The description is the saved summary, not a package file.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Skill"
+        "404":
+          description: No stored row matches this handle and slug
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
   /v1/skill-categories:
     get:
       tags: [skills]

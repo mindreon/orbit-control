@@ -78,6 +78,8 @@ type Repository interface {
 	// ListSkillCatalog reads the shared SkillHub copy. tenantID is required so
 	// only an authenticated caller can ask; rows are not scoped by tenant.
 	ListSkillCatalog(ctx context.Context, tenantID string, q SkillCatalogQuery) (SkillCatalogPage, error)
+	// GetSkill reads one stored row by id (handle/slug). It does not call SkillHub.
+	GetSkill(ctx context.Context, tenantID, id string) (SkillRecord, error)
 	// UpsertSkillCatalog inserts or refreshes catalog rows. An existing
 	// trending rank is left as it is.
 	UpsertSkillCatalog(ctx context.Context, tenantID string, rows []SkillRecord) error
@@ -296,6 +298,17 @@ func clipText(s string, n int) string {
 		return string(r[:n])
 	}
 	return s
+}
+
+// SkillPathID builds the catalog id from a URL handle and slug. Both parts
+// must be a single token. A slash, space, or empty part is rejected.
+func SkillPathID(handle, slug string) (string, bool) {
+	handle = NormalizeSkillQuery(SkillCatalogQuery{Category: handle}).Category
+	slug = NormalizeSkillQuery(SkillCatalogQuery{Category: slug}).Category
+	if handle == "" || slug == "" {
+		return "", false
+	}
+	return handle + "/" + slug, true
 }
 
 func clipToken(s string, n int) string {
