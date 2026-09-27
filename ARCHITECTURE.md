@@ -183,7 +183,9 @@ events replayed) and remove that switch.
 
 ## Still intentionally missing
 
-No OAuth, KMS, workspace membership policy, persisted persona/skill catalog,
-persisted credential grants, artifact store, or production service
-authentication.
+No OAuth, KMS, workspace membership policy, persisted credential grants,
+artifact store, or production service authentication.
+Personas and MCP connectors are stored per tenant. The SkillHub skill list
+is a shared local copy refreshed in the background; `GET /v1/skills` reads
+that copy and does not call SkillHub. Skill packages are not downloaded.
 Model and dsh execution remain outside this process.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -73,6 +74,21 @@ type Repository interface {
 	ListMcpConnectors(ctx context.Context, tenantID string) ([]McpConnectorRecord, error)
 	// CreateMcpConnector inserts one connector. EnvRefs are names, never values.
 	CreateMcpConnector(ctx context.Context, tenantID string, c McpConnectorRecord) error
+
+	// ListSkillCatalog reads the shared SkillHub copy. tenantID is required so
+	// only an authenticated caller can ask; rows are not scoped by tenant.
+	ListSkillCatalog(ctx context.Context, tenantID string, q SkillCatalogQuery) (SkillCatalogPage, error)
+	// UpsertSkillCatalog inserts or refreshes catalog rows. An existing
+	// trending rank is left as it is.
+	UpsertSkillCatalog(ctx context.Context, tenantID string, rows []SkillRecord) error
+	// ReplaceSkillTrending marks the current trending order. Ranks not in rows
+	// are cleared. This does not call SkillHub.
+	ReplaceSkillTrending(ctx context.Context, tenantID string, rows []SkillRecord) error
+	// ListSkillCategories returns category labels for the shared catalog.
+	ListSkillCategories(ctx context.Context, tenantID string) ([]SkillCategoryRecord, error)
+	// UpsertSkillCategories stores category labels. It does not delete keys
+	// that disappeared upstream.
+	UpsertSkillCategories(ctx context.Context, tenantID string, rows []SkillCategoryRecord) error
 
 	Close()
 }
@@ -177,4 +193,122 @@ type McpConnectorRecord struct {
 	Args      []string
 	EnvRefs   []string
 	CreatedAt time.Time
+}
+
+// SkillRecord is one row of the shared SkillHub catalog. It is display
+// metadata only: no package bytes and no secret values.
+type SkillRecord struct {
+	ID             string
+	Slug           string
+	Handle         string
+	Name           string
+	Description    string
+	Category       string
+	CategoryName   string
+	IconURL        string
+	Downloads      int64
+	Stars          int64
+	Source         string
+	Version        string
+	RequiresAPIKey bool
+	Paid           bool
+	Score          float64
+	UpdatedAt      time.Time
+	SyncedAt       time.Time
+	TrendingRank   int
+}
+
+// SkillCategoryRecord is a display label for SkillRecord.Category.
+type SkillCategoryRecord struct {
+	Key       string
+	Name      string
+	NameEn    string
+	SortOrder int
+}
+
+// SkillCatalogQuery selects a page of the local catalog.
+// Sort is score, downloads, updated_at, stars, or trending.
+// RequiresAPIKey and Paid are "", "true", or "false".
+type SkillCatalogQuery struct {
+	Sort           string
+	Category       string
+	Source         string
+	Keyword        string
+	RequiresAPIKey string
+	Paid           string
+	Page           int
+	PageSize       int
+}
+
+// SkillCatalogPage is one page plus the newest sync time (zero when empty).
+type SkillCatalogPage struct {
+	Items    []SkillRecord
+	Total    int
+	Page     int
+	PageSize int
+	SyncedAt time.Time
+}
+
+// NormalizeSkillQuery clamps a catalog query to the values the stores implement.
+func NormalizeSkillQuery(q SkillCatalogQuery) SkillCatalogQuery {
+	switch q.Sort {
+	case "downloads", "updated_at", "stars", "trending":
+	default:
+		q.Sort = "score"
+	}
+	q.Category = clipToken(q.Category, 64)
+	switch q.Source {
+	case "clawhub", "community", "enterprise":
+	default:
+		q.Source = ""
+	}
+	q.Keyword = clipText(q.Keyword, 80)
+	q.RequiresAPIKey = boolWord(q.RequiresAPIKey)
+	q.Paid = boolWord(q.Paid)
+	if q.Page < 1 {
+		q.Page = 1
+	}
+	if q.Page > 10000 {
+		q.Page = 10000
+	}
+	if q.PageSize < 1 {
+		q.PageSize = 24
+	}
+	if q.PageSize > 48 {
+		q.PageSize = 48
+	}
+	return q
+}
+
+func boolWord(v string) string {
+	switch strings.TrimSpace(strings.ToLower(v)) {
+	case "true", "false":
+		return strings.TrimSpace(strings.ToLower(v))
+	default:
+		return ""
+	}
+}
+
+func clipText(s string, n int) string {
+	s = strings.TrimSpace(strings.ReplaceAll(s, "\x00", ""))
+	r := []rune(s)
+	if len(r) > n {
+		return string(r[:n])
+	}
+	return s
+}
+
+func clipToken(s string, n int) string {
+	s = clipText(s, n)
+	if s == "" {
+		return ""
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.' || r == '_' || r == '-':
+		default:
+			return ""
+		}
+	}
+	return s
 }

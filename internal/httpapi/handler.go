@@ -17,6 +17,7 @@ import (
 	"github.com/mindreon/orbit-control/internal/app"
 	"github.com/mindreon/orbit-control/internal/internalauth"
 	"github.com/mindreon/orbit-control/internal/orch"
+	"github.com/mindreon/orbit-control/internal/skillhub"
 	"github.com/mindreon/orbit-control/internal/store"
 	"github.com/mindreon/orbit-control/internal/worker"
 )
@@ -210,6 +211,11 @@ func Handlers() (public, internal http.Handler, closeStore func(), err error) {
 	}
 	runtime := app.NewWithOptions(opts)
 	runtime.Limits = app.LimitsFromEnv()
+	// The catalog is copied in the background. GET /v1/skills only reads the
+	// store. ORBIT_SKILLHUB_SYNC=0 turns the copy off.
+	if os.Getenv("ORBIT_SKILLHUB_SYNC") != "0" {
+		go skillhub.Run(context.Background(), repo, defaultTenant, skillhub.NewClient(""), runtime.Log)
+	}
 	public = HandlerWithOptions(runtime, Options{
 		Auth:           authenticatorFromEnv(defaultTenant),
 		AllowedOrigins: allowedOriginsFromEnv(),
@@ -441,6 +447,34 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 		items, err := runtime.ListMcpConnectors(r.Context(), p.TenantID)
 		if err != nil {
 			writeAppErr(runtime.Log, w, err, "connector not found", http.StatusInternalServerError, "INTERNAL")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	}))
+	mux.HandleFunc("GET /v1/skills", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		q := r.URL.Query()
+		page, _ := strconv.Atoi(q.Get("page"))
+		pageSize, _ := strconv.Atoi(q.Get("pageSize"))
+		list, err := runtime.ListSkills(r.Context(), p.TenantID, store.SkillCatalogQuery{
+			Sort:           q.Get("sortBy"),
+			Category:       q.Get("category"),
+			Source:         q.Get("source"),
+			Keyword:        q.Get("keyword"),
+			RequiresAPIKey: q.Get("requiresApiKey"),
+			Paid:           q.Get("paid"),
+			Page:           page,
+			PageSize:       pageSize,
+		})
+		if err != nil {
+			writeAppErr(runtime.Log, w, err, "skill not found", http.StatusInternalServerError, "INTERNAL")
+			return
+		}
+		writeJSON(w, http.StatusOK, list)
+	}))
+	mux.HandleFunc("GET /v1/skill-categories", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		items, err := runtime.ListSkillCategories(r.Context(), p.TenantID)
+		if err != nil {
+			writeAppErr(runtime.Log, w, err, "skill not found", http.StatusInternalServerError, "INTERNAL")
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"items": items})
