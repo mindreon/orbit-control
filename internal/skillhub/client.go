@@ -1,5 +1,5 @@
-// Package skillhub copies the public SkillHub skill list into the local
-// catalog. It never downloads skill packages.
+// Package skillhub copies the public SkillHub catalog into local storage.
+// TextFiles also copies text out of one public package. It does not install it.
 package skillhub
 
 import (
@@ -21,6 +21,8 @@ const (
 	userAgent      = "orbit-skillhub/1.0"
 	maxBody        = 8 << 20
 	requestTimeout = 30 * time.Second
+	// packageHost is the only object host a skill download may redirect to.
+	packageHost = "skillhub-1388575217.cos.accelerate.myqcloud.com"
 )
 
 // Client talks only to the SkillHub host it was built with. The process
@@ -38,16 +40,8 @@ func NewClient(base string) *Client {
 	}
 	c := &Client{Base: strings.TrimRight(base, "/")}
 	c.HTTP = &http.Client{
-		Timeout: requestTimeout,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) == 0 || req.URL.Host != via[0].URL.Host {
-				return errors.New("skillhub redirect left the api host")
-			}
-			if len(via) >= 2 {
-				return errors.New("skillhub redirect")
-			}
-			return nil
-		},
+		Timeout:       requestTimeout,
+		CheckRedirect: allowRedirect,
 	}
 	return c
 }
@@ -144,6 +138,21 @@ func (c *Client) ListTrending(ctx context.Context) ([]store.SkillRecord, error) 
 		out = append(out, rec)
 	}
 	return out, nil
+}
+
+// allowRedirect keeps the client on the API host, or on one hop to the
+// fixed object host that serves the public zip. Other hosts are refused.
+func allowRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) != 1 || req.URL == nil || req.URL.User != nil {
+		return errors.New("skillhub redirect")
+	}
+	if req.URL.Host == via[0].URL.Host && req.URL.Scheme == via[0].URL.Scheme {
+		return nil
+	}
+	if req.URL.Scheme == "https" && strings.EqualFold(req.URL.Hostname(), packageHost) && req.URL.Port() == "" {
+		return nil
+	}
+	return errors.New("skillhub redirect left the api host")
 }
 
 func (c *Client) get(ctx context.Context, path string) ([]byte, error) {
