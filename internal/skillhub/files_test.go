@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/mindreon/orbit-control/internal/store"
 )
 
 func TestTextFilesFromZipKeepsMarkdownAndDropsUnsafePaths(t *testing.T) {
@@ -37,6 +39,46 @@ func TestTextFilesFromZipKeepsMarkdownAndDropsUnsafePaths(t *testing.T) {
 	if files[1].Path != "templates/01.md" {
 		t.Fatalf("second = %+v", files)
 	}
+}
+
+func TestTextFilesKeepsOverviewAheadOfTheRuneBudget(t *testing.T) {
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	write := func(name, body string) {
+		w, err := zw.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	big := strings.Repeat("x", 50000)
+	for _, name := range []string{"a.md", "b.md", "c.md", "d.md", "e.md"} {
+		write(name, big)
+	}
+	write("SKILL.md", "# 技能说明")
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	files, err := textFilesFromZip(buf.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		if file.Path == "SKILL.md" && strings.Contains(file.Body, "技能说明") {
+			return
+		}
+	}
+	t.Fatalf("overview missing from %+v", pathsOf(files))
+}
+
+func pathsOf(files []store.SkillFile) []string {
+	out := make([]string, len(files))
+	for i, file := range files {
+		out[i] = file.Path
+	}
+	return out
 }
 
 func TestSkillHandleFromCanonicalName(t *testing.T) {

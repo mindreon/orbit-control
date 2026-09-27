@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
 	"github.com/mindreon/orbit-control/internal/store"
 )
@@ -151,7 +152,87 @@ func (a *App) SkillPage(ctx context.Context, tenantID, handle, slug string, fetc
 	if !json.Valid(raw) {
 		return files, nil, nil
 	}
-	return files, raw, nil
+	files, raw = a.keepOverviewFile(ctx, tenantID, id, handle, slug, files, raw, fetchFiles)
+	return files, stripOverviewTried(raw), nil
+}
+
+// keepOverviewFile copies the package again when the file list names SKILL.md
+// but an earlier copy filled its budget before that file. One attempt is
+// remembered on the stored detail so a miss does not download on every view.
+func (a *App) keepOverviewFile(ctx context.Context, tenantID, id, handle, slug string, files []SkillTextFile, raw []byte, fetch func(context.Context, string, string) ([]store.SkillFile, error)) ([]SkillTextFile, []byte) {
+	if !overviewMissing(files, raw) || fetch == nil {
+		return files, raw
+	}
+	if fresh, err := fetch(ctx, handle, slug); err == nil {
+		if err := a.Repo.SaveSkillTextFiles(ctx, tenantID, id, fresh); err == nil {
+			files = make([]SkillTextFile, 0, len(fresh))
+			for _, file := range fresh {
+				files = append(files, SkillTextFile{Path: file.Path, Body: file.Body})
+			}
+		}
+	}
+	marked := markOverviewTried(raw)
+	if err := a.Repo.SaveSkillDetail(ctx, tenantID, id, marked); err != nil {
+		return files, raw
+	}
+	return files, marked
+}
+
+func overviewMissing(files []SkillTextFile, raw []byte) bool {
+	var meta struct {
+		FileIndex []struct {
+			Path string `json:"path"`
+		} `json:"fileIndex"`
+		OverviewTried bool `json:"overviewTried"`
+	}
+	if json.Unmarshal(raw, &meta) != nil || meta.OverviewTried {
+		return false
+	}
+	listed := false
+	for _, file := range meta.FileIndex {
+		if strings.EqualFold(file.Path, "SKILL.md") {
+			listed = true
+			break
+		}
+	}
+	if !listed {
+		return false
+	}
+	for _, file := range files {
+		if strings.EqualFold(file.Path, "SKILL.md") {
+			return false
+		}
+	}
+	return true
+}
+
+func markOverviewTried(raw []byte) []byte {
+	var meta map[string]json.RawMessage
+	if json.Unmarshal(raw, &meta) != nil {
+		return raw
+	}
+	meta["overviewTried"] = []byte("true")
+	out, err := json.Marshal(meta)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
+func stripOverviewTried(raw []byte) []byte {
+	var meta map[string]json.RawMessage
+	if json.Unmarshal(raw, &meta) != nil {
+		return raw
+	}
+	if _, ok := meta["overviewTried"]; !ok {
+		return raw
+	}
+	delete(meta, "overviewTried")
+	out, err := json.Marshal(meta)
+	if err != nil {
+		return raw
+	}
+	return out
 }
 
 func skillID(handle, slug string) (string, bool) {

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/url"
 	"path"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -54,7 +55,13 @@ func textFilesFromZip(body []byte) ([]store.SkillFile, error) {
 	}
 	out := make([]store.SkillFile, 0, 8)
 	var runes int
-	for _, file := range reader.File {
+	// The overview document is small. Take it before the rune budget is spent
+	// on later files in zip order.
+	ordered := append([]*zip.File(nil), reader.File...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return overviewRank(ordered[i].Name) < overviewRank(ordered[j].Name)
+	})
+	for _, file := range ordered {
 		if file.FileInfo().IsDir() {
 			continue
 		}
@@ -92,6 +99,21 @@ func textFilesFromZip(body []byte) ([]store.SkillFile, error) {
 		out = []store.SkillFile{}
 	}
 	return out, nil
+}
+
+func overviewRank(name string) int {
+	name = strings.TrimPrefix(strings.ReplaceAll(name, "\\", "/"), "/")
+	if strings.Contains(name, "/") {
+		return 2
+	}
+	switch strings.ToLower(name) {
+	case "skill.md":
+		return 0
+	case "readme.md", "skills.md":
+		return 1
+	default:
+		return 2
+	}
 }
 
 func safeZipPath(name string) (string, bool) {
