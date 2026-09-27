@@ -186,7 +186,9 @@ events replayed) and remove that switch.
 No OAuth, KMS, workspace membership policy, persisted credential grants,
 artifact store, or production service authentication.
 Personas and MCP connectors are stored per tenant. The SkillHub skill list
-is a shared local copy refreshed in the background. `GET /v1/skills` and
-`GET /v1/skills/{handle}/{slug}` read that copy and do not call SkillHub.
-Skill packages are not downloaded.
+is a shared local copy refreshed in the background. `GET /v1/skills`,
+`GET /v1/skills/{slug}`, and `GET /v1/skills/{handle}/{slug}` read that copy
+and do not call SkillHub. The first request for a skill's text files copies
+safe text out of the public package into that row. Later reads use the copy.
+Packages are not installed, and the page does not offer a download.
 Model and dsh execution remain outside this process.

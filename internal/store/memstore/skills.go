@@ -73,6 +73,45 @@ func (s *Store) GetSkill(_ context.Context, tenantID, id string) (store.SkillRec
 	return rec, nil
 }
 
+func (s *Store) GetSkillTextFiles(_ context.Context, tenantID, id string) ([]store.SkillFile, bool, error) {
+	if tenantID == "" || id == "" {
+		return nil, false, store.ErrNotFound
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.skills[id]
+	if !ok {
+		return nil, false, store.ErrNotFound
+	}
+	if !rec.FilesKnown {
+		return nil, false, nil
+	}
+	files := append([]store.SkillFile(nil), rec.TextFiles...)
+	if files == nil {
+		files = []store.SkillFile{}
+	}
+	return files, true, nil
+}
+
+func (s *Store) SaveSkillTextFiles(_ context.Context, tenantID, id string, files []store.SkillFile) error {
+	if tenantID == "" || id == "" {
+		return store.ErrNotFound
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.skills[id]
+	if !ok {
+		return store.ErrNotFound
+	}
+	if files == nil {
+		files = []store.SkillFile{}
+	}
+	rec.TextFiles = append([]store.SkillFile(nil), files...)
+	rec.FilesKnown = true
+	s.skills[id] = rec
+	return nil
+}
+
 func (s *Store) UpsertSkillCatalog(_ context.Context, tenantID string, rows []store.SkillRecord) error {
 	if tenantID == "" {
 		return store.ErrNotFound
@@ -88,12 +127,31 @@ func (s *Store) UpsertSkillCatalog(_ context.Context, tenantID string, rows []st
 		if prev, ok := s.skills[row.ID]; ok {
 			row.TrendingRank = prev.TrendingRank
 		}
+		s.keepSkillFiles(&row)
 		if row.SyncedAt.IsZero() {
 			row.SyncedAt = now
 		}
 		s.skills[row.ID] = row
 	}
 	return nil
+}
+
+// keepSkillFiles moves a slug-only row onto handle/slug and keeps text that
+// was already copied. The caller holds s.mu.
+func (s *Store) keepSkillFiles(row *store.SkillRecord) {
+	if row.Handle != "" && row.Slug != "" && row.ID == row.Handle+"/"+row.Slug {
+		if prev, ok := s.skills[row.Slug]; ok && prev.Handle == "" && prev.Slug == row.Slug {
+			if _, exists := s.skills[row.ID]; !exists {
+				delete(s.skills, row.Slug)
+				row.TextFiles = prev.TextFiles
+				row.FilesKnown = prev.FilesKnown
+			}
+		}
+	}
+	if prev, ok := s.skills[row.ID]; ok && prev.FilesKnown {
+		row.TextFiles = prev.TextFiles
+		row.FilesKnown = true
+	}
 }
 
 func (s *Store) ReplaceSkillTrending(_ context.Context, tenantID string, rows []store.SkillRecord) error {
@@ -112,6 +170,7 @@ func (s *Store) ReplaceSkillTrending(_ context.Context, tenantID string, rows []
 		if row.ID == "" {
 			continue
 		}
+		s.keepSkillFiles(&row)
 		if row.SyncedAt.IsZero() {
 			row.SyncedAt = now
 		}
@@ -216,6 +275,12 @@ func skillLess(a, b store.SkillRecord, sortBy string) bool {
 	default:
 		if a.Score != b.Score {
 			return a.Score > b.Score
+		}
+		if a.Downloads != b.Downloads {
+			return a.Downloads > b.Downloads
+		}
+		if a.Stars != b.Stars {
+			return a.Stars > b.Stars
 		}
 	}
 	return a.ID < b.ID

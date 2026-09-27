@@ -214,13 +214,14 @@ type rawSkill struct {
 	UpdatedAt     float64  `json:"updated_at"`
 	Labels        labelMap `json:"labels"`
 	Namespace     struct {
-		Handle string `json:"handle"`
+		Handle        string `json:"handle"`
+		CanonicalName string `json:"canonicalName"`
 	} `json:"namespace"`
 }
 
 func (raw rawSkill) record() (store.SkillRecord, bool) {
 	slug := store.NormalizeSkillQuery(store.SkillCatalogQuery{Category: raw.Slug}).Category
-	handle := store.NormalizeSkillQuery(store.SkillCatalogQuery{Category: raw.Namespace.Handle}).Category
+	handle := skillHandle(raw.Namespace.Handle, raw.Namespace.CanonicalName)
 	if slug == "" {
 		return store.SkillRecord{}, false
 	}
@@ -255,6 +256,18 @@ func (raw rawSkill) record() (store.SkillRecord, bool) {
 		Score:          raw.Score,
 		UpdatedAt:      unixTime(raw.UpdatedAt),
 	}, true
+}
+
+func skillHandle(handle, canonical string) string {
+	handle = store.NormalizeSkillQuery(store.SkillCatalogQuery{Category: handle}).Category
+	if handle != "" {
+		return handle
+	}
+	name := strings.TrimPrefix(strings.TrimSpace(canonical), "@")
+	if i := strings.Index(name, "/"); i > 0 {
+		return store.NormalizeSkillQuery(store.SkillCatalogQuery{Category: name[:i]}).Category
+	}
+	return ""
 }
 
 func clipRunes(s string, n int) string {

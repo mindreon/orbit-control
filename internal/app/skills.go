@@ -69,10 +69,10 @@ func (a *App) ListSkills(ctx context.Context, tenantID string, q store.SkillCata
 	}, nil
 }
 
-// GetSkill reads one stored skill. handle and slug come from the page URL.
-// A missing row and a malformed path both look the same to the caller.
+// GetSkill reads one stored skill. handle may be empty when the catalog row
+// has no author. A missing row and a malformed path both look the same.
 func (a *App) GetSkill(ctx context.Context, tenantID, handle, slug string) (Skill, error) {
-	id, ok := store.SkillPathID(handle, slug)
+	id, ok := skillID(handle, slug)
 	if !ok {
 		return Skill{}, store.ErrNotFound
 	}
@@ -81,6 +81,49 @@ func (a *App) GetSkill(ctx context.Context, tenantID, handle, slug string) (Skil
 		return Skill{}, err
 	}
 	return skillFrom(rec), nil
+}
+
+// SkillTextFile is one saved text file. Body is for reading on the page.
+type SkillTextFile struct {
+	Path string `json:"path"`
+	Body string `json:"body"`
+}
+
+// SkillTextFiles returns text copied from the skill package. The first call
+// for a row uses fetch and stores the result. Later calls only read the copy.
+func (a *App) SkillTextFiles(ctx context.Context, tenantID, handle, slug string, fetch func(context.Context, string, string) ([]store.SkillFile, error)) ([]SkillTextFile, error) {
+	id, ok := skillID(handle, slug)
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	files, known, err := a.Repo.GetSkillTextFiles(ctx, tenantID, id)
+	if err != nil {
+		return nil, err
+	}
+	if !known {
+		if fetch == nil {
+			return nil, store.ErrNotFound
+		}
+		files, err = fetch(ctx, handle, slug)
+		if err != nil {
+			return nil, err
+		}
+		if err := a.Repo.SaveSkillTextFiles(ctx, tenantID, id, files); err != nil {
+			return nil, err
+		}
+	}
+	out := make([]SkillTextFile, 0, len(files))
+	for _, file := range files {
+		out = append(out, SkillTextFile{Path: file.Path, Body: file.Body})
+	}
+	return out, nil
+}
+
+func skillID(handle, slug string) (string, bool) {
+	if handle == "" {
+		return store.SkillSlugID(slug)
+	}
+	return store.SkillPathID(handle, slug)
 }
 
 func skillFrom(rec store.SkillRecord) Skill {
