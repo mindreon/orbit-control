@@ -146,8 +146,8 @@ func (f *faultOrch) DecideOutcome(ctx context.Context, roomID, approvalRequestID
 func (f *faultOrch) ApprovalPending(ctx context.Context, roomID, approvalRequestID string) (bool, error) {
 	return f.inner.ApprovalPending(ctx, roomID, approvalRequestID)
 }
-func (f *faultOrch) StartRoom(ctx context.Context, roomID, kind, permissionPreset string) (orch.RoomView, error) {
-	return f.inner.StartRoom(ctx, roomID, kind, permissionPreset)
+func (f *faultOrch) StartRoom(ctx context.Context, roomID, kind, permissionPreset string, connectors []orch.McpConnectorSpec) (orch.RoomView, error) {
+	return f.inner.StartRoom(ctx, roomID, kind, permissionPreset, connectors)
 }
 func (f *faultOrch) RunTurn(ctx context.Context, roomID, turnID, message string) (orch.RunTurnResult, error) {
 	return f.inner.RunTurn(ctx, roomID, turnID, message)

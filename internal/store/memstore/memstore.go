@@ -63,6 +63,8 @@ type Store struct {
 	connectors      map[string]connectorRow
 	skills          map[string]store.SkillRecord
 	skillCategories map[string]store.SkillCategoryRecord
+	mcpMarket       map[string]store.McpMarketRecord
+	mcpCategories   map[string]store.McpMarketCategoryRecord
 }
 
 var _ store.Repository = (*Store)(nil)
@@ -78,6 +80,8 @@ func New() *Store {
 		connectors:      map[string]connectorRow{},
 		skills:          map[string]store.SkillRecord{},
 		skillCategories: map[string]store.SkillCategoryRecord{},
+		mcpMarket:       map[string]store.McpMarketRecord{},
+		mcpCategories:   map[string]store.McpMarketCategoryRecord{},
 	}
 }
 
@@ -372,6 +376,7 @@ func (s *Store) ListMcpConnectors(_ context.Context, tenantID string) ([]store.M
 		rec := row.rec
 		rec.Args = copyStrings(row.rec.Args)
 		rec.EnvRefs = copyStrings(row.rec.EnvRefs)
+		rec.HeaderRefs = copyStrings(row.rec.HeaderRefs)
 		out = append(out, rec)
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -394,6 +399,10 @@ func (s *Store) CreateMcpConnector(_ context.Context, tenantID string, c store.M
 	}
 	c.Args = copyStrings(c.Args)
 	c.EnvRefs = copyStrings(c.EnvRefs)
+	c.HeaderRefs = copyStrings(c.HeaderRefs)
+	if c.Transport == "" {
+		c.Transport = "stdio"
+	}
 	s.connectors[c.ID] = connectorRow{tenantID: tenantID, rec: c}
 	return nil
 }

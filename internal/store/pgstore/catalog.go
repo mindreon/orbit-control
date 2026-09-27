@@ -21,16 +21,23 @@ func scanPersona(row pgx.Row) (store.PersonaRecord, error) {
 
 func scanConnector(row pgx.Row) (store.McpConnectorRecord, error) {
 	var rec store.McpConnectorRecord
-	var args, refs []string
-	err := row.Scan(&rec.ID, &rec.Name, &rec.Command, &args, &refs, &rec.CreatedAt)
+	var args, refs, headers []string
+	err := row.Scan(
+		&rec.ID, &rec.Name, &rec.Transport, &rec.Command, &args, &refs,
+		&rec.URL, &headers, &rec.DefaultOpen, &rec.CreatedAt,
+	)
 	if args == nil {
 		args = []string{}
 	}
 	if refs == nil {
 		refs = []string{}
 	}
+	if headers == nil {
+		headers = []string{}
+	}
 	rec.Args = args
 	rec.EnvRefs = refs
+	rec.HeaderRefs = headers
 	return rec, err
 }
 
@@ -86,7 +93,7 @@ func (s *Store) ListMcpConnectors(ctx context.Context, tenantID string) ([]store
 	out := []store.McpConnectorRecord{}
 	err := s.inTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
-			SELECT id, name, command, args, env_refs, created_at
+			SELECT id, name, transport, command, args, env_refs, url, header_refs, default_open, created_at
 			  FROM mcp_connectors
 			 WHERE tenant_id = $1
 			 ORDER BY created_at DESC, id`,
@@ -122,11 +129,20 @@ func (s *Store) CreateMcpConnector(ctx context.Context, tenantID string, c store
 	if refs == nil {
 		refs = []string{}
 	}
+	headers := c.HeaderRefs
+	if headers == nil {
+		headers = []string{}
+	}
+	transport := c.Transport
+	if transport == "" {
+		transport = "stdio"
+	}
 	return s.inTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
-			INSERT INTO mcp_connectors (id, tenant_id, name, command, args, env_refs, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-			c.ID, tenantID, c.Name, c.Command, args, refs, c.CreatedAt)
+			INSERT INTO mcp_connectors (
+			  id, tenant_id, name, transport, command, args, env_refs, url, header_refs, default_open, created_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+			c.ID, tenantID, c.Name, transport, c.Command, args, refs, c.URL, headers, c.DefaultOpen, c.CreatedAt)
 		if err != nil {
 			return storageErr("insert mcp connector", err)
 		}

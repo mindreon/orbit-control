@@ -90,6 +90,8 @@ below has a written reason; a new grant needs a new line here first.
 | `events`, `messages`, `artifact_versions` | SELECT, INSERT; **no UPDATE, no DELETE** | Immutable history (review M-c): a written event, message or artifact version is never rewritten. |
 | `turns`, `artifacts` | SELECT, INSERT; **no UPDATE, no DELETE** | No P0 code path updates them. Phase 2 / the §16 PR add their columns here first (`turns.status`/`finished_at`, `artifacts.latest_version`/`updated_at`). |
 | `users`, `personas`, `mcp_connectors`, `cloud_agent_jobs` | SELECT, INSERT; **no UPDATE, no DELETE** | No P0 code path updates or deletes these rows (`UpsertUser` is `INSERT … ON CONFLICT DO NOTHING`). |
+| `mcp_market_servers` | SELECT, INSERT, UPDATE, DELETE | Shared plaza display rows, not tenant history and not under RLS. Process start replaces the shipped snapshot: `DELETE` the previous rows, then `INSERT` the new copy. No launch command, hosted URL, or secret is stored. |
+| `mcp_market_categories` | SELECT, INSERT, UPDATE | The fourteen plaza labels. Startup upserts them. Rows are not deleted. |
 | `approval_rules` | SELECT, INSERT, DELETE; **no UPDATE** | Revoking a rule deletes its row (§18.3; C23 / S-Rb-8). Rules are never edited in place. |
 | `idempotency_keys` | SELECT, INSERT, DELETE; **no UPDATE** | Expiry cleanup: an expired key for the same user is deleted before it is reused (`pgstore.createRoomOnce`). The `EXISTS(live room)` policy still hides keys of deleted tasks, so M1-1 is unaffected. |
 | `oidc_login_state` | SELECT, INSERT, DELETE; **no UPDATE** | One-time use: the callback consumes the row with `DELETE … RETURNING` (§18.3), and expired rows are cleaned up. |
