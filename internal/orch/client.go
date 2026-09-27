@@ -21,6 +21,24 @@ type Client struct {
 	taskQueue string
 }
 
+// McpHeaderRef is a header name plus the environment variable that holds its value.
+type McpHeaderRef struct {
+	Name string `json:"name"`
+	Env  string `json:"env"`
+}
+
+// McpConnectorSpec is the connector payload on RoomWorkflow. Values are absent.
+type McpConnectorSpec struct {
+	ID         string         `json:"id"`
+	Name       string         `json:"name"`
+	Transport  string         `json:"transport"`
+	Command    string         `json:"command,omitempty"`
+	Args       []string       `json:"args,omitempty"`
+	EnvRefs    []string       `json:"envRefs,omitempty"`
+	URL        string         `json:"url,omitempty"`
+	HeaderRefs []McpHeaderRef `json:"headerRefs,omitempty"`
+}
+
 type RoomView struct {
 	RoomID                   string `json:"roomId"`
 	State                    string `json:"state"`
@@ -77,22 +95,26 @@ func WorkflowID(roomID string) string {
 	return WorkflowRoomPrefix + roomID
 }
 
-func (c *Client) StartRoom(ctx context.Context, roomID, kind, permissionPreset string) (RoomView, error) {
+func (c *Client) StartRoom(ctx context.Context, roomID, kind, permissionPreset string, connectors []McpConnectorSpec) (RoomView, error) {
 	if kind == "" {
 		kind = "solo"
 	}
 	if permissionPreset == "" {
 		permissionPreset = "workspace-write"
 	}
+	input := map[string]any{
+		"roomId":           roomID,
+		"kind":             kind,
+		"permissionPreset": permissionPreset,
+	}
+	if len(connectors) > 0 {
+		input["mcpConnectors"] = connectors
+	}
 	_, err := c.tc.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
 		ID:                       WorkflowID(roomID),
 		TaskQueue:                c.taskQueue,
 		WorkflowExecutionTimeout: 24 * time.Hour,
-	}, "RoomWorkflow", map[string]any{
-		"roomId":           roomID,
-		"kind":             kind,
-		"permissionPreset": permissionPreset,
-	})
+	}, "RoomWorkflow", input)
 	if err != nil {
 		return RoomView{}, err
 	}

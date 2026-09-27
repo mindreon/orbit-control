@@ -65,12 +65,36 @@ func TestCatalogSurvivesNewProcessAndStaysInTenant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	connector, err := a.CreateMcpConnector(ctx, DefaultTenantID, "Docs", "npx", []string{"--header=demo"}, []string{"DOCS_TOKEN"})
+	connector, err := a.CreateMcpConnector(ctx, DefaultTenantID, McpConnectorInput{
+		Name: "Docs", Command: "npx", Args: []string{"--header=demo"}, EnvRefs: []string{"DOCS_TOKEN"},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.CreateMcpConnector(ctx, DefaultTenantID, "Bad", "true", nil, []string{"TOKEN=secret"}); err == nil {
+	if connector.Transport != "stdio" {
+		t.Fatalf("transport = %s", connector.Transport)
+	}
+	if _, err := a.CreateMcpConnector(ctx, DefaultTenantID, McpConnectorInput{
+		Name: "Bad", Command: "true", EnvRefs: []string{"TOKEN=secret"},
+	}); err == nil {
 		t.Fatal("env ref with a value was accepted")
+	}
+	if _, err := a.CreateMcpConnector(ctx, DefaultTenantID, McpConnectorInput{
+		Name: "Public", Transport: "streamable_http", URL: "http://mcp.example.com/mcp",
+	}); err == nil {
+		t.Fatal("public http url was accepted")
+	}
+	remote, err := a.CreateMcpConnector(ctx, DefaultTenantID, McpConnectorInput{
+		Name: "Remote", Transport: "streamable_http", URL: "https://mcp.example.com/mcp",
+		HeaderRefs: []HeaderRef{{Name: "Authorization", Env: "DOCS_TOKEN"}}, DefaultOpen: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.CreateMcpConnector(ctx, DefaultTenantID, McpConnectorInput{
+		Name: "Leaked", Transport: "streamable_http", URL: "https://mcp.example.com/mcp?token=hidden",
+	}); err == nil {
+		t.Fatal("url secret was accepted")
 	}
 	if _, err := a.CreatePersona(ctx, "other", "Hidden", "no", nil); err != nil {
 		t.Fatal(err)
@@ -89,8 +113,28 @@ func TestCatalogSurvivesNewProcessAndStaysInTenant(t *testing.T) {
 		t.Fatalf("other tenant = %+v err=%v", hidden, err)
 	}
 	connectors, err := b.ListMcpConnectors(ctx, DefaultTenantID)
-	if err != nil || len(connectors) != 1 || connectors[0].ID != connector.ID || connectors[0].Args[0] != "--header=demo" {
+	if err != nil || len(connectors) != 2 {
 		t.Fatalf("connectors = %+v err=%v", connectors, err)
+	}
+	foundDocs := false
+	for _, item := range connectors {
+		if item.ID == connector.ID && len(item.Args) == 1 && item.Args[0] == "--header=demo" {
+			foundDocs = true
+		}
+	}
+	if !foundDocs {
+		t.Fatalf("stdio connector missing: %+v", connectors)
+	}
+	selected, err := b.ConnectorsForRoom(ctx, DefaultTenantID, "")
+	if err != nil || len(selected) != 1 || selected[0].ID != remote.ID || selected[0].URL != "https://mcp.example.com/mcp" {
+		t.Fatalf("default open = %+v err=%v", selected, err)
+	}
+	if selected[0].HeaderRefs[0].Env != "DOCS_TOKEN" || selected[0].HeaderRefs[0].Name != "Authorization" {
+		t.Fatalf("header ref = %+v", selected[0].HeaderRefs)
+	}
+	linked, err := b.ConnectorsForRoom(ctx, DefaultTenantID, persona.ID)
+	if err != nil || len(linked) != 1 {
+		t.Fatalf("persona without links should still get default open, got %+v err=%v", linked, err)
 	}
 	loaded, _, _, err := b.CompositionForRoom(persona.ID, "")
 	if err != nil || loaded == nil || loaded.Name != "Reviewer" {

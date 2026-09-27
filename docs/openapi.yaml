@@ -701,8 +701,9 @@ paths:
       operationId: createMcpConnector
       summary: Create an MCP connector
       description: |
-        Stores the launch command and argument list. `envRefs` are environment
-        variable names. Values are rejected. Plaintext secrets are never accepted.
+        Stores how to reach an MCP server. `stdio` keeps a launch command.
+        `streamable_http` keeps a URL. `envRefs` and `headerRefs` are names.
+        Values are rejected. This API does not run the connector.
       x-unimplemented: false
       requestBody:
         required: true
@@ -718,7 +719,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/McpConnector"
         "400":
-          description: Missing name or command, or an env ref that includes a value
+          description: Missing name or launch target, or a name that includes a value
           content:
             application/json:
               schema:
@@ -1528,16 +1529,32 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Persona"
-    CreateMcpConnectorRequest:
+    McpHeaderRef:
       type: object
       additionalProperties: false
-      required: [name, command]
+      required: [name, env]
       properties:
         name:
           type: string
+          description: HTTP header name. Not a secret value.
+        env:
+          type: string
+          description: Environment variable name on the worker. Not a secret value.
+    CreateMcpConnectorRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name:
+          type: string
+        transport:
+          type: string
+          enum: [stdio, streamable_http]
+          default: stdio
+          description: stdio starts a local command. streamable_http connects to url.
         command:
           type: string
-          description: Executable used to start the MCP server. Not run by this API.
+          description: Executable used to start a stdio MCP server. Required for stdio. Not run by this API.
         args:
           type: array
           items:
@@ -1547,15 +1564,28 @@ components:
           items:
             type: string
           description: Environment variable names. Do not send values.
+        url:
+          type: string
+          description: Remote MCP URL. Required for streamable_http. Public hosts must use https.
+        headerRefs:
+          type: array
+          items:
+            $ref: "#/components/schemas/McpHeaderRef"
+        defaultOpen:
+          type: boolean
+          description: When true, a new room connects this connector even without a persona link.
     McpConnector:
       type: object
       additionalProperties: false
-      required: [id, name, command, createdAt]
+      required: [id, name, transport, command, defaultOpen, createdAt]
       properties:
         id:
           type: string
         name:
           type: string
+        transport:
+          type: string
+          enum: [stdio, streamable_http]
         command:
           type: string
         args:
@@ -1566,6 +1596,14 @@ components:
           type: array
           items:
             type: string
+        url:
+          type: string
+        headerRefs:
+          type: array
+          items:
+            $ref: "#/components/schemas/McpHeaderRef"
+        defaultOpen:
+          type: boolean
         createdAt:
           type: string
           format: date-time

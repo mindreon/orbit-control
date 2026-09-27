@@ -198,14 +198,19 @@ type PersonaRecord struct {
 	CreatedAt       time.Time
 }
 
-// McpConnectorRecord is one MCP launcher. EnvRefs are variable names only.
+// McpConnectorRecord is one MCP launcher. EnvRefs and HeaderRefs are names
+// only. HeaderRefs are stored as "Header-Name:ENV_NAME".
 type McpConnectorRecord struct {
-	ID        string
-	Name      string
-	Command   string
-	Args      []string
-	EnvRefs   []string
-	CreatedAt time.Time
+	ID          string
+	Name        string
+	Transport   string
+	Command     string
+	Args        []string
+	EnvRefs     []string
+	URL         string
+	HeaderRefs  []string
+	DefaultOpen bool
+	CreatedAt   time.Time
 }
 
 // SkillFile is one text file copied from a skill package for display.

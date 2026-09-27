@@ -431,7 +431,7 @@ type stubOrch struct {
 
 const planted = "sk-live-E2E-PLANTED-SECRET"
 
-func (f *stubOrch) StartRoom(_ context.Context, roomID, kind, _ string) (orch.RoomView, error) {
+func (f *stubOrch) StartRoom(_ context.Context, roomID, kind, _ string, _ []orch.McpConnectorSpec) (orch.RoomView, error) {
 	return orch.RoomView{RoomID: roomID, State: "running", Kind: kind, SessionID: fmt.Sprintf("sess-k-%d", f.seq.Add(1))}, nil
 }
 func (f *stubOrch) RunTurn(context.Context, string, string, string) (orch.RunTurnResult, error) {
