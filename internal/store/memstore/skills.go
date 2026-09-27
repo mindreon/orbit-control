@@ -112,6 +112,41 @@ func (s *Store) SaveSkillTextFiles(_ context.Context, tenantID, id string, files
 	return nil
 }
 
+func (s *Store) GetSkillDetail(_ context.Context, tenantID, id string) ([]byte, bool, error) {
+	if tenantID == "" || id == "" {
+		return nil, false, store.ErrNotFound
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.skills[id]
+	if !ok {
+		return nil, false, store.ErrNotFound
+	}
+	if !rec.DetailKnown {
+		return nil, false, nil
+	}
+	return append([]byte(nil), rec.DetailJSON...), true, nil
+}
+
+func (s *Store) SaveSkillDetail(_ context.Context, tenantID, id string, raw []byte) error {
+	if tenantID == "" || id == "" {
+		return store.ErrNotFound
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.skills[id]
+	if !ok {
+		return store.ErrNotFound
+	}
+	if raw == nil {
+		raw = []byte("{}")
+	}
+	rec.DetailJSON = append([]byte(nil), raw...)
+	rec.DetailKnown = true
+	s.skills[id] = rec
+	return nil
+}
+
 func (s *Store) UpsertSkillCatalog(_ context.Context, tenantID string, rows []store.SkillRecord) error {
 	if tenantID == "" {
 		return store.ErrNotFound
@@ -145,12 +180,20 @@ func (s *Store) keepSkillFiles(row *store.SkillRecord) {
 				delete(s.skills, row.Slug)
 				row.TextFiles = prev.TextFiles
 				row.FilesKnown = prev.FilesKnown
+				row.DetailJSON = append([]byte(nil), prev.DetailJSON...)
+				row.DetailKnown = prev.DetailKnown
 			}
 		}
 	}
-	if prev, ok := s.skills[row.ID]; ok && prev.FilesKnown {
-		row.TextFiles = prev.TextFiles
-		row.FilesKnown = true
+	if prev, ok := s.skills[row.ID]; ok {
+		if prev.FilesKnown {
+			row.TextFiles = prev.TextFiles
+			row.FilesKnown = true
+		}
+		if prev.DetailKnown {
+			row.DetailJSON = append([]byte(nil), prev.DetailJSON...)
+			row.DetailKnown = true
+		}
 	}
 }
 

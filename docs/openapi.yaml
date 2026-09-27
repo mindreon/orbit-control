@@ -865,8 +865,10 @@ paths:
       summary: Read text files saved for one skill
       description: |
         Returns text copied once from the public package so the page can show
-        it. Later calls read the stored copy and do not call SkillHub. The
-        files are not installed or executed, and this response is not a zip.
+        it, plus meta when the extra public page fields have been copied.
+        The first call may read SkillHub. Later calls read the stored copy.
+        The files are not installed or executed, and this response is not a zip.
+        meta omits signed report URLs.
       x-unimplemented: false
       parameters:
         - name: handle
@@ -1676,6 +1678,111 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/SkillTextFile"
+        meta:
+          $ref: "#/components/schemas/SkillPageMeta"
+    SkillPageMeta:
+      type: object
+      additionalProperties: false
+      description: |
+        Public page fields copied once. Absent until that copy exists.
+      properties:
+        summary:
+          type: string
+        summaryZh:
+          type: string
+        subCategories:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [key, name]
+            properties:
+              key:
+                type: string
+              name:
+                type: string
+        safe:
+          type: boolean
+        score:
+          type: number
+          description: AI score on a 0 to 5 scale, from the public evaluation.
+        version:
+          type: string
+        updatedAt:
+          type: integer
+          description: Unix milliseconds.
+        versionCreatedAt:
+          type: integer
+          description: Unix milliseconds.
+        fileIndex:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [path, size]
+            properties:
+              path:
+                type: string
+              size:
+                type: integer
+        versions:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [version]
+            properties:
+              version:
+                type: string
+              changelog:
+                type: string
+              createdAt:
+                type: integer
+        evaluation:
+          type: object
+          additionalProperties: false
+          required: [score, dimensions]
+          properties:
+            userSummary:
+              type: string
+            createdAt:
+              type: integer
+            score:
+              type: number
+            dimensions:
+              type: array
+              items:
+                type: object
+                additionalProperties: false
+                required: [key, label, labelZh, score]
+                properties:
+                  key:
+                    type: string
+                  label:
+                    type: string
+                  labelZh:
+                    type: string
+                  description:
+                    type: string
+                  score:
+                    type: number
+                  summary:
+                    type: string
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [key, name, score]
+                      properties:
+                        key:
+                          type: string
+                        name:
+                          type: string
+                        score:
+                          type: number
+                        reason:
+                          type: string
     CreateCloudAgentRequest:
       type: object
       additionalProperties: false

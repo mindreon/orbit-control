@@ -148,6 +148,49 @@ func (s *Store) SaveSkillTextFiles(ctx context.Context, tenantID, id string, fil
 	})
 }
 
+func (s *Store) GetSkillDetail(ctx context.Context, tenantID, id string) ([]byte, bool, error) {
+	if tenantID == "" || id == "" {
+		return nil, false, store.ErrNotFound
+	}
+	var raw []byte
+	err := s.withTx(ctx, func(tx pgx.Tx) error {
+		err := tx.QueryRow(ctx, `SELECT detail_copy FROM skill_catalog WHERE id = $1`, id).Scan(&raw)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return store.ErrNotFound
+		}
+		if err != nil {
+			return storageErr("get skill detail", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	if raw == nil {
+		return nil, false, nil
+	}
+	return raw, true, nil
+}
+
+func (s *Store) SaveSkillDetail(ctx context.Context, tenantID, id string, raw []byte) error {
+	if tenantID == "" || id == "" {
+		return store.ErrNotFound
+	}
+	if raw == nil {
+		raw = []byte("{}")
+	}
+	return s.withTx(ctx, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE skill_catalog SET detail_copy = $2 WHERE id = $1`, id, raw)
+		if err != nil {
+			return storageErr("save skill detail", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return store.ErrNotFound
+		}
+		return nil
+	})
+}
+
 func scanSkill(row pgx.Row) (store.SkillRecord, error) {
 	var rec store.SkillRecord
 	err := row.Scan(

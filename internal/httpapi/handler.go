@@ -480,12 +480,17 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 		writeJSON(w, http.StatusOK, skill)
 	}
 	writeSkillFiles := func(w http.ResponseWriter, r *http.Request, p app.Principal, handle, slug string) {
-		files, err := runtime.SkillTextFiles(r.Context(), p.TenantID, handle, slug, skillhub.NewClient("").TextFiles)
+		client := skillhub.NewClient("")
+		files, meta, err := runtime.SkillPage(r.Context(), p.TenantID, handle, slug, client.TextFiles, client.PageCopy)
 		if err != nil {
 			writeAppErr(runtime.Log, w, err, "skill not found", http.StatusInternalServerError, "INTERNAL")
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"items": files})
+		body := map[string]any{"items": files}
+		if len(meta) > 0 {
+			body["meta"] = json.RawMessage(meta)
+		}
+		writeJSON(w, http.StatusOK, body)
 	}
 	mux.HandleFunc("GET /v1/skills/{handle}/{slug}", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		writeSkill(w, r, p, r.PathValue("handle"), r.PathValue("slug"))

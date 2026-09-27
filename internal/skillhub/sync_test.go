@@ -108,6 +108,9 @@ func TestSlugOnlyRowAdoptsHandleAndKeepsText(t *testing.T) {
 	if err := repo.SaveSkillTextFiles(ctx, "default", "weekly", []store.SkillFile{{Path: "SKILL.md", Body: "你好"}}); err != nil {
 		t.Fatal(err)
 	}
+	if err := repo.SaveSkillDetail(ctx, "default", "weekly", []byte(`{"summaryZh":"周报"}`)); err != nil {
+		t.Fatal(err)
+	}
 	row.Handle = "demo"
 	row.ID = "demo/weekly"
 	if err := repo.UpsertSkillCatalog(ctx, "default", []store.SkillRecord{row}); err != nil {
@@ -123,6 +126,10 @@ func TestSlugOnlyRowAdoptsHandleAndKeepsText(t *testing.T) {
 	files, known, err := repo.GetSkillTextFiles(ctx, "default", "demo/weekly")
 	if err != nil || !known || len(files) != 1 || files[0].Body != "你好" {
 		t.Fatalf("files=%+v known=%v err=%v", files, known, err)
+	}
+	detail, detailKnown, err := repo.GetSkillDetail(ctx, "default", "demo/weekly")
+	if err != nil || !detailKnown || string(detail) != `{"summaryZh":"周报"}` {
+		t.Fatalf("detail=%s known=%v err=%v", detail, detailKnown, err)
 	}
 }
 

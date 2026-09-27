@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/mindreon/orbit-control/internal/store"
 )
@@ -117,6 +118,40 @@ func (a *App) SkillTextFiles(ctx context.Context, tenantID, handle, slug string,
 		out = append(out, SkillTextFile{Path: file.Path, Body: file.Body})
 	}
 	return out, nil
+}
+
+// SkillPage is the saved text plus the extra public fields the skill page
+// shows. Meta is nil until that copy exists. A failed detail copy does not
+// hide text that was already saved, and it is not marked saved.
+func (a *App) SkillPage(ctx context.Context, tenantID, handle, slug string, fetchFiles func(context.Context, string, string) ([]store.SkillFile, error), fetchMeta func(context.Context, string, string) ([]byte, error)) ([]SkillTextFile, []byte, error) {
+	files, err := a.SkillTextFiles(ctx, tenantID, handle, slug, fetchFiles)
+	if err != nil {
+		return nil, nil, err
+	}
+	id, ok := skillID(handle, slug)
+	if !ok {
+		return nil, nil, store.ErrNotFound
+	}
+	raw, known, err := a.Repo.GetSkillDetail(ctx, tenantID, id)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !known {
+		if fetchMeta == nil {
+			return files, nil, nil
+		}
+		raw, err = fetchMeta(ctx, handle, slug)
+		if err != nil || !json.Valid(raw) {
+			return files, nil, nil
+		}
+		if err := a.Repo.SaveSkillDetail(ctx, tenantID, id, raw); err != nil {
+			return files, raw, nil
+		}
+	}
+	if !json.Valid(raw) {
+		return files, nil, nil
+	}
+	return files, raw, nil
 }
 
 func skillID(handle, slug string) (string, bool) {
