@@ -2,6 +2,7 @@ package pgstore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -10,6 +11,10 @@ import (
 
 	"github.com/mindreon/orbit-control/internal/store"
 )
+
+const skillSelect = `s.id, s.slug, s.handle, s.name, s.description, s.category,
+	COALESCE(c.name, ''), s.icon_url, s.downloads, s.stars, s.source,
+	s.version, s.requires_api_key, s.paid, s.score, s.updated_at, s.trending_rank`
 
 // skill_catalog and skill_categories are shared marketplace metadata. They
 // are not [T] tables: statements do not filter by tenant_id. tenantID is
@@ -39,9 +44,7 @@ func (s *Store) ListSkillCatalog(ctx context.Context, tenantID string, q store.S
 		}
 		limit := len(args) + 1
 		offset := len(args) + 2
-		listSQL := `SELECT s.id, s.slug, s.handle, s.name, s.description, s.category,
-		                   COALESCE(c.name, ''), s.icon_url, s.downloads, s.stars, s.source,
-		                   s.version, s.requires_api_key, s.paid, s.score, s.updated_at, s.trending_rank
+		listSQL := `SELECT ` + skillSelect + `
 		              FROM skill_catalog s
 		              LEFT JOIN skill_categories c ON c.key = s.category
 		             WHERE ` + where + `
@@ -53,12 +56,8 @@ func (s *Store) ListSkillCatalog(ctx context.Context, tenantID string, q store.S
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var rec store.SkillRecord
-			if err := rows.Scan(
-				&rec.ID, &rec.Slug, &rec.Handle, &rec.Name, &rec.Description, &rec.Category,
-				&rec.CategoryName, &rec.IconURL, &rec.Downloads, &rec.Stars, &rec.Source,
-				&rec.Version, &rec.RequiresAPIKey, &rec.Paid, &rec.Score, &rec.UpdatedAt, &rec.TrendingRank,
-			); err != nil {
+			rec, err := scanSkill(rows)
+			if err != nil {
 				return storageErr("scan skill catalog", err)
 			}
 			page.Items = append(page.Items, rec)
@@ -69,6 +68,39 @@ func (s *Store) ListSkillCatalog(ctx context.Context, tenantID string, q store.S
 		return nil
 	})
 	return page, err
+}
+
+func (s *Store) GetSkill(ctx context.Context, tenantID, id string) (store.SkillRecord, error) {
+	if tenantID == "" || id == "" {
+		return store.SkillRecord{}, store.ErrNotFound
+	}
+	var rec store.SkillRecord
+	err := s.withTx(ctx, func(tx pgx.Tx) error {
+		row, err := scanSkill(tx.QueryRow(ctx, `
+			SELECT `+skillSelect+`
+			  FROM skill_catalog s
+			  LEFT JOIN skill_categories c ON c.key = s.category
+			 WHERE s.id = $1`, id))
+		if errors.Is(err, pgx.ErrNoRows) {
+			return store.ErrNotFound
+		}
+		if err != nil {
+			return storageErr("get skill", err)
+		}
+		rec = row
+		return nil
+	})
+	return rec, err
+}
+
+func scanSkill(row pgx.Row) (store.SkillRecord, error) {
+	var rec store.SkillRecord
+	err := row.Scan(
+		&rec.ID, &rec.Slug, &rec.Handle, &rec.Name, &rec.Description, &rec.Category,
+		&rec.CategoryName, &rec.IconURL, &rec.Downloads, &rec.Stars, &rec.Source,
+		&rec.Version, &rec.RequiresAPIKey, &rec.Paid, &rec.Score, &rec.UpdatedAt, &rec.TrendingRank,
+	)
+	return rec, err
 }
 
 func (s *Store) UpsertSkillCatalog(ctx context.Context, tenantID string, rows []store.SkillRecord) error {

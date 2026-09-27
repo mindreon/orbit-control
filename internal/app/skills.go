@@ -54,25 +54,7 @@ func (a *App) ListSkills(ctx context.Context, tenantID string, q store.SkillCata
 	}
 	items := make([]Skill, 0, len(page.Items))
 	for _, rec := range page.Items {
-		items = append(items, Skill{
-			ID:             rec.ID,
-			Slug:           rec.Slug,
-			Handle:         rec.Handle,
-			Name:           rec.Name,
-			Description:    rec.Description,
-			Category:       rec.Category,
-			CategoryName:   rec.CategoryName,
-			IconURL:        rec.IconURL,
-			Downloads:      rec.Downloads,
-			Stars:          rec.Stars,
-			Source:         rec.Source,
-			Version:        rec.Version,
-			RequiresAPIKey: rec.RequiresAPIKey,
-			Paid:           rec.Paid,
-			Score:          rec.Score,
-			UpdatedAt:      stamp(rec.UpdatedAt),
-			TrendingRank:   rec.TrendingRank,
-		})
+		items = append(items, skillFrom(rec))
 	}
 	synced := ""
 	if !page.SyncedAt.IsZero() {
@@ -85,6 +67,42 @@ func (a *App) ListSkills(ctx context.Context, tenantID string, q store.SkillCata
 		PageSize: page.PageSize,
 		SyncedAt: synced,
 	}, nil
+}
+
+// GetSkill reads one stored skill. handle and slug come from the page URL.
+// A missing row and a malformed path both look the same to the caller.
+func (a *App) GetSkill(ctx context.Context, tenantID, handle, slug string) (Skill, error) {
+	id, ok := store.SkillPathID(handle, slug)
+	if !ok {
+		return Skill{}, store.ErrNotFound
+	}
+	rec, err := a.Repo.GetSkill(ctx, tenantID, id)
+	if err != nil {
+		return Skill{}, err
+	}
+	return skillFrom(rec), nil
+}
+
+func skillFrom(rec store.SkillRecord) Skill {
+	return Skill{
+		ID:             rec.ID,
+		Slug:           rec.Slug,
+		Handle:         rec.Handle,
+		Name:           rec.Name,
+		Description:    rec.Description,
+		Category:       rec.Category,
+		CategoryName:   rec.CategoryName,
+		IconURL:        rec.IconURL,
+		Downloads:      rec.Downloads,
+		Stars:          rec.Stars,
+		Source:         rec.Source,
+		Version:        rec.Version,
+		RequiresAPIKey: rec.RequiresAPIKey,
+		Paid:           rec.Paid,
+		Score:          rec.Score,
+		UpdatedAt:      stamp(rec.UpdatedAt),
+		TrendingRank:   rec.TrendingRank,
+	}
 }
 
 // ListSkillCategories reads stored labels. It does not call SkillHub.

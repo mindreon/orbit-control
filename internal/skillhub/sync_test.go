@@ -2,6 +2,7 @@ package skillhub
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -80,6 +81,19 @@ func TestSyncOnceStoresLocallyAndListDoesNotCallUpstream(t *testing.T) {
 	}
 	if _, err := repo.ListSkillCatalog(ctx, "", store.SkillCatalogQuery{}); err == nil {
 		t.Fatal("empty tenant was accepted")
+	}
+	one, err := repo.GetSkill(ctx, "default", "demo/weekly")
+	if err != nil || one.Name != "周报汇总" || one.CategoryName != "办公效率" || one.Handle != "demo" {
+		t.Fatalf("get skill = %+v err=%v", one, err)
+	}
+	if hits != before {
+		t.Fatal("reading one skill called upstream")
+	}
+	if _, err := repo.GetSkill(ctx, "default", "missing/skill"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("missing skill err=%v", err)
+	}
+	if _, err := repo.GetSkill(ctx, "", "demo/weekly"); err == nil {
+		t.Fatal("empty tenant was accepted for one skill")
 	}
 }
 

@@ -57,6 +57,22 @@ func (s *Store) ListSkillCatalog(_ context.Context, tenantID string, q store.Ski
 	}, nil
 }
 
+func (s *Store) GetSkill(_ context.Context, tenantID, id string) (store.SkillRecord, error) {
+	if tenantID == "" || id == "" {
+		return store.SkillRecord{}, store.ErrNotFound
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.skills[id]
+	if !ok {
+		return store.SkillRecord{}, store.ErrNotFound
+	}
+	if cat, found := s.skillCategories[rec.Category]; found {
+		rec.CategoryName = cat.Name
+	}
+	return rec, nil
+}
+
 func (s *Store) UpsertSkillCatalog(_ context.Context, tenantID string, rows []store.SkillRecord) error {
 	if tenantID == "" {
 		return store.ErrNotFound
