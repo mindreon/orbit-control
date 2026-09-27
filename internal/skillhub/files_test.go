@@ -24,6 +24,8 @@ func TestTextFilesFromZipKeepsMarkdownAndDropsUnsafePaths(t *testing.T) {
 	}
 	write("SKILL.md", "# 周报\n只阅读")
 	write("templates/01.md", "模板")
+	write("hooks/secret_scan.py", "scan")
+	write("docs/password-reset.md", "重置")
 	write("../secret.md", "nope")
 	write(".env", "TOKEN=value")
 	write("notes.bin", "abc")
@@ -34,11 +36,11 @@ func TestTextFilesFromZipKeepsMarkdownAndDropsUnsafePaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) != 2 || files[0].Path != "SKILL.md" || !strings.Contains(files[0].Body, "周报") {
+	if len(files) != 4 || files[0].Path != "SKILL.md" || !strings.Contains(files[0].Body, "周报") {
 		t.Fatalf("files = %+v", files)
 	}
-	if files[1].Path != "templates/01.md" {
-		t.Fatalf("second = %+v", files)
+	if files[1].Path != "templates/01.md" || files[2].Path != "hooks/secret_scan.py" || files[3].Path != "docs/password-reset.md" {
+		t.Fatalf("paths = %+v", pathsOf(files))
 	}
 }
 

@@ -163,13 +163,16 @@ func (a *App) keepMissingText(ctx context.Context, tenantID, id, handle, slug st
 	if !textMissing(files, raw) || fetch == nil {
 		return files, raw
 	}
-	if fresh, err := fetch(ctx, handle, slug); err == nil {
-		if err := a.Repo.SaveSkillTextFiles(ctx, tenantID, id, fresh); err == nil {
-			files = make([]SkillTextFile, 0, len(fresh))
-			for _, file := range fresh {
-				files = append(files, SkillTextFile{Path: file.Path, Body: file.Body})
-			}
-		}
+	fresh, err := fetch(ctx, handle, slug)
+	if err != nil {
+		return files, raw
+	}
+	if err := a.Repo.SaveSkillTextFiles(ctx, tenantID, id, fresh); err != nil {
+		return files, raw
+	}
+	files = make([]SkillTextFile, 0, len(fresh))
+	for _, file := range fresh {
+		files = append(files, SkillTextFile{Path: file.Path, Body: file.Body})
 	}
 	marked := markCopyFlag(raw, "filesTried")
 	if err := a.Repo.SaveSkillDetail(ctx, tenantID, id, marked); err != nil {
