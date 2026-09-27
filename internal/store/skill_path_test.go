@@ -16,4 +16,11 @@ func TestSkillPathID(t *testing.T) {
 	if _, ok := SkillPathID("has space", "slug"); ok {
 		t.Fatal("a space was accepted")
 	}
+	slug, ok := SkillSlugID("academic-research-skills")
+	if !ok || slug != "academic-research-skills" {
+		t.Fatalf("slug=%q ok=%v", slug, ok)
+	}
+	if _, ok := SkillSlugID("bad/slug"); ok {
+		t.Fatal("a slash in the slug was accepted")
+	}
 }

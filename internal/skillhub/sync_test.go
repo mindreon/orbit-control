@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mindreon/orbit-control/internal/store"
 	"github.com/mindreon/orbit-control/internal/store/memstore"
@@ -94,6 +95,34 @@ func TestSyncOnceStoresLocallyAndListDoesNotCallUpstream(t *testing.T) {
 	}
 	if _, err := repo.GetSkill(ctx, "", "demo/weekly"); err == nil {
 		t.Fatal("empty tenant was accepted for one skill")
+	}
+}
+
+func TestSlugOnlyRowAdoptsHandleAndKeepsText(t *testing.T) {
+	repo := memstore.New()
+	ctx := context.Background()
+	row := store.SkillRecord{ID: "weekly", Slug: "weekly", Name: "周报", UpdatedAt: time.Unix(1, 0).UTC()}
+	if err := repo.UpsertSkillCatalog(ctx, "default", []store.SkillRecord{row}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SaveSkillTextFiles(ctx, "default", "weekly", []store.SkillFile{{Path: "SKILL.md", Body: "你好"}}); err != nil {
+		t.Fatal(err)
+	}
+	row.Handle = "demo"
+	row.ID = "demo/weekly"
+	if err := repo.UpsertSkillCatalog(ctx, "default", []store.SkillRecord{row}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.GetSkill(ctx, "default", "weekly"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("old id err=%v", err)
+	}
+	got, err := repo.GetSkill(ctx, "default", "demo/weekly")
+	if err != nil || got.Handle != "demo" {
+		t.Fatalf("adopted = %+v err=%v", got, err)
+	}
+	files, known, err := repo.GetSkillTextFiles(ctx, "default", "demo/weekly")
+	if err != nil || !known || len(files) != 1 || files[0].Body != "你好" {
+		t.Fatalf("files=%+v known=%v err=%v", files, known, err)
 	}
 }
 

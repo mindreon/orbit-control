@@ -2,6 +2,7 @@ package pgstore
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -91,6 +92,60 @@ func (s *Store) GetSkill(ctx context.Context, tenantID, id string) (store.SkillR
 		return nil
 	})
 	return rec, err
+}
+
+func (s *Store) GetSkillTextFiles(ctx context.Context, tenantID, id string) ([]store.SkillFile, bool, error) {
+	if tenantID == "" || id == "" {
+		return nil, false, store.ErrNotFound
+	}
+	var raw []byte
+	err := s.withTx(ctx, func(tx pgx.Tx) error {
+		err := tx.QueryRow(ctx, `SELECT text_files FROM skill_catalog WHERE id = $1`, id).Scan(&raw)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return store.ErrNotFound
+		}
+		if err != nil {
+			return storageErr("get skill text", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	if raw == nil {
+		return nil, false, nil
+	}
+	var files []store.SkillFile
+	if err := json.Unmarshal(raw, &files); err != nil {
+		return nil, false, storageErr("decode skill text", err)
+	}
+	if files == nil {
+		files = []store.SkillFile{}
+	}
+	return files, true, nil
+}
+
+func (s *Store) SaveSkillTextFiles(ctx context.Context, tenantID, id string, files []store.SkillFile) error {
+	if tenantID == "" || id == "" {
+		return store.ErrNotFound
+	}
+	if files == nil {
+		files = []store.SkillFile{}
+	}
+	raw, err := json.Marshal(files)
+	if err != nil {
+		return store.ErrStorage
+	}
+	return s.withTx(ctx, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE skill_catalog SET text_files = $2 WHERE id = $1`, id, raw)
+		if err != nil {
+			return storageErr("save skill text", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return store.ErrNotFound
+		}
+		return nil
+	})
 }
 
 func scanSkill(row pgx.Row) (store.SkillRecord, error) {
@@ -189,6 +244,15 @@ func (s *Store) queueSkills(ctx context.Context, tx pgx.Tx, rows []store.SkillRe
 	}
 	batch := &pgx.Batch{}
 	for _, row := range rows {
+		if row.Handle != "" && row.Slug != "" && row.ID == row.Handle+"/"+row.Slug {
+			// A skill that arrived without an author handle was stored under
+			// the slug alone. Once the handle is known, keep that same row.
+			batch.Queue(`
+				UPDATE skill_catalog SET id = $1, handle = $2
+				 WHERE id = $3 AND handle = '' AND slug = $3
+				   AND NOT EXISTS (SELECT 1 FROM skill_catalog existing WHERE existing.id = $1)`,
+				row.ID, row.Handle, row.Slug)
+		}
 		if withRank {
 			batch.Queue(`
 				INSERT INTO skill_catalog (
@@ -321,7 +385,7 @@ func skillOrder(sort string) string {
 	case "trending":
 		return "s.trending_rank ASC, s.id"
 	default:
-		return "s.score DESC, s.id"
+		return "s.score DESC, s.downloads DESC, s.stars DESC, s.id"
 	}
 }
 

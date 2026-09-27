@@ -78,8 +78,14 @@ type Repository interface {
 	// ListSkillCatalog reads the shared SkillHub copy. tenantID is required so
 	// only an authenticated caller can ask; rows are not scoped by tenant.
 	ListSkillCatalog(ctx context.Context, tenantID string, q SkillCatalogQuery) (SkillCatalogPage, error)
-	// GetSkill reads one stored row by id (handle/slug). It does not call SkillHub.
+	// GetSkill reads one stored row by id (handle/slug, or slug when there is no handle).
+	// It does not call SkillHub.
 	GetSkill(ctx context.Context, tenantID, id string) (SkillRecord, error)
+	// GetSkillTextFiles reads text copied out of a skill package. known is false
+	// until the first successful copy. It does not call SkillHub.
+	GetSkillTextFiles(ctx context.Context, tenantID, id string) (files []SkillFile, known bool, err error)
+	// SaveSkillTextFiles stores that copy. Later reads do not download the package again.
+	SaveSkillTextFiles(ctx context.Context, tenantID, id string, files []SkillFile) error
 	// UpsertSkillCatalog inserts or refreshes catalog rows. An existing
 	// trending rank is left as it is.
 	UpsertSkillCatalog(ctx context.Context, tenantID string, rows []SkillRecord) error
@@ -197,6 +203,13 @@ type McpConnectorRecord struct {
 	CreatedAt time.Time
 }
 
+// SkillFile is one text file copied from a skill package for display.
+// The process does not run it.
+type SkillFile struct {
+	Path string `json:"path"`
+	Body string `json:"body"`
+}
+
 // SkillRecord is one row of the shared SkillHub catalog. It is display
 // metadata only: no package bytes and no secret values.
 type SkillRecord struct {
@@ -218,6 +231,8 @@ type SkillRecord struct {
 	UpdatedAt      time.Time
 	SyncedAt       time.Time
 	TrendingRank   int
+	TextFiles      []SkillFile
+	FilesKnown     bool
 }
 
 // SkillCategoryRecord is a display label for SkillRecord.Category.
@@ -298,6 +313,15 @@ func clipText(s string, n int) string {
 		return string(r[:n])
 	}
 	return s
+}
+
+// SkillSlugID is the catalog id for a skill that has no author handle.
+func SkillSlugID(slug string) (string, bool) {
+	slug = NormalizeSkillQuery(SkillCatalogQuery{Category: slug}).Category
+	if slug == "" {
+		return "", false
+	}
+	return slug, true
 }
 
 // SkillPathID builds the catalog id from a URL handle and slug. Both parts

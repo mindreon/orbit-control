@@ -471,13 +471,33 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, list)
 	}))
-	mux.HandleFunc("GET /v1/skills/{handle}/{slug}", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
-		skill, err := runtime.GetSkill(r.Context(), p.TenantID, r.PathValue("handle"), r.PathValue("slug"))
+	writeSkill := func(w http.ResponseWriter, r *http.Request, p app.Principal, handle, slug string) {
+		skill, err := runtime.GetSkill(r.Context(), p.TenantID, handle, slug)
 		if err != nil {
 			writeAppErr(runtime.Log, w, err, "skill not found", http.StatusInternalServerError, "INTERNAL")
 			return
 		}
 		writeJSON(w, http.StatusOK, skill)
+	}
+	writeSkillFiles := func(w http.ResponseWriter, r *http.Request, p app.Principal, handle, slug string) {
+		files, err := runtime.SkillTextFiles(r.Context(), p.TenantID, handle, slug, skillhub.NewClient("").TextFiles)
+		if err != nil {
+			writeAppErr(runtime.Log, w, err, "skill not found", http.StatusInternalServerError, "INTERNAL")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": files})
+	}
+	mux.HandleFunc("GET /v1/skills/{handle}/{slug}", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		writeSkill(w, r, p, r.PathValue("handle"), r.PathValue("slug"))
+	}))
+	mux.HandleFunc("GET /v1/skills/{slug}", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		writeSkill(w, r, p, "", r.PathValue("slug"))
+	}))
+	mux.HandleFunc("GET /v1/skill-files/{handle}/{slug}", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		writeSkillFiles(w, r, p, r.PathValue("handle"), r.PathValue("slug"))
+	}))
+	mux.HandleFunc("GET /v1/skill-files/{slug}", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		writeSkillFiles(w, r, p, "", r.PathValue("slug"))
 	}))
 	mux.HandleFunc("GET /v1/skill-categories", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		items, err := runtime.ListSkillCategories(r.Context(), p.TenantID)

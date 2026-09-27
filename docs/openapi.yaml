@@ -826,6 +826,107 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+  /v1/skills/{slug}:
+    get:
+      tags: [skills]
+      operationId: getSkillBySlug
+      summary: Read one stored skill that has no author handle
+      description: |
+        Reads one row whose id is the slug alone. The handler does not call
+        SkillHub, and it does not download or install the skill package.
+      x-unimplemented: false
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The stored skill.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Skill"
+        "404":
+          description: No stored row matches this slug
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/skill-files/{handle}/{slug}:
+    get:
+      tags: [skills]
+      operationId: listSkillFiles
+      summary: Read text files saved for one skill
+      description: |
+        Returns text copied once from the public package so the page can show
+        it. Later calls read the stored copy and do not call SkillHub. The
+        files are not installed or executed, and this response is not a zip.
+      x-unimplemented: false
+      parameters:
+        - name: handle
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Saved text files. items is empty when the package had none we keep.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillTextFileList"
+        "404":
+          description: No stored skill matches this handle and slug
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/skill-files/{slug}:
+    get:
+      tags: [skills]
+      operationId: listSkillFilesBySlug
+      summary: Read text files for a skill that has no author handle
+      description: |
+        Same as listSkillFiles, for a row whose id is the slug alone.
+      x-unimplemented: false
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Saved text files.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillTextFileList"
+        "404":
+          description: No stored skill matches this slug
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
   /v1/skill-categories:
     get:
       tags: [skills]
@@ -1556,6 +1657,25 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/SkillCategory"
+    SkillTextFile:
+      type: object
+      additionalProperties: false
+      required: [path, body]
+      properties:
+        path:
+          type: string
+        body:
+          type: string
+          description: Text kept for display. It is not executed.
+    SkillTextFileList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SkillTextFile"
     CreateCloudAgentRequest:
       type: object
       additionalProperties: false
