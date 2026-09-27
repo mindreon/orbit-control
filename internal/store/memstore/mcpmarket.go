@@ -90,7 +90,32 @@ func (s *Store) ListMcpMarketCategories(_ context.Context, tenantID string, need
 	return out, nil
 }
 
-func (s *Store) ReplaceMcpMarket(_ context.Context, tenantID string, servers []store.McpMarketRecord, categories []store.McpMarketCategoryRecord) error {
+func (s *Store) GetMcpMarket(_ context.Context, tenantID, id string) (store.McpMarketDetail, error) {
+	if tenantID == "" || id == "" {
+		return store.McpMarketDetail{}, store.ErrNotFound
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.mcpMarket[id]
+	if !ok {
+		return store.McpMarketDetail{}, store.ErrNotFound
+	}
+	if cat, ok := s.mcpCategories[rec.Category]; ok {
+		rec.CategoryName = cat.Name
+	}
+	out := store.McpMarketDetail{McpMarketRecord: rec, Tools: []store.McpMarketTool{}}
+	if detail, ok := s.mcpDetails[id]; ok {
+		out.License = detail.License
+		out.UpdatedOn = detail.UpdatedOn
+		out.Readme = detail.Readme
+		if detail.Tools != nil {
+			out.Tools = detail.Tools
+		}
+	}
+	return out, nil
+}
+
+func (s *Store) ReplaceMcpMarket(_ context.Context, tenantID string, servers []store.McpMarketRecord, categories []store.McpMarketCategoryRecord, details []store.McpMarketDetailRecord) error {
 	if tenantID == "" {
 		return store.ErrNotFound
 	}
@@ -108,9 +133,23 @@ func (s *Store) ReplaceMcpMarket(_ context.Context, tenantID string, servers []s
 		}
 		nextCats[row.Key] = row
 	}
+	nextDetails := map[string]store.McpMarketDetailRecord{}
+	for _, row := range details {
+		if row.ID == "" {
+			continue
+		}
+		if _, ok := nextServers[row.ID]; !ok {
+			continue
+		}
+		if row.Tools == nil {
+			row.Tools = []store.McpMarketTool{}
+		}
+		nextDetails[row.ID] = row
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.mcpMarket = nextServers
+	s.mcpDetails = nextDetails
 	if s.mcpCategories == nil {
 		s.mcpCategories = map[string]store.McpMarketCategoryRecord{}
 	}

@@ -2,6 +2,7 @@ package mcpmarket
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/mindreon/orbit-control/internal/store"
@@ -53,6 +54,25 @@ func TestInstallStoresSnapshot(t *testing.T) {
 	}
 	if len(cats) == 0 || cats[0].Key != "browser-automation" || cats[0].Count == 0 {
 		t.Fatalf("categories %+v", cats)
+	}
+	detail, err := repo.GetMcpMarket(context.Background(), "default", fetch.Items[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Name != "Fetch网页内容抓取" || detail.License == "" || detail.Readme == "" {
+		t.Fatalf("detail %+v", detail)
+	}
+	if strings.Contains(strings.ToLower(detail.Readme), "https://") || strings.Contains(strings.ToLower(detail.Readme), "http://") {
+		t.Fatal("readme still has a URL")
+	}
+	if strings.Contains(detail.Readme, "交流反馈") {
+		t.Fatal("readme includes the discussion section")
+	}
+	if len(detail.Tools) == 0 || detail.Tools[0].Name == "" {
+		t.Fatalf("tools %+v", detail.Tools)
+	}
+	if _, err := repo.GetMcpMarket(context.Background(), "default", "missing"); err == nil {
+		t.Fatal("expected missing detail")
 	}
 }
 

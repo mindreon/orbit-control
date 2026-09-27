@@ -475,6 +475,14 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, list)
 	}))
+	mux.HandleFunc("GET /v1/mcp-market/{id}", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		detail, err := runtime.GetMcpMarket(r.Context(), p.TenantID, r.PathValue("id"))
+		if err != nil {
+			writeAppErr(runtime.Log, w, err, "market server not found", http.StatusInternalServerError, "INTERNAL")
+			return
+		}
+		writeJSON(w, http.StatusOK, detail)
+	}))
 	mux.HandleFunc("GET /v1/mcp-market-categories", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		items, err := runtime.ListMcpMarketCategories(r.Context(), p.TenantID, r.URL.Query().Get("needsOnline"))
 		if err != nil {

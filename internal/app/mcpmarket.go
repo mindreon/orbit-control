@@ -76,6 +76,48 @@ func (a *App) ListMcpMarket(ctx context.Context, tenantID string, q store.McpMar
 	}, nil
 }
 
+// McpMarketDetail is one server page. It has no discussion thread and no hosted URL.
+type McpMarketDetail struct {
+	McpMarketServer
+	License   string                `json:"license"`
+	UpdatedOn string                `json:"updatedOn"`
+	Readme    string                `json:"readme"`
+	Tools     []store.McpMarketTool `json:"tools"`
+}
+
+// GetMcpMarket reads one stored server. It does not call ModelScope.
+func (a *App) GetMcpMarket(ctx context.Context, tenantID, id string) (McpMarketDetail, error) {
+	rec, err := a.Repo.GetMcpMarket(ctx, tenantID, id)
+	if err != nil {
+		return McpMarketDetail{}, err
+	}
+	tools := rec.Tools
+	if tools == nil {
+		tools = []store.McpMarketTool{}
+	}
+	return McpMarketDetail{
+		McpMarketServer: McpMarketServer{
+			ID:           rec.ID,
+			Name:         rec.Name,
+			Summary:      rec.Summary,
+			Author:       rec.Author,
+			Category:     rec.Category,
+			CategoryName: rec.CategoryName,
+			CategoryMore: rec.CategoryMore,
+			Calls:        rec.Calls,
+			Views:        rec.Views,
+			Stars:        rec.Stars,
+			Verified:     rec.Verified,
+			Hosted:       rec.Hosted,
+			NeedsOnline:  rec.NeedsOnline,
+		},
+		License:   rec.License,
+		UpdatedOn: rec.UpdatedOn,
+		Readme:    rec.Readme,
+		Tools:     tools,
+	}, nil
+}
+
 // ListMcpMarketCategories reads stored labels. It does not call ModelScope.
 func (a *App) ListMcpMarketCategories(ctx context.Context, tenantID, needsOnline string) ([]McpMarketCategory, error) {
 	rows, err := a.Repo.ListMcpMarketCategories(ctx, tenantID, needsOnline)

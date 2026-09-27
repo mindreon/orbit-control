@@ -4,9 +4,12 @@
 package mcpmarket
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"embed"
 	"encoding/json"
+	"io"
 	"strings"
 
 	"github.com/mindreon/orbit-control/internal/store"
@@ -16,7 +19,7 @@ import (
 // The public list API does not return every row, so the stored snapshot is smaller.
 const PlazaTotal = 12525
 
-//go:embed catalog.json
+//go:embed catalog.json details.json.gz
 var catalogJSON embed.FS
 
 type snapshotRow struct {
@@ -108,7 +111,81 @@ func Install(ctx context.Context, repo store.Repository, tenantID string) error 
 	if len(servers) == 0 {
 		return errEmpty
 	}
-	return repo.ReplaceMcpMarket(ctx, tenantID, servers, Categories())
+	details, err := readDetails(seen)
+	if err != nil {
+		return err
+	}
+	return repo.ReplaceMcpMarket(ctx, tenantID, servers, Categories(), details)
+}
+
+func readDetails(allowed map[string]struct{}) ([]store.McpMarketDetailRecord, error) {
+	raw, err := catalogJSON.ReadFile("details.json.gz")
+	if err != nil {
+		return nil, err
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		return nil, err
+	}
+	defer zr.Close()
+	body, err := io.ReadAll(zr)
+	if err != nil {
+		return nil, err
+	}
+	var rows []store.McpMarketDetailRecord
+	if err := json.Unmarshal(body, &rows); err != nil {
+		return nil, err
+	}
+	out := make([]store.McpMarketDetailRecord, 0, len(rows))
+	seen := map[string]struct{}{}
+	for _, row := range rows {
+		row.ID = strings.TrimSpace(row.ID)
+		if row.ID == "" {
+			continue
+		}
+		if _, ok := allowed[row.ID]; !ok {
+			continue
+		}
+		if _, ok := seen[row.ID]; ok {
+			return nil, errDuplicate
+		}
+		seen[row.ID] = struct{}{}
+		row.License = dropURLs(row.License)
+		row.UpdatedOn = dropURLs(row.UpdatedOn)
+		row.Readme = dropURLs(row.Readme)
+		for i := range row.Tools {
+			row.Tools[i].Name = dropURLs(row.Tools[i].Name)
+			row.Tools[i].Description = dropURLs(row.Tools[i].Description)
+			for j := range row.Tools[i].Params {
+				row.Tools[i].Params[j].Name = dropURLs(row.Tools[i].Params[j].Name)
+				row.Tools[i].Params[j].Type = dropURLs(row.Tools[i].Params[j].Type)
+				row.Tools[i].Params[j].Description = dropURLs(row.Tools[i].Params[j].Description)
+			}
+		}
+		if containsURL(row.License, row.Readme, row.UpdatedOn) {
+			return nil, errURL
+		}
+		out = append(out, row)
+	}
+	return out, nil
+}
+
+func dropURLs(s string) string {
+	lower := strings.ToLower(s)
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); {
+		switch {
+		case strings.HasPrefix(lower[i:], "https://"):
+			i += len("https://")
+		case strings.HasPrefix(lower[i:], "http://"):
+			i += len("http://")
+		default:
+			b.WriteByte(s[i])
+			i++
+		}
+	}
+	return b.String()
 }
 
 func containsURL(parts ...string) bool {
