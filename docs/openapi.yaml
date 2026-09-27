@@ -984,6 +984,7 @@ paths:
         it, plus meta when the extra public page fields have been copied.
         The first call may read SkillHub. A saved copy that is missing a listed
         text file, including one under a subdirectory, is read once more.
+        A failed copy is not remembered, so the next open tries again.
         Later calls read the stored copy.
         The files are not installed or executed, and this response is not a zip.
         meta omits signed report URLs.

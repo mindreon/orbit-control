@@ -135,12 +135,15 @@ func safeZipPath(name string) (string, bool) {
 }
 
 func textExt(name string) bool {
-	ext := strings.ToLower(path.Ext(name))
-	switch ext {
-	case ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".py", ".js", ".ts", ".tsx", ".jsx", ".css", ".html", ".xml", ".csv":
-		return true
-	default:
+	switch strings.ToLower(path.Ext(name)) {
+	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf",
+		".zip", ".gz", ".tgz", ".7z", ".rar", ".bz2", ".xz",
+		".wasm", ".woff", ".woff2", ".ttf", ".otf", ".eot",
+		".mp3", ".mp4", ".wav", ".ogg", ".bin", ".exe", ".dll",
+		".so", ".dylib", ".pyc", ".class", ".jar", ".dmg", ".iso":
 		return false
+	default:
+		return true
 	}
 }
 
@@ -159,9 +162,7 @@ func secretName(name string) bool {
 	switch {
 	case base == ".env" || strings.HasPrefix(base, ".env."):
 		return true
-	case strings.Contains(base, "secret"), strings.Contains(base, "credential"), strings.Contains(base, "password"):
-		return true
-	case strings.HasSuffix(base, ".pem"), base == "id_rsa", base == "id_ed25519":
+	case strings.HasSuffix(base, ".pem"), base == "id_rsa", base == "id_ed25519", base == "id_dsa":
 		return true
 	default:
 		return false

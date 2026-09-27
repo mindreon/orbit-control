@@ -88,3 +88,49 @@ func TestSkillPageCopiesMissingNestedFileOnce(t *testing.T) {
 		t.Fatalf("second view fetched again: %d", fetches)
 	}
 }
+
+func TestSkillPageRetriesWhenTheCopyFails(t *testing.T) {
+	repo := memstore.New()
+	ctx := context.Background()
+	if err := repo.UpsertSkillCatalog(ctx, "default", []store.SkillRecord{{
+		ID: "demo/weekly", Slug: "weekly", Handle: "demo", Name: "周报",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SaveSkillTextFiles(ctx, "default", "demo/weekly", []store.SkillFile{{Path: "SKILL.md", Body: "# 技能说明"}}); err != nil {
+		t.Fatal(err)
+	}
+	detail := []byte(`{"fileIndex":[{"path":"scripts/build_graph.py","size":20}],"score":4.7}`)
+	if err := repo.SaveSkillDetail(ctx, "default", "demo/weekly", detail); err != nil {
+		t.Fatal(err)
+	}
+	fetches := 0
+	runtime := &App{Repo: repo}
+	fetch := func(context.Context, string, string) ([]store.SkillFile, error) {
+		fetches++
+		if fetches == 1 {
+			return nil, context.DeadlineExceeded
+		}
+		return []store.SkillFile{
+			{Path: "SKILL.md", Body: "# 技能说明"},
+			{Path: "scripts/build_graph.py", Body: "print('graph')"},
+		}, nil
+	}
+	files, _, err := runtime.SkillPage(ctx, "default", "demo", "weekly", fetch, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fetches != 1 || len(files) != 1 {
+		t.Fatalf("first fetches=%d files=%+v", fetches, files)
+	}
+	files, meta, err := runtime.SkillPage(ctx, "default", "demo", "weekly", fetch, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fetches != 2 || len(files) != 2 || files[1].Path != "scripts/build_graph.py" {
+		t.Fatalf("second fetches=%d files=%+v", fetches, files)
+	}
+	if strings.Contains(string(meta), "filesTried") {
+		t.Fatalf("meta = %s", meta)
+	}
+}
