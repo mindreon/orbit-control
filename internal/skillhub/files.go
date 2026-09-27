@@ -18,9 +18,9 @@ import (
 const (
 	maxZip         = 4 << 20
 	maxUnpacked    = 4 << 20
-	maxTextFiles   = 40
-	maxFileBytes   = 48 << 10
-	maxStoredRunes = 200_000
+	maxTextFiles   = 500
+	maxFileBytes   = maxUnpacked
+	maxStoredRunes = maxUnpacked
 )
 
 // TextFiles downloads one public skill package and keeps text files for
@@ -89,10 +89,12 @@ func textFilesFromZip(body []byte) ([]store.SkillFile, error) {
 		if !utf8.ValidString(text) || strings.TrimSpace(text) == "" {
 			continue
 		}
-		runes += utf8.RuneCountInString(text)
-		if runes > maxStoredRunes {
-			break
+		// One large file must not drop the nested files that follow it.
+		n := utf8.RuneCountInString(text)
+		if runes+n > maxStoredRunes {
+			continue
 		}
+		runes += n
 		out = append(out, store.SkillFile{Path: name, Body: text})
 	}
 	if out == nil {
@@ -140,6 +142,16 @@ func textExt(name string) bool {
 	default:
 		return false
 	}
+}
+
+// Previewable reports whether a listed path is text the page can show.
+// The same rules decide which zip entries are stored.
+func Previewable(name string) bool {
+	cleaned, ok := safeZipPath(name)
+	if !ok {
+		return false
+	}
+	return textExt(cleaned) && !secretName(cleaned)
 }
 
 func secretName(name string) bool {
