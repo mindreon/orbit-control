@@ -86,6 +86,11 @@ type Repository interface {
 	GetSkillTextFiles(ctx context.Context, tenantID, id string) (files []SkillFile, known bool, err error)
 	// SaveSkillTextFiles stores that copy. Later reads do not download the package again.
 	SaveSkillTextFiles(ctx context.Context, tenantID, id string, files []SkillFile) error
+	// GetSkillDetail reads the extra public page fields copied once. known is
+	// false until that copy exists. It does not call SkillHub.
+	GetSkillDetail(ctx context.Context, tenantID, id string) (raw []byte, known bool, err error)
+	// SaveSkillDetail stores that copy. Later reads do not call SkillHub again.
+	SaveSkillDetail(ctx context.Context, tenantID, id string, raw []byte) error
 	// UpsertSkillCatalog inserts or refreshes catalog rows. An existing
 	// trending rank is left as it is.
 	UpsertSkillCatalog(ctx context.Context, tenantID string, rows []SkillRecord) error
@@ -233,6 +238,8 @@ type SkillRecord struct {
 	TrendingRank   int
 	TextFiles      []SkillFile
 	FilesKnown     bool
+	DetailJSON     []byte
+	DetailKnown    bool
 }
 
 // SkillCategoryRecord is a display label for SkillRecord.Category.
