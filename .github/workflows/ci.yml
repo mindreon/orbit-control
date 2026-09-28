@@ -92,6 +92,10 @@ jobs:
             fi
           done
 
+      - name: Contract v3 Go types match the vendored schema
+        run: |
+          go generate ./internal/contract/...
+          git diff --exit-code internal/contract
       - run: go vet ./... 2>&1 | tee artifacts/logs/vet.log
       - run: go vet -tags e2e ./... 2>&1 | tee -a artifacts/logs/vet.log
       - run: go test -race -count=1 ./... 2>&1 | tee artifacts/logs/unit.log
