@@ -2,7 +2,7 @@
 
 状态：v2.1 **已签字**（Sentinel）；签字后追加 C28（来自 orbit-runtime#3）、C29（术语对齐，只改文档）、C30（产物事件与读取接口，v2.1 按 Sentinel 评审修订）、C31（登录鉴权与任务归属，**草案，未签字**）和 C32（control 持久化存储，已按 Sentinel 评审修订（C32 rev），任务删除改为软删除（C32 rev2），**仍是草案，需要 Celestial 和 Sentinel 签字**）；C33 按 orbit-runtime#4（A1）对齐事件契约；C34 新增 `state_unreadable` 错误码和 decide 投递幂等（F2），需要 Celestial 和 Sentinel 签字，见变更记录（v1 保留在 `/workspace/orbit-contract-draft-v1.md`）　日期：2026-09-26　作者：Celestial（架构）　读者：Forge（实现）、Sentinel（验收）、orbit-web
 基线（已核对代码）：orbit-runtime `7b800eb`、orbit-control `846d27e`、orbit-web `c7b8717`、orbit-infra `1abb9a6`。
-技术基线：AgentScope 2.0.8（runtime）+ Vite 8（web），见 `orbit-adr-draft.md`。产品范围：`/workspace/fe-study/orbit-product-scope.md`（2026-09-26 已确认）。
+技术基线：AgentScope 2.0.9（runtime）+ Vite 8（web），见 `orbit-adr-draft.md`。产品范围：`/workspace/fe-study/orbit-product-scope.md`（2026-09-26 已确认）。
 
 写法约定：所有"现状"都带 `repo:path:line`；"变更"用 pydantic 字段级 diff（`+` 新增、`~` 修改）；Sentinel 验收写成 `S-编号`。新增字段都有默认值，旧 payload 照常反序列化（向后兼容），不兼容的地方单独标 **BREAKING**。
 
@@ -353,7 +353,7 @@ control 侧的变更：`workerEventTypes`（`app.go:565-574`）加入 5 个新�
 - **一个调用一张卡，逐个决定**：`resolveApproval` 只带一个 `approval_request_id` 和 `call_id`，worker 发出的 `UserConfirmResultEvent.confirm_results` **只包含这一个调用**，其他 ASKING 调用保持 ASKING。**P0 没有"全部允许"**，API 也不接受批量决定。worker 在同一个 turn 内遇到重复的 `call_id`（同一次模型响应里出现两个相同 id）时，拒绝这个 turn（`ValueError("duplicate call_id")`），防止两张卡共用一个 id。
 - **部分回填**：批准一个或回填一部分 external 之后，如果还有待办调用，worker 返回同样的列表形式（剩余部分），并为剩余调用**重新发出** `approval.asked` / `tool.call`。id 是确定性的，control 按 id upsert，不会重复出卡。room 保持 `awaiting_approval` / `awaiting_external`，直到列表清空。
 - **external 批量执行**：workflow 对 `externals[]` 用 `asyncio.gather`（确定性）并行执行，然后**一次** `deliverToolResult(results=[…])` 回填，或者按完成顺序逐个回填（每次都遵守上一条规则）。同时有 approvals 和 externals 时，先执行 externals，再停下来等审批。
-- **需要验证**（A2 的测试义务）：AgentScope 2.0.8 能否接受只含部分调用的 `confirm_results`，并让其余调用保持 ASKING。如果不能，worker 在 blob 里暂存已作出的决定，等所有 ASKING 调用都有决定后再一次性提交。但 S-Ra-10 要求批准后立即执行，所以这时需要在 Orbit 包装层单独执行被批准的调用，并把结果注入。
+- **需要验证**（A2 的测试义务）：AgentScope 2.0.9 能否接受只含部分调用的 `confirm_results`，并让其余调用保持 ASKING。如果不能，worker 在 blob 里暂存已作出的决定，等所有 ASKING 调用都有决定后再一次性提交。但 S-Ra-10 要求批准后立即执行，所以这时需要在 Orbit 包装层单独执行被批准的调用，并把结果注入。
 - 验收：
   - **S-PP-1**：mock 在一次响应里发出两个 gated 调用（call_id 不同）。先批准一个，它立刻执行，另一个仍然 pending，room 保持 `awaiting_approval`；再拒绝另一个，它执行 0 次并得到 `APPROVAL_REJECTED`，这时 room 才回到 `running`。整个过程中被批准的调用只执行一次。
   - **S-PP-2**：一次响应里发出两个 `gateway_lookup`，两次 `gatewayExecute` 都执行，结果一次回填；status 序列里没有出现过 `continue`。
