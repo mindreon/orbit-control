@@ -35,6 +35,8 @@ var (
 	appURL   = os.Getenv("ORBIT_TEST_DB_URL")
 	ownerURL = os.Getenv("ORBIT_TEST_MIGRATE_DB_URL")
 	opsURL   = os.Getenv("ORBIT_TEST_OPS_DB_URL")
+	// orbit_worker on orbit_control (migration 00013, ISO-21, ISO-22).
+	workerURL = os.Getenv("ORBIT_TEST_WORKER_DB_URL")
 )
 
 const (
@@ -62,8 +64,8 @@ func TestMain(m *testing.M) {
 }
 
 func run(m *testing.M) int {
-	if appURL == "" || ownerURL == "" || opsURL == "" {
-		msg := "ORBIT_TEST_DB_URL (orbit_app), ORBIT_TEST_MIGRATE_DB_URL (orbit_owner) and ORBIT_TEST_OPS_DB_URL (orbit_ops) are required"
+	if appURL == "" || ownerURL == "" || opsURL == "" || workerURL == "" {
+		msg := "ORBIT_TEST_DB_URL (orbit_app), ORBIT_TEST_MIGRATE_DB_URL (orbit_owner), ORBIT_TEST_OPS_DB_URL (orbit_ops) and ORBIT_TEST_WORKER_DB_URL (orbit_worker) are required"
 		fatalSetup(msg)
 		fmt.Fprintln(os.Stderr, msg)
 		return 1

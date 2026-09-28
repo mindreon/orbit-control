@@ -73,7 +73,7 @@ docs/openapi.yaml      Public HTTP/WS contract
 ```bash
 # Passwords may be (and in CI are) SCRAM verifiers, so plaintext never reaches the server:
 #   app_v=$(printf '%s\n' "$APP_PASSWORD" | python3 deploy/postgres/scram-verifier.py)
-psql -v ON_ERROR_STOP=1 -v owner_password=... -v app_password="$app_v" -v ops_password=... \
+psql -v ON_ERROR_STOP=1 -v owner_password=... -v app_password="$app_v" -v ops_password=... -v worker_password=... \
   -f deploy/postgres/bootstrap-roles.sql "$SUPERUSER_URL"
 ORBIT_CONTROL_MIGRATE_DB_URL=... go run ./cmd/orbit-control   # once, with ORBIT_CONTROL_MIGRATE_ON_START=1
 psql -v ON_ERROR_STOP=1 -v tenant_id=default \
@@ -110,6 +110,7 @@ docker compose -f e2e/compose.yaml up -d --wait
 ORBIT_TEST_DB_URL=postgres://orbit_app:e2e-app@127.0.0.1:55432/orbit_control?sslmode=disable \
 ORBIT_TEST_MIGRATE_DB_URL=postgres://orbit_owner:e2e-owner@127.0.0.1:55432/orbit_control?sslmode=disable \
 ORBIT_TEST_OPS_DB_URL=postgres://orbit_ops:e2e-ops@127.0.0.1:55432/orbit_control?sslmode=disable \
+ORBIT_TEST_WORKER_DB_URL=postgres://orbit_worker:e2e-worker@127.0.0.1:55432/orbit_control?sslmode=disable \
 go test -tags e2e -count=1 ./e2e/...
 ```
 
