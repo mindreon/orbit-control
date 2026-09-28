@@ -117,6 +117,37 @@ raw tokens:
   hashes the raw id inside the package, so a raw token never reaches SQL.
   S-DB-1 enforces both the allowlist and the package boundary.
 
+## Task runtime tables and `orbit_worker` (migration 00013)
+
+Migration 00013 adds the TaskWorkflow tables from orbit-infra
+`docs/architecture` (03 domain model, 09 events, 10 ledger, 12 Step 2). They
+live next to the room tables until the cutover; nothing here reads or writes
+a room table. No code path uses them yet, so each role gets only the DML the
+design already fixes. An UPDATE or DELETE for a later code path (Projector,
+reconciliation, GC) needs a new line here first, like every other grant.
+
+A new login role, **`orbit_worker`**, is what orbit-runtime's activity
+worker uses for `orbit_control` (U4, ADR-0012). It is `NOSUPERUSER
+NOBYPASSRLS`, owns nothing, and has no privilege on any room-era table, so a
+compromised worker cannot read personas, connectors or rooms. It sets the
+tenant with `set_config('app.tenant_id', $1, true)`, the same way control
+does (ISO-1 rules apply to its SQL as well).
+
+| Table | RLS | orbit_app | orbit_worker | Reason |
+|---|---|---|---|---|
+| `agent_profiles` | tenant | SELECT, INSERT | SELECT | Versions are immutable; a change is a new version (11 §2). |
+| `node_type_registry` | **none** | SELECT | SELECT | Global, not tenant data. Seeded by the migration; `team_stage` is disabled in v1 (A20). |
+| `tasks`, `task_nodes`, `stage_attempts`, `task_approvals` | tenant | SELECT, INSERT | — | Projections written by the Projector in control. Their UPDATE columns are added with the Projector (orbit-infra 12 Step 7). |
+| `plan_versions`, `task_messages`, `task_events` | tenant | SELECT, INSERT; **no UPDATE, no DELETE** | — | Immutable history, like `events` and `messages`. |
+| `runtime_outbox` | **none** | SELECT, UPDATE (`projected_at`) | INSERT | The Projector reads every tenant's rows in one pass (09 §3), so RLS would stall it. Rows carry `tenant_id`, and the Projector writes them into tenant tables under that tenant. The worker only appends. Cleanup after 7 days is a later grant. |
+| `idempotency_ledger` | tenant | SELECT, INSERT | SELECT, INSERT, UPDATE (`status, result_ref, owner, last_seen`) | The worker moves a side effect from `started` to `succeeded` or `failed_permanent` (10 §1). |
+| `checkpoints` | tenant | SELECT | SELECT, INSERT, UPDATE (`committed_in_history`) | The commit protocol (08 §3) marks a checkpoint once workflow history holds its ref. |
+| `artifact_manifests` | tenant | SELECT | SELECT, INSERT; **no UPDATE, no DELETE** | Manifests are immutable (03 §9). |
+| `workspace_leases` | tenant | SELECT | SELECT, INSERT, UPDATE (`sandbox_id, expires_at, released_at`) | Heartbeats renew a lease; release and the reaper set `released_at` (08 §1). A partial unique index allows one live write lease per workspace key. |
+
+`orbit_worker` also gets no TRUNCATE, REFERENCES or TRIGGER anywhere, for the
+reasons listed above for `orbit_app`.
+
 ## Auth PR security requirements (review L-b; documented, not implemented here)
 
 - **Session ids.** The auth PR switches from `sha256(id)` to:
@@ -658,6 +689,64 @@ The pending → decided transition through the API keeps working (REVIEW-Md).
 - **FM-58.** A decided approval is rewritten, either reopened or flipped
   between allow and reject, by a bug, a replayed request or direct SQL. The
   audit trail and the delivered decision then disagree.
+
+### ISO-21 — task runtime tables: tenant isolation and immutable history
+
+The migration creates the rows below as the owner for two tenants, then
+connects as `orbit_app` and as `orbit_worker`:
+
+- every tenant table from migration 00013 has RLS **and** FORCE RLS, and
+  `runtime_outbox` and `node_type_registry` are the only new tables without
+  RLS;
+- with tenant A set, each role reads only tenant A's rows from every tenant
+  table it may SELECT; with no tenant set it reads none;
+- `UPDATE` and `DELETE` on `plan_versions`, `task_messages`, `task_events`
+  and `artifact_manifests` fail with `42501` for both roles, and the owner
+  reads the old value;
+- a second live write lease for the same workspace key fails with `23505`;
+- registry version 1 has six node types and `team_stage` is disabled.
+
+- **FM-77.** A new task table is created without RLS or without FORCE RLS.
+  Control or the worker then reads another tenant's tasks, events or
+  checkpoints with a plain query.
+- **FM-78.** Task history (a committed plan version, a user message, a
+  durable event, an artifact manifest) is rewritten or deleted. Replay,
+  reconciliation and the audit trail then disagree with what happened.
+- **FM-79.** Two attempts hold a write lease on the same task workspace at
+  once. They write the same sandbox concurrently and the head snapshot no
+  longer matches either attempt (orbit-infra 08 §1, serial writes).
+- **FM-80.** `team_stage` is enabled in registry version 1, so an agent can
+  create a Team node before phase 2 has its bounded-stage design (A20).
+- **FM-81.** `runtime_outbox` gets RLS. The Projector reads it without a
+  tenant, sees no rows, and every task's events stop without an error.
+
+Why HTTP cannot catch these: no API serves these tables yet, and the
+properties are about roles and constraints rather than a request.
+
+### ISO-22 — `orbit_worker` has only its grants
+
+Connected **as `orbit_worker`**:
+
+- `current_user` is `orbit_worker`; it has neither SUPERUSER nor BYPASSRLS,
+  owns no table, and is not a member of a role that does;
+- it has no TRUNCATE, REFERENCES or TRIGGER on any `public` table;
+- it has no privilege at all on the room-era tables and on the control-only
+  task tables (`tasks`, `task_nodes`, `stage_attempts`, `task_approvals`,
+  `plan_versions`, `task_messages`, `task_events`);
+- an UPDATE of a column outside its grant on `idempotency_ledger`,
+  `checkpoints` or `workspace_leases` fails with `42501`.
+
+- **FM-82.** `orbit_worker` can read room-era tables or control's
+  projections. A worker compromised through a tool or sandbox escape then
+  reads personas, MCP connector settings or other tenants' conversations.
+- **FM-83.** `orbit_worker` has SUPERUSER, BYPASSRLS, TRUNCATE or TRIGGER,
+  or owns a table. One bad statement then crosses every tenant.
+- **FM-84.** `orbit_worker` can UPDATE columns no design path writes (for
+  example a ledger key, a checkpoint's blob ref, a lease's holder), so a
+  retried activity can rewrite what another attempt recorded.
+
+Why HTTP cannot catch these: the worker has no HTTP surface in control; the
+properties are privileges.
 
 ### F2 — phase 1 has no reopen; phase 2 must not double-deliver (documented, not implemented)
 
