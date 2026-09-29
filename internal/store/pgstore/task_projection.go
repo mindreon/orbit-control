@@ -215,7 +215,7 @@ func (s *Store) ListTaskEvents(ctx context.Context, p taskruntime.Principal, tas
 }
 
 func projectionErr(op string, err error) error {
-	if err == nil || errors.Is(err, store.ErrNotFound) || errors.Is(err, taskruntime.ErrIdempotencyConflict) || errors.Is(err, store.ErrStorage) {
+	if err == nil || errors.Is(err, store.ErrNotFound) || errors.Is(err, taskruntime.ErrIdempotencyConflict) || errors.Is(err, taskruntime.ErrCommandInProgress) || errors.Is(err, store.ErrStorage) {
 		return err
 	}
 	return storageErr(op, err)

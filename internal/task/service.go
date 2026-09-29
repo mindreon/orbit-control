@@ -18,19 +18,8 @@ import (
 	"github.com/mindreon/orbit-control/internal/store"
 )
 
-// commandCacheLimit and seenEventCacheLimit bound the in-memory idempotency
-// and event-dedup tables so a long-lived process cannot grow them without limit.
-const (
-	commandCacheLimit   = 4096
-	seenEventCacheLimit = 16384
-)
-
-// commandRecord keeps the request hash and the cached response together, so
-// evicting one cannot leave a hash that replays an empty body.
-type commandRecord struct {
-	hash   string
-	result json.RawMessage
-}
+// seenEventCacheLimit bounds the in-memory event-dedup table so a long-lived process cannot grow it without limit.
+const seenEventCacheLimit = 16384
 
 type Principal struct {
 	TenantID string
@@ -154,7 +143,7 @@ type Service struct {
 	events         map[string][]Event
 	subs           map[string]map[*subscriber]struct{}
 	seenMessage    map[string]map[string]uint64
-	commandCache   *lru.Cache[string, commandRecord]
+	ledger         CommandLedger
 	nextSeq        map[string]uint64
 	seenEvents     *lru.Cache[string, struct{}]
 	entityVersion  map[string]map[string]int64
@@ -177,7 +166,7 @@ func NewWithProjection(client TaskClient, projection ProjectionStore) *Service {
 	return &Service{
 		orch: client, projection: projection, tasks: map[string]*Task{}, events: map[string][]Event{},
 		subs: map[string]map[*subscriber]struct{}{}, seenMessage: map[string]map[string]uint64{},
-		commandCache: mustCache[string, commandRecord](commandCacheLimit), nextSeq: map[string]uint64{},
+		ledger: newCommandLedger(projection), nextSeq: map[string]uint64{},
 		seenEvents:    mustCache[string, struct{}](seenEventCacheLimit),
 		entityVersion: map[string]map[string]int64{}, profiles: map[string]map[string]Profile{}, manifests: map[string]ArtifactManifest{}, maxEvents: 5000,
 	}
@@ -401,50 +390,52 @@ func (s *Service) Update(ctx context.Context, p Principal, id, name, commandID s
 	if err != nil {
 		return nil, err
 	}
-	hash := fmt.Sprintf("%x", sha256.Sum256(requestBytes))
-	key := commandKey(id, commandID)
-	s.mu.Lock()
-	if previous, ok := s.commandCache.Get(key); ok {
-		if previous.hash != hash {
-			s.mu.Unlock()
-			return nil, ErrIdempotencyConflict
-		}
-		cached := append(json.RawMessage(nil), previous.result...)
-		s.mu.Unlock()
-		return cached, nil
-	}
-	s.commandCache.Add(key, commandRecord{hash: hash})
-	s.mu.Unlock()
-	if s.orch != nil {
-		raw, err := s.orch.UpdateTask(ctx, p.TenantID, id, name, commandID, payload)
-		if err == nil {
-			s.applyUpdateProjection(id, name, raw)
-			s.cacheCommandResult(id, commandID, raw)
-			return raw, nil
-		}
+	// The update name is part of the hash: one command_id cannot mean two different commands.
+	sum := sha256.Sum256(append([]byte(name+"\x00"), requestBytes...))
+	hash := fmt.Sprintf("%x", sum)
+	key, owner := commandKey(p, id, commandID), mustUUIDv7()
+	stored, claimed, err := s.ledger.ClaimCommand(ctx, p.TenantID, key, hash, owner, commandLease)
+	if err != nil {
 		return nil, err
 	}
-	// The local projection remains usable in dev and during an orchestrator
-	// restart. It is replaced by the durable event projector when connected.
-	s.applyLocalUpdate(id, name, payload)
-	raw := json.RawMessage(`{"accepted":true}`)
-	s.cacheCommandResult(id, commandID, raw)
+	if !claimed {
+		return stored, nil
+	}
+	raw, err := s.runUpdate(ctx, p, id, name, commandID, payload)
+	if err != nil {
+		s.releaseCommand(ctx, p.TenantID, key, owner)
+		return nil, err
+	}
+	if err := s.ledger.CompleteCommand(ctx, p.TenantID, key, owner, raw); err != nil {
+		// The workflow accepted the command. Give the claim up so a retry with the same command_id does not have to
+		// wait for the lease; the Update ID makes the second send a no-op.
+		s.releaseCommand(ctx, p.TenantID, key, owner)
+		return nil, err
+	}
 	return raw, nil
 }
 
-func (s *Service) cacheCommandResult(taskID, commandID string, raw json.RawMessage) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	key := commandKey(taskID, commandID)
-	record, ok := s.commandCache.Get(key)
-	if !ok {
-		// The hash entry was evicted before the response arrived. Drop the
-		// result instead of storing one with an empty hash, which would make
-		// the next retry look like a conflict.
-		return
+// runUpdate sends the command to the workflow. Without an orchestrator the local projection stays usable in dev and
+// during an orchestrator restart; the durable event projector replaces it when connected.
+func (s *Service) runUpdate(ctx context.Context, p Principal, id, name, commandID string, payload any) (json.RawMessage, error) {
+	if s.orch != nil {
+		raw, err := s.orch.UpdateTask(ctx, p.TenantID, id, name, commandID, payload)
+		if err != nil {
+			return nil, err
+		}
+		s.applyUpdateProjection(id, name, raw)
+		return raw, nil
 	}
-	record.result = append(json.RawMessage(nil), raw...)
-	s.commandCache.Add(key, record)
+	s.applyLocalUpdate(id, name, payload)
+	return json.RawMessage(`{"accepted":true}`), nil
+}
+
+// releaseCommand runs on a context that outlives a cancelled request, so a client that hung up does not leave the
+// claim held until the lease passes. A failure here is bounded by that lease.
+func (s *Service) releaseCommand(ctx context.Context, tenantID, key, owner string) {
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	_ = s.ledger.ReleaseCommand(releaseCtx, tenantID, key, owner)
 }
 
 func (s *Service) Signal(ctx context.Context, p Principal, id, name string, payload any) error {
@@ -957,8 +948,6 @@ func mustUUIDv7() string {
 	}
 	return id.String()
 }
-
-func commandKey(taskID, commandID string) string { return taskID + "\x00" + commandID }
 
 func eventKey(taskID, eventID string) string { return taskID + "\x00" + eventID }
 

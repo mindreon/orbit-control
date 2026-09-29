@@ -3,7 +3,6 @@ package task
 import (
 	"context"
 	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -33,23 +32,6 @@ func TestNewIDUsesUUIDv7(t *testing.T) {
 			t.Fatalf("ids went backwards in time: %s then %s", previous, stamp)
 		}
 		previous = stamp
-	}
-}
-
-func TestCommandCacheStaysBounded(t *testing.T) {
-	service := New(nil)
-	principal := Principal{TenantID: "tenant", UserID: "user"}
-	created, err := service.Create(context.Background(), principal, CreateInput{Title: "cache", Goal: "bound"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i := range commandCacheLimit + 32 {
-		if _, err := service.Update(context.Background(), principal, created.ID, "control", "cmd-"+strconv.Itoa(i), map[string]any{"action": "pause"}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if service.commandCache.Len() > commandCacheLimit {
-		t.Fatalf("command cache len = %d, limit %d", service.commandCache.Len(), commandCacheLimit)
 	}
 }
 

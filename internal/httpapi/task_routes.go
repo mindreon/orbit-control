@@ -39,6 +39,9 @@ func registerTaskRoutes(router gin.IRoutes, runtime *app.App, authed func(princi
 			writeErr(w, http.StatusConflict, "TASK_CLOSED", "task is closed")
 		case errors.Is(err, taskruntime.ErrIdempotencyConflict):
 			writeErr(w, http.StatusConflict, "IDEMPOTENCY_KEY_REUSED", "command id was already used with a different request")
+		case errors.Is(err, taskruntime.ErrCommandInProgress):
+			w.Header().Set("Retry-After", "1")
+			writeErr(w, http.StatusConflict, "IN_PROGRESS", "this command id is still being processed; retry with the same command id")
 		case errors.Is(err, store.ErrStorage):
 			runtime.Log.Printf("task storage error: %v", err)
 			writeErr(w, http.StatusInternalServerError, "STORAGE_ERROR", "task storage is temporarily unavailable")
@@ -241,7 +244,12 @@ func registerTaskRoutes(router gin.IRoutes, runtime *app.App, authed func(princi
 			return
 		}
 		id := commandID(stringValue(body, "command_id", "commandId"))
-		clientID := commandID(stringValue(body, "client_message_id", "clientMessageId"))
+		// Without a client_message_id the command id stands in for it (10 §1). A random one would change the request
+		// hash on every retry of the same command_id and turn a safe retry into a 409.
+		clientID := stringValue(body, "client_message_id", "clientMessageId")
+		if strings.TrimSpace(clientID) == "" {
+			clientID = id
+		}
 		payload := map[string]any{"command_id": id, "client_message_id": clientID, "text": stringValue(body, "text", "message"), "delivery": stringValue(body, "delivery")}
 		if payload["delivery"] == "" {
 			payload["delivery"] = "queue"

@@ -5,6 +5,7 @@ import "context"
 // ProjectionStore is the durable task projection boundary. The service keeps
 // its in-process cache for fan-out, while this interface owns restart safety.
 type ProjectionStore interface {
+	CommandLedger
 	CreateTask(context.Context, Principal, *Task) error
 	GetTask(context.Context, Principal, string) (*Task, error)
 	ListTasks(context.Context, Principal) ([]*Task, error)

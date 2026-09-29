@@ -73,3 +73,24 @@ func TestTaskProfilesAndManifestProjection(t *testing.T) {
 		t.Fatalf("artifact list = %d: %s", artifacts.Code, artifacts.Body.String())
 	}
 }
+
+func TestMessageRetryWithoutClientMessageIDIsReplayedNotConflicted(t *testing.T) {
+	h := HandlerWith(app.NewWithOptions(app.Options{}))
+	create := httptest.NewRecorder()
+	h.ServeHTTP(create, internalReq(http.MethodPost, "/v1/tasks", `{"title":"demo","goal":"ship"}`))
+	var task struct {
+		ID string `json:"task_id"`
+	}
+	if err := json.Unmarshal(create.Body.Bytes(), &task); err != nil {
+		t.Fatal(err)
+	}
+	path := "/v1/tasks/" + task.ID + "/messages"
+	body := `{"command_id":"00000000000000000000000002","text":"hello"}`
+	first := httptest.NewRecorder()
+	h.ServeHTTP(first, internalReq(http.MethodPost, path, body))
+	retry := httptest.NewRecorder()
+	h.ServeHTTP(retry, internalReq(http.MethodPost, path, body))
+	if first.Code != http.StatusAccepted || retry.Code != http.StatusAccepted || retry.Body.String() != first.Body.String() {
+		t.Fatalf("first = %d %q, retry = %d %q", first.Code, first.Body.String(), retry.Code, retry.Body.String())
+	}
+}
