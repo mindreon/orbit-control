@@ -50,7 +50,7 @@ No unit tests are added for persistence.
 | S-DB-11 | (a) static ISO-1; (b) E2E + ISO-2 |
 | S-DB-12 | E2E (FM-63): blob ingest on the internal listener; public listener returns 404 |
 | S-DB-14 | ISO-18, connected as `orbit_app` |
-| ISO-21, ISO-22 | task runtime tables and the `orbit_worker` role |
+| ISO-21, ISO-22, ISO-25 | task runtime tables and the `orbit_worker` role |
 
 ## Privilege decisions
 
@@ -98,10 +98,11 @@ does (ISO-1 rules apply to its SQL as well).
 | `node_type_registry` | **none** | SELECT | SELECT | Global, not tenant data. Seeded by the migration; `team_stage` is disabled in v1 (A20). |
 | `tasks` | tenant | SELECT, INSERT, UPDATE (`status, plan_version, budgets, usage, pending_approvals, updated_at`); `policy` is written at creation and never updated | — | The v3 control service creates tasks, applies durable runtime projections, and may repair a projection from the authoritative workflow Query during T4.5 reconciliation. |
 | `task_nodes`, `task_approvals` | tenant | SELECT, INSERT | — | Projections written by the Projector in control. Their UPDATE columns are added with the Projector (orbit-infra 12 Step 7). |
-| `stage_attempts` | tenant | SELECT, INSERT | SELECT, DELETE | Control owns the projection; the worker maintenance schedule deletes attempts left STARTING or RUNNING for more than 24 hours. |
+| `stage_attempts` | tenant | SELECT, INSERT | SELECT, UPDATE (`status, failure, finished_at, entity_version`) (migration 00018); **no DELETE** | Control owns the projection. The worker maintenance schedule looks at attempts left STARTING or RUNNING for more than 24 hours and, only when their AttemptWorkflow no longer exists or has closed, moves them to a terminal status (`LOST` or `ABORTED`) with the reason in `failure`. An attempt parked on an approval or on user input can legitimately stay RUNNING for days, so age alone never changes a row, and nothing deletes one: the row is history. |
 | `plan_versions`, `task_messages`, `task_events` | tenant | SELECT, INSERT; **no UPDATE, no DELETE** | — | Immutable history, like `events` and `messages`. |
 | `runtime_outbox` | **none** | SELECT, UPDATE (`projected_at`) | INSERT, SELECT (`event_id`) | The Projector reads every tenant's rows in one pass (09 §3), so RLS would stall it. Rows carry `tenant_id`, and the Projector writes them into tenant tables under that tenant. The worker only appends. `INSERT … ON CONFLICT (event_id) DO NOTHING` (the idempotent publish, 04 §3) needs SELECT on the conflict column, so the worker may read `event_id` and nothing else; it still cannot read a body or another tenant's task id. Cleanup after 7 days is a later grant. |
 | `idempotency_ledger` | tenant | SELECT, INSERT | SELECT, INSERT, UPDATE (`status, result_ref, owner, last_seen`) | The worker moves a side effect from `started` to `succeeded` or `failed_permanent` (10 §1). |
+| `tenants` | **none** | SELECT | SELECT (`id`) only, no INSERT, UPDATE or DELETE (migration 00018) | The maintenance schedules run once per tenant under that tenant's RLS, so the worker has to know which tenants exist; a tenant created after the worker started is then covered on the next tick. The column grant limits it to the id: the worker cannot read a tenant's name. |
 | `checkpoints` | tenant | SELECT | SELECT, INSERT, UPDATE (`committed_in_history`), DELETE | The commit protocol (08 §3) marks a checkpoint once workflow history holds its ref; the maintenance GC deletes stale uncommitted rows and their blobs. |
 | `artifact_manifests` | tenant | SELECT, INSERT | SELECT, INSERT; **no UPDATE, no DELETE** | The control Projector creates the immutable projection from `artifact.manifest_created`; workers may also write the manifest before the event arrives (03 §9). |
 | `workspace_leases` | tenant | SELECT | SELECT, INSERT, UPDATE (`sandbox_id, expires_at, released_at`) | Heartbeats renew a lease; release and the reaper set `released_at` (08 §1). A partial unique index allows one live write lease per workspace key. `backend` is `docker` or `opensandbox` in production; `local` is the filesystem backend the dev stack and the acceptance E2E run with. |
@@ -357,7 +358,8 @@ Connected **as `orbit_worker`**:
 
 - **FM-82.** `orbit_worker` can read the catalog or control's projections. A
   worker compromised through a tool or sandbox escape then reads personas,
-  MCP connector settings or other tenants' tasks.
+  MCP connector settings or other tenants' tasks. (The one exception is the
+  `id` column of `tenants`, ISO-25.)
 - **FM-83.** `orbit_worker` has SUPERUSER, BYPASSRLS, TRUNCATE or TRIGGER,
   or owns a table. One bad statement then crosses every tenant.
 - **FM-84.** `orbit_worker` can UPDATE columns no design path writes (for
@@ -375,3 +377,22 @@ properties are privileges.
   file is removed. A body over `ORBIT_ARTIFACT_MAX_BYTES` is **413**, counted while streaming, and leaves no temp file.
   On the public listener every `/internal/*` path, including `/internal/events` and `/internal/artifact-blobs`, is
   **404**.
+
+### ISO-25 — `orbit_worker` maintenance grants: attempts and tenant ids
+
+Connected **as `orbit_worker`**, on a `stage_attempts` row seeded by the owner:
+
+- UPDATE of `status`, `failure`, `finished_at` and `entity_version` works;
+- UPDATE of any other column (`attempt_no`, `task_id`, `node_id`, `tenant_id`, `started_at`) fails with `42501`;
+- DELETE fails with `42501`;
+- `SELECT id FROM tenants` returns every tenant without a tenant being set; `SELECT name FROM tenants`, and any
+  INSERT, UPDATE or DELETE on `tenants`, fail with `42501`.
+
+- **FM-87.** `orbit_worker` can DELETE `stage_attempts`. A maintenance bug that mistakes a parked attempt for an orphan
+  (one that waited two days for an approval) then erases the attempt's history instead of correcting a status.
+- **FM-88.** `orbit_worker` can rewrite the identity of a `stage_attempts` row (`attempt_no`, `task_id`, `node_id`) or
+  reach another tenant's row. Maintenance may only close a row out, in its own tenant.
+- **FM-89.** `orbit_worker` can read tenant names or write `tenants`. The tenant listing exists so maintenance can visit
+  every tenant; it must stay a list of ids.
+
+Why HTTP cannot catch these: the worker has no HTTP surface in control; the properties are privileges.
