@@ -107,7 +107,7 @@ func TestSDB14AppRoleCannotEscapeRLS(t *testing.T) {
 		}
 	}
 	sort.Strings(missing)
-	iso(t, "S-DB-14/rls-implies-force", c, []string{"FM-50"}, "every public table with RLS enabled also has FORCE ROW LEVEL SECURITY; all 13 [T] tables have RLS",
+	iso(t, "S-DB-14/rls-implies-force", c, []string{"FM-50"}, "every public table with RLS enabled also has FORCE ROW LEVEL SECURITY; every [T] table has RLS",
 		sqlReq{Role: "orbit_app", SQL: sdb14RLSSQL},
 		map[string]any{"rlsWithoutForce": []string{}, "tenantTablesWithoutRLS": []string{}, "rlsTablesAtLeast": len(tenantTables), "sqlstate": "ok"},
 		map[string]any{"rlsWithoutForce": noForce, "tenantTablesWithoutRLS": missing, "rlsTables": rlsTables, "sqlstate": sqlState(rlsErr)},

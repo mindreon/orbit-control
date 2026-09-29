@@ -6,35 +6,47 @@ import (
 	"errors"
 	"slices"
 	"strconv"
+	"time"
 
-	"github.com/jackc/pgx/v5"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	taskruntime "github.com/mindreon/orbit-control/internal/task"
 )
 
+type sopDefinitionRow struct {
+	TenantID  string `gorm:"primaryKey"`
+	SopID     string `gorm:"primaryKey"`
+	Version   int    `gorm:"primaryKey"`
+	Steps     []byte `gorm:"type:jsonb"`
+	CreatedAt time.Time
+}
+
+func (sopDefinitionRow) TableName() string { return "sop_definitions" }
+
 func (s *Store) RegisterSOP(ctx context.Context, p taskruntime.Principal, sop taskruntime.SOP) (taskruntime.SOP, error) {
-	err := s.inTenantTx(ctx, p.TenantID, func(tx pgx.Tx) error {
-		steps, err := json.Marshal(sop.Steps)
-		if err != nil {
+	steps, err := json.Marshal(sop.Steps)
+	if err != nil {
+		return taskruntime.SOP{}, err
+	}
+	err = s.inTenant(ctx, p.TenantID, func(tx *gorm.DB) error {
+		// A version is immutable: inserting it again changes nothing, and the stored steps decide below.
+		insert := sopDefinitionRow{TenantID: p.TenantID, SopID: sop.SOPID, Version: sop.Version, Steps: steps}
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Select("TenantID", "SopID", "Version", "Steps").Create(&insert).Error; err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO sop_definitions(tenant_id, sop_id, version, steps)
-			VALUES ($1,$2,$3,$4::jsonb) ON CONFLICT (tenant_id, sop_id, version) DO NOTHING`,
-			p.TenantID, sop.SOPID, sop.Version, steps); err != nil {
-			return err
-		}
-		var stored []byte
-		if err := tx.QueryRow(ctx, `SELECT steps, created_at FROM sop_definitions WHERE tenant_id=$1 AND sop_id=$2 AND version=$3`,
-			p.TenantID, sop.SOPID, sop.Version).Scan(&stored, &sop.CreatedAt); err != nil {
+		var stored sopDefinitionRow
+		if err := tx.Where("tenant_id = ? AND sop_id = ? AND version = ?", p.TenantID, sop.SOPID, sop.Version).Take(&stored).Error; err != nil {
 			return err
 		}
 		var existing []taskruntime.SOPStep
-		if err := json.Unmarshal(stored, &existing); err != nil {
+		if err := json.Unmarshal(stored.Steps, &existing); err != nil {
 			return err
 		}
 		if !slices.Equal(existing, sop.Steps) {
 			return taskruntime.ErrIdempotencyConflict
 		}
+		sop.CreatedAt = stored.CreatedAt
 		return nil
 	})
 	if err != nil {
@@ -45,25 +57,20 @@ func (s *Store) RegisterSOP(ctx context.Context, p taskruntime.Principal, sop ta
 
 func (s *Store) ListSOPs(ctx context.Context, p taskruntime.Principal) ([]taskruntime.SOP, error) {
 	items := []taskruntime.SOP{}
-	err := s.inTenantTx(ctx, p.TenantID, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT sop_id, version, steps, created_at FROM sop_definitions WHERE tenant_id=$1 ORDER BY sop_id, version`, p.TenantID)
-		if err != nil {
+	err := s.inTenant(ctx, p.TenantID, func(tx *gorm.DB) error {
+		var rows []sopDefinitionRow
+		if err := tx.Where("tenant_id = ?", p.TenantID).Order("sop_id, version").Find(&rows).Error; err != nil {
 			return err
 		}
-		defer rows.Close()
-		for rows.Next() {
-			var item taskruntime.SOP
-			var steps []byte
-			if err := rows.Scan(&item.SOPID, &item.Version, &steps, &item.CreatedAt); err != nil {
-				return err
-			}
-			if err := json.Unmarshal(steps, &item.Steps); err != nil {
+		for _, row := range rows {
+			item := taskruntime.SOP{SOPID: row.SopID, Version: row.Version, CreatedAt: row.CreatedAt}
+			if err := json.Unmarshal(row.Steps, &item.Steps); err != nil {
 				return errors.New("stored SOP steps are not a list of steps")
 			}
-			item.Ref = item.SOPID + "@" + strconv.Itoa(item.Version)
+			item.Ref = row.SopID + "@" + strconv.Itoa(row.Version)
 			items = append(items, item)
 		}
-		return rows.Err()
+		return nil
 	})
 	return items, projectionErr("list sops", err)
 }

@@ -20,37 +20,6 @@ import (
 	"time"
 )
 
-// contractGitRev is the newest commit that changed the contract file: C35 (53ee38c0) plus the AgentScope 2.0.9
-// baseline edit. The suite hashes that blob; it does not hard-code the hash.
-const contractGitRev = "1fd25aadcf3f28cdf1ae3f7594c92c74d5db5039"
-
-var (
-	contractRevision       = "C35 with the AgentScope 2.0.9 baseline (" + contractGitRev + ")"
-	contractSHA256         string
-	contractLines          int
-	previousContractSHA256 string
-)
-
-func init() {
-	root, err := repoRoot()
-	if err != nil {
-		return
-	}
-	raw, err := exec.Command("git", "-C", root, "show", contractGitRev+":"+contractFile).Output()
-	if err != nil {
-		return
-	}
-	sum := sha256.Sum256(raw)
-	contractSHA256 = hex.EncodeToString(sum[:])
-	contractLines = strings.Count(string(raw), "\n")
-	prev, err := exec.Command("git", "-C", root, "show", contractGitRev+"^:"+contractFile).Output()
-	if err != nil {
-		return
-	}
-	psum := sha256.Sum256(prev)
-	previousContractSHA256 = hex.EncodeToString(psum[:])
-}
-
 // Case is one row of the report. Kind is "e2e", "isolated" (must cite FM ids
 // from docs/persistence-failure-modes.md), "static" or "process". Status is
 // "pass", "fail" or "blocked" (feature outside this PR; see BlockedBy).
@@ -282,7 +251,7 @@ var reModuleVersion = regexp.MustCompile(`(?m)^\s*(?:require\s+)?(github\.com/ja
 // secretNeedles are values that must never appear in the report: DB URLs,
 // the DB users' passwords from the environment, and planted secrets.
 func secretNeedles() []string {
-	needles := []string{"postgres://", "postgresql://", planted, plantedDBPassword, plantedIdemKey, plantedSessionID, "PGPASSWORD", "-----BEGIN"}
+	needles := []string{"postgres://", "postgresql://", plantedDBPassword, "PGPASSWORD", "-----BEGIN"}
 	for _, raw := range []string{appURL, ownerURL, opsURL} {
 		if u, err := url.Parse(raw); err == nil && u.User != nil {
 			if pw, ok := u.User.Password(); ok && pw != "" {
@@ -360,7 +329,7 @@ func writeReport() (string, bool, error) {
 	sum := sha256.Sum256(normCases)
 	report := map[string]any{
 		"suite":      "e2e-persistence",
-		"contract":   map[string]string{"document": contractFile, "section": contractRevision, "sha256": contractSHA256, "previousSha256": previousContractSHA256},
+		"contract":   map[string]string{"document": "docs/persistence-failure-modes.md", "schema": "internal/contract/v3/contracts.json"},
 		"gitSha":     gitSHA(root),
 		"components": components(),
 		"harness": map[string]string{

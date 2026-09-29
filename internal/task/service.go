@@ -3,16 +3,17 @@ package task
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/oklog/ulid/v2"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/mindreon/orbit-control/internal/orch"
+	"github.com/mindreon/orbit-control/internal/store"
 )
 
 type Principal struct {
@@ -27,6 +28,7 @@ type CreateInput struct {
 	Profile string
 	SOP     string
 	Budgets map[string]any
+	Policy  Policy
 }
 
 type Task struct {
@@ -45,6 +47,7 @@ type Task struct {
 	Budgets          map[string]any `json:"budgets"`
 	Usage            map[string]any `json:"usage"`
 	PendingApprovals []string       `json:"pending_approvals"`
+	Policy           Policy         `json:"policy"`
 }
 
 type TaskReconcileDifference struct {
@@ -114,7 +117,8 @@ type TaskClient interface {
 	SignalTask(context.Context, string, string, string, any) error
 }
 
-var ErrNotFound = errors.New("task not found")
+// ErrNotFound is the repository sentinel: a task that does not exist, or that another tenant or user owns.
+var ErrNotFound = store.ErrNotFound
 var ErrClosed = errors.New("task is closed")
 
 // ErrMalformedEvent marks an event that can never be projected (no tenant, task or id). Retrying it cannot help.
@@ -222,11 +226,11 @@ func (s *Service) GetProfile(ctx context.Context, p Principal, ref string) (Prof
 func PersonaProfileRef(id string) string { return "persona_" + id + "@1" }
 
 func (s *Service) Manifests(ctx context.Context, p Principal, taskID string) ([]ArtifactManifest, error) {
-	if s.projection != nil {
-		return s.projection.ListManifests(ctx, p, taskID)
-	}
 	if _, err := s.Get(ctx, p, taskID); err != nil {
 		return nil, err
+	}
+	if s.projection != nil {
+		return s.projection.ListManifests(ctx, p, taskID)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -289,14 +293,15 @@ func (s *Service) Create(ctx context.Context, p Principal, in CreateInput) (*Tas
 	if in.Budgets == nil {
 		in.Budgets = map[string]any{}
 	}
-	id, err := newID("task")
-	if err != nil {
+	if err := in.Policy.validate(); err != nil {
 		return nil, err
 	}
+	in.Policy = in.Policy.normalized()
+	id := newID("task")
 	now := time.Now().UTC()
 	t := &Task{ID: id, TenantID: p.TenantID, WorkflowID: orch.TaskWorkflowID(p.TenantID, id), Title: in.Title,
 		Goal: in.Goal, Mode: in.Mode, Status: "CREATED", Profile: in.Profile, PlanVersion: 1,
-		CreatedBy: p.UserID, CreatedAt: now, UpdatedAt: now, Budgets: in.Budgets, Usage: map[string]any{}}
+		CreatedBy: p.UserID, CreatedAt: now, UpdatedAt: now, Budgets: in.Budgets, Usage: map[string]any{}, Policy: in.Policy}
 	if s.projection != nil {
 		if err := s.projection.CreateTask(ctx, p, t); err != nil {
 			return nil, err
@@ -316,7 +321,7 @@ func (s *Service) Create(ctx context.Context, p Principal, in CreateInput) (*Tas
 		_, err := s.orch.StartTask(ctx, orch.TaskWorkflowInput{
 			TaskID: id, TenantID: p.TenantID, CreatedBy: map[string]any{"kind": "user", "id": p.UserID},
 			Title: in.Title, Goal: in.Goal, Mode: in.Mode, Profile: in.Profile, SOP: in.SOP,
-			NodeTypeRegistryVersion: 1, Budgets: in.Budgets,
+			NodeTypeRegistryVersion: 1, Budgets: in.Budgets, Policy: in.Policy,
 		})
 		if err != nil {
 			// The durable task exists even if Temporal is temporarily unavailable;
@@ -432,11 +437,11 @@ func (s *Service) Signal(ctx context.Context, p Principal, id, name string, payl
 }
 
 func (s *Service) Plan(ctx context.Context, p Principal, id string) (orch.TaskPlan, error) {
-	if s.orch == nil {
-		return orch.TaskPlan{}, nil
-	}
 	if _, err := s.Get(ctx, p, id); err != nil {
 		return orch.TaskPlan{}, err
+	}
+	if s.orch == nil {
+		return orch.TaskPlan{}, nil
 	}
 	return s.orch.GetTaskPlan(ctx, p.TenantID, id)
 }
@@ -832,6 +837,7 @@ func cloneTask(t *Task) *Task {
 	copy.Budgets = cloneMap(t.Budgets)
 	copy.Usage = cloneMap(t.Usage)
 	copy.PendingApprovals = append([]string(nil), t.PendingApprovals...)
+	copy.Policy.DeniedTools = append([]string{}, t.Policy.DeniedTools...)
 	return &copy
 }
 
@@ -931,20 +937,6 @@ func isClosed(status string) bool {
 	return status == "COMPLETED" || status == "FAILED" || status == "CANCELLED"
 }
 
-func newID(prefix string) (string, error) {
-	var raw [16]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return "", err
-	}
-	const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
-	var encoded [26]byte
-	value := raw
-	for i := len(encoded) - 1; i >= 0; i-- {
-		encoded[i] = alphabet[value[15]&31]
-		for j := len(value) - 1; j > 0; j-- {
-			value[j] = value[j]>>5 | value[j-1]<<3
-		}
-		value[0] >>= 5
-	}
-	return prefix + "_" + string(encoded[:]), nil
-}
+// newID is an identifier of the contract's shape: the prefix, then a 26 character Crockford ULID (time ordered, so
+// ids sort by creation).
+func newID(prefix string) string { return prefix + "_" + ulid.Make().String() }

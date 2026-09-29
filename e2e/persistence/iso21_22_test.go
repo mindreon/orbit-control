@@ -223,10 +223,9 @@ func TestISO22WorkerRoleGrants(t *testing.T) {
 		firstErr(roleErr, ownedErr, memberErr, privErr) == nil && who == "orbit_worker" && !super && !bypass &&
 			len(owned) == 0 && len(members) == 0 && len(granted) == 0)
 
-	// FM-82: no privilege at all on room-era tables or control's projections.
-	forbidden := append(append([]string{}, tenantTables...),
-		"tenants", "sessions", "oidc_login_state", "tasks", "task_nodes",
-		"task_approvals", "plan_versions", "task_messages", "task_events")
+	// FM-82: no privilege at all on the catalog, the tenants table or control's projections.
+	forbidden := []string{"tenants", "personas", "mcp_connectors", "tasks", "task_nodes",
+		"task_approvals", "plan_versions", "task_messages", "task_events"}
 	const privSQL = `SELECT t FROM unnest($1::text[]) AS t
 	                  WHERE has_table_privilege(current_user, t, 'SELECT, INSERT, UPDATE, DELETE')`
 	reachable := []string{}
@@ -241,8 +240,8 @@ func TestISO22WorkerRoleGrants(t *testing.T) {
 		}
 		r.Close()
 	}
-	iso(t, "ISO-22/no-room-or-projection-access", c, []string{"FM-82"},
-		"orbit_worker has no SELECT, INSERT, UPDATE or DELETE on room-era tables or on control's task projections",
+	iso(t, "ISO-22/no-catalog-or-projection-access", c, []string{"FM-82"},
+		"orbit_worker has no SELECT, INSERT, UPDATE or DELETE on the catalog or on control's task projections",
 		sqlReq{Role: "orbit_worker", SQL: privSQL},
 		map[string]any{"reachable": []string{}, "checked": len(forbidden), "error": "ok"},
 		map[string]any{"reachable": reachable, "checked": len(forbidden), "error": sqlState(reachErr)},

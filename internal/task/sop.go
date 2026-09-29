@@ -55,7 +55,7 @@ func (st SOPStep) normalized() SOPStep {
 	return st
 }
 
-var errSOPNeedsStore = errors.New("the SOP registry needs the durable task store")
+var errSOPNeedsStore = errNeedsStore("the SOP registry")
 
 func (s *Service) RegisterSOP(ctx context.Context, p Principal, sop SOP) (SOP, error) {
 	if p.TenantID == "" || p.UserID == "" || sop.SOPID == "" || sop.Version < 1 {

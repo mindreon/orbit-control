@@ -9,11 +9,10 @@ import (
 
 	"github.com/mindreon/orbit-control/internal/app"
 	taskruntime "github.com/mindreon/orbit-control/internal/task"
-	"github.com/mindreon/orbit-control/internal/worker"
 )
 
 func TestTaskAPIEndToEndIdempotencyAndSSECursor(t *testing.T) {
-	h := HandlerWith(app.New(worker.New("")))
+	h := HandlerWith(app.NewWithOptions(app.Options{}))
 	create := httptest.NewRecorder()
 	h.ServeHTTP(create, internalReq(http.MethodPost, "/v1/tasks", `{"title":"demo","goal":"ship"}`))
 	if create.Code != http.StatusCreated {
@@ -44,7 +43,7 @@ func TestTaskAPIEndToEndIdempotencyAndSSECursor(t *testing.T) {
 }
 
 func TestTaskProfilesAndManifestProjection(t *testing.T) {
-	runtime := app.New(worker.New(""))
+	runtime := app.NewWithOptions(app.Options{})
 	h := HandlerWith(runtime)
 	profile := httptest.NewRecorder()
 	h.ServeHTTP(profile, internalReq(http.MethodPost, "/v1/profiles", `{"profile_id":"coder","version":1,"spec":{"model":"test"}}`))

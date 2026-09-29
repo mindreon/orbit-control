@@ -21,14 +21,6 @@ var tenantParamAllowlist = map[string]bool{
 	"Repository.Close": true,
 	"pgstore.Close":    true,
 	"memstore.Close":   true,
-	// Pre-login tables (no tenant yet, §18.5); FM-47.
-	"auth.Create": true,
-	"auth.Lookup": true,
-	"auth.Delete": true,
-	// Artifact ingest learns the tenant from the room, then filters by it.
-	"pgstore.FindRoomTenant": true,
-	// The reconciler lists every tenant, then opens a tenant-scoped transaction.
-	"pgstore.ListTenantIDs": true,
 	// Runtime outbox is intentionally cross-tenant and has no RLS; the
 	// projector claims and marks batches in one pass (09 §3).
 	"pgstore.ClaimRuntimeOutbox":         true,
@@ -46,15 +38,15 @@ var tenantParamAllowlist = map[string]bool{
 	"pgstore.RegisterProfile": true,
 	"pgstore.ListProfiles":    true,
 	"pgstore.RegisterSOP":     true,
+	"pgstore.GetTenantPolicy": true,
+	"pgstore.SetTenantPolicy": true,
 	"pgstore.ListSOPs":        true,
 	"pgstore.GetProfile":      true,
 	"pgstore.ListManifests":   true,
 	"pgstore.GetManifest":     true,
 }
 
-var rePreLoginTableSQL = regexp.MustCompile(`(?i)\b(FROM|INTO|UPDATE|JOIN)\s+(public\.)?(sessions|oidc_login_state)\b`)
-
-var reTenantTableSQL = regexp.MustCompile(`(?i)\b(FROM|INTO|UPDATE|JOIN)\s+(public\.)?(users|rooms|turns|events|messages|approvals|approval_rules|idempotency_keys|artifacts|artifact_versions|personas|mcp_connectors|cloud_agent_jobs)\b`)
+var reTenantTableSQL = regexp.MustCompile(`(?i)\b(FROM|INTO|UPDATE|JOIN)\s+(public\.)?(agent_profiles|tasks|plan_versions|task_nodes|stage_attempts|task_approvals|task_messages|task_events|idempotency_ledger|checkpoints|artifact_manifests|workspace_leases|sop_definitions|tenant_policy|personas|mcp_connectors)\b`)
 
 type methodFinding struct {
 	Method string `json:"method"`
@@ -192,7 +184,7 @@ func TestSDB01StaticTenantScopedRepository(t *testing.T) {
 		Actual:      map[string]any{"findings": ifaceFindings, "methods": ifaceChecked},
 		Pass:        len(ifaceFindings) == 0 && len(ifaceChecked) >= 10})
 
-	for _, impl := range []struct{ dir, recv string }{{"internal/store/pgstore", "Store"}, {"internal/store/memstore", "Store"}, {"internal/store/auth", "Sessions"}} {
+	for _, impl := range []struct{ dir, recv string }{{"internal/store/pgstore", "Store"}, {"internal/store/memstore", "Store"}} {
 		checked, findings := storeMethods(t, filepath.Join(root, impl.dir), impl.recv)
 		if findings == nil {
 			findings = []methodFinding{}
@@ -205,45 +197,6 @@ func TestSDB01StaticTenantScopedRepository(t *testing.T) {
 			Actual:      map[string]any{"findings": findings, "methods": checked},
 			Pass:        len(findings) == 0 && len(checked) >= 3})
 	}
-
-	// FM-47: pre-login tables only from internal/store/auth.
-	preLogin := []finding{}
-	preLoginInAuth := 0
-	_ = filepath.WalkDir(filepath.Join(root, "internal"), func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return err
-		}
-		fset := token.NewFileSet()
-		f, perr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-		if perr != nil {
-			return nil
-		}
-		rel, _ := filepath.Rel(root, path)
-		rel = filepath.ToSlash(rel)
-		inAuth := strings.HasPrefix(rel, "internal/store/auth/")
-		ast.Inspect(f, func(n ast.Node) bool {
-			b, ok := n.(*ast.BasicLit)
-			if !ok || b.Kind != token.STRING {
-				return true
-			}
-			if s, err := strconv.Unquote(b.Value); err == nil && rePreLoginTableSQL.MatchString(s) {
-				if inAuth {
-					preLoginInAuth++
-				} else {
-					preLogin = append(preLogin, finding{rel + ":" + strconv.Itoa(fset.Position(b.Pos()).Line), "FM-47: pre-login table accessed outside internal/store/auth"})
-				}
-			}
-			return true
-		})
-		return nil
-	})
-	record(t, caseInput{ID: "S-DB-1/pre-login-table-boundary", Contract: c, Kind: "static", FailureModes: []string{"FM-47"},
-		Description: "sessions / oidc_login_state SQL appears only in internal/store/auth",
-		Steps:       []string{"parse every non-test Go file under internal/", "flag SQL naming sessions or oidc_login_state outside internal/store/auth"},
-		Request:     map[string]any{"scope": "internal/**/*.go (non-test)"},
-		Expected:    map[string]any{"findings": []finding{}, "statementsInAuthAtLeast": 3},
-		Actual:      map[string]any{"findings": preLogin, "statementsInAuth": preLoginInAuth},
-		Pass:        len(preLogin) == 0 && preLoginInAuth >= 3})
 
 	// SQL literals in pgstore touching [T] tables must carry tenant_id.
 	fset, pgFiles := parseDir(t, filepath.Join(root, "internal/store/pgstore"))
@@ -269,10 +222,10 @@ func TestSDB01StaticTenantScopedRepository(t *testing.T) {
 		})
 	}
 	record(t, caseInput{ID: "S-DB-1/sql-tenant-predicate", Contract: c, Kind: "static", FailureModes: []string{"FM-27"},
-		Description: "every pgstore SQL literal that reads or writes a [T] table contains tenant_id",
+		Description: "every raw pgstore SQL literal that reads or writes a [T] table contains tenant_id (gorm builders run in inTenant; S-DB-2 checks RLS underneath)",
 		Steps:       []string{"parse internal/store/pgstore string literals", "for statements naming a [T] table after FROM/INTO/UPDATE/JOIN: require tenant_id"},
 		Request:     map[string]any{"package": "internal/store/pgstore"},
-		Expected:    map[string]any{"findings": []finding{}, "statementsAtLeast": 10},
+		Expected:    map[string]any{"findings": []finding{}},
 		Actual:      map[string]any{"findings": sqlFindings, "statements": sqlChecked},
-		Pass:        len(sqlFindings) == 0 && sqlChecked >= 10})
+		Pass:        len(sqlFindings) == 0})
 }

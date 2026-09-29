@@ -36,8 +36,10 @@ func registerTaskRoutes(mux *http.ServeMux, runtime *app.App, authed func(princi
 		case errors.Is(err, taskruntime.ErrIdempotencyConflict):
 			writeErr(w, http.StatusConflict, "IDEMPOTENCY_KEY_REUSED", "command id was already used with a different request")
 		case errors.Is(err, store.ErrStorage):
+			runtime.Log.Printf("task storage error: %v", err)
 			writeErr(w, http.StatusInternalServerError, "STORAGE_ERROR", "task storage is temporarily unavailable")
 		default:
+			runtime.Log.Printf("bad task request: %v", err)
 			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "the request is invalid")
 		}
 	}
@@ -83,6 +85,27 @@ func registerTaskRoutes(mux *http.ServeMux, runtime *app.App, authed func(princi
 		}
 		writeJSON(w, http.StatusOK, profile)
 	}))
+	mux.HandleFunc("GET /v1/policy", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		policy, err := runtime.Tasks.GetTenantPolicy(r.Context(), toPrincipal(p))
+		if err != nil {
+			writeTaskErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, policy)
+	}))
+	mux.HandleFunc("PUT /v1/policy", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		var body taskruntime.Policy
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "request body must be valid JSON")
+			return
+		}
+		policy, err := runtime.Tasks.SetTenantPolicy(r.Context(), toPrincipal(p), body)
+		if err != nil {
+			writeTaskErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, policy)
+	}))
 	mux.HandleFunc("GET /v1/sops", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		items, err := runtime.Tasks.ListSOPs(r.Context(), toPrincipal(p))
 		if err != nil {
@@ -110,18 +133,19 @@ func registerTaskRoutes(mux *http.ServeMux, runtime *app.App, authed func(princi
 	}))
 	mux.HandleFunc("POST /v1/tasks", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		var body struct {
-			Title   string         `json:"title"`
-			Goal    string         `json:"goal"`
-			Mode    string         `json:"mode"`
-			Profile string         `json:"profile"`
-			SOP     string         `json:"sop"`
-			Budgets map[string]any `json:"budgets"`
+			Title   string             `json:"title"`
+			Goal    string             `json:"goal"`
+			Mode    string             `json:"mode"`
+			Profile string             `json:"profile"`
+			SOP     string             `json:"sop"`
+			Budgets map[string]any     `json:"budgets"`
+			Policy  taskruntime.Policy `json:"policy"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "request body must be valid JSON")
 			return
 		}
-		t, err := runtime.Tasks.Create(r.Context(), toPrincipal(p), taskruntime.CreateInput{Title: body.Title, Goal: body.Goal, Mode: body.Mode, Profile: body.Profile, SOP: body.SOP, Budgets: body.Budgets})
+		t, err := runtime.Tasks.Create(r.Context(), toPrincipal(p), taskruntime.CreateInput{Title: body.Title, Goal: body.Goal, Mode: body.Mode, Profile: body.Profile, SOP: body.SOP, Budgets: body.Budgets, Policy: body.Policy})
 		if err != nil {
 			writeTaskErr(w, err)
 			return

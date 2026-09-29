@@ -1,6 +1,6 @@
 -- TaskWorkflow runtime tables (orbit-infra docs/architecture 03, 08, 09, 10;
--- 12 Step 2). They sit next to the room tables until the cutover and do not
--- reference them. Grants and their reasons: docs/persistence-failure-modes.md
+-- 12 Step 2). They do not
+-- reference the catalog tables. Grants and their reasons: docs/persistence-failure-modes.md
 -- ("Task runtime tables and orbit_worker"); checks: ISO-21, ISO-22.
 --
 -- No foreign key points at tasks: the worker writes ledger, checkpoint and

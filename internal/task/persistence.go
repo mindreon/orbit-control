@@ -14,6 +14,8 @@ type ProjectionStore interface {
 	RegisterProfile(context.Context, Principal, Profile) (Profile, error)
 	ListProfiles(context.Context, Principal) ([]Profile, error)
 	GetProfile(context.Context, Principal, string) (Profile, error)
+	GetTenantPolicy(context.Context, Principal) (Policy, error)
+	SetTenantPolicy(context.Context, Principal, Policy) (Policy, error)
 	RegisterSOP(context.Context, Principal, SOP) (SOP, error)
 	ListSOPs(context.Context, Principal) ([]SOP, error)
 	ListManifests(context.Context, Principal, string) ([]ArtifactManifest, error)

@@ -4,63 +4,123 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 
-	"github.com/jackc/pgx/v5"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/mindreon/orbit-control/internal/store"
 )
 
-// mcp_market_servers and mcp_market_categories are shared marketplace
-// metadata. They are not tenant tables: statements do not filter by
-// tenant_id. tenantID is still required so a caller without a tenant cannot
+// mcp_market_servers, mcp_market_categories and mcp_market_details are shared marketplace metadata. They are not
+// tenant tables: statements do not filter by tenant_id. tenantID is still required so a caller without a tenant cannot
 // use the repository.
+
+type mcpMarketServerRow struct {
+	ID           string `gorm:"primaryKey"`
+	Name         string
+	Summary      string
+	Author       string
+	Category     string
+	CategoryMore int
+	Calls        int64
+	Views        int64
+	Stars        int64
+	Verified     bool
+	Hosted       bool
+	NeedsOnline  bool
+	Rank         int
+}
+
+func (mcpMarketServerRow) TableName() string { return "mcp_market_servers" }
+
+type mcpMarketCategoryRow struct {
+	Key       string `gorm:"primaryKey"`
+	Name      string
+	SortOrder int
+}
+
+func (mcpMarketCategoryRow) TableName() string { return "mcp_market_categories" }
+
+type mcpMarketDetailRow struct {
+	ID        string `gorm:"primaryKey"`
+	License   string
+	UpdatedOn string
+	Readme    string
+	Tools     []byte `gorm:"type:jsonb"`
+}
+
+func (mcpMarketDetailRow) TableName() string { return "mcp_market_details" }
+
+// mcpMarketListRow is a server with the label of its category, and the fields of its detail when there are any: flat
+// (gorm skips embedded structs of unexported type).
+type mcpMarketListRow struct {
+	ID           string
+	Name         string
+	Summary      string
+	Author       string
+	Category     string
+	CategoryName string
+	CategoryMore int
+	Calls        int64
+	Views        int64
+	Stars        int64
+	Verified     bool
+	Hosted       bool
+	NeedsOnline  bool
+	Rank         int
+	License      string
+	UpdatedOn    string
+	Readme       string
+	Tools        []byte
+}
+
+func (r mcpMarketListRow) record() store.McpMarketRecord {
+	return store.McpMarketRecord{
+		ID: r.ID, Name: r.Name, Summary: r.Summary, Author: r.Author, Category: r.Category, CategoryName: r.CategoryName,
+		CategoryMore: r.CategoryMore, Calls: r.Calls, Views: r.Views, Stars: r.Stars, Verified: r.Verified, Hosted: r.Hosted,
+		NeedsOnline: r.NeedsOnline, Rank: r.Rank,
+	}
+}
+
+const mcpMarketSelect = `s.id, s.name, s.summary, s.author, s.category, COALESCE(c.name, '') AS category_name,
+	s.category_more, s.calls, s.views, s.stars, s.verified, s.hosted, s.needs_online, s.rank`
+
+func mcpServers(tx *gorm.DB) *gorm.DB {
+	return tx.Table("mcp_market_servers AS s").Joins("LEFT JOIN mcp_market_categories c ON c.key = s.category")
+}
 
 func (s *Store) ListMcpMarket(ctx context.Context, tenantID string, q store.McpMarketQuery) (store.McpMarketPage, error) {
 	if tenantID == "" {
 		return store.McpMarketPage{}, store.ErrNotFound
 	}
 	q = store.NormalizeMcpMarketQuery(q)
-	where, args := mcpMarketWhere(q, true)
-	storedWhere, storedArgs := mcpMarketWhere(store.McpMarketQuery{NeedsOnline: q.NeedsOnline}, false)
-	var page store.McpMarketPage
-	page.Page = q.Page
-	page.PageSize = q.PageSize
-	page.Items = []store.McpMarketRecord{}
-	err := s.withTx(ctx, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, "SELECT count(*) FROM mcp_market_servers s WHERE "+storedWhere, storedArgs...).Scan(&page.Stored); err != nil {
+	page := store.McpMarketPage{Page: q.Page, PageSize: q.PageSize, Items: []store.McpMarketRecord{}}
+	err := s.inShared(ctx, func(tx *gorm.DB) error {
+		var stored, total int64
+		if err := mcpServers(tx).Scopes(mcpMarketFilter(store.McpMarketQuery{NeedsOnline: q.NeedsOnline}, false)).Count(&stored).Error; err != nil {
 			return storageErr("count mcp market stored", err)
 		}
-		if err := tx.QueryRow(ctx, "SELECT count(*) FROM mcp_market_servers s LEFT JOIN mcp_market_categories c ON c.key = s.category WHERE "+where, args...).Scan(&page.Total); err != nil {
+		if err := mcpServers(tx).Scopes(mcpMarketFilter(q, true)).Count(&total).Error; err != nil {
 			return storageErr("count mcp market", err)
 		}
-		limit := len(args) + 1
-		offset := len(args) + 2
-		listSQL := `SELECT s.id, s.name, s.summary, s.author, s.category, COALESCE(c.name, ''),
-		                   s.category_more, s.calls, s.views, s.stars, s.verified, s.hosted, s.needs_online, s.rank
-		              FROM mcp_market_servers s
-		              LEFT JOIN mcp_market_categories c ON c.key = s.category
-		             WHERE ` + where + `
-		             ORDER BY ` + mcpMarketOrder(q, len(args)) + fmt.Sprintf(`
-		             LIMIT $%d OFFSET $%d`, limit, offset)
-		rows, err := tx.Query(ctx, listSQL, append(append([]any{}, args...), q.PageSize, (q.Page-1)*q.PageSize)...)
-		if err != nil {
+		page.Stored, page.Total = int(stored), int(total)
+		var rows []mcpMarketListRow
+		list := mcpServers(tx).Select(mcpMarketSelect).Scopes(mcpMarketFilter(q, true))
+		if q.Keyword == "" {
+			list = list.Order("s.rank ASC, s.id ASC")
+		} else {
+			// Cards whose name or author match come before those that only match elsewhere.
+			list = list.Order(clause.Expr{
+				SQL:  `CASE WHEN lower(s.name) LIKE ? ESCAPE '\' OR lower(s.author) LIKE ? ESCAPE '\' THEN 0 ELSE 1 END, s.rank ASC, s.id ASC`,
+				Vars: []any{likeContains(q.Keyword), likeContains(q.Keyword)},
+			})
+		}
+		if err := list.Limit(q.PageSize).Offset((q.Page - 1) * q.PageSize).Find(&rows).Error; err != nil {
 			return storageErr("list mcp market", err)
 		}
-		defer rows.Close()
-		for rows.Next() {
-			var rec store.McpMarketRecord
-			if err := rows.Scan(
-				&rec.ID, &rec.Name, &rec.Summary, &rec.Author, &rec.Category, &rec.CategoryName,
-				&rec.CategoryMore, &rec.Calls, &rec.Views, &rec.Stars, &rec.Verified, &rec.Hosted, &rec.NeedsOnline, &rec.Rank,
-			); err != nil {
-				return storageErr("scan mcp market", err)
-			}
-			page.Items = append(page.Items, rec)
-		}
-		if err := rows.Err(); err != nil {
-			return storageErr("list mcp market", err)
+		for _, row := range rows {
+			page.Items = append(page.Items, row.record())
 		}
 		return nil
 	})
@@ -71,69 +131,57 @@ func (s *Store) ListMcpMarketCategories(ctx context.Context, tenantID string, ne
 	if tenantID == "" {
 		return nil, store.ErrNotFound
 	}
-	needsOnline = store.NormalizeMcpMarketQuery(store.McpMarketQuery{NeedsOnline: needsOnline}).NeedsOnline
 	filter := "TRUE"
-	switch needsOnline {
+	switch store.NormalizeMcpMarketQuery(store.McpMarketQuery{NeedsOnline: needsOnline}).NeedsOnline {
 	case "true":
 		filter = "s.needs_online"
 	case "false":
 		filter = "NOT s.needs_online"
 	}
-	out := []store.McpMarketCategoryCount{}
-	err := s.withTx(ctx, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `
-			SELECT c.key, c.name, c.sort_order, count(s.id) FILTER (WHERE `+filter+`)
-			  FROM mcp_market_categories c
-			  LEFT JOIN mcp_market_servers s ON s.category = c.key
-			 GROUP BY c.key, c.name, c.sort_order
-			HAVING count(s.id) FILTER (WHERE `+filter+`) > 0
-			 ORDER BY c.sort_order, c.key`)
-		if err != nil {
-			return storageErr("list mcp market categories", err)
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var rec store.McpMarketCategoryCount
-			if err := rows.Scan(&rec.Key, &rec.Name, &rec.SortOrder, &rec.Count); err != nil {
-				return storageErr("scan mcp market category", err)
-			}
-			out = append(out, rec)
-		}
-		return rows.Err()
+	// filter is one of three constants above, never caller input.
+	counted := "count(s.id) FILTER (WHERE " + filter + ")"
+	var rows []struct {
+		Key       string
+		Name      string
+		SortOrder int
+		Count     int
+	}
+	err := s.inShared(ctx, func(tx *gorm.DB) error {
+		return tx.Table("mcp_market_categories AS c").
+			Select("c.key, c.name, c.sort_order, " + counted + " AS count").
+			Joins("LEFT JOIN mcp_market_servers s ON s.category = c.key").
+			Group("c.key, c.name, c.sort_order").Having(counted + " > 0").Order("c.sort_order, c.key").Scan(&rows).Error
 	})
-	return out, err
+	if err != nil {
+		return nil, storageErr("list mcp market categories", err)
+	}
+	out := make([]store.McpMarketCategoryCount, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, store.McpMarketCategoryCount{Key: row.Key, Name: row.Name, SortOrder: row.SortOrder, Count: row.Count})
+	}
+	return out, nil
 }
 
 func (s *Store) GetMcpMarket(ctx context.Context, tenantID, id string) (store.McpMarketDetail, error) {
 	if tenantID == "" || id == "" {
 		return store.McpMarketDetail{}, store.ErrNotFound
 	}
-	var out store.McpMarketDetail
-	var toolsRaw []byte
-	err := s.withTx(ctx, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `
-			SELECT s.id, s.name, s.summary, s.author, s.category, COALESCE(c.name, ''),
-			       s.category_more, s.calls, s.views, s.stars, s.verified, s.hosted, s.needs_online, s.rank,
-			       COALESCE(d.license, ''), COALESCE(d.updated_on, ''), COALESCE(d.readme, ''),
-			       COALESCE(d.tools, '[]'::jsonb)
-			FROM mcp_market_servers s
-			LEFT JOIN mcp_market_categories c ON c.key = s.category
-			LEFT JOIN mcp_market_details d ON d.id = s.id
-			WHERE s.id = $1`, id).Scan(
-			&out.ID, &out.Name, &out.Summary, &out.Author, &out.Category, &out.CategoryName,
-			&out.CategoryMore, &out.Calls, &out.Views, &out.Stars, &out.Verified, &out.Hosted, &out.NeedsOnline, &out.Rank,
-			&out.License, &out.UpdatedOn, &out.Readme, &toolsRaw,
-		)
+	var row mcpMarketListRow
+	err := s.inShared(ctx, func(tx *gorm.DB) error {
+		return mcpServers(tx).Joins("LEFT JOIN mcp_market_details d ON d.id = s.id").
+			Select(mcpMarketSelect+`, COALESCE(d.license, '') AS license, COALESCE(d.updated_on, '') AS updated_on,
+				COALESCE(d.readme, '') AS readme, COALESCE(d.tools, '[]'::jsonb) AS tools`).
+			Where("s.id = ?", id).Take(&row).Error
 	})
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return store.McpMarketDetail{}, store.ErrNotFound
-		}
-		return store.McpMarketDetail{}, err
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return store.McpMarketDetail{}, store.ErrNotFound
 	}
-	out.Tools = []store.McpMarketTool{}
-	if len(toolsRaw) > 0 {
-		if err := json.Unmarshal(toolsRaw, &out.Tools); err != nil {
+	if err != nil {
+		return store.McpMarketDetail{}, storageErr("get mcp market", err)
+	}
+	out := store.McpMarketDetail{McpMarketRecord: row.record(), License: row.License, UpdatedOn: row.UpdatedOn, Readme: row.Readme, Tools: []store.McpMarketTool{}}
+	if len(row.Tools) > 0 {
+		if err := json.Unmarshal(row.Tools, &out.Tools); err != nil {
 			return store.McpMarketDetail{}, storageErr("decode mcp market tools", err)
 		}
 	}
@@ -143,148 +191,109 @@ func (s *Store) GetMcpMarket(ctx context.Context, tenantID, id string) (store.Mc
 	return out, nil
 }
 
+const marketChunk = 200
+
+// ReplaceMcpMarket swaps the stored plaza for the given one in one transaction. Details of servers that are not in the
+// new plaza are dropped, and categories are upserted, not replaced.
 func (s *Store) ReplaceMcpMarket(ctx context.Context, tenantID string, servers []store.McpMarketRecord, categories []store.McpMarketCategoryRecord, details []store.McpMarketDetailRecord) error {
 	if tenantID == "" {
 		return store.ErrNotFound
 	}
-	return s.withTx(ctx, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `DELETE FROM mcp_market_details`); err != nil {
-			return storageErr("clear mcp market details", err)
+	serverRows := make([]mcpMarketServerRow, 0, len(servers))
+	known := map[string]struct{}{}
+	for _, row := range servers {
+		if row.ID == "" {
+			continue
 		}
-		if _, err := tx.Exec(ctx, `DELETE FROM mcp_market_servers`); err != nil {
-			return storageErr("clear mcp market", err)
+		known[row.ID] = struct{}{}
+		serverRows = append(serverRows, mcpMarketServerRow{
+			ID: row.ID, Name: row.Name, Summary: row.Summary, Author: row.Author, Category: row.Category, CategoryMore: row.CategoryMore,
+			Calls: row.Calls, Views: row.Views, Stars: row.Stars, Verified: row.Verified, Hosted: row.Hosted, NeedsOnline: row.NeedsOnline, Rank: row.Rank,
+		})
+	}
+	detailRows := make([]mcpMarketDetailRow, 0, len(details))
+	for _, row := range details {
+		if _, ok := known[row.ID]; !ok {
+			continue
 		}
-		const chunk = 200
-		for start := 0; start < len(servers); start += chunk {
-			end := start + chunk
-			if end > len(servers) {
-				end = len(servers)
-			}
-			batch := &pgx.Batch{}
-			for _, row := range servers[start:end] {
-				if row.ID == "" {
-					continue
+		tools := row.Tools
+		if tools == nil {
+			tools = []store.McpMarketTool{}
+		}
+		raw, err := json.Marshal(tools)
+		if err != nil {
+			return storageErr("encode mcp market tools", err)
+		}
+		detailRows = append(detailRows, mcpMarketDetailRow{ID: row.ID, License: row.License, UpdatedOn: row.UpdatedOn, Readme: row.Readme, Tools: raw})
+	}
+	categoryRows := make([]mcpMarketCategoryRow, 0, len(categories))
+	for _, row := range categories {
+		if row.Key != "" {
+			categoryRows = append(categoryRows, mcpMarketCategoryRow{Key: row.Key, Name: row.Name, SortOrder: row.SortOrder})
+		}
+	}
+	return s.inShared(ctx, func(tx *gorm.DB) error {
+		for _, step := range []struct {
+			op    string
+			write func() error
+		}{
+			{"clear mcp market details", func() error { return tx.Where("TRUE").Delete(&mcpMarketDetailRow{}).Error }},
+			{"clear mcp market", func() error { return tx.Where("TRUE").Delete(&mcpMarketServerRow{}).Error }},
+			{"insert mcp market", func() error { return createInChunks(tx, serverRows) }},
+			{"insert mcp market details", func() error { return createInChunks(tx, detailRows) }},
+			{"upsert mcp market categories", func() error {
+				if len(categoryRows) == 0 {
+					return nil
 				}
-				batch.Queue(`
-					INSERT INTO mcp_market_servers (
-					  id, name, summary, author, category, category_more,
-					  calls, views, stars, verified, hosted, needs_online, rank
-					) VALUES (
-					  $1, $2, $3, $4, $5, $6,
-					  $7, $8, $9, $10, $11, $12, $13
-					)`,
-					row.ID, row.Name, row.Summary, row.Author, row.Category, row.CategoryMore,
-					row.Calls, row.Views, row.Stars, row.Verified, row.Hosted, row.NeedsOnline, row.Rank)
-			}
-			if batch.Len() == 0 {
-				continue
-			}
-			if err := execBatch(ctx, tx, batch, "insert mcp market"); err != nil {
-				return err
+				return tx.Clauses(clause.OnConflict{
+					Columns: []clause.Column{{Name: "key"}}, DoUpdates: clause.AssignmentColumns([]string{"name", "sort_order"}),
+				}).Create(&categoryRows).Error
+			}},
+		} {
+			if err := step.write(); err != nil {
+				return storageErr(step.op, err)
 			}
 		}
-		known := map[string]struct{}{}
-		for _, row := range servers {
-			if row.ID != "" {
-				known[row.ID] = struct{}{}
-			}
-		}
-		for start := 0; start < len(details); start += chunk {
-			end := start + chunk
-			if end > len(details) {
-				end = len(details)
-			}
-			batch := &pgx.Batch{}
-			for _, row := range details[start:end] {
-				if row.ID == "" {
-					continue
-				}
-				if _, ok := known[row.ID]; !ok {
-					continue
-				}
-				tools := row.Tools
-				if tools == nil {
-					tools = []store.McpMarketTool{}
-				}
-				raw, err := json.Marshal(tools)
-				if err != nil {
-					return storageErr("encode mcp market tools", err)
-				}
-				batch.Queue(`
-					INSERT INTO mcp_market_details (id, license, updated_on, readme, tools)
-					VALUES ($1, $2, $3, $4, $5::jsonb)`,
-					row.ID, row.License, row.UpdatedOn, row.Readme, raw)
-			}
-			if batch.Len() == 0 {
-				continue
-			}
-			if err := execBatch(ctx, tx, batch, "insert mcp market details"); err != nil {
-				return err
-			}
-		}
-		if len(categories) == 0 {
-			return nil
-		}
-		batch := &pgx.Batch{}
-		for _, row := range categories {
-			if row.Key == "" {
-				continue
-			}
-			batch.Queue(`
-				INSERT INTO mcp_market_categories (key, name, sort_order)
-				VALUES ($1, $2, $3)
-				ON CONFLICT (key) DO UPDATE SET
-				  name = EXCLUDED.name,
-				  sort_order = EXCLUDED.sort_order`,
-				row.Key, row.Name, row.SortOrder)
-		}
-		if batch.Len() == 0 {
-			return nil
-		}
-		return execBatch(ctx, tx, batch, "upsert mcp market categories")
+		return nil
 	})
 }
 
-func mcpMarketWhere(q store.McpMarketQuery, withSearch bool) (string, []any) {
-	q = store.NormalizeMcpMarketQuery(q)
-	parts := []string{"TRUE"}
-	args := []any{}
-	switch q.NeedsOnline {
-	case "true":
-		parts = append(parts, "s.needs_online")
-	case "false":
-		parts = append(parts, "NOT s.needs_online")
+func createInChunks[T any](tx *gorm.DB, rows []T) error {
+	if len(rows) == 0 {
+		return nil
 	}
-	if !withSearch {
-		return strings.Join(parts, " AND "), args
-	}
-	if q.Category != "" {
-		args = append(args, q.Category)
-		parts = append(parts, fmt.Sprintf("s.category = $%d", len(args)))
-	}
-	switch q.ServiceType {
-	case "hosted":
-		parts = append(parts, "s.hosted")
-	case "local":
-		parts = append(parts, "NOT s.hosted")
-	}
-	if q.Keyword != "" {
-		args = append(args, likeContains(q.Keyword))
-		n := len(args)
-		parts = append(parts, fmt.Sprintf(`(
-			lower(s.name) LIKE $%d ESCAPE '\' OR lower(s.author) LIKE $%d ESCAPE '\' OR
-			lower(s.summary) LIKE $%d ESCAPE '\' OR lower(s.category) LIKE $%d ESCAPE '\' OR
-			lower(COALESCE(c.name, '')) LIKE $%d ESCAPE '\'
-		)`, n, n, n, n, n))
-	}
-	return strings.Join(parts, " AND "), args
+	return tx.CreateInBatches(&rows, marketChunk).Error
 }
 
-func mcpMarketOrder(q store.McpMarketQuery, argCount int) string {
-	if q.Keyword == "" {
-		return "s.rank ASC, s.id ASC"
+func mcpMarketFilter(q store.McpMarketQuery, withSearch bool) func(*gorm.DB) *gorm.DB {
+	q = store.NormalizeMcpMarketQuery(q)
+	return func(tx *gorm.DB) *gorm.DB {
+		switch q.NeedsOnline {
+		case "true":
+			tx = tx.Where("s.needs_online")
+		case "false":
+			tx = tx.Where("NOT s.needs_online")
+		}
+		if !withSearch {
+			return tx
+		}
+		if q.Category != "" {
+			tx = tx.Where("s.category = ?", q.Category)
+		}
+		switch q.ServiceType {
+		case "hosted":
+			tx = tx.Where("s.hosted")
+		case "local":
+			tx = tx.Where("NOT s.hosted")
+		}
+		if q.Keyword != "" {
+			like := likeContains(q.Keyword)
+			tx = tx.Where(`(lower(s.name) LIKE ? ESCAPE '\' OR lower(s.author) LIKE ? ESCAPE '\' OR
+				lower(s.summary) LIKE ? ESCAPE '\' OR lower(s.category) LIKE ? ESCAPE '\' OR
+				lower(COALESCE(c.name, '')) LIKE ? ESCAPE '\')`, like, like, like, like, like)
+		}
+		return tx
 	}
-	return fmt.Sprintf(`CASE WHEN lower(s.name) LIKE $%d ESCAPE '\' OR lower(s.author) LIKE $%d ESCAPE '\' THEN 0 ELSE 1 END, s.rank ASC, s.id ASC`, argCount, argCount)
 }
 
 func likeContains(keyword string) string {

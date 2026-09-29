@@ -4,50 +4,29 @@ One-pager for humans and coding agents contributing here.
 
 ## What this repo is
 
-Sole **public HTTP/WS API** for Orbit: tenants, accounts, personas, rooms, approvals, secrets, billing, cloud-agent jobs.
+The sole **public HTTP API** for Orbit: the task center (TaskWorkflow), profiles, SOPs, policy, artifacts, and the
+tenant catalog. Read [README.md](./README.md) before adding files.
 
-Read [README.md](./README.md) and [ARCHITECTURE.md](./ARCHITECTURE.md) before adding files.
+The agent loop is **AgentScope on orbit-worker**, not this process. Do not add agent runtimes or LLM SDKs here.
 
-The agent loop is **dsh on orbit-worker**, not this process. Do not add dsh, Pi, or LLM SDKs here.
+## Rules
 
-## W1 rules
-
-- In-memory rooms, messages, HITL, and SSE are allowed. Still no OAuth.
-- Postgres persistence follows contract §18 only: pgx + goose, behind
-  `store.Repository`. No data backward-compatibility shims.
-- Persistence is verified by E2E (`e2e/persistence`, build tag `e2e`) through
-  the HTTP API against real Postgres, producing
-  `artifacts/e2e-persistence-report.json`. No unit tests for it. An isolated
-  SQL/role/static check needs an entry in
+- Postgres persistence follows contract §18: gorm over pgx behind `store.Repository`, goose migrations, no
+  AutoMigrate. Tenant tables are reached only through `inTenant`, which sets `app.tenant_id` first. No data
+  backward-compatibility shims.
+- Persistence is verified by E2E (`e2e/persistence`, build tag `e2e`) through the HTTP API against real Postgres,
+  producing `artifacts/e2e-persistence-report.json`. An isolated SQL/role/static check needs an entry in
   `docs/persistence-failure-modes.md` committed before the check.
-- Temporal is optional: set `TEMPORAL_ADDRESS` to drive `RoomWorkflow` (orbit-orch); otherwise control calls orbit-worker over HTTP.
 - **No tenant secret plaintext** in logs, fixtures, or OpenAPI examples.
-- Do not import dsh, Pi, or LLM SDKs here.
+- `go test ./...` must pass without external services (the Postgres E2E suite is behind the `e2e` build tag).
 
 ## Where things go
 
 | Change | Put it here | Not here |
 | --- | --- | --- |
 | Public path or error shape | `docs/openapi.yaml` first | orch / worker repos |
-| HTTP mux / stub status | `internal/httpapi` | New frameworks, ORMs |
+| HTTP mux | `internal/httpapi` | New frameworks |
 | Process entrypoint | `cmd/orbit-control` | Multiple public binaries |
-| Boundary / trust rules | `ARCHITECTURE.md` | Ad-hoc comments only |
+| Contract v3 types | `scripts/sync-contracts.sh` from orbit-runtime | Hand edits to `internal/contract/v3` |
 
-`orbit-web` must keep calling **only** this API. Orchestration contract changes belong in [orbit-orch](https://github.com/mindreon/orbit-orch).
-
-## Before you PR
-
-1. Mark new public paths `501` / unimplemented until a later wave implements them.
-2. Keep `401` / `403` stub schemas stable — Sentinel will assert them.
-3. `go test ./...` must pass without external services (the Postgres E2E
-   suite is behind the `e2e` build tag).
-4. Do not add `go.mod` requires for dsh, Pi, or LLM SDKs. The only
-   infrastructure dependencies are the Temporal SDK (optional path) and pgx +
-   goose (contract §18).
-
-## Cross-links
-
-- Public contract: [docs/openapi.yaml](./docs/openapi.yaml)
-- Web UI consumer: [orbit-web](https://github.com/mindreon/orbit-web)
-- Orch contracts: [orbit-orch](https://github.com/mindreon/orbit-orch)
-- Worker: [orbit-worker](https://github.com/mindreon/orbit-worker)
+`orbit-web` must keep calling **only** this API.

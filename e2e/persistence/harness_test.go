@@ -5,7 +5,6 @@ package persistence
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,9 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -26,10 +23,8 @@ import (
 
 	"github.com/mindreon/orbit-control/internal/app"
 	"github.com/mindreon/orbit-control/internal/httpapi"
-	"github.com/mindreon/orbit-control/internal/orch"
 	"github.com/mindreon/orbit-control/internal/store/pgstore"
 	taskruntime "github.com/mindreon/orbit-control/internal/task"
-	"github.com/mindreon/orbit-control/internal/worker"
 )
 
 var (
@@ -46,10 +41,7 @@ const (
 )
 
 func TestMain(m *testing.M) {
-	alias(planted, "<planted-secret>")
 	alias(plantedDBPassword, "<planted-db-password>")
-	alias(plantedIdemKey, "<planted-idempotency-key>")
-	alias(plantedSessionID, "<planted-session-id>")
 	code := run(m)
 	path, gateOK, err := writeReport()
 	if err != nil {
@@ -210,18 +202,10 @@ type server struct {
 }
 
 type serverOpts struct {
-	tenant       string
-	maxConns     int32
-	workerURL    string
-	orch         app.Orchestrator
-	abortTimeout time.Duration
-	// deliveryTimeout bounds resolveApproval / acceptance of the decide Update.
-	deliveryTimeout   time.Duration
-	reconcileInterval time.Duration
-	unknownTimeout    time.Duration
-	turnTimeout       time.Duration
-	artifactDir       string
-	artifactMax       int64
+	tenant      string
+	maxConns    int32
+	artifactDir string
+	artifactMax int64
 	// projector runs the runtime_outbox Projector, as in production. It holds one connection for LISTEN, so a
 	// test that sets it needs a pool of more than one.
 	projector bool
@@ -234,10 +218,7 @@ func startServer(t *testing.T, o serverOpts) *server {
 	repo := pgstore.New(pool)
 	logs := &syncBuffer{}
 	runtime := app.NewWithOptions(app.Options{
-		Worker: worker.New(o.workerURL), Orch: o.orch, Repo: repo,
-		Log: log.New(logs, "", 0), DefaultTenant: o.tenant, AbortTimeout: o.abortTimeout,
-		DeliveryTimeout: o.deliveryTimeout, ReconcileInterval: o.reconcileInterval,
-		UnknownTimeout: o.unknownTimeout, TurnTimeout: o.turnTimeout,
+		Repo: repo, Log: log.New(logs, "", 0), DefaultTenant: o.tenant,
 		ArtifactDir: o.artifactDir, ArtifactMaxBytes: o.artifactMax,
 	})
 	if o.projector {
@@ -259,10 +240,7 @@ func startServer(t *testing.T, o serverOpts) *server {
 	srv := httptest.NewServer(httpapi.HandlerWithOptions(runtime, httpapi.Options{
 		Auth: auth, AllowedOrigins: []string{testOrigin},
 	}))
-	t.Cleanup(func() {
-		srv.Close()
-		runtime.StopReconcile()
-	})
+	t.Cleanup(srv.Close)
 	isrv := httptest.NewServer(httpapi.InternalHandler(runtime))
 	t.Cleanup(isrv.Close)
 	return &server{base: srv.URL, internal: isrv.URL, appPool: pool, logs: logs, runtime: runtime}
@@ -369,167 +347,4 @@ func withHeader(h map[string]string, k, v string) map[string]string {
 		out[hk] = hv
 	}
 	return out
-}
-
-func roomID(t *testing.T, a httpAct) string {
-	t.Helper()
-	var r app.Room
-	if err := json.Unmarshal([]byte(a.Body), &r); err != nil || r.ID == "" {
-		t.Fatalf("no room id in %q", a.Body)
-	}
-	return r.ID
-}
-
-// stubWorker serves orbit-worker activities. onAbort runs inside the abort
-// activity so the scenario can observe ordering.
-func stubWorker(t *testing.T, onAbort func(roomID string)) *httptest.Server {
-	var n atomic.Int64
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		raw, _ := io.ReadAll(r.Body)
-		var in map[string]any
-		_ = json.Unmarshal(raw, &in)
-		i := n.Add(1)
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/openSession"):
-			fmt.Fprintf(w, `{"sessionId":"sess-%d"}`, i)
-		case strings.HasSuffix(r.URL.Path, "/runTurn"):
-			fmt.Fprintf(w, `{"status":"needs_approval","approval":{"approvalRequestId":"ask-%d","toolName":"bash","reason":"ls"},"texts":["stub reply"]}`, i)
-		case strings.HasSuffix(r.URL.Path, "/resolveApproval"):
-			_, _ = io.WriteString(w, `{"applied":true}`)
-		case strings.HasSuffix(r.URL.Path, "/abort"):
-			if onAbort != nil {
-				id, _ := in["roomId"].(string)
-				onAbort(id)
-			}
-			_, _ = io.WriteString(w, `{"aborted":true}`)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(srv.Close)
-	return srv
-}
-
-// stubOrch stubs Temporal for S-DB-13 (k): Abort hangs until the deadline
-// ("timeout") or fails with a token-like message ("error").
-type stubOrch struct {
-	mode    string
-	aborts  atomic.Int32
-	onAbort func(roomID string)
-	seq     atomic.Int64
-	// askApproval makes RunTurn park an approval; decides counts the
-	// Update calls that deliver a decision (review M-d). acceptDelay holds
-	// acceptance of the decide Update; completeDelay holds its result (the
-	// resumed turn) after acceptance; resumeText, when set, is the resumed
-	// turn's assistant text.
-	askApproval   bool
-	acceptDelay   time.Duration
-	completeDelay time.Duration
-	resumeText    string
-	decides       atomic.Int32
-	updateIDs     sync.Map
-	outcomes      sync.Map
-	// onDecide runs when the Update is received, before acceptDelay.
-	onDecide func()
-	// acceptErr, when set, fails acceptance immediately so in-request
-	// retries run until DeliveryTimeout.
-	acceptErr error
-	// ttlS is decideConfig.ttlS. Zero means 86400.
-	ttlS       int
-	configErr  error
-	outcomeErr error
-	pending    bool
-	pendingErr error
-}
-
-const planted = "sk-live-E2E-PLANTED-SECRET"
-
-func (f *stubOrch) StartRoom(_ context.Context, roomID, kind, _ string, _ []orch.McpConnectorSpec) (orch.RoomView, error) {
-	return orch.RoomView{RoomID: roomID, State: "running", Kind: kind, SessionID: fmt.Sprintf("sess-k-%d", f.seq.Add(1))}, nil
-}
-func (f *stubOrch) RunTurn(context.Context, string, string, string) (orch.RunTurnResult, error) {
-	if f.askApproval {
-		return orch.RunTurnResult{Status: "needs_approval", Approval: &orch.ApprovalAsk{ApprovalRequestID: "ask-orch-1", ToolName: "bash"}}, nil
-	}
-	return orch.RunTurnResult{Status: "completed"}, nil
-}
-
-// Decide counts the Update as delivered on receipt, then reports acceptance
-// after acceptDelay unless the caller gives up first.
-func (f *stubOrch) Decide(ctx context.Context, _, approvalRequestID, _, decision string) (orch.DecideUpdate, error) {
-	f.decides.Add(1)
-	f.updateIDs.Store(approvalRequestID, true)
-	if f.onDecide != nil {
-		f.onDecide()
-	}
-	if f.acceptErr != nil {
-		return nil, f.acceptErr
-	}
-	select {
-	case <-time.After(f.acceptDelay):
-		f.outcomes.Store(approvalRequestID, orch.DecideOutcome{Decision: decision, TurnStatus: "completed"})
-		return stubDecideUpdate{f: f, decision: decision}, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-}
-
-func (f *stubOrch) DecideConfig(context.Context, string) (orch.DecideConfig, error) {
-	if f.configErr != nil {
-		return orch.DecideConfig{}, f.configErr
-	}
-	ttl := f.ttlS
-	if ttl == 0 {
-		ttl = 86400
-	}
-	return orch.DecideConfig{TTLS: ttl, MaxDecided: 1024}, nil
-}
-
-func (f *stubOrch) DecideOutcome(_ context.Context, _, approvalRequestID string) (bool, orch.DecideOutcome, error) {
-	if f.outcomeErr != nil {
-		return false, orch.DecideOutcome{}, f.outcomeErr
-	}
-	v, ok := f.outcomes.Load(approvalRequestID)
-	if !ok {
-		return false, orch.DecideOutcome{}, nil
-	}
-	return true, v.(orch.DecideOutcome), nil
-}
-
-func (f *stubOrch) ApprovalPending(context.Context, string, string) (bool, error) {
-	if f.pendingErr != nil {
-		return false, f.pendingErr
-	}
-	return f.pending, nil
-}
-
-type stubDecideUpdate struct {
-	f        *stubOrch
-	decision string
-}
-
-func (u stubDecideUpdate) Result(ctx context.Context) (orch.DecideResult, error) {
-	select {
-	case <-time.After(u.f.completeDelay):
-	case <-ctx.Done():
-		return orch.DecideResult{}, ctx.Err()
-	}
-	out := orch.DecideResult{Decision: u.decision}
-	if u.f.resumeText != "" {
-		out.Turn = &orch.RunTurnResult{Status: "completed", Texts: []string{u.f.resumeText}}
-	}
-	return out, nil
-}
-func (f *stubOrch) Steer(context.Context, string, string, string) error { return nil }
-func (f *stubOrch) Abort(ctx context.Context, roomID, _, _ string) error {
-	f.aborts.Add(1)
-	if f.onAbort != nil {
-		f.onAbort(roomID)
-	}
-	if f.mode == "timeout" {
-		<-ctx.Done()
-		return ctx.Err()
-	}
-	return errors.New("temporal signal failed: token=" + planted)
 }

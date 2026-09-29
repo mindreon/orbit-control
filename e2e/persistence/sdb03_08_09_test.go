@@ -3,14 +3,13 @@
 package persistence
 
 import (
+	"context"
 	"encoding/json"
 	"net"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/mindreon/orbit-control/internal/app"
 )
 
 const plantedDBPassword = "e2e-planted-db-password-7f3a"
@@ -31,21 +30,20 @@ func TestSDB03RestartKeepsData(t *testing.T) {
 	const c = "S-DB-3"
 	const tenant = "t-sdb3"
 	opsEnsureTenant(t, tenant)
-	wk := stubWorker(t, nil)
 	ownerPool := newPool(t, ownerURL, 2)
+	workerPool := newPool(t, workerURL, 2)
 	boot := func() (vars []envVar, internalBase string) {
 		internal := freePort(t)
 		vars = []envVar{
 			appDBVar(),
 			{Name: "ORBIT_DEFAULT_TENANT", Value: tenant},
-			{Name: "ORBIT_WORKER_URL", Value: wk.URL, Display: "<stub worker>"},
 			{Name: "ORBIT_DATA_DIR", Value: t.TempDir(), Display: "<temp dir>"},
 			{Name: "PORT", Value: freePort(t)},
 			{Name: "ORBIT_INTERNAL_ADDR", Value: "127.0.0.1:" + internal, Display: "127.0.0.1:<port>"},
 		}
 		return vars, "http://127.0.0.1:" + internal
 	}
-	v1, internal1 := boot()
+	v1, _ := boot()
 	p1 := startBinary(t, v1)
 	healthy := p1.waitHealthy(15 * time.Second)
 	record(t, caseInput{ID: "S-DB-3/start-1", Contract: c, Description: "orbit-control binary starts against Postgres",
@@ -57,28 +55,32 @@ func TestSDB03RestartKeepsData(t *testing.T) {
 		t.FailNow()
 	}
 
-	create := httpReq{Method: "POST", Path: "/v1/rooms", Headers: map[string]string{"Idempotency-Key": "e2e-sdb3"}, Body: `{"kind":"solo","title":"survives restart"}`}
-	room := roomID(t, checkAt(t, p1.base, "S-DB-3/create", c, "create a task (binary local mode, local-dev principal)", create, httpExp{Status: 200}))
-	alias(room, "<room-sdb3>")
-	posted := checkAt(t, p1.base, "S-DB-3/message", c, "post a message; the stub worker parks an approval",
-		httpReq{Method: "POST", Path: "/v1/rooms/" + room + "/messages", Body: `{"message":"list files"}`},
-		httpExp{Status: 200, BodyIncludes: []string{`"approval":{`}})
-	var pb struct {
-		Approval *app.Approval `json:"approval"`
+	created := checkAt(t, p1.base, "S-DB-3/create-task", c, "create a task (binary local mode, local-dev principal)",
+		httpReq{Method: "POST", Path: "/v1/tasks", Body: `{"title":"survives restart","goal":"keep the projection"}`},
+		httpExp{Status: 201, BodyIncludes: []string{`"task_id"`, `"status":"CREATED"`}})
+	var task struct {
+		ID string `json:"task_id"`
 	}
-	_ = json.Unmarshal([]byte(posted.Body), &pb)
-	if pb.Approval == nil {
-		t.Fatalf("no approval: %s", posted.Body)
+	if err := json.Unmarshal([]byte(created.Body), &task); err != nil || task.ID == "" {
+		t.Fatalf("no task id in %q", created.Body)
 	}
-	alias(pb.Approval.ID, "<approval-sdb3>")
+	alias(task.ID, "<task-sdb3>")
+	checkAt(t, p1.base, "S-DB-3/create-persona", c, "create an assistant in the catalog",
+		httpReq{Method: "POST", Path: "/v1/personas", Body: `{"name":"Reviewer","instructions":"be careful"}`},
+		httpExp{Status: 200, BodyIncludes: []string{`"name":"Reviewer"`}})
 
-	evBody := `{"type":"tool.call","roomId":"` + room + `","toolName":"bash","occurredAt":"2026-09-26T00:00:00Z"}`
-	checkAt(t, internal1, "S-DB-3/ingest-before-restart", c, "a worker event is stored under the task's own seq",
-		httpReq{Method: "POST", Path: "/internal/events", Body: evBody}, httpExp{Status: 202})
-	seqBefore := ownerScalar[int64](t, ownerPool, `SELECT last_event_seq FROM rooms WHERE id = $1`, room)
+	// Durable events reach the projection only through runtime_outbox, as orbit_worker writes them.
+	event := `{"schema":"orbit.event/3","event_id":"evt_01SDB3000000000000000000001","tenant_id":"` + tenant + `","task_id":"` + task.ID + `","type":"task.status_changed","source":{"kind":"workflow","id":"w"},"entity":{"kind":"task","id":"` + task.ID + `","version":1},"retention":"durable","occurred_at":"2026-09-29T00:00:00Z","payload":{"from_status":"CREATED","to_status":"RUNNING"}}`
+	if _, err := execAsApp(context.Background(), workerPool, tenant,
+		`INSERT INTO runtime_outbox (tenant_id, task_id, event_id, body) VALUES ($1, $2, $3, $4::jsonb)`,
+		tenant, task.ID, "evt_01SDB3000000000000000000001", event); err != nil {
+		t.Fatalf("append to runtime_outbox: %v", err)
+	}
+	waitForProjection(t, &server{base: p1.base, logs: &syncBuffer{}}, task.ID, nil, `"status":"RUNNING"`)
+	eventsBefore := ownerScalar[int64](t, ownerPool, `SELECT count(*) FROM task_events WHERE task_id = $1`, task.ID)
 
 	p1.stop()
-	v2, internal2 := boot()
+	v2, _ := boot()
 	p2 := startBinary(t, v2)
 	healthy = p2.waitHealthy(15 * time.Second)
 	record(t, caseInput{ID: "S-DB-3/restart", Contract: c, Description: "kill the process and start a fresh one on the same database",
@@ -89,39 +91,21 @@ func TestSDB03RestartKeepsData(t *testing.T) {
 	if !healthy {
 		t.FailNow()
 	}
-	checkAt(t, p2.base, "S-DB-3/room-after-restart", c, "the task is still there with its state",
-		httpReq{Method: "GET", Path: "/v1/rooms/" + room},
-		httpExp{Status: 200, BodyIncludes: []string{room, `"state":"awaiting_approval"`, `"title":"survives restart"`}})
+	checkAt(t, p2.base, "S-DB-3/restart-keeps-task", c, "the task is still there with its projected state",
+		httpReq{Method: "GET", Path: "/v1/tasks/" + task.ID},
+		httpExp{Status: 200, BodyIncludes: []string{task.ID, `"status":"RUNNING"`, `"title":"survives restart"`}})
 	checkAt(t, p2.base, "S-DB-3/list-after-restart", c, "the task is listed",
-		httpReq{Method: "GET", Path: "/v1/rooms"}, httpExp{Status: 200, BodyIncludes: []string{room}})
-	checkAt(t, p2.base, "S-DB-3/messages-after-restart", c, "user and assistant messages are still there",
-		httpReq{Method: "GET", Path: "/v1/rooms/" + room + "/messages"},
-		httpExp{Status: 200, BodyIncludes: []string{`"role":"user","text":"list files"`, `"role":"assistant","text":"stub reply"`}})
-	checkAt(t, p2.base, "S-DB-3/approval-after-restart", c, "the pending approval is still there",
-		httpReq{Method: "GET", Path: "/v1/approvals"}, httpExp{Status: 200, BodyIncludes: []string{pb.Approval.ID, `"status":"pending"`}})
-	checkAt(t, p2.base, "S-DB-3/idempotency-after-restart", c, "Idempotency-Key replay after restart returns the same task",
-		create, httpExp{Status: 200, BodyIncludes: []string{room}, Headers: map[string]string{"Idempotent-Replayed": "true"}})
-	checkAt(t, p2.base, "S-DB-3/decide-after-restart", c, "the approval can be decided after restart",
-		httpReq{Method: "POST", Path: "/v1/approvals/" + pb.Approval.ID + "/decide", Body: `{"decision":"allow"}`},
-		httpExp{Status: 200, BodyIncludes: []string{`"status":"decided"`, `"decision":"allow"`}})
-	checkAt(t, p2.base, "S-DB-3/events-after-restart", c, "events written before the restart are replayed from Postgres after it",
-		httpReq{Method: "GET", Path: "/v1/rooms/" + room + "/activity"},
-		httpExp{Status: 200, BodyIncludes: []string{`"type":"tool.call"`}, BodyExcludes: []string{`"type":"assistant.delta"`}})
-	checkAt(t, internal2, "S-DB-3/ingest-after-restart", c, "another worker event is accepted after restart",
-		httpReq{Method: "POST", Path: "/internal/events", Body: `{"type":"tool.result","roomId":"` + room + `","toolName":"bash","occurredAt":"2026-09-26T00:00:01Z"}`},
-		httpExp{Status: 202})
-	seqAfter := ownerScalar[int64](t, ownerPool, `SELECT last_event_seq FROM rooms WHERE id = $1`, room)
-	record(t, caseInput{ID: "S-DB-3/last-event-seq-continues", Contract: c, Kind: "e2e", FailureModes: []string{"FM-62"},
-		Description: "last_event_seq keeps increasing across the restart",
-		Steps:       []string{"read last_event_seq before restart", "restart", "ingest one more event", "read last_event_seq"},
-		Request:     map[string]string{"sql": "SELECT last_event_seq FROM rooms WHERE id = <room>"},
-		Expected:    map[string]any{"increased": true},
-		Actual:      map[string]any{"before": seqBefore, "after": seqAfter},
-		Pass:        seqAfter > seqBefore})
-
-	blocked(t, "S-DB-3/artifacts-after-restart", c, "e2e", "artifacts written before the restart are readable after it",
-		"§16 control artifact PR (ingest + read API) and phase 2 /internal/artifact-blobs",
-		[]string{"ingest artifact.created", "restart", "GET /v1/artifacts/{id}"}, "artifact metadata and content present")
+		httpReq{Method: "GET", Path: "/v1/tasks"}, httpExp{Status: 200, BodyIncludes: []string{task.ID}})
+	checkAt(t, p2.base, "S-DB-3/persona-after-restart", c, "the assistant is still in the catalog",
+		httpReq{Method: "GET", Path: "/v1/personas"}, httpExp{Status: 200, BodyIncludes: []string{`"name":"Reviewer"`}})
+	eventsAfter := ownerScalar[int64](t, ownerPool, `SELECT count(*) FROM task_events WHERE task_id = $1`, task.ID)
+	record(t, caseInput{ID: "S-DB-3/events-after-restart", Contract: c, Kind: "e2e",
+		Description: "the projected events are still in Postgres after the restart",
+		Steps:       []string{"count task_events before the restart", "restart", "count task_events"},
+		Request:     map[string]string{"sql": "SELECT count(*) FROM task_events WHERE task_id = <task>"},
+		Expected:    map[string]any{"atLeastOne": true, "unchanged": true},
+		Actual:      map[string]any{"before": eventsBefore, "after": eventsAfter},
+		Pass:        eventsBefore > 0 && eventsAfter == eventsBefore})
 }
 
 // S-DB-8: prod configuration without ORBIT_CONTROL_DB_URL refuses to start.
@@ -211,24 +195,18 @@ func TestSDB09NoSecretsInLogsOrErrors(t *testing.T) {
 	}
 
 	// Runtime storage failure behind the HTTP API.
-	wk := stubWorker(t, nil)
-	srv := startServer(t, serverOpts{tenant: "t-sdb9", maxConns: 2, workerURL: wk.URL})
+	srv := startServer(t, serverOpts{tenant: "t-sdb9", maxConns: 2})
 	srv.check(t, "S-DB-9/runtime/setup", c, "the API works before the storage failure",
-		httpReq{Method: "GET", Path: "/v1/rooms", Headers: user("u-sdb9")}, httpExp{Status: 200})
+		httpReq{Method: "GET", Path: "/v1/tasks", Headers: user("u-sdb9")}, httpExp{Status: 200})
 	srv.appPool.Close()
-	act := sendTo(t, srv.base, httpReq{Method: "GET", Path: "/v1/rooms", Headers: user("u-sdb9")})
+	act := sendTo(t, srv.base, httpReq{Method: "GET", Path: "/v1/tasks", Headers: user("u-sdb9")})
 	logs := srv.logs.String()
 	record(t, caseInput{ID: "S-DB-9/runtime-storage-failure", Contract: c,
 		Description: "a storage failure mid-request returns a generic 500; neither the response nor the server log carries a DB URL, user or password",
-		Steps:       []string{"close the server's DB pool", "GET /v1/rooms as u-sdb9", "inspect response body and server log"},
-		Request:     httpReq{Method: "GET", Path: "/v1/rooms", Headers: user("u-sdb9")},
-		Expected:    map[string]any{"status": 500, "body": `{"error":"internal","code":"INTERNAL","message":"internal error"}`, "logIncludes": "host=<db-host>", "excludes": shownForbidden},
+		Steps:       []string{"close the server's DB pool", "GET /v1/tasks as u-sdb9", "inspect response body and server log"},
+		Request:     httpReq{Method: "GET", Path: "/v1/tasks", Headers: user("u-sdb9")},
+		Expected:    map[string]any{"status": 500, "body": `{"error":"storage error","code":"STORAGE_ERROR","message":"task storage is temporarily unavailable"}`, "logIncludes": "host=<db-host>", "excludes": shownForbidden},
 		Actual:      map[string]any{"status": act.Status, "body": shown(act.Body), "log": shown(logs)},
-		Pass: act.Status == 500 && strings.TrimSpace(act.Body) == `{"error":"internal","code":"INTERNAL","message":"internal error"}` &&
+		Pass: act.Status == 500 && strings.TrimSpace(act.Body) == `{"error":"storage error","code":"STORAGE_ERROR","message":"task storage is temporarily unavailable"}` &&
 			strings.Contains(logs, "host=<db-host>") && clean(act.Body) && clean(logs)})
-
-	blocked(t, "S-DB-9/session-error-path", c, "e2e", "invalid or expired session cookie: no cookie value or token in logs/response",
-		"auth PR (§17; ordered after this PR by §17.9): no session handling exists yet", nil, "401 without cookie/token echo")
-	blocked(t, "S-DB-9/oidc-error-path", c, "e2e", "OIDC callback failure: no code, token, client secret in logs/response",
-		"auth PR (§17; ordered after this PR by §17.9): no OIDC flow exists yet", nil, "login failure without token echo")
 }

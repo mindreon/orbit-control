@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -10,8 +9,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-
-	"github.com/mindreon/orbit-control/internal/store"
 )
 
 // ErrDigestMismatch is HTTP 422: X-Content-Digest is not the sha256 of the body.
@@ -23,28 +20,17 @@ var ErrTooLarge = errors.New("artifact too large")
 var digestHex = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
 
 // SaveArtifactBlob streams a blob onto {ArtifactDir}/{tenant}/{sha256}.
-// tenant comes from the room row. digestHeader is only compared, never used
+// tenantID names the tenant directory. digestHeader is only compared, never used
 // as a path. A body over the limit is rejected while streaming and leaves
 // no temp file (FM-63).
-func (a *App) SaveArtifactBlob(taskID, tenantHint, digestHeader string, body io.Reader) (string, error) {
+func (a *App) SaveArtifactBlob(tenantID, digestHeader string, body io.Reader) (string, error) {
 	if !digestHex.MatchString(strings.TrimSpace(digestHeader)) {
 		return "", invalidf("X-Content-Digest must be 64 hex characters")
 	}
-	es, ok := a.Repo.(store.EventStore)
 	if a.ArtifactDir == "" {
 		return "", invalidf("artifact storage is not configured")
 	}
-	tenantID := strings.TrimSpace(tenantHint)
-	if tenantID == "" {
-		if !ok {
-			return "", invalidf("artifact tenant is required")
-		}
-		var err error
-		tenantID, err = es.FindRoomTenant(context.Background(), taskID)
-		if err != nil {
-			return "", err
-		}
-	}
+	tenantID = strings.TrimSpace(tenantID)
 	if tenantID == "" || strings.Contains(tenantID, "/") || strings.Contains(tenantID, `\`) || strings.Contains(tenantID, "..") {
 		return "", ErrNotFound
 	}

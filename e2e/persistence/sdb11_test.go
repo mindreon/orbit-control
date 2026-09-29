@@ -18,26 +18,23 @@ import (
 
 // S-DB-11 (a) allowlist of SECURITY DEFINER functions. Changes need Sentinel
 // review (docs/persistence-failure-modes.md ISO-1, FM-4).
-var securityDefinerAllowlist = map[string]string{
-	"orbit_soft_delete_room": "internal/store/migrations/sql/00003_soft_delete_room.sql",
-}
+// It is empty: control has no SECURITY DEFINER function.
+var securityDefinerAllowlist = map[string]string{}
 
 const (
 	ruleSetGUC     = "FM-1/FM-2: SET, SET LOCAL or SET SESSION of app.tenant_id"
 	ruleSetConfig  = "FM-3: set_config other than the bound transaction-local form"
 	ruleConcatSET  = "FM-2: SET statement built by concatenation or printf"
 	ruleSecDefiner = "FM-4: security-definer function outside the allowlist"
-	ruleSoftDelete = "FM-5: deleted_at/deleted_by written outside orbit_soft_delete_room"
 )
 
-var staticRules = []string{ruleSetGUC, ruleSetConfig, ruleConcatSET, ruleSecDefiner, ruleSoftDelete}
+var staticRules = []string{ruleSetGUC, ruleSetConfig, ruleConcatSET, ruleSecDefiner}
 
 var (
 	reSetTenantGUC   = regexp.MustCompile(`(?i)\bSET\s+(LOCAL\s+|SESSION\s+)?app\.tenant_id\b`)
 	reSetConfigCall  = regexp.MustCompile(`(?i)\bset_config\s*\(`)
 	reSetConfigOK    = regexp.MustCompile(`(?i)^set_config\(\s*'app\.tenant_id'\s*,\s*\$1\s*,\s*true\s*\)`)
 	reSecDefiner     = regexp.MustCompile(`(?i)\bSECURITY\s+DEFINER\b`)
-	reSoftDeleteSet  = regexp.MustCompile(`(?i)\bdeleted_(at|by)\s*=`)
 	reSQLFunction    = regexp.MustCompile(`(?is)CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?([a-z_][a-z0-9_]*)\s*\(.*?\$\$.*?\$\$`)
 	reSQLLineComment = regexp.MustCompile(`--[^\n]*`)
 	reStartsWithSET  = regexp.MustCompile(`(?i)^\s*SET\s`)
@@ -71,11 +68,6 @@ func scanText(where, text string, allowed []span) []finding {
 	for _, loc := range reSecDefiner.FindAllStringIndex(text, -1) {
 		if !inAllowed(loc[0]) {
 			out = append(out, finding{where, ruleSecDefiner})
-		}
-	}
-	for _, loc := range reSoftDeleteSet.FindAllStringIndex(text, -1) {
-		if !inAllowed(loc[0]) {
-			out = append(out, finding{where, ruleSoftDelete})
 		}
 	}
 	return out
@@ -146,7 +138,7 @@ func scanGo(rel string, src []byte) []finding {
 
 func TestSDB11aStaticCheck(t *testing.T) {
 	const c = "S-DB-11 (a)"
-	fms := []string{"FM-1", "FM-2", "FM-3", "FM-4", "FM-5"}
+	fms := []string{"FM-1", "FM-2", "FM-3", "FM-4"}
 
 	// The checker must reject each forbidden shape before its scan counts.
 	// Samples are joined at runtime so this file does not trip the scan.
@@ -158,7 +150,6 @@ func TestSDB11aStaticCheck(t *testing.T) {
 		{"sql", j("SELECT set_", "config('app.tenant_id', $1, false)"), ruleSetConfig},
 		{"sql", j("SELECT set_", "config('app.tenant_id', $1, $2)"), ruleSetConfig},
 		{"sql", j("SELECT set_", "config('app.tenant_id', 't1', true)"), ruleSetConfig},
-		{"sql", j("UPDATE rooms SET deleted_", "at = now() WHERE id = $1"), ruleSoftDelete},
 		{"sqlfile", j("CREATE FUNCTION other_fn() RETURNS int LANGUAGE sql SECURITY", " DEFINER AS $$ SELECT 1 $$;"), ruleSecDefiner},
 		{"go", j("package x\nvar tenant string\nvar q = \"SE", "T app.tenant_id = '\" + tenant + \"'\"\n"), ruleConcatSET},
 		{"go", j("package x\nimport \"fmt\"\nvar q = fmt.Sprintf(\"SE", "T LOCAL app.tenant_id = '%s'\", \"t\")\n"), ruleConcatSET},
@@ -252,19 +243,18 @@ func TestSDB11bPooledConnectionDoesNotLeakTenant(t *testing.T) {
 	const c = "S-DB-11 (b)"
 	ctx := context.Background()
 	const tenant, u = "t-sdb11", "u-sdb11"
-	wk := stubWorker(t, nil)
-	srv := startServer(t, serverOpts{tenant: tenant, maxConns: 1, workerURL: wk.URL})
+	srv := startServer(t, serverOpts{tenant: tenant, maxConns: 1})
 
 	var pidBefore int
 	if err := srv.appPool.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&pidBefore); err != nil {
 		t.Fatal(err)
 	}
-	srv.check(t, "S-DB-11(b)/create", c, "create a room so the tenant has data",
-		httpReq{Method: "POST", Path: "/v1/rooms", Headers: user(u), Body: `{"kind":"solo"}`}, httpExp{Status: 200})
-	srv.check(t, "S-DB-11(b)/request-A-commit", c, "request A: a committed tenant transaction that sees the room",
-		httpReq{Method: "GET", Path: "/v1/rooms", Headers: user(u)}, httpExp{Status: 200, BodyIncludes: []string{`"id":"rm_`}})
-	srv.check(t, "S-DB-11(b)/request-A-rollback", c, "request A': a tenant transaction that rolls back (404)",
-		httpReq{Method: "GET", Path: "/v1/rooms/rm_missing", Headers: user(u)}, httpExp{Status: 404})
+	srv.check(t, "S-DB-11(b)/create", c, "create a task so the tenant has data",
+		httpReq{Method: "POST", Path: "/v1/tasks", Headers: user(u), Body: `{"title":"pooled","goal":"one connection"}`}, httpExp{Status: 201})
+	srv.check(t, "S-DB-11(b)/request-A-commit", c, "request A: a committed tenant transaction that sees the task",
+		httpReq{Method: "GET", Path: "/v1/tasks", Headers: user(u)}, httpExp{Status: 200, BodyIncludes: []string{`"task_id":"task_`}})
+	srv.check(t, "S-DB-11(b)/request-A-rollback", c, "request A': a tenant transaction that finds nothing (404)",
+		httpReq{Method: "GET", Path: "/v1/tasks/task_01ARZ3NDEKTSV4RRFFQ69G5FAV", Headers: user(u)}, httpExp{Status: 404})
 
 	var pid int
 	var guc *string
@@ -272,7 +262,7 @@ func TestSDB11bPooledConnectionDoesNotLeakTenant(t *testing.T) {
 		t.Fatal(err)
 	}
 	counts := map[string]int{}
-	for _, table := range []string{"rooms", "users", "messages", "idempotency_keys"} {
+	for _, table := range []string{"tasks", "task_events", "personas", "idempotency_ledger"} {
 		var n int
 		if err := srv.appPool.QueryRow(ctx, `SELECT count(*) FROM `+table).Scan(&n); err != nil {
 			t.Fatal(err)

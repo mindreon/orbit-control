@@ -24,7 +24,6 @@
 --                  Granted on tenants only; control never uses it.
 --   orbit_worker   LOGIN, NOBYPASSRLS, not an owner; orbit-runtime's activity
 --                  worker (task runtime tables only, migration 00013).
---   orbit_definer  NOLOGIN BYPASSRLS; owns orbit_soft_delete_room only.
 
 -- Keep CREATE ROLE ... PASSWORD out of the server log, even on error
 -- (session-local; needs the superuser this script runs as).
@@ -55,13 +54,6 @@ SELECT format(
   :'worker_password')
  WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'orbit_worker')
 \gexec
-
-SELECT 'CREATE ROLE orbit_definer NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE BYPASSRLS'
- WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'orbit_definer')
-\gexec
-
--- Lets the migration hand orbit_soft_delete_room to orbit_definer.
-GRANT orbit_definer TO orbit_owner;
 
 SELECT 'CREATE DATABASE orbit_control OWNER orbit_owner'
  WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'orbit_control')

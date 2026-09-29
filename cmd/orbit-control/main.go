@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -11,7 +12,19 @@ import (
 	"github.com/mindreon/orbit-control/internal/httpapi"
 )
 
+// installLogger routes every log.Printf of the process through slog. ORBIT_LOG_FORMAT=json makes the lines JSON, which a
+// log pipeline can index (tenant, task and the rest of a message stay in `msg`).
+func installLogger() {
+	options := &slog.HandlerOptions{Level: slog.LevelInfo}
+	var handler slog.Handler = slog.NewTextHandler(os.Stderr, options)
+	if os.Getenv("ORBIT_LOG_FORMAT") == "json" {
+		handler = slog.NewJSONHandler(os.Stderr, options)
+	}
+	slog.SetDefault(slog.New(handler))
+}
+
 func main() {
+	installLogger()
 	addr := publicListenAddr()
 	if err := checkPublicBind(addr); err != nil {
 		log.Fatal(err)
@@ -28,7 +41,7 @@ func main() {
 			log.Fatal(err)
 		}
 	}()
-	log.Printf("orbit-control listening on %s (rooms + HITL; TEMPORAL_ADDRESS enables RoomWorkflow)", addr)
+	log.Printf("orbit-control listening on %s (tasks; TEMPORAL_ADDRESS enables TaskWorkflow)", addr)
 	if err := server(addr, public).ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}

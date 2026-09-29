@@ -13,33 +13,45 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 
 	"github.com/mindreon/orbit-control/internal/store"
 )
 
 const setTenantSQL = "SELECT set_config('app.tenant_id', $1, true)"
 
-const (
-	sqlstateUniqueViolation     = "23505"
-	sqlstateForeignKeyViolation = "23503"
-	sqlstateInsufficientPriv    = "42501"
-)
-
+// Store keeps the pgx pool for what gorm cannot do (LISTEN, session advisory locks)
+// and a gorm handle on the same pool for everything else. Tenant tables are only ever reached through inTenant,
+// which sets the tenant GUC first.
 type Store struct {
 	pool *pgxpool.Pool
+	db   *gorm.DB
 }
 
-var (
-	_ store.Repository    = (*Store)(nil)
-	_ store.DeliveryStore = (*Store)(nil)
-	_ store.EventStore    = (*Store)(nil)
-)
+var _ store.Repository = (*Store)(nil)
 
 // New wraps an existing pool (tests size it explicitly, e.g. MaxConns=1).
-func New(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
+func New(pool *pgxpool.Pool) *Store {
+	db, err := gorm.Open(
+		postgres.New(postgres.Config{Conn: stdlib.OpenDBFromPool(pool)}),
+		&gorm.Config{
+			// Writes name their columns: orbit_app may only UPDATE some of them, and a full-row Save would be refused.
+			// SkipDefaultTransaction because every statement here already runs inside inTenant's transaction.
+			SkipDefaultTransaction: true,
+			Logger:                 logger.Discard, // statements carry tenant data; failures are reported by the store
+			TranslateError:         false,
+		},
+	)
+	if err != nil {
+		panic("pgstore: gorm cannot wrap an open pgx pool: " + err.Error()) // Open only fails on a nil or closed pool
+	}
+	return &Store{pool: pool, db: db}
+}
 
 // Open connects with ORBIT_CONTROL_DB_URL. Errors never echo the URL.
 func Open(ctx context.Context, url string) (*Store, error) {
@@ -85,33 +97,25 @@ func pgCode(err error) (string, string) {
 	return "", ""
 }
 
-// childWriteErr maps a rejected child-row write to ErrNotFound: an RLS
-// WITH CHECK failure (parent room deleted or foreign) or a missing parent.
-func childWriteErr(op string, err error) error {
-	switch code, _ := pgCode(err); code {
-	case sqlstateInsufficientPriv, sqlstateForeignKeyViolation:
-		return store.ErrNotFound
-	}
-	return storageErr(op, err)
-}
-
-// inTenantTx is the only way this package touches [T] tables.
-func (s *Store) inTenantTx(ctx context.Context, tenantID string, fn func(pgx.Tx) error) error {
+// inTenant runs fn in one transaction whose first statement binds the tenant GUC (never concatenated), so
+// row-level security still applies to everything gorm runs. Only Model(...).Select(...).Updates and Create are used
+// to write; there is no Save, since orbit_app holds column-level UPDATE grants.
+func (s *Store) inTenant(ctx context.Context, tenantID string, fn func(tx *gorm.DB) error) error {
 	if tenantID == "" {
 		return store.ErrNotFound
 	}
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return SanitizeConnError(err)
+	tx := s.db.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return SanitizeConnError(tx.Error)
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, setTenantSQL, tenantID); err != nil {
+	defer tx.Rollback() // after a commit this is a no-op error
+	if err := tx.Exec(setTenantSQL, tenantID).Error; err != nil {
 		return storageErr("set tenant", err)
 	}
 	if err := fn(tx); err != nil {
 		return err
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit().Error; err != nil {
 		return storageErr("commit", err)
 	}
 	return nil
@@ -126,18 +130,4 @@ func (s *Store) CheckTenant(ctx context.Context, tenantID string) error {
 		return store.ErrNotFound
 	}
 	return nil
-}
-
-func (s *Store) UpsertUser(ctx context.Context, tenantID string, u store.UserRecord) error {
-	return s.inTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `
-			INSERT INTO users (id, tenant_id, iss, sub, display_name, email)
-			VALUES ($1, $2, $3, $4, $5, $6)
-			ON CONFLICT DO NOTHING`,
-			u.ID, tenantID, u.Issuer, u.Subject, u.DisplayName, u.Email)
-		if err != nil {
-			return storageErr("upsert user", err)
-		}
-		return nil
-	})
 }

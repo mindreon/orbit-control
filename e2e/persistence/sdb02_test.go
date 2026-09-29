@@ -5,95 +5,75 @@ package persistence
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/mindreon/orbit-control/internal/app"
 )
 
-var tenantTables = []string{
-	"users", "rooms", "turns", "events", "messages", "approvals", "approval_rules",
-	"idempotency_keys", "artifacts", "artifact_versions", "personas", "mcp_connectors", "cloud_agent_jobs",
-}
+// tenantTables are every table under tenant RLS: the task runtime (migration 00013), SOP and policy layers, and the
+// catalog.
+var tenantTables = append(append([]string{}, taskTenantTables...), "sop_definitions", "tenant_policy", "personas", "mcp_connectors")
 
-type tenantFixture struct {
-	tenant, user, room, approval string
-}
-
-func seedTenant(t *testing.T, srv *server, prefix, tenant, u, idemKey, label string) tenantFixture {
+// seedTenant fills every tenant table for tenant as the owner, so an isolation check never passes on an empty table.
+func seedTenant(t *testing.T, owner *pgxpool.Pool, tenant string) {
 	t.Helper()
 	ctx := context.Background()
-	room := roomID(t, srv.check(t, prefix+"/setup/create-"+label, strings.SplitN(prefix, "/", 2)[0], "create a task in tenant "+label,
-		httpReq{Method: "POST", Path: "/v1/rooms", Headers: withHeader(user(u), "Idempotency-Key", idemKey), Body: `{"kind":"solo","title":"tenant task"}`},
-		httpExp{Status: 200}))
-	alias(room, "<room-"+label+">")
-	posted := srv.check(t, prefix+"/setup/message-"+label, strings.SplitN(prefix, "/", 2)[0], "message parks an approval in tenant "+label,
-		httpReq{Method: "POST", Path: "/v1/rooms/" + room + "/messages", Headers: user(u), Body: `{"message":"list files"}`},
-		httpExp{Status: 200, BodyIncludes: []string{`"approval":{`}})
-	var body struct {
-		Approval *app.Approval `json:"approval"`
+	if err := seedTaskRows(ctx, owner, tenant); err != nil {
+		t.Fatalf("seed task rows for %s: %v", tenant, err)
 	}
-	_ = json.Unmarshal([]byte(posted.Body), &body)
-	if body.Approval == nil {
-		t.Fatalf("no approval for tenant %s", label)
-	}
-	alias(body.Approval.ID, "<approval-"+label+">")
-	seedChildren(t, srv.appPool, tenant, room, tenant+"/blob", "sha256:0", 1)
-	if err := asTenant(ctx, srv.appPool, tenant, func(tx pgx.Tx) error {
-		for _, q := range []string{
-			`INSERT INTO personas (id, tenant_id, name) VALUES ('persona_' || $1, $1, 'p')`,
-			`INSERT INTO mcp_connectors (id, tenant_id, name, command) VALUES ('mcp_' || $1, $1, 'm', 'true')`,
-			`INSERT INTO cloud_agent_jobs (id, tenant_id, repo_url, prompt, permission_preset, state) VALUES ('caj_' || $1, $1, 'https://example.test/r.git', 'p', 'read-only', 'queued')`,
-		} {
-			if _, err := tx.Exec(ctx, q, tenant); err != nil {
-				return err
-			}
+	for _, q := range []string{
+		`INSERT INTO sop_definitions (tenant_id, sop_id, version, steps) VALUES ($1, 'sop', 1, '[{"id":"s"}]')`,
+		`INSERT INTO tenant_policy (tenant_id, spec) VALUES ($1, '{}')`,
+		`INSERT INTO personas (id, tenant_id, name) VALUES ('persona_' || $1, $1, 'p')`,
+		`INSERT INTO mcp_connectors (id, tenant_id, name, command) VALUES ('mcp_' || $1, $1, 'm', 'true')`,
+	} {
+		if _, err := owner.Exec(ctx, q, tenant); err != nil {
+			t.Fatalf("seed catalog rows for %s: %v", tenant, err)
 		}
-		return nil
-	}); err != nil {
-		t.Fatalf("seed catalog rows: %v", err)
 	}
-	return tenantFixture{tenant: tenant, user: u, room: room, approval: body.Approval.ID}
 }
 
 func TestSDB02TenantIsolation(t *testing.T) {
 	const c = "S-DB-2"
+	const tenantA, tenantB, sharedUser = "t-sdb2-a", "t-sdb2-b", "u-sdb2"
 	ctx := context.Background()
 	ownerPool := newPool(t, ownerURL, 2)
-	wk := stubWorker(t, nil)
-	sa := startServer(t, serverOpts{tenant: "t-sdb2-a", maxConns: 4, workerURL: wk.URL})
-	sb := startServer(t, serverOpts{tenant: "t-sdb2-b", maxConns: 4, workerURL: wk.URL})
-	a := seedTenant(t, sa, "S-DB-2", "t-sdb2-a", "u-sdb2-a", "e2e-sdb2-shared-key", "A")
-	b := seedTenant(t, sb, "S-DB-2", "t-sdb2-b", "u-sdb2-b", "e2e-sdb2-shared-key", "B")
+	sa := startServer(t, serverOpts{tenant: tenantA, maxConns: 4})
+	sb := startServer(t, serverOpts{tenant: tenantB, maxConns: 4})
+	seedTenant(t, ownerPool, tenantA)
+	seedTenant(t, ownerPool, tenantB)
+	// The same user id in both tenants: only the tenant tells them apart.
+	newTask := func(srv *server, label string) string {
+		act := srv.check(t, "S-DB-2/setup/create-"+label, c, "create a task in tenant "+label,
+			httpReq{Method: "POST", Path: "/v1/tasks", Headers: user(sharedUser), Body: `{"title":"tenant task","goal":"isolate"}`}, httpExp{Status: 201})
+		var body struct {
+			ID string `json:"task_id"`
+		}
+		if err := json.Unmarshal([]byte(act.Body), &body); err != nil || body.ID == "" {
+			t.Fatalf("no task id in %q", act.Body)
+		}
+		alias(body.ID, "<task-"+label+">")
+		return body.ID
+	}
+	taskA, taskB := newTask(sa, "A"), newTask(sb, "B")
+	const seededUser = sharedUser
 
 	// E2E: tenant B's user cannot reach tenant A's task through any route.
-	missing := sb.check(t, "S-DB-2/setup/missing-room", c, "baseline 404 body in tenant B",
-		httpReq{Method: "GET", Path: "/v1/rooms/rm_does_not_exist", Headers: user(b.user)}, httpExp{Status: 404})
-	for _, p := range []string{"", "/messages", "/activity", "/events"} {
+	missing := sb.check(t, "S-DB-2/setup/missing-task", c, "baseline 404 body in tenant B",
+		httpReq{Method: "GET", Path: "/v1/tasks/task_01ARZ3NDEKTSV4RRFFQ69G5FAV", Headers: user(seededUser)}, httpExp{Status: 404})
+	for _, p := range []string{"", "/plan", "/artifacts"} {
 		sb.check(t, "S-DB-2/cross-tenant/GET"+p, c, "tenant B reads tenant A's task"+p+" → same 404 as missing",
-			httpReq{Method: "GET", Path: "/v1/rooms/" + a.room + p, Headers: user(b.user)}, httpExp{Status: 404, BodyEquals: missing.Body})
+			httpReq{Method: "GET", Path: "/v1/tasks/" + taskA + p, Headers: user(seededUser)}, httpExp{Status: 404, BodyEquals: missing.Body})
 	}
 	sb.check(t, "S-DB-2/cross-tenant/POST-message", c, "tenant B posts to tenant A's task → 404",
-		httpReq{Method: "POST", Path: "/v1/rooms/" + a.room + "/messages", Headers: user(b.user), Body: `{"message":"x"}`}, httpExp{Status: 404, BodyEquals: missing.Body})
-	sb.check(t, "S-DB-2/cross-tenant/DELETE", c, "tenant B deletes tenant A's task → 404",
-		httpReq{Method: "DELETE", Path: "/v1/rooms/" + a.room, Headers: userCSRF(b.user)}, httpExp{Status: 404, BodyEquals: missing.Body})
-	missingAp := sb.check(t, "S-DB-2/setup/missing-approval", c, "baseline 404 for a missing approval in tenant B",
-		httpReq{Method: "POST", Path: "/v1/approvals/ap_missing/decide", Headers: user(b.user), Body: `{"decision":"allow"}`}, httpExp{Status: 404})
-	sb.check(t, "S-DB-2/cross-tenant/decide", c, "tenant B decides tenant A's approval → same 404",
-		httpReq{Method: "POST", Path: "/v1/approvals/" + a.approval + "/decide", Headers: user(b.user), Body: `{"decision":"allow"}`},
-		httpExp{Status: 404, BodyEquals: missingAp.Body})
-	sb.check(t, "S-DB-2/cross-tenant/list-rooms", c, "tenant B's room list has only its own task",
-		httpReq{Method: "GET", Path: "/v1/rooms", Headers: user(b.user)}, httpExp{Status: 200, BodyIncludes: []string{b.room}, BodyExcludes: []string{a.room}})
-	sb.check(t, "S-DB-2/cross-tenant/list-approvals", c, "tenant B's approval list has only its own approval",
-		httpReq{Method: "GET", Path: "/v1/approvals", Headers: user(b.user)}, httpExp{Status: 200, BodyIncludes: []string{b.approval}, BodyExcludes: []string{a.approval}})
+		httpReq{Method: "POST", Path: "/v1/tasks/" + taskA + "/messages", Headers: user(seededUser), Body: `{"text":"x","delivery":"queue"}`}, httpExp{Status: 404, BodyEquals: missing.Body})
+	sb.check(t, "S-DB-2/cross-tenant/list-tasks", c, "tenant B's task list has only its own task",
+		httpReq{Method: "GET", Path: "/v1/tasks", Headers: user(seededUser)}, httpExp{Status: 200, BodyIncludes: []string{taskB}, BodyExcludes: []string{taskA}})
+	sb.check(t, "S-DB-2/cross-tenant/list-personas", c, "tenant B's assistant list has only its own assistant",
+		httpReq{Method: "GET", Path: "/v1/personas", Headers: user(sharedUser)}, httpExp{Status: 200, BodyIncludes: []string{"persona_" + tenantB}, BodyExcludes: []string{"persona_" + tenantA}})
 	sa.check(t, "S-DB-2/cross-tenant/A-still-sees-own", c, "tenant A still reads its task",
-		httpReq{Method: "GET", Path: "/v1/rooms/" + a.room, Headers: user(a.user)}, httpExp{Status: 200, BodyIncludes: []string{a.room}})
-	record(t, caseInput{ID: "S-DB-2/idempotency-key-per-tenant", Contract: c, Description: "the same Idempotency-Key in two tenants created two different tasks (no cross-tenant replay)",
-		Request:  "S-DB-2/setup/create-A and S-DB-2/setup/create-B used the same key and body",
-		Expected: "different task ids", Actual: map[string]bool{"differentTaskIDs": a.room != b.room}, Pass: a.room != b.room})
+		httpReq{Method: "GET", Path: "/v1/tasks/" + taskA, Headers: user(seededUser)}, httpExp{Status: 200, BodyIncludes: []string{taskA}})
 
 	// ISO-10: RLS underneath the query layer.
 	ownerCounts := func(tenant string) map[string]int {
@@ -107,7 +87,7 @@ func TestSDB02TenantIsolation(t *testing.T) {
 		}
 		return out
 	}
-	oa, ob := ownerCounts(a.tenant), ownerCounts(b.tenant)
+	oa, ob := ownerCounts(tenantA), ownerCounts(tenantB)
 	seeded := true
 	for _, tbl := range tenantTables {
 		seeded = seeded && oa[tbl] > 0 && ob[tbl] > 0
@@ -160,7 +140,7 @@ func TestSDB02TenantIsolation(t *testing.T) {
 	for _, own := range []struct {
 		label, tenant string
 		owner         map[string]int
-	}{{"A", a.tenant, oa}, {"B", b.tenant, ob}} {
+	}{{"A", tenantA, oa}, {"B", tenantB, ob}} {
 		got, err := appCounts(sa.appPool, own.tenant, true)
 		equal := err == nil
 		for _, tbl := range tenantTables {

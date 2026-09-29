@@ -30,7 +30,7 @@ func LocalAuthenticator(tenantID string) Authenticator {
 }
 
 // denyAllAuthenticator is used for ORBIT_AUTH_MODE=oidc until the OIDC session
-// authenticator exists: every /v1 room call is 401, never the dev principal.
+// authenticator exists: every /v1 call is 401, never the dev principal.
 var denyAllAuthenticator = AuthenticatorFunc(func(*http.Request) (app.Principal, bool) {
 	return app.Principal{}, false
 })

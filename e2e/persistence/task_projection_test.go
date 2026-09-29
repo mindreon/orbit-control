@@ -17,8 +17,7 @@ func TestTaskProjectionPersistsAcrossControlRestart(t *testing.T) {
 		tenant   = "t-task-projection"
 		testUser = "u-task-projection"
 	)
-	wk := stubWorker(t, nil)
-	first := startServer(t, serverOpts{tenant: tenant, workerURL: wk.URL, projector: true, maxConns: 6})
+	first := startServer(t, serverOpts{tenant: tenant, projector: true, maxConns: 6})
 	principal := user(testUser)
 
 	created := first.check(t, "TASK-PROJECTION/create", contract, "create a v3 task through the PostgreSQL backed control API", httpReq{
@@ -58,7 +57,7 @@ func TestTaskProjectionPersistsAcrossControlRestart(t *testing.T) {
 	}, httpExp{Status: http.StatusBadRequest, BodyIncludes: []string{"runtime_outbox"}})
 	waitForProjection(t, first, createdBody.ID, principal, `"status":"RUNNING"`)
 
-	second := startServer(t, serverOpts{tenant: tenant, workerURL: wk.URL})
+	second := startServer(t, serverOpts{tenant: tenant})
 	second.check(t, "TASK-PROJECTION/get-after-restart", contract, "read the task projection from PostgreSQL in a fresh control process", httpReq{
 		Method: http.MethodGet, Path: "/v1/tasks/" + createdBody.ID, Headers: principal,
 	}, httpExp{Status: http.StatusOK, BodyIncludes: []string{createdBody.ID, `"status":"RUNNING"`}})

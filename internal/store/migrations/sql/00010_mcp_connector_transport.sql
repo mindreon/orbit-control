@@ -1,6 +1,6 @@
 -- MCP connectors can be a local command or a remote streamable HTTP URL.
 -- header_refs stores "Header-Name:ENV_NAME". Values are never stored.
--- default_open selects the connector for a new room without a persona link.
+-- default_open marks a connector that is on unless a task turns it off.
 
 -- +goose Up
 

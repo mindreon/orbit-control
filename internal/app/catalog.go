@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
@@ -54,57 +53,6 @@ type McpConnectorInput struct {
 	URL         string
 	HeaderRefs  []HeaderRef
 	DefaultOpen bool
-}
-
-// GrantPublic is the API-safe view (no secret values).
-type GrantPublic struct {
-	ID        string   `json:"id"`
-	EnvNames  []string `json:"envNames"`
-	ExpiresAt string   `json:"expiresAt"`
-}
-
-type grantRecord struct {
-	ID        string
-	Env       map[string]string
-	EnvNames  []string
-	ExpiresAt time.Time
-}
-
-type CloudAgentJob struct {
-	ID               string `json:"id"`
-	RepoURL          string `json:"repoUrl"`
-	Branch           string `json:"branch,omitempty"`
-	Prompt           string `json:"prompt"`
-	PermissionPreset string `json:"permissionPreset"`
-	PersonaID        string `json:"personaId,omitempty"`
-	State            string `json:"state"`
-	CreatedAt        string `json:"createdAt"`
-}
-
-type CreateCloudAgentInput struct {
-	RepoURL          string
-	Prompt           string
-	Branch           string
-	PermissionPreset string
-	PersonaID        string
-}
-
-func (a *App) ensureCatalog() {
-	if a.Personas == nil {
-		a.Personas = map[string]*Persona{}
-	}
-	if a.McpConnectors == nil {
-		a.McpConnectors = map[string]*McpConnector{}
-	}
-	if a.grants == nil {
-		a.grants = map[string]*grantRecord{}
-	}
-	if a.CloudAgents == nil {
-		a.CloudAgents = map[string]*CloudAgentJob{}
-	}
-	if a.Store == nil {
-		a.Store = store.New("")
-	}
 }
 
 func trimNonEmpty(in []string) []string {
@@ -213,17 +161,9 @@ func (a *App) ListPersonas(ctx context.Context, tenantID string) ([]*Persona, er
 		return nil, err
 	}
 	out := make([]*Persona, 0, len(recs))
-	next := map[string]*Persona{}
 	for _, rec := range recs {
-		p := personaFromRecord(rec)
-		next[p.ID] = p
-		cp := *p
-		out = append(out, &cp)
+		out = append(out, personaFromRecord(rec))
 	}
-	a.mu.Lock()
-	a.ensureCatalog()
-	a.Personas = next
-	a.mu.Unlock()
 	return out, nil
 }
 
@@ -250,13 +190,7 @@ func (a *App) CreatePersona(ctx context.Context, tenantID, name, instructions st
 	}); err != nil {
 		return nil, err
 	}
-	a.mu.Lock()
-	a.ensureCatalog()
-	a.Personas[p.ID] = p
-	_ = a.Store.WriteJSON("personas/"+p.ID+".json", p)
-	cp := *p
-	a.mu.Unlock()
-	return &cp, nil
+	return p, nil
 }
 
 func (a *App) ListMcpConnectors(ctx context.Context, tenantID string) ([]*McpConnector, error) {
@@ -265,17 +199,9 @@ func (a *App) ListMcpConnectors(ctx context.Context, tenantID string) ([]*McpCon
 		return nil, err
 	}
 	out := make([]*McpConnector, 0, len(recs))
-	next := map[string]*McpConnector{}
 	for _, rec := range recs {
-		c := connectorFromRecord(rec)
-		next[c.ID] = c
-		cp := *c
-		out = append(out, &cp)
+		out = append(out, connectorFromRecord(rec))
 	}
-	a.mu.Lock()
-	a.ensureCatalog()
-	a.McpConnectors = next
-	a.mu.Unlock()
 	return out, nil
 }
 
@@ -332,188 +258,5 @@ func (a *App) CreateMcpConnector(ctx context.Context, tenantID string, in McpCon
 	}); err != nil {
 		return nil, err
 	}
-	a.mu.Lock()
-	a.ensureCatalog()
-	a.McpConnectors[c.ID] = c
-	_ = a.Store.WriteJSON("mcp/"+c.ID+".json", c)
-	cp := *c
-	a.mu.Unlock()
-	return &cp, nil
-}
-
-// ConnectorsForRoom is the set the worker should connect: connectors marked
-// default-open, plus any connector linked from the persona. Secret values
-// are not included.
-func (a *App) ConnectorsForRoom(ctx context.Context, tenantID, personaID string) ([]*McpConnector, error) {
-	all, err := a.ListMcpConnectors(ctx, tenantID)
-	if err != nil {
-		return nil, err
-	}
-	linked := map[string]struct{}{}
-	if personaID != "" {
-		personas, err := a.ListPersonas(ctx, tenantID)
-		if err != nil {
-			return nil, err
-		}
-		var found *Persona
-		for _, persona := range personas {
-			if persona.ID == personaID {
-				found = persona
-				break
-			}
-		}
-		if found == nil {
-			return nil, fmt.Errorf("persona not found")
-		}
-		for _, mcpID := range found.McpConnectorIDs {
-			linked[mcpID] = struct{}{}
-		}
-	}
-	out := make([]*McpConnector, 0)
-	for _, connector := range all {
-		_, ok := linked[connector.ID]
-		if connector.DefaultOpen || ok {
-			cp := *connector
-			out = append(out, &cp)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	return out, nil
-}
-
-func (a *App) MintGrant(env map[string]string, ttlSeconds int) (*GrantPublic, error) {
-	if len(env) == 0 {
-		return nil, fmt.Errorf("env is required")
-	}
-	if ttlSeconds <= 0 {
-		ttlSeconds = 900
-	}
-	names := make([]string, 0, len(env))
-	clean := map[string]string{}
-	for k, v := range env {
-		k = strings.TrimSpace(k)
-		if k == "" || v == "" {
-			continue
-		}
-		clean[k] = v
-		names = append(names, k)
-	}
-	if len(clean) == 0 {
-		return nil, fmt.Errorf("env must contain at least one non-empty entry")
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.ensureCatalog()
-	expires := time.Now().UTC().Add(time.Duration(ttlSeconds) * time.Second)
-	g := &grantRecord{
-		ID:        id("grant_"),
-		Env:       clean,
-		EnvNames:  names,
-		ExpiresAt: expires,
-	}
-	a.grants[g.ID] = g
-	pub := GrantPublic{ID: g.ID, EnvNames: names, ExpiresAt: expires.Format(time.RFC3339Nano)}
-	_ = a.Store.WriteJSON("grants/"+g.ID+".json", pub)
-	return &pub, nil
-}
-
-func (a *App) ListCloudAgents() []*CloudAgentJob {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.ensureCatalog()
-	out := make([]*CloudAgentJob, 0, len(a.CloudAgents))
-	for _, j := range a.CloudAgents {
-		cp := *j
-		out = append(out, &cp)
-	}
-	return out
-}
-
-func (a *App) CreateCloudAgent(ctx context.Context, input CreateCloudAgentInput) (*CloudAgentJob, error) {
-	_ = ctx
-	repo := strings.TrimSpace(input.RepoURL)
-	prompt := strings.TrimSpace(input.Prompt)
-	if repo == "" || prompt == "" {
-		return nil, fmt.Errorf("repoUrl and prompt are required")
-	}
-	preset, err := normalizePermissionPreset(input.PermissionPreset)
-	if err != nil {
-		return nil, err
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.ensureCatalog()
-	if input.PersonaID != "" {
-		if _, ok := a.Personas[input.PersonaID]; !ok {
-			return nil, fmt.Errorf("persona not found")
-		}
-	}
-	job := &CloudAgentJob{
-		ID:               id("caj_"),
-		RepoURL:          repo,
-		Branch:           strings.TrimSpace(input.Branch),
-		Prompt:           prompt,
-		PermissionPreset: preset,
-		PersonaID:        strings.TrimSpace(input.PersonaID),
-		State:            "queued",
-		CreatedAt:        now(),
-	}
-	a.CloudAgents[job.ID] = job
-	_ = a.Store.WriteJSON("cloud-agents/"+job.ID+".json", job)
-	cp := *job
-	return &cp, nil
-}
-
-func (a *App) CompositionForRoom(personaID, grantID string) (*Persona, []*McpConnector, map[string]string, error) {
-	if personaID != "" {
-		a.mu.Lock()
-		a.ensureCatalog()
-		_, cached := a.Personas[personaID]
-		a.mu.Unlock()
-		if !cached {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			_, _ = a.ListPersonas(ctx, a.DefaultTenant)
-			_, _ = a.ListMcpConnectors(ctx, a.DefaultTenant)
-			cancel()
-		}
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.ensureCatalog()
-	var persona *Persona
-	var connectors []*McpConnector
-	var grantEnv map[string]string
-	if personaID != "" {
-		p, ok := a.Personas[personaID]
-		if !ok {
-			return nil, nil, nil, fmt.Errorf("persona not found")
-		}
-		cp := *p
-		persona = &cp
-		for _, mcpID := range p.McpConnectorIDs {
-			if c, ok := a.McpConnectors[mcpID]; ok {
-				cc := *c
-				connectors = append(connectors, &cc)
-			}
-		}
-	}
-	if grantID != "" {
-		g, ok := a.grants[grantID]
-		if !ok {
-			return nil, nil, nil, fmt.Errorf("grant not found")
-		}
-		if time.Now().UTC().After(g.ExpiresAt) {
-			return nil, nil, nil, fmt.Errorf("grant expired")
-		}
-		grantEnv = map[string]string{}
-		for k, v := range g.Env {
-			grantEnv[k] = v
-		}
-	}
-	return persona, connectors, grantEnv, nil
-}
-
-func (a *App) persistActivity(roomID string, item Envelope) {
-	a.ensureCatalog()
-	_ = a.Store.AppendJSONL("audit/"+roomID+".jsonl", item)
+	return c, nil
 }

@@ -796,6 +796,13 @@ type PlanView struct {
 	PlanVersion int64      `json:"plan_version"`
 }
 
+// What an attempt may do (05 §6). Every layer (tenant, task, profile) can carry one; layers only tighten each
+// other: `denied_tools` add up and the smallest `exploration_max_tool_calls` wins. A missing field limits nothing.
+type Policy struct {
+	DeniedTools             []string `json:"denied_tools,omitempty"`
+	ExplorationMaxToolCalls *int64   `json:"exploration_max_tool_calls,omitempty"`
+}
+
 type ProfileSwitchedEvent struct {
 	AfterSeq   *int64                 `json:"after_seq,omitempty"`
 	Entity     EntityRef              `json:"entity"`
@@ -1003,6 +1010,7 @@ type TaskWorkflowInput struct {
 	Goal                    string                     `json:"goal"`
 	Mode                    *string                    `json:"mode,omitempty"`
 	NodeTypeRegistryVersion int64                      `json:"node_type_registry_version"`
+	Policy                  *Policy                    `json:"policy,omitempty"`
 	Profile                 string                     `json:"profile"`
 	SOP                     *string                    `json:"sop,omitempty"`
 	TaskID                  string                     `json:"task_id"`

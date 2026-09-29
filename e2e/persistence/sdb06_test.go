@@ -35,7 +35,7 @@ SELECT coalesce(string_agg(x, E'\n' ORDER BY x), '') FROM (
     FROM information_schema.role_table_grants WHERE table_schema = 'public' AND table_name <> 'goose_db_version'
   UNION ALL
   SELECT 'colgrant:' || table_name || '.' || column_name || ':' || grantee || ':' || privilege_type
-    FROM information_schema.column_privileges WHERE table_schema = 'public' AND grantee IN ('orbit_definer', 'orbit_app', 'orbit_ops')
+    FROM information_schema.column_privileges WHERE table_schema = 'public' AND grantee IN ('orbit_app', 'orbit_ops')
 ) s`
 
 const objectCountSQL = `
@@ -98,7 +98,10 @@ func errText(err error) string {
 // runSDB06Migrations is S-DB-6 (ISO-12). It leaves the database migrated
 // for the rest of the suite.
 // latestMigration is the number of the newest embedded migration: an empty database applies all of them.
-const latestMigration = 15
+const latestMigration = 16 // the highest migration number; numbers 3 to 5 are unused
+
+// migrationFiles is how many migrations an empty database applies.
+const migrationFiles = 13
 
 func runSDB06Migrations(ctx context.Context) bool {
 	const c = "S-DB-6"
@@ -133,8 +136,8 @@ func runSDB06Migrations(ctx context.Context) bool {
 	first := up()
 	step("S-DB-6/up-on-empty", "up on an empty database succeeds and applies every migration",
 		[]string{"goose up", "read version", "snapshot schema"},
-		map[string]any{"applied": latestMigration, "version": latestMigration, "error": ""}, first,
-		first.Error == "" && first.Applied == latestMigration && first.Version == latestMigration && first.Schema.Fingerprint != "")
+		map[string]any{"applied": migrationFiles, "version": latestMigration, "error": ""}, first,
+		first.Error == "" && first.Applied == migrationFiles && first.Version == latestMigration && first.Schema.Fingerprint != "")
 
 	second := up()
 	step("S-DB-6/up-again-noop", "up on an already migrated database succeeds and changes nothing",
@@ -154,9 +157,9 @@ func runSDB06Migrations(ctx context.Context) bool {
 	third := up()
 	step("S-DB-6/up-after-down", "up after down reproduces the fresh schema exactly",
 		[]string{"goose up", "snapshot schema", "compare with the fresh-up snapshot"},
-		map[string]any{"applied": latestMigration, "version": latestMigration, "error": "", "schemaFingerprint": first.Schema.Fingerprint},
+		map[string]any{"applied": migrationFiles, "version": latestMigration, "error": "", "schemaFingerprint": first.Schema.Fingerprint},
 		map[string]any{"applied": third.Applied, "version": third.Version, "error": third.Error, "schemaFingerprint": third.Schema.Fingerprint},
-		third.Error == "" && third.Applied == latestMigration && third.Version == latestMigration && third.Schema.Fingerprint == first.Schema.Fingerprint)
+		third.Error == "" && third.Applied == migrationFiles && third.Version == latestMigration && third.Schema.Fingerprint == first.Schema.Fingerprint)
 	return ok
 }
 

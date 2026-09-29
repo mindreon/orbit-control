@@ -1,650 +1,97 @@
 openapi: 3.0.3
 info:
   title: Orbit Control API
-  version: 0.2.0-w1
+  version: 0.3.0
   description: |
-    W1 **live rooms**. Health, rooms, messages, approvals, room activity history,
-    steer, and SSE events are implemented. Rooms, messages, approvals and
-    idempotency keys are stored in Postgres when `ORBIT_CONTROL_DB_URL` is set
-    (in-memory otherwise, dev/test only). Durable events use a per-task seq
-    in that database; live SSE fan-out stays in-process. Control calls
-    orbit-worker HTTP activities directly, or
-    RoomWorkflow when Temporal is configured. It still has no OAuth.
+    Orbit control API: the task center (TaskWorkflow), agent profiles, SOPs and policy, artifacts,
+    and the tenant catalog (assistants, connectors, skills, MCP market). Tasks are stored in Postgres
+    (`ORBIT_CONTROL_DB_URL`); control drives TaskWorkflow through Temporal (`TEMPORAL_ADDRESS`). The
+    event stream of a task is SSE with a durable per-task `seq` and ephemeral live frames without one.
 
-    Product surfaces:
+    The agent loop runs on orbit-worker (AgentScope). This API never exposes Temporal or worker URLs.
 
-    - **Super single-agent** — rooms `kind=solo` (W1)
-    - **Multi-agent** — rooms `kind=collab`, per-room agent catalog (later)
-    - **Cloud Agent** — `/v1/cloud-agents` jobs (later)
-
-    The agent loop runs on orbit-worker as AgentScope. This API does not
-    require `kernel=dsh` or `protocol=acp`, and it never exposes Temporal
-    or worker URLs.
-
-    `Unauthorized` (401) and `Forbidden` (403) are reserved shapes for later
-    Sentinel tests. They are not emitted in W1.
+    `Unauthorized` (401) and `Forbidden` (403) are reserved shapes for the auth layer.
   license:
     name: MIT
     url: https://opensource.org/licenses/MIT
 servers:
-  - url: http://127.0.0.1:8080
-    description: Local W1 control (in-memory rooms + HITL)
-# W1 intentionally has no authentication. Later security schemes replace this
-# root-level declaration; the reserved 401/403 response bodies stay stable.
+- url: http://127.0.0.1:8080
+  description: Local control
 security: []
 tags:
-  - name: health
-    description: Liveness
-  - name: rooms
-    description: Conversation / work rooms (W1 in-memory)
-  - name: messages
-    description: Room messages (W1 in-memory)
-  - name: approvals
-    description: Human-in-the-loop approvals (W1 in-memory)
-  - name: personas
-    description: Agent personas. Stored in Postgres when ORBIT_CONTROL_DB_URL is set.
-  - name: mcp-connectors
-    description: MCP connector launchers. Environment references are names only.
-  - name: mcp-market
-    description: |
-      Shared ModelScope plaza snapshot stored in this service. Listing reads
-      the local copy. Process start loads the shipped snapshot. This API does
-      not call modelscope.cn, does not store launch commands or hosted URLs,
-      and does not connect to a server.
-  - name: skills
-    description: |
-      Shared SkillHub catalog stored in this service. Listing reads the local
-      copy. A background sync refreshes it. Skill packages are not downloaded
-      and this API does not install them.
-  - name: secrets
-    description: Tenant secrets metadata only (unimplemented; plaintext never in API)
-  - name: cloud-agents
-    description: Cloud agent jobs (unimplemented)
-  - name: tasks
-    description: TaskWorkflow v3 orchestration
-  - name: profiles
-    description: Immutable versioned agent profiles
-  - name: websocket
-    description: Public WebSocket upgrade (unimplemented)
+- name: health
+  description: Liveness
+- name: tasks
+  description: TaskWorkflow orchestration
+- name: profiles
+  description: Immutable versioned agent profiles
+- name: policy
+  description: Tenant policy layer (tighten-only)
+- name: sops
+  description: Versioned SOP definitions
+- name: personas
+  description: Agent personas. Stored in Postgres when ORBIT_CONTROL_DB_URL is set.
+- name: mcp-connectors
+  description: MCP connector launchers. Environment references are names only.
+- name: mcp-market
+  description: |
+    Shared ModelScope plaza snapshot stored in this service. Listing reads
+    the local copy. Process start loads the shipped snapshot. This API does
+    not call modelscope.cn, does not store launch commands or hosted URLs,
+    and does not connect to a server.
+- name: skills
+  description: |
+    Shared SkillHub catalog stored in this service. Listing reads the local
+    copy. A background sync refreshes it. Skill packages are not downloaded
+    and this API does not install them.
 paths:
   /health:
     get:
-      tags: [health]
+      tags:
+      - health
       operationId: getHealth
       summary: Health check
-      description: "W1 returns 200 `{status: ok}` without a database."
+      description: 'Returns 200 `{status: ok}` without touching the database.'
       x-unimplemented: false
       responses:
-        "200":
+        '200':
           description: Process is up
           content:
             application/json:
               schema:
                 type: object
                 additionalProperties: false
-                required: [status]
+                required:
+                - status
                 properties:
                   status:
                     type: string
                     example: ok
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-  /v1/rooms:
-    get:
-      tags: [rooms]
-      operationId: listRooms
-      summary: List rooms
-      x-unimplemented: false
-      responses:
-        "200":
-          description: Room list
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/RoomList"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-    post:
-      tags: [rooms]
-      operationId: createRoom
-      summary: Create a room
-      description: |
-        `kind=solo` is the super single-agent room. Opens a session on
-        orbit-worker. `permissionPreset` is pinned on that room and forwarded
-        with the session (`workspace-write`, `read-only`, or
-        `danger-full-access`). `danger-full-access` applies only to this
-        room, not as a global client switch. `kind=collab` is accepted but
-        still one parent session in W1.
-      x-unimplemented: false
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/CreateRoomRequest"
-      responses:
-        "200":
-          description: |
-            Created room, or the original room when the same
-            `Idempotency-Key` and body are replayed.
-          headers:
-            Idempotent-Replayed:
-              description: "`true` when this response is a replay."
-              schema:
-                type: string
-                enum: ["true"]
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Room"
-        "404":
-          description: |
-            The `Idempotency-Key` belongs to a room that was deleted. The body
-            is identical to a missing room and never contains its id.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorBody"
-              example:
-                error: not found
-                code: NOT_FOUND
-                message: room not found
-        "409":
-          $ref: "#/components/responses/IdempotencyKeyReused"
-        "502":
-          $ref: "#/components/responses/NotImplemented"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-  /v1/rooms/{roomId}:
-    get:
-      tags: [rooms]
-      operationId: getRoom
-      summary: Get a room
-      x-unimplemented: false
-      parameters:
-        - $ref: "#/components/parameters/RoomId"
-      responses:
-        "200":
-          description: Room
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Room"
-        "404":
-          $ref: "#/components/responses/NotImplemented"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-    delete:
-      tags: [rooms]
-      operationId: deleteRoom
-      summary: Soft-delete a room (task)
-      description: |
-        Only the creator may delete. Checks run in order: unauthenticated →
-        401, CSRF (`Origin` not allowed or `X-Orbit-Request: 1` missing) →
-        403, not the creator / missing / already deleted → 404.
-
-        Control first sends `abort` to the room workflow, then marks the room
-        deleted. If the abort fails or times out, the room is still deleted
-        and 204 is returned. Open SSE streams for the room are closed; the
-        room, its messages, activity, events and approvals then return 404.
-        Any request body is ignored; `deleted_at` / `deleted_by` are set by
-        the server from the session. There is no restore or purge API.
-      x-unimplemented: false
-      parameters:
-        - $ref: "#/components/parameters/RoomId"
-      responses:
-        "204":
-          description: Room deleted
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/CsrfRejected"
-        "404":
-          $ref: "#/components/responses/NotFound"
-  /v1/rooms/{roomId}/messages:
-    get:
-      tags: [messages]
-      operationId: listRoomMessages
-      summary: List messages in a room
-      x-unimplemented: false
-      parameters:
-        - $ref: "#/components/parameters/RoomId"
-      responses:
-        "200":
-          description: Messages
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/MessageList"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-    post:
-      tags: [messages]
-      operationId: createRoomMessage
-      summary: Post a message to a room
-      description: Human turn text. Control calls worker `runTurn` (W1 stand-in for Temporal).
-      x-unimplemented: false
-      parameters:
-        - $ref: "#/components/parameters/RoomId"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/CreateRoomMessageRequest"
-      responses:
-        "200":
-          description: Room after the turn, plus a pending approval when parked
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PostMessageResponse"
-        "400":
-          $ref: "#/components/responses/NotImplemented"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-  /v1/rooms/{roomId}/steer:
-    post:
-      tags: [rooms]
-      operationId: steerRoom
-      summary: Steer a running room
-      description: |
-        Maps to Temporal Signal `steer`, or the worker Activity on the direct
-        W1 path. Legal only while the room is running.
-      x-unimplemented: false
-      parameters:
-        - $ref: "#/components/parameters/RoomId"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/SteerRequest"
-      responses:
-        "200":
-          description: Steer accepted
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: false
-                required: [accepted]
-                properties:
-                  accepted:
-                    type: boolean
-        "400":
-          $ref: "#/components/responses/NotImplemented"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-  /v1/rooms/{roomId}/abort:
-    post:
-      tags: [rooms]
-      operationId: abortRoom
-      summary: Abort a room
-      description: Calls worker `abort` (W1 stand-in for Temporal Signal `abort`).
-      x-unimplemented: false
-      parameters:
-        - $ref: "#/components/parameters/RoomId"
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/AbortRequest"
-      responses:
-        "200":
-          description: Room aborted
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [aborted]
-                properties:
-                  aborted:
-                    type: boolean
-        "400":
-          $ref: "#/components/responses/NotImplemented"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-  /v1/rooms/{roomId}/events:
-    get:
-      tags: [rooms]
-      operationId: streamRoomEvents
-      summary: SSE room events
-      description: |
-        W1 stand-in for public WebSocket. orbit-web subscribes here only.
-        Every frame is a default SSE `message` whose `data:` is an
-        `EventEnvelope` (never raw ACP); switch on `data.type`.
-
-        **Event ids.** Every message carries `id: <n>`, where `n` is
-        `EventEnvelope.id`: the event's id from one process-global in-memory
-        counter shared by all rooms. Within a room ids strictly increase but
-        are not contiguous. The counter restarts with control, so ids issued
-        before a restart are unknown afterwards.
-
-        **Resume.** Send the last id you received as the `Last-Event-ID`
-        header (browsers do this on EventSource auto-reconnect) or as the
-        `lastEventId` query parameter. The header wins when both are present.
-        The cursor must be `0` or the id of an event of **this** room.
-        Control replays this room's retained events with a greater id, in
-        order, then switches to live with no duplicates and no gaps. Without
-        a cursor the stream is live-only, as before.
-
-        **Reset.** If the cursor is malformed, unknown (not an event of this
-        room — e.g. another room's id, an id beyond the latest issued, or any
-        id issued before a control restart), or older than the earliest
-        retained event (activity keeps the last 500 per room), the first
-        message is a `reset` envelope (payload `ResetPayload`) whose `id:` is
-        this room's latest event id. Refetch the room, messages, and
-        activity, then keep reading this stream; it continues live after
-        `payload.lastId`. Rooms are also in memory, so after a restart the
-        room itself is usually gone and the request gets `404` before any
-        stream opens.
-
-        **assistant.delta** envelopes are live-only: not stored, no envelope
-        `id`, never replayed, and never counted against the 500-event
-        window. Their SSE `id:` repeats the id of the last durable event
-        delivered on this connection. Clients drop partial drafts on
-        reconnect. Deltas can be dropped (behind replayed events, or while a
-        stream catches up after a buffer overflow) without any signal; the
-        persisted `assistant.message` is authoritative.
-
-        **No authorization yet.** Until the §17 auth PR, any caller can
-        replay any room. Control refuses to start on a non-loopback public
-        bind unless `ORBIT_ALLOW_UNAUTHENTICATED_BIND=1` (not externally
-        reachable environments only).
-
-        **Stream end.** The stream ends when its room closes (after buffered
-        frames), when a write stalls past `ORBIT_SSE_WRITE_TIMEOUT`, after a
-        `lagging` reset, or on an event store error (preceded by
-        `retry: 10000`).
-
-        Comment lines `: connected` and `: heartbeat` (about every 15s) keep
-        proxies from idling the connection; they carry no id.
-      x-unimplemented: false
-      parameters:
-        - $ref: "#/components/parameters/RoomId"
-        - name: Last-Event-ID
-          in: header
-          required: false
-          description: Resume cursor, the last event id received (decimal).
-          schema:
-            type: string
-          example: "42"
-        - name: lastEventId
-          in: query
-          required: false
-          description: EventSource fallback for `Last-Event-ID`; ignored when the header is set.
-          schema:
-            type: string
-          example: "42"
-      responses:
-        "200":
-          description: |
-            `text/event-stream` with `Cache-Control: no-cache` and
-            `X-Accel-Buffering: no`. Each `data:` is an `EventEnvelope`.
-          headers:
-            Cache-Control:
-              schema:
-                type: string
-                enum: [no-cache]
-            X-Accel-Buffering:
-              schema:
-                type: string
-                enum: ["no"]
-          content:
-            text/event-stream:
-              schema:
-                $ref: "#/components/schemas/EventEnvelope"
-        "404":
-          description: Room not found. Returned before any stream is opened.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorBody"
-              example:
-                error: not found
-                code: NOT_FOUND
-                message: room not found
-        "429":
-          description: |
-            The room (`STREAM_LIMIT_ROOM`, `ORBIT_SSE_MAX_STREAMS_PER_ROOM`) or
-            the client IP (`STREAM_LIMIT_CLIENT`,
-            `ORBIT_SSE_MAX_STREAMS_PER_CLIENT`) is at its SSE stream cap.
-            Returned before any stream is opened.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorBody"
-              example:
-                error: stream limit room
-                code: STREAM_LIMIT_ROOM
-                message: too many streams on this room
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-  /v1/rooms/{roomId}/activity:
-    get:
-      tags: [rooms]
-      operationId: listRoomActivity
-      summary: List the room execution timeline
-      description: |
-        Returns the room's retained durable events (last 500), oldest first,
-        as `EventEnvelope`s with the producer's payload passed through
-        unchanged. `assistant.delta` is never included. The response never
-        contains raw dsh or ACP frames.
-      x-unimplemented: false
-      parameters:
-        - $ref: "#/components/parameters/RoomId"
-      responses:
-        "200":
-          description: Room activity, oldest first
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ActivityEventList"
-        "404":
-          $ref: "#/components/responses/NotImplemented"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-  /v1/rooms/{roomId}/agents:
-    get:
-      tags: [rooms]
-      operationId: listRoomAgents
-      summary: List agents in a room (unimplemented)
-      description: |
-        Parent session plus projected subagent catalog. Used by collab rooms
-        and by solo rooms that spawned children.
-      x-unimplemented: true
-      parameters:
-        - $ref: "#/components/parameters/RoomId"
-      responses:
-        "501":
-          $ref: "#/components/responses/NotImplemented"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-  /v1/approvals:
-    get:
-      tags: [approvals]
-      operationId: listApprovals
-      summary: List approvals
-      x-unimplemented: false
-      responses:
-        "200":
-          description: Approval list
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApprovalList"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-  /v1/approvals/{approvalId}:
-    get:
-      tags: [approvals]
-      operationId: getApproval
-      summary: Get an approval (unimplemented)
-      x-unimplemented: true
-      parameters:
-        - $ref: "#/components/parameters/ApprovalId"
-      responses:
-        "501":
-          $ref: "#/components/responses/NotImplemented"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-  /v1/approvals/{approvalId}/decide:
-    post:
-      tags: [approvals]
-      operationId: decideApproval
-      summary: Approve or reject
-      description: |
-        Public HITL verb. Control maps `allow` to worker `resolveApproval`
-        (`allowed-once`) then `runTurn` resume. `reject` maps to worker `abort`.
-        Temporal Update/Signal is the later stand-in target.
-
-        The approval is claimed with a conditional update (`status = pending`)
-        before anything is sent to the workflow, so concurrent decisions have
-        exactly one winner and the workflow receives exactly one decision.
-        The Temporal decide Update uses `UpdateID = approvalRequestId` and
-        does not send `resumeTurnId` (C35). A transition that matches 0 rows
-        is re-read and answered from that row; it is never 500. A room that
-        is already `failed` returns **409** `ROOM_FAILED`. `room.failed`
-        carries `failure: {code, message}` with the §10.2 sentence.
-        Deciding an approval that is already `delivered`, `unresolved`, or
-        `cancelled` returns **409** `APPROVAL_NOT_PENDING` (contract §2.0).
-        While `deliveryState` is `in_flight` or `unknown`, the same decision
-        again returns **202** and is not re-delivered; a different decision
-        returns **409** `APPROVAL_DELIVERY_PENDING` with the current
-        `approval` on the error body (C34 §2.4). An unconfirmed delivery
-        (timeout or any ambiguous error) returns **202**
-        `{approval, deliveryState: "unknown"}`. A confirmed
-        `DECIDED_APPROVALS_LIMIT` returns **409** `ROOM_FAILED`. Delivery
-        ends when the decision is accepted; the resumed turn is written back
-        on a background context, so a slow turn is **200** and a client
-        disconnect does not drop that write (FM-61).
-      x-unimplemented: false
-      parameters:
-        - $ref: "#/components/parameters/ApprovalId"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/DecideApprovalRequest"
-      responses:
-        "200":
-          description: Updated approval
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Approval"
-        "400":
-          description: |
-            The decision was delivered, but resuming the turn afterwards
-            failed: the worker `runTurn` resume on the direct path, or waiting
-            for the result of the accepted `decide` Update on the Temporal
-            path. The message carries the error. The approval stays decided.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorBody"
-              example:
-                error: bad request
-                code: BAD_REQUEST
-                message: "worker runTurn: HTTP 500"
-        "404":
-          description: Missing, not owned by the caller, in another tenant, or its task was deleted.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorBody"
-              example:
-                error: not found
-                code: NOT_FOUND
-                message: approval not found
-        "202":
-          description: |
-            Delivery outcome is not confirmed (`deliveryState` `unknown`), or
-            the caller repeated the same decision while delivery is `in_flight`
-            or `unknown`. Not an error body. Nothing is re-delivered.
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: false
-                required: [approval, deliveryState]
-                properties:
-                  approval:
-                    $ref: "#/components/schemas/Approval"
-                  deliveryState:
-                    type: string
-                    enum: [in_flight, unknown]
-        "409":
-          description: |
-            `APPROVAL_NOT_PENDING` when the approval is no longer waiting on
-            delivery, or `APPROVAL_DELIVERY_PENDING` / `ROOM_FAILED` (both
-            include `approval`). See the component responses.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorBody"
-        "503":
-          description: |
-            `APPROVAL_NOT_DELIVERED`. The decision was provably not delivered
-            and the approval is pending again.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorBody"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /v1/personas:
     get:
-      tags: [personas]
+      tags:
+      - personas
       operationId: listPersonas
       summary: List personas
       x-unimplemented: false
       responses:
-        "200":
+        '200':
           description: Personas for the caller's tenant, newest first
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/PersonaList"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
+                $ref: '#/components/schemas/PersonaList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
     post:
-      tags: [personas]
+      tags:
+      - personas
       operationId: createPersona
       summary: Create a persona
       description: |
@@ -656,58 +103,45 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/CreatePersonaRequest"
+              $ref: '#/components/schemas/CreatePersonaRequest'
       responses:
-        "200":
+        '200':
           description: Created persona
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Persona"
-        "400":
+                $ref: '#/components/schemas/Persona'
+        '400':
           description: Missing name, or a connector id that includes a value
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorBody"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-  /v1/personas/{personaId}:
-    get:
-      tags: [personas]
-      operationId: getPersona
-      summary: Get a persona (unimplemented)
-      x-unimplemented: true
-      parameters:
-        - $ref: "#/components/parameters/PersonaId"
-      responses:
-        "501":
-          $ref: "#/components/responses/NotImplemented"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /v1/mcp-connectors:
     get:
-      tags: [mcp-connectors]
+      tags:
+      - mcp-connectors
       operationId: listMcpConnectors
       summary: List MCP connectors
       x-unimplemented: false
       responses:
-        "200":
+        '200':
           description: Connectors for the caller's tenant, newest first
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/McpConnectorList"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
+                $ref: '#/components/schemas/McpConnectorList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
     post:
-      tags: [mcp-connectors]
+      tags:
+      - mcp-connectors
       operationId: createMcpConnector
       summary: Create an MCP connector
       description: |
@@ -720,27 +154,28 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/CreateMcpConnectorRequest"
+              $ref: '#/components/schemas/CreateMcpConnectorRequest'
       responses:
-        "200":
+        '200':
           description: Created connector
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/McpConnector"
-        "400":
+                $ref: '#/components/schemas/McpConnector'
+        '400':
           description: Missing name or launch target, or a name that includes a value
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorBody"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /v1/mcp-market:
     get:
-      tags: [mcp-market]
+      tags:
+      - mcp-market
       operationId: listMcpMarket
       summary: List the stored ModelScope MCP plaza
       description: |
@@ -748,49 +183,54 @@ paths:
         call modelscope.cn. Rows are display metadata only.
       x-unimplemented: false
       parameters:
-        - name: keyword
-          in: query
-          schema:
-            type: string
-        - name: category
-          in: query
-          schema:
-            type: string
-        - name: serviceType
-          in: query
-          schema:
-            type: string
-            enum: [hosted, local]
-        - name: needsOnline
-          in: query
-          schema:
-            type: string
-            enum: ["true", "false"]
-        - name: page
-          in: query
-          schema:
-            type: integer
-            minimum: 1
-        - name: pageSize
-          in: query
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 48
+      - name: keyword
+        in: query
+        schema:
+          type: string
+      - name: category
+        in: query
+        schema:
+          type: string
+      - name: serviceType
+        in: query
+        schema:
+          type: string
+          enum:
+          - hosted
+          - local
+      - name: needsOnline
+        in: query
+        schema:
+          type: string
+          enum:
+          - 'true'
+          - 'false'
+      - name: page
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+      - name: pageSize
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 48
       responses:
-        "200":
+        '200':
           description: One page of the stored plaza. items is empty until startup stores the snapshot.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/McpMarketList"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
+                $ref: '#/components/schemas/McpMarketList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /v1/mcp-market/{id}:
     get:
-      tags: [mcp-market]
+      tags:
+      - mcp-market
       operationId: getMcpMarket
       summary: Read one stored MCP server
       description: |
@@ -799,31 +239,32 @@ paths:
         discussion threads are not stored.
       x-unimplemented: false
       parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
       responses:
-        "200":
+        '200':
           description: The stored server. readme and tools may be empty.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/McpMarketDetail"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
+                $ref: '#/components/schemas/McpMarketDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
           description: No stored server has this id
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorBody"
+                $ref: '#/components/schemas/ErrorBody'
   /v1/mcp-market-categories:
     get:
-      tags: [mcp-market]
+      tags:
+      - mcp-market
       operationId: listMcpMarketCategories
       summary: List stored plaza categories
       description: |
@@ -831,25 +272,28 @@ paths:
         the needsOnline filter. Does not call modelscope.cn.
       x-unimplemented: false
       parameters:
-        - name: needsOnline
-          in: query
-          schema:
-            type: string
-            enum: ["true", "false"]
+      - name: needsOnline
+        in: query
+        schema:
+          type: string
+          enum:
+          - 'true'
+          - 'false'
       responses:
-        "200":
+        '200':
           description: Category labels that have at least one stored server
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/McpMarketCategoryList"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
+                $ref: '#/components/schemas/McpMarketCategoryList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /v1/skills:
     get:
-      tags: [skills]
+      tags:
+      - skills
       operationId: listSkills
       summary: List the local SkillHub catalog
       description: |
@@ -859,59 +303,72 @@ paths:
         operation does not install a skill.
       x-unimplemented: false
       parameters:
-        - name: sortBy
-          in: query
-          schema:
-            type: string
-            enum: [score, downloads, updated_at, stars, trending]
-        - name: category
-          in: query
-          schema:
-            type: string
-        - name: source
-          in: query
-          schema:
-            type: string
-            enum: [clawhub, community, enterprise]
-        - name: keyword
-          in: query
-          schema:
-            type: string
-        - name: requiresApiKey
-          in: query
-          schema:
-            type: string
-            enum: ["true", "false"]
-        - name: paid
-          in: query
-          schema:
-            type: string
-            enum: ["true", "false"]
-        - name: page
-          in: query
-          schema:
-            type: integer
-            minimum: 1
-        - name: pageSize
-          in: query
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 48
+      - name: sortBy
+        in: query
+        schema:
+          type: string
+          enum:
+          - score
+          - downloads
+          - updated_at
+          - stars
+          - trending
+      - name: category
+        in: query
+        schema:
+          type: string
+      - name: source
+        in: query
+        schema:
+          type: string
+          enum:
+          - clawhub
+          - community
+          - enterprise
+      - name: keyword
+        in: query
+        schema:
+          type: string
+      - name: requiresApiKey
+        in: query
+        schema:
+          type: string
+          enum:
+          - 'true'
+          - 'false'
+      - name: paid
+        in: query
+        schema:
+          type: string
+          enum:
+          - 'true'
+          - 'false'
+      - name: page
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+      - name: pageSize
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 48
       responses:
-        "200":
+        '200':
           description: One page of the stored catalog. items is empty until the first sync writes rows.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SkillList"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
+                $ref: '#/components/schemas/SkillList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /v1/skills/{handle}/{slug}:
     get:
-      tags: [skills]
+      tags:
+      - skills
       operationId: getSkill
       summary: Read one stored skill
       description: |
@@ -919,36 +376,37 @@ paths:
         SkillHub, and it does not download or install the skill package.
       x-unimplemented: false
       parameters:
-        - name: handle
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: slug
-          in: path
-          required: true
-          schema:
-            type: string
+      - name: handle
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: slug
+        in: path
+        required: true
+        schema:
+          type: string
       responses:
-        "200":
+        '200':
           description: The stored skill. The description is the saved summary, not a package file.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Skill"
-        "404":
+                $ref: '#/components/schemas/Skill'
+        '404':
           description: No stored row matches this handle and slug
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorBody"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /v1/skills/{slug}:
     get:
-      tags: [skills]
+      tags:
+      - skills
       operationId: getSkillBySlug
       summary: Read one stored skill that has no author handle
       description: |
@@ -956,31 +414,32 @@ paths:
         SkillHub, and it does not download or install the skill package.
       x-unimplemented: false
       parameters:
-        - name: slug
-          in: path
-          required: true
-          schema:
-            type: string
+      - name: slug
+        in: path
+        required: true
+        schema:
+          type: string
       responses:
-        "200":
+        '200':
           description: The stored skill.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Skill"
-        "404":
+                $ref: '#/components/schemas/Skill'
+        '404':
           description: No stored row matches this slug
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorBody"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /v1/skill-files/{handle}/{slug}:
     get:
-      tags: [skills]
+      tags:
+      - skills
       operationId: listSkillFiles
       summary: Read text files saved for one skill
       description: |
@@ -994,642 +453,758 @@ paths:
         meta omits signed report URLs.
       x-unimplemented: false
       parameters:
-        - name: handle
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: slug
-          in: path
-          required: true
-          schema:
-            type: string
+      - name: handle
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: slug
+        in: path
+        required: true
+        schema:
+          type: string
       responses:
-        "200":
+        '200':
           description: Saved text files. items is empty when the package had none we keep.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SkillTextFileList"
-        "404":
+                $ref: '#/components/schemas/SkillTextFileList'
+        '404':
           description: No stored skill matches this handle and slug
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorBody"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /v1/skill-files/{slug}:
     get:
-      tags: [skills]
+      tags:
+      - skills
       operationId: listSkillFilesBySlug
       summary: Read text files for a skill that has no author handle
       description: |
         Same as listSkillFiles, for a row whose id is the slug alone.
       x-unimplemented: false
       parameters:
-        - name: slug
-          in: path
-          required: true
-          schema:
-            type: string
+      - name: slug
+        in: path
+        required: true
+        schema:
+          type: string
       responses:
-        "200":
+        '200':
           description: Saved text files.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SkillTextFileList"
-        "404":
+                $ref: '#/components/schemas/SkillTextFileList'
+        '404':
           description: No stored skill matches this slug
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorBody"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /v1/skill-categories:
     get:
-      tags: [skills]
+      tags:
+      - skills
       operationId: listSkillCategories
       summary: List stored skill category labels
       description: Reads labels stored with the local catalog. Does not call SkillHub.
       x-unimplemented: false
       responses:
-        "200":
+        '200':
           description: Category labels, ordered by sortOrder
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SkillCategoryList"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-  /v1/secrets:
-    get:
-      tags: [secrets]
-      operationId: listSecrets
-      summary: List secret metadata (unimplemented)
-      description: |
-        Returns names and status only. Plaintext secret values are never
-        included in request or response examples.
-      x-unimplemented: true
-      responses:
-        "501":
-          $ref: "#/components/responses/NotImplemented"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-    post:
-      tags: [secrets]
-      operationId: putSecret
-      summary: Store a secret (unimplemented)
-      description: Ciphertext is owned only by orbit-control. Body is a placeholder.
-      x-unimplemented: true
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/PlaceholderObject"
-      responses:
-        "501":
-          $ref: "#/components/responses/NotImplemented"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-  /v1/secrets/{secretId}:
-    get:
-      tags: [secrets]
-      operationId: getSecretMetadata
-      summary: Get secret metadata (unimplemented)
-      x-unimplemented: true
-      parameters:
-        - $ref: "#/components/parameters/SecretId"
-      responses:
-        "501":
-          $ref: "#/components/responses/NotImplemented"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-    delete:
-      tags: [secrets]
-      operationId: deleteSecret
-      summary: Delete a secret (unimplemented)
-      x-unimplemented: true
-      parameters:
-        - $ref: "#/components/parameters/SecretId"
-      responses:
-        "501":
-          $ref: "#/components/responses/NotImplemented"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-  /v1/cloud-agents:
-    get:
-      tags: [cloud-agents]
-      operationId: listCloudAgents
-      summary: List cloud agent jobs (unimplemented)
-      x-unimplemented: true
-      responses:
-        "501":
-          $ref: "#/components/responses/NotImplemented"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-    post:
-      tags: [cloud-agents]
-      operationId: createCloudAgent
-      summary: Start a cloud agent job (unimplemented)
-      description: |
-        Control starts Temporal workflow `CloudAgentJob`. GitHub and other
-        webhooks also land here — not on dsh webhookRuntime.
-      x-unimplemented: true
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/CreateCloudAgentRequest"
-      responses:
-        "501":
-          $ref: "#/components/responses/NotImplemented"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-  /v1/cloud-agents/{agentId}:
-    get:
-      tags: [cloud-agents]
-      operationId: getCloudAgent
-      summary: Get a cloud agent job (unimplemented)
-      x-unimplemented: true
-      parameters:
-        - $ref: "#/components/parameters/AgentId"
-      responses:
-        "501":
-          $ref: "#/components/responses/NotImplemented"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-  /v1/cloud-agents/{agentId}/cancel:
-    post:
-      tags: [cloud-agents]
-      operationId: cancelCloudAgent
-      summary: Cancel a cloud agent job (unimplemented)
-      description: Maps to Temporal Signal `abort` on CloudAgentJob.
-      x-unimplemented: true
-      parameters:
-        - $ref: "#/components/parameters/AgentId"
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/AbortRequest"
-      responses:
-        "501":
-          $ref: "#/components/responses/NotImplemented"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-  /ws:
-    get:
-      tags: [websocket]
-      operationId: upgradeWebSocket
-      summary: Public WebSocket upgrade (unimplemented)
-      description: |
-        Placeholder for the public WS surface. orbit-web will subscribe here
-        only — never to orch, worker, or dsh sockets.
-
-        Later frames are `OrbitEvent` objects (session.status, assistant.message,
-        tool.call, tool.result, approval.asked, agent.started, agent.finished,
-        usage). Raw dsh/ACP payloads are not forwarded.
-      x-unimplemented: true
-      responses:
-        "501":
-          $ref: "#/components/responses/NotImplemented"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
+                $ref: '#/components/schemas/SkillCategoryList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /v1/tasks:
     get:
-      tags: [tasks]
+      tags:
+      - tasks
       operationId: listTasks
       summary: List task workflows
       responses:
-        "200":
+        '200':
           description: Task list
           content:
             application/json:
               schema:
                 type: object
-                required: [items]
+                required:
+                - items
                 properties:
-                  items: { type: array, items: { $ref: "#/components/schemas/Task" } }
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Task'
     post:
-      tags: [tasks]
+      tags:
+      - tasks
       operationId: createTask
       summary: Create and start a TaskWorkflow
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/CreateTaskRequest" }
+            schema:
+              $ref: '#/components/schemas/CreateTaskRequest'
       responses:
-        "201":
+        '201':
           description: Created task
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Task" }
+              schema:
+                $ref: '#/components/schemas/Task'
   /v1/profiles:
     get:
-      tags: [profiles]
+      tags:
+      - profiles
       operationId: listProfiles
       responses:
-        "200":
+        '200':
           description: Immutable profile versions
           content:
             application/json:
               schema:
                 type: object
-                required: [items]
+                required:
+                - items
                 properties:
-                  items: { type: array, items: { $ref: "#/components/schemas/Profile" } }
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Profile'
     post:
-      tags: [profiles]
+      tags:
+      - profiles
       operationId: registerProfile
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/RegisterProfileRequest" }
+            schema:
+              $ref: '#/components/schemas/RegisterProfileRequest'
       responses:
-        "201":
+        '201':
           description: Profile registered
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Profile" }
+              schema:
+                $ref: '#/components/schemas/Profile'
   /v1/profiles/{profileRef}:
     get:
-      tags: [profiles]
+      tags:
+      - profiles
       operationId: getProfile
       parameters:
-        - { name: profileRef, in: path, required: true, schema: { type: string } }
+      - name: profileRef
+        in: path
+        required: true
+        schema:
+          type: string
       responses:
-        "200":
+        '200':
           description: Immutable profile version
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Profile" }
+              schema:
+                $ref: '#/components/schemas/Profile'
+  /v1/policy:
+    get:
+      tags:
+      - policy
+      operationId: getTenantPolicy
+      responses:
+        '200':
+          description: The tenant-wide policy, the outermost layer (05 §6)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Policy'
+    put:
+      tags:
+      - policy
+      operationId: setTenantPolicy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Policy'
+      responses:
+        '200':
+          description: The policy now in force. Tasks and profiles can only tighten it.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Policy'
   /v1/sops:
     get:
-      tags: [sops]
+      tags:
+      - sops
       operationId: listSOPs
       responses:
-        "200":
+        '200':
           description: Immutable SOP versions
           content:
             application/json:
               schema:
                 type: object
-                required: [items]
+                required:
+                - items
                 properties:
-                  items: { type: array, items: { $ref: "#/components/schemas/SOP" } }
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SOP'
     post:
-      tags: [sops]
+      tags:
+      - sops
       operationId: registerSOP
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/RegisterSOPRequest" }
+            schema:
+              $ref: '#/components/schemas/RegisterSOPRequest'
       responses:
-        "201":
+        '201':
           description: SOP registered (the same id, version and steps again is a no-op)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/SOP" }
-        "409":
+              schema:
+                $ref: '#/components/schemas/SOP'
+        '409':
           description: The version exists with different steps
   /v1/tasks/{taskId}:
-    parameters: [{ name: taskId, in: path, required: true, schema: { type: string } }]
+    parameters:
+    - name: taskId
+      in: path
+      required: true
+      schema:
+        type: string
     get:
-      tags: [tasks]
+      tags:
+      - tasks
       operationId: getTask
       responses:
-        "200":
+        '200':
           description: Task projection
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Task" }
+              schema:
+                $ref: '#/components/schemas/Task'
   /v1/tasks/{taskId}/messages:
     post:
-      tags: [tasks]
+      tags:
+      - tasks
       operationId: sendTaskMessage
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/SendTaskMessageRequest" }
+            schema:
+              $ref: '#/components/schemas/SendTaskMessageRequest'
       responses:
-        "202": { description: Update accepted }
+        '202':
+          description: Update accepted
   /v1/tasks/{taskId}/control:
     post:
-      tags: [tasks]
+      tags:
+      - tasks
       operationId: controlTask
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/TaskControlRequest" }
+            schema:
+              $ref: '#/components/schemas/TaskControlRequest'
       responses:
-        "202": { description: Update accepted }
+        '202':
+          description: Update accepted
   /v1/tasks/{taskId}/budget:
     post:
-      tags: [tasks]
+      tags:
+      - tasks
       operationId: grantTaskBudget
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/GrantBudgetRequest" }
+            schema:
+              $ref: '#/components/schemas/GrantBudgetRequest'
       responses:
-        "202": { description: Update accepted }
+        '202':
+          description: Update accepted
   /v1/tasks/{taskId}/profile:
     post:
-      tags: [tasks]
+      tags:
+      - tasks
       operationId: requestTaskProfileSwitch
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/RequestProfileSwitchRequest" }
+            schema:
+              $ref: '#/components/schemas/RequestProfileSwitchRequest'
       responses:
-        "202": { description: Update accepted }
+        '202':
+          description: Update accepted
   /v1/tasks/{taskId}/approvals/{approvalId}:
     post:
-      tags: [tasks]
+      tags:
+      - tasks
       operationId: decideTaskApproval
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/DecideTaskApprovalRequest" }
+            schema:
+              $ref: '#/components/schemas/DecideTaskApprovalRequest'
       responses:
-        "202": { description: Update accepted }
+        '202':
+          description: Update accepted
   /v1/tasks/{taskId}/plan:
     post:
-      tags: [tasks]
+      tags:
+      - tasks
       operationId: submitPlanChange
       requestBody:
         required: true
         content:
           application/json:
-            schema: { type: object, additionalProperties: true }
+            schema:
+              type: object
+              additionalProperties: true
       responses:
-        "202": { description: Update accepted }
+        '202':
+          description: Update accepted
     get:
-      tags: [tasks]
+      tags:
+      - tasks
       operationId: getTaskPlan
       responses:
-        "200": { description: Current plan, content: { application/json: { schema: { type: object } } } }
+        '200':
+          description: Current plan
+          content:
+            application/json:
+              schema:
+                type: object
   /v1/tasks/{taskId}/events:
     get:
-      tags: [tasks]
+      tags:
+      - tasks
       operationId: streamTaskEvents
       summary: Durable and ephemeral task events
       parameters:
-        - { name: Last-Event-ID, in: header, required: false, schema: { type: string } }
+      - name: Last-Event-ID
+        in: header
+        required: false
+        schema:
+          type: string
       responses:
-        "200": { description: SSE stream, content: { text/event-stream: { schema: { type: string } } } }
+        '200':
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
   /v1/tasks/{taskId}/artifacts:
     get:
-      tags: [tasks]
+      tags:
+      - tasks
       operationId: listTaskArtifacts
       parameters:
-        - { name: taskId, in: path, required: true, schema: { type: string } }
+      - name: taskId
+        in: path
+        required: true
+        schema:
+          type: string
       responses:
-        "200":
+        '200':
           description: Artifact manifests emitted by the task
           content:
             application/json:
               schema:
                 type: object
-                required: [items]
+                required:
+                - items
                 properties:
-                  items: { type: array, items: { $ref: "#/components/schemas/ArtifactManifest" } }
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ArtifactManifest'
   /v1/artifacts/{manifestId}:
     get:
-      tags: [tasks]
+      tags:
+      - tasks
       operationId: getArtifactManifest
       parameters:
-        - { name: manifestId, in: path, required: true, schema: { type: string } }
+      - name: manifestId
+        in: path
+        required: true
+        schema:
+          type: string
       responses:
-        "200":
+        '200':
           description: Artifact manifest
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ArtifactManifest" }
+              schema:
+                $ref: '#/components/schemas/ArtifactManifest'
   /v1/artifacts/{manifestId}/url:
     get:
-      tags: [tasks]
+      tags:
+      - tasks
       operationId: getArtifactDownloadURL
       parameters:
-        - { name: manifestId, in: path, required: true, schema: { type: string } }
-        - { name: name, in: query, required: true, schema: { type: string } }
+      - name: manifestId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: name
+        in: query
+        required: true
+        schema:
+          type: string
       responses:
-        "200":
+        '200':
           description: Short lived tenant scoped presigned artifact URL
           content:
             application/json:
               schema:
                 type: object
-                required: [url]
+                required:
+                - url
                 properties:
-                  url: { type: string, format: uri }
-
+                  url:
+                    type: string
+                    format: uri
 components:
-  parameters:
-    IdempotencyKey:
-      name: Idempotency-Key
-      in: header
-      required: false
-      description: |
-        Optional, at most 128 characters. Scoped to the calling user and
-        kept for 24 hours; only its sha256 is stored.
-      schema:
-        type: string
-        maxLength: 128
-    RoomId:
-      name: roomId
-      in: path
-      required: true
-      schema:
-        type: string
-    ApprovalId:
-      name: approvalId
-      in: path
-      required: true
-      schema:
-        type: string
-    PersonaId:
-      name: personaId
-      in: path
-      required: true
-      schema:
-        type: string
-    SecretId:
-      name: secretId
-      in: path
-      required: true
-      schema:
-        type: string
-    AgentId:
-      name: agentId
-      in: path
-      required: true
-      schema:
-        type: string
   schemas:
     Task:
       type: object
-      required: [task_id, tenant_id, workflow_id, title, goal, mode, status, profile, plan_version]
+      required:
+      - task_id
+      - tenant_id
+      - workflow_id
+      - title
+      - goal
+      - mode
+      - status
+      - profile
+      - plan_version
       properties:
-        task_id: { type: string, pattern: '^task_[0-9A-HJKMNP-TV-Z]{26}$' }
-        tenant_id: { type: string }
-        workflow_id: { type: string }
-        title: { type: string }
-        goal: { type: string }
-        mode: { type: string, enum: [single, multi, long] }
-        status: { type: string }
-        profile: { type: string }
-        plan_version: { type: integer, minimum: 1 }
-        created_by: { type: string }
-        created_at: { type: string, format: date-time }
-        updated_at: { type: string, format: date-time }
-        budgets: { type: object, additionalProperties: true }
-        usage: { type: object, additionalProperties: true }
-        pending_approvals: { type: array, items: { type: string } }
+        task_id:
+          type: string
+          pattern: ^task_[0-9A-HJKMNP-TV-Z]{26}$
+        tenant_id:
+          type: string
+        workflow_id:
+          type: string
+        title:
+          type: string
+        goal:
+          type: string
+        mode:
+          type: string
+          enum:
+          - single
+          - multi
+          - long
+        status:
+          type: string
+        profile:
+          type: string
+        plan_version:
+          type: integer
+          minimum: 1
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        budgets:
+          type: object
+          additionalProperties: true
+        usage:
+          type: object
+          additionalProperties: true
+        pending_approvals:
+          type: array
+          items:
+            type: string
+        policy:
+          $ref: '#/components/schemas/Policy'
     Profile:
       type: object
-      required: [profile_id, version, ref, spec, created_at]
+      required:
+      - profile_id
+      - version
+      - ref
+      - spec
+      - created_at
       properties:
-        profile_id: { type: string }
-        version: { type: integer, minimum: 1 }
-        ref: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]*@[1-9][0-9]*$' }
-        spec: { type: object, additionalProperties: true }
-        created_at: { type: string, format: date-time }
+        profile_id:
+          type: string
+        version:
+          type: integer
+          minimum: 1
+        ref:
+          type: string
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*@[1-9][0-9]*$
+        spec:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
     RegisterProfileRequest:
       type: object
-      required: [profile_id, version, spec]
+      required:
+      - profile_id
+      - version
+      - spec
       properties:
-        profile_id: { type: string, minLength: 1 }
-        version: { type: integer, minimum: 1 }
-        spec: { type: object, additionalProperties: true }
+        profile_id:
+          type: string
+          minLength: 1
+        version:
+          type: integer
+          minimum: 1
+        spec:
+          type: object
+          additionalProperties: true
+    Policy:
+      type: object
+      description: What an attempt may do. Tenant, task and profile layers only tighten each other.
+      properties:
+        denied_tools:
+          type: array
+          items:
+            type: string
+            minLength: 1
+        exploration_max_tool_calls:
+          type: integer
+          minimum: 0
     SOP:
       type: object
-      required: [sop_id, version, ref, steps, created_at]
+      required:
+      - sop_id
+      - version
+      - ref
+      - steps
+      - created_at
       properties:
-        sop_id: { type: string }
-        version: { type: integer, minimum: 1 }
-        ref: { type: string, description: "sop_id@version, what a sop_stage node names" }
-        steps: { type: array, minItems: 1, items: { $ref: "#/components/schemas/SOPStep" } }
-        created_at: { type: string, format: date-time }
-    RegisterSOPRequest:
-      type: object
-      required: [sop_id, version, steps]
-      properties:
-        sop_id: { type: string, minLength: 1 }
-        version: { type: integer, minimum: 1 }
+        sop_id:
+          type: string
+        version:
+          type: integer
+          minimum: 1
+        ref:
+          type: string
+          description: sop_id@version, what a sop_stage node names
         steps:
           type: array
           minItems: 1
-          description: A step is an object, or a bare string standing for a step whose subject and description are that text.
+          items:
+            $ref: '#/components/schemas/SOPStep'
+        created_at:
+          type: string
+          format: date-time
+    RegisterSOPRequest:
+      type: object
+      required:
+      - sop_id
+      - version
+      - steps
+      properties:
+        sop_id:
+          type: string
+          minLength: 1
+        version:
+          type: integer
+          minimum: 1
+        steps:
+          type: array
+          minItems: 1
+          description: A step is an object, or a bare string standing for a step whose subject and description are
+            that text.
           items:
             oneOf:
-              - { type: string, minLength: 1 }
-              - { $ref: "#/components/schemas/SOPStep" }
+            - type: string
+              minLength: 1
+            - $ref: '#/components/schemas/SOPStep'
     SOPStep:
       type: object
-      required: [subject]
+      required:
+      - subject
       properties:
-        subject: { type: string, minLength: 1 }
-        description: { type: string, description: "What the step must achieve; defaults to the subject" }
-        max_attempts: { type: integer, minimum: 1, description: "Refusals before the SOP gives up on the step; defaults to 3" }
+        subject:
+          type: string
+          minLength: 1
+        description:
+          type: string
+          description: What the step must achieve; defaults to the subject
+        max_attempts:
+          type: integer
+          minimum: 1
+          description: Refusals before the SOP gives up on the step; defaults to 3
     ArtifactManifest:
       type: object
-      required: [manifest_id, task_id, entries, created_at]
+      required:
+      - manifest_id
+      - task_id
+      - entries
+      - created_at
       properties:
-        manifest_id: { type: string }
-        task_id: { type: string }
-        attempt_id: { type: string }
-        entries: { type: array, items: { type: object, additionalProperties: true } }
-        manifest_hash: { type: string }
-        created_at: { type: string, format: date-time }
+        manifest_id:
+          type: string
+        task_id:
+          type: string
+        attempt_id:
+          type: string
+        entries:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        manifest_hash:
+          type: string
+        created_at:
+          type: string
+          format: date-time
     CreateTaskRequest:
       type: object
-      required: [title, goal]
+      required:
+      - title
+      - goal
       properties:
-        title: { type: string, minLength: 1 }
-        goal: { type: string, minLength: 1 }
-        mode: { type: string, enum: [single, multi, long], default: single }
-        profile: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]*@[1-9][0-9]*$' }
-        sop: { type: string }
-        budgets: { type: object, additionalProperties: true }
+        title:
+          type: string
+          minLength: 1
+        goal:
+          type: string
+          minLength: 1
+        mode:
+          type: string
+          enum:
+          - single
+          - multi
+          - long
+          default: single
+        profile:
+          type: string
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*@[1-9][0-9]*$
+        sop:
+          type: string
+        budgets:
+          type: object
+          additionalProperties: true
+        policy:
+          $ref: '#/components/schemas/Policy'
+          description: 'The task layer of the policy: it can only tighten the tenant layer.'
     SendTaskMessageRequest:
       type: object
-      required: [text]
+      required:
+      - text
       properties:
-        command_id: { type: string }
-        client_message_id: { type: string }
-        text: { type: string, minLength: 1 }
-        delivery: { type: string, enum: [queue, interrupt], default: queue }
+        command_id:
+          type: string
+        client_message_id:
+          type: string
+        text:
+          type: string
+          minLength: 1
+        delivery:
+          type: string
+          enum:
+          - queue
+          - interrupt
+          default: queue
     TaskControlRequest:
       type: object
-      required: [action]
+      required:
+      - action
       properties:
-        command_id: { type: string }
-        action: { type: string, enum: [pause, resume, cancel, takeover, handback] }
-        reason: { type: string }
+        command_id:
+          type: string
+        action:
+          type: string
+          enum:
+          - pause
+          - resume
+          - cancel
+          - takeover
+          - handback
+        reason:
+          type: string
     DecideTaskApprovalRequest:
       type: object
-      required: [decision]
+      required:
+      - decision
       properties:
-        command_id: { type: string }
-        decision: { type: string, enum: [approve, reject] }
-        comment: { type: string }
+        command_id:
+          type: string
+        decision:
+          type: string
+          enum:
+          - approve
+          - reject
+        comment:
+          type: string
     GrantBudgetRequest:
       type: object
-      required: [delta]
+      required:
+      - delta
       properties:
-        command_id: { type: string }
-        delta: { type: object, additionalProperties: true }
+        command_id:
+          type: string
+        delta:
+          type: object
+          additionalProperties: true
     RequestProfileSwitchRequest:
       type: object
-      required: [node_id, to_profile, reason]
+      required:
+      - node_id
+      - to_profile
+      - reason
       properties:
-        command_id: { type: string }
-        node_id: { type: string }
-        to_profile: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]*@[1-9][0-9]*$' }
-        reason: { type: string, minLength: 1 }
+        command_id:
+          type: string
+        node_id:
+          type: string
+        to_profile:
+          type: string
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*@[1-9][0-9]*$
+        reason:
+          type: string
+          minLength: 1
     ErrorBody:
       type: object
       additionalProperties: false
-      required: [error, code, message]
+      required:
+      - error
+      - code
+      - message
       properties:
         error:
           type: string
@@ -1640,337 +1215,15 @@ components:
         message:
           type: string
           description: Human-readable explanation (not a secret)
-        approval:
-          $ref: "#/components/schemas/Approval"
-          description: |
-            Optional. Set on `APPROVAL_DELIVERY_PENDING`, `ROOM_FAILED`, and
-            `APPROVAL_NOT_DELIVERED` (C34 §2.4).
       example:
         error: not implemented
         code: NOT_IMPLEMENTED
-        message: "W0 skeleton: this endpoint is not implemented"
-    PlaceholderObject:
-      type: object
-      additionalProperties: true
-      description: W0 request placeholder. No business fields yet.
-    RoomKind:
-      type: string
-      enum: [solo, collab]
-      description: solo = super single-agent; collab = multi-agent catalog in one room
-    PermissionPreset:
-      type: string
-      enum: [workspace-write, read-only, danger-full-access]
-      description: |
-        Closed presets the AgentScope worker already accepts. Default is
-        `workspace-write`. `read-only` is explore-only. `danger-full-access`
-        is explicit and applies only to the room or cloud-agent job that
-        sets it — not a global client switch.
-    RoomState:
-      type: string
-      enum: [idle, running, awaiting_approval, closed, failed]
-    Room:
-      type: object
-      additionalProperties: false
-      required: [id, kind, title, state, permissionPreset, runtime, createdAt]
-      properties:
-        id:
-          type: string
-        kind:
-          $ref: "#/components/schemas/RoomKind"
-        title:
-          type: string
-        state:
-          $ref: "#/components/schemas/RoomState"
-        permissionPreset:
-          $ref: "#/components/schemas/PermissionPreset"
-        runtime:
-          $ref: "#/components/schemas/RuntimeSnapshot"
-        sessionId:
-          type: string
-        failure:
-          type: object
-          additionalProperties: false
-          required: [code, message]
-          properties:
-            code:
-              type: string
-              enum: [WORKFLOW_START_FAILED, SESSION_TIMEOUT, DECIDED_APPROVALS_LIMIT]
-            message:
-              type: string
-        createdAt:
-          type: string
-    RuntimeSnapshot:
-      type: object
-      additionalProperties: false
-      required: [kernel, protocol, isolation]
-      properties:
-        kernel:
-          type: string
-          description: |
-            Runtime identity on the room snapshot. The live worker is
-            `agentscope`. `dsh` is not required.
-          example: agentscope
-        protocol:
-          type: string
-          description: |
-            Session protocol when the runtime has one. `acp` is not required.
-            AgentScope rooms leave this empty; they do not speak ACP.
-        isolation:
-          type: string
-          enum: [process]
-          description: Per-session process isolation recorded on the room snapshot.
-    RoomList:
-      type: object
-      additionalProperties: false
-      required: [items]
-      properties:
-        items:
-          type: array
-          items:
-            $ref: "#/components/schemas/Room"
-    ChatMessage:
-      type: object
-      additionalProperties: false
-      required: [id, roomId, role, text, createdAt]
-      properties:
-        id:
-          type: string
-        roomId:
-          type: string
-        role:
-          type: string
-        type:
-          type: string
-        text:
-          type: string
-        createdAt:
-          type: string
-    MessageList:
-      type: object
-      additionalProperties: false
-      required: [items]
-      properties:
-        items:
-          type: array
-          items:
-            $ref: "#/components/schemas/ChatMessage"
-    Approval:
-      type: object
-      additionalProperties: false
-      required: [id, roomId, status, createdAt]
-      properties:
-        id:
-          type: string
-        roomId:
-          type: string
-        sessionId:
-          type: string
-        approvalRequestId:
-          type: string
-        toolName:
-          type: string
-        reason:
-          type: string
-        status:
-          type: string
-        decision:
-          type: string
-        deliveryState:
-          type: string
-          description: C34 delivery state. Empty while the approval is pending.
-        createdAt:
-          type: string
-    ApprovalList:
-      type: object
-      additionalProperties: false
-      required: [items]
-      properties:
-        items:
-          type: array
-          items:
-            $ref: "#/components/schemas/Approval"
-    EventEnvelope:
-      type: object
-      additionalProperties: false
-      required: [type, taskId, ts, source, payload]
-      description: |
-        One room (task) event on `/activity` and SSE: typed routing fields
-        plus the producer's payload. **BREAKING** vs the former flat
-        `ActivityEvent`: fields such as `text`, `toolName`, `role`,
-        `status`, and `reason` now live under `payload`, and `sequence` is
-        now `id`.
-      properties:
-        id:
-          type: integer
-          format: int64
-          description: |
-            Event id from one process-global counter shared by all rooms;
-            strictly increasing within a room, not contiguous, and reset when
-            control restarts. This is the event's SSE `id:`. Absent on
-            live-only envelopes (`assistant.delta`, `reset`).
-        type:
-          type: string
-          description: |
-            Worker types are `OrbitEvent.type` (orbit-runtime A1 schema).
-            Control also emits `session.status`, `assistant.message` (user
-            turns), `approval.asked`, `room.steered`, and `reset` (SSE only).
-          example: tool.result
-        taskId:
-          type: string
-          description: Room id (room = task, contract C29).
-        ts:
-          type: string
-          format: date-time
-          description: The payload's `occurredAt` when present, otherwise when control received it.
-        source:
-          type: string
-          enum: [control, worker]
-        payload:
-          anyOf:
-            - $ref: "#/components/schemas/ResetPayload"
-            - type: object
-              additionalProperties: true
-          description: |
-            `source=worker`: the ingested `OrbitEvent` body, unchanged
-            (camelCase; whitespace compacted), including fields control does
-            not interpret — e.g. `delta`, `blockId`, `seq`,
-            `activityAttempt`, `argsPreview`, `toolState`, `truncated`,
-            `agentId`, `agentPath`, `turnId`, `failure`, and usage counters.
-            `source=control`: control's own event fields plus `roomId`,
-            `occurredAt`, `runtime`, and `permissionPreset`. `type=reset`:
-            `ResetPayload`.
-      example:
-        id: 42
-        type: tool.result
-        taskId: rm_0123456789abcdef
-        ts: "2026-09-26T14:00:00.123456+00:00"
-        source: worker
-        payload:
-          type: tool.result
-          roomId: rm_0123456789abcdef
-          sessionId: sess-1
-          toolName: bash
-          callId: c1
-          toolState: success
-          truncated: false
-          text: README.md
-          agentId: main
-          agentPath: main
-          turnId: tn_1
-          occurredAt: "2026-09-26T14:00:00.123456+00:00"
-    ResetPayload:
-      type: object
-      additionalProperties: false
-      required: [reason, lastId]
-      description: |
-        Payload of a `type=reset` envelope (no envelope `id`, `source=control`),
-        sent as the first SSE message when a resume cursor cannot be
-        honoured. Control never silently skips: refetch
-        `GET /v1/rooms/{roomId}`, `/messages`, and `/activity`, then keep
-        reading the same stream, which continues live after `lastId`. The
-        frame's SSE `id:` is `lastId`.
-      properties:
-        reason:
-          type: string
-          enum: [malformed, unknown, expired, lagging]
-          description: |
-            `malformed` — not a canonical decimal id. `unknown` — not an event
-            of this room: another room's id, beyond the latest issued id, or
-            issued before a control restart. `expired` — one of this room's
-            own events, evicted from the retained window. `lagging` — the
-            reader fell behind its live buffer too many times in a row; the
-            stream closes after this frame (reconnect with `lastId`).
-        lastId:
-          type: integer
-          format: int64
-          description: |
-            This room's latest event id at reset time (0 if none); the stream
-            resumes after it.
-      example:
-        reason: expired
-        lastId: 812
-    ActivityEventList:
-      type: object
-      additionalProperties: false
-      required: [items]
-      properties:
-        items:
-          type: array
-          items:
-            $ref: "#/components/schemas/EventEnvelope"
-    PostMessageResponse:
-      type: object
-      additionalProperties: false
-      required: [room]
-      properties:
-        room:
-          $ref: "#/components/schemas/Room"
-        approval:
-          $ref: "#/components/schemas/Approval"
-    CloudAgentJobState:
-      type: string
-      enum: [queued, running, awaiting_approval, succeeded, failed, cancelled]
-    CreateRoomRequest:
-      type: object
-      additionalProperties: false
-      properties:
-        kind:
-          $ref: "#/components/schemas/RoomKind"
-        personaId:
-          type: string
-        permissionPreset:
-          $ref: "#/components/schemas/PermissionPreset"
-        title:
-          type: string
-    CreateRoomMessageRequest:
-      type: object
-      additionalProperties: false
-      required: [message]
-      properties:
-        message:
-          type: string
-        attachments:
-          type: array
-          items:
-            $ref: "#/components/schemas/TurnAttachment"
-    TurnAttachment:
-      type: object
-      additionalProperties: false
-      required: [name, contentType, urlOrBlobRef]
-      properties:
-        name:
-          type: string
-        contentType:
-          type: string
-        urlOrBlobRef:
-          type: string
-          description: Pointer only — not file bytes
-    SteerRequest:
-      type: object
-      additionalProperties: false
-      required: [instruction]
-      properties:
-        instruction:
-          type: string
-    AbortRequest:
-      type: object
-      additionalProperties: false
-      properties:
-        reason:
-          type: string
-    DecideApprovalRequest:
-      type: object
-      additionalProperties: false
-      required: [decision]
-      properties:
-        decision:
-          type: string
-          enum: [allow, reject]
-          description: allow → allowed-once on the worker; reject → abort by default
+        message: 'this endpoint is not implemented'
     CreatePersonaRequest:
       type: object
       additionalProperties: false
-      required: [name]
+      required:
+      - name
       properties:
         name:
           type: string
@@ -1985,7 +1238,11 @@ components:
     Persona:
       type: object
       additionalProperties: false
-      required: [id, name, instructions, createdAt]
+      required:
+      - id
+      - name
+      - instructions
+      - createdAt
       properties:
         id:
           type: string
@@ -2003,16 +1260,19 @@ components:
     PersonaList:
       type: object
       additionalProperties: false
-      required: [items]
+      required:
+      - items
       properties:
         items:
           type: array
           items:
-            $ref: "#/components/schemas/Persona"
+            $ref: '#/components/schemas/Persona'
     McpHeaderRef:
       type: object
       additionalProperties: false
-      required: [name, env]
+      required:
+      - name
+      - env
       properties:
         name:
           type: string
@@ -2023,13 +1283,16 @@ components:
     CreateMcpConnectorRequest:
       type: object
       additionalProperties: false
-      required: [name]
+      required:
+      - name
       properties:
         name:
           type: string
         transport:
           type: string
-          enum: [stdio, streamable_http]
+          enum:
+          - stdio
+          - streamable_http
           default: stdio
           description: stdio starts a local command. streamable_http connects to url.
         command:
@@ -2050,14 +1313,20 @@ components:
         headerRefs:
           type: array
           items:
-            $ref: "#/components/schemas/McpHeaderRef"
+            $ref: '#/components/schemas/McpHeaderRef'
         defaultOpen:
           type: boolean
-          description: When true, a new room connects this connector even without a persona link.
+          description: When true, the connector is on by default.
     McpConnector:
       type: object
       additionalProperties: false
-      required: [id, name, transport, command, defaultOpen, createdAt]
+      required:
+      - id
+      - name
+      - transport
+      - command
+      - defaultOpen
+      - createdAt
       properties:
         id:
           type: string
@@ -2065,7 +1334,9 @@ components:
           type: string
         transport:
           type: string
-          enum: [stdio, streamable_http]
+          enum:
+          - stdio
+          - streamable_http
         command:
           type: string
         args:
@@ -2081,7 +1352,7 @@ components:
         headerRefs:
           type: array
           items:
-            $ref: "#/components/schemas/McpHeaderRef"
+            $ref: '#/components/schemas/McpHeaderRef'
         defaultOpen:
           type: boolean
         createdAt:
@@ -2090,16 +1361,30 @@ components:
     McpConnectorList:
       type: object
       additionalProperties: false
-      required: [items]
+      required:
+      - items
       properties:
         items:
           type: array
           items:
-            $ref: "#/components/schemas/McpConnector"
+            $ref: '#/components/schemas/McpConnector'
     McpMarketServer:
       type: object
       additionalProperties: false
-      required: [id, name, summary, author, category, categoryName, categoryMore, calls, views, stars, verified, hosted, needsOnline]
+      required:
+      - id
+      - name
+      - summary
+      - author
+      - category
+      - categoryName
+      - categoryMore
+      - calls
+      - views
+      - stars
+      - verified
+      - hosted
+      - needsOnline
       properties:
         id:
           type: string
@@ -2131,7 +1416,11 @@ components:
     McpMarketToolParam:
       type: object
       additionalProperties: false
-      required: [name, type, required, description]
+      required:
+      - name
+      - type
+      - required
+      - description
       properties:
         name:
           type: string
@@ -2144,7 +1433,10 @@ components:
     McpMarketTool:
       type: object
       additionalProperties: false
-      required: [name, description, params]
+      required:
+      - name
+      - description
+      - params
       properties:
         name:
           type: string
@@ -2153,11 +1445,28 @@ components:
         params:
           type: array
           items:
-            $ref: "#/components/schemas/McpMarketToolParam"
+            $ref: '#/components/schemas/McpMarketToolParam'
     McpMarketDetail:
       type: object
       additionalProperties: false
-      required: [id, name, summary, author, category, categoryName, categoryMore, calls, views, stars, verified, hosted, needsOnline, license, updatedOn, readme, tools]
+      required:
+      - id
+      - name
+      - summary
+      - author
+      - category
+      - categoryName
+      - categoryMore
+      - calls
+      - views
+      - stars
+      - verified
+      - hosted
+      - needsOnline
+      - license
+      - updatedOn
+      - readme
+      - tools
       properties:
         id:
           type: string
@@ -2196,16 +1505,22 @@ components:
         tools:
           type: array
           items:
-            $ref: "#/components/schemas/McpMarketTool"
+            $ref: '#/components/schemas/McpMarketTool'
     McpMarketList:
       type: object
       additionalProperties: false
-      required: [items, total, stored, plazaTotal, page, pageSize]
+      required:
+      - items
+      - total
+      - stored
+      - plazaTotal
+      - page
+      - pageSize
       properties:
         items:
           type: array
           items:
-            $ref: "#/components/schemas/McpMarketServer"
+            $ref: '#/components/schemas/McpMarketServer'
         total:
           type: integer
         stored:
@@ -2221,7 +1536,11 @@ components:
     McpMarketCategory:
       type: object
       additionalProperties: false
-      required: [key, name, sortOrder, count]
+      required:
+      - key
+      - name
+      - sortOrder
+      - count
       properties:
         key:
           type: string
@@ -2234,16 +1553,34 @@ components:
     McpMarketCategoryList:
       type: object
       additionalProperties: false
-      required: [items]
+      required:
+      - items
       properties:
         items:
           type: array
           items:
-            $ref: "#/components/schemas/McpMarketCategory"
+            $ref: '#/components/schemas/McpMarketCategory'
     Skill:
       type: object
       additionalProperties: false
-      required: [id, slug, handle, name, description, category, categoryName, iconUrl, downloads, stars, source, version, requiresApiKey, paid, score, updatedAt, trendingRank]
+      required:
+      - id
+      - slug
+      - handle
+      - name
+      - description
+      - category
+      - categoryName
+      - iconUrl
+      - downloads
+      - stars
+      - source
+      - version
+      - requiresApiKey
+      - paid
+      - score
+      - updatedAt
+      - trendingRank
       properties:
         id:
           type: string
@@ -2284,12 +1621,17 @@ components:
     SkillList:
       type: object
       additionalProperties: false
-      required: [items, total, page, pageSize, syncedAt]
+      required:
+      - items
+      - total
+      - page
+      - pageSize
+      - syncedAt
       properties:
         items:
           type: array
           items:
-            $ref: "#/components/schemas/Skill"
+            $ref: '#/components/schemas/Skill'
         total:
           type: integer
         page:
@@ -2302,7 +1644,11 @@ components:
     SkillCategory:
       type: object
       additionalProperties: false
-      required: [key, name, nameEn, sortOrder]
+      required:
+      - key
+      - name
+      - nameEn
+      - sortOrder
       properties:
         key:
           type: string
@@ -2315,16 +1661,19 @@ components:
     SkillCategoryList:
       type: object
       additionalProperties: false
-      required: [items]
+      required:
+      - items
       properties:
         items:
           type: array
           items:
-            $ref: "#/components/schemas/SkillCategory"
+            $ref: '#/components/schemas/SkillCategory'
     SkillTextFile:
       type: object
       additionalProperties: false
-      required: [path, body]
+      required:
+      - path
+      - body
       properties:
         path:
           type: string
@@ -2334,14 +1683,15 @@ components:
     SkillTextFileList:
       type: object
       additionalProperties: false
-      required: [items]
+      required:
+      - items
       properties:
         items:
           type: array
           items:
-            $ref: "#/components/schemas/SkillTextFile"
+            $ref: '#/components/schemas/SkillTextFile'
         meta:
-          $ref: "#/components/schemas/SkillPageMeta"
+          $ref: '#/components/schemas/SkillPageMeta'
     SkillPageMeta:
       type: object
       additionalProperties: false
@@ -2357,7 +1707,9 @@ components:
           items:
             type: object
             additionalProperties: false
-            required: [key, name]
+            required:
+            - key
+            - name
             properties:
               key:
                 type: string
@@ -2381,7 +1733,9 @@ components:
           items:
             type: object
             additionalProperties: false
-            required: [path, size]
+            required:
+            - path
+            - size
             properties:
               path:
                 type: string
@@ -2392,7 +1746,8 @@ components:
           items:
             type: object
             additionalProperties: false
-            required: [version]
+            required:
+            - version
             properties:
               version:
                 type: string
@@ -2403,7 +1758,9 @@ components:
         evaluation:
           type: object
           additionalProperties: false
-          required: [score, dimensions]
+          required:
+          - score
+          - dimensions
           properties:
             userSummary:
               type: string
@@ -2416,7 +1773,11 @@ components:
               items:
                 type: object
                 additionalProperties: false
-                required: [key, label, labelZh, score]
+                required:
+                - key
+                - label
+                - labelZh
+                - score
                 properties:
                   key:
                     type: string
@@ -2435,7 +1796,10 @@ components:
                     items:
                       type: object
                       additionalProperties: false
-                      required: [key, name, score]
+                      required:
+                      - key
+                      - name
+                      - score
                       properties:
                         key:
                           type: string
@@ -2445,95 +1809,15 @@ components:
                           type: number
                         reason:
                           type: string
-    CreateCloudAgentRequest:
-      type: object
-      additionalProperties: false
-      required: [repoUrl, prompt]
-      properties:
-        repoUrl:
-          type: string
-        branch:
-          type: string
-        prompt:
-          type: string
-        personaId:
-          type: string
-        permissionPreset:
-          $ref: "#/components/schemas/PermissionPreset"
-    OrbitEvent:
-      type: object
-      additionalProperties: true
-      required: [type]
-      description: |
-        Worker ingest body (internal `/internal/events`), camelCase, as in
-        orbit-runtime `schema/OrbitEvent.json` (A1) — never raw ACP
-        session/update. Control validates `type` (unknown types are 400),
-        `roomId`/`sessionId`, and `occurredAt`, then stores or streams the
-        body unchanged as `EventEnvelope.payload`. `assistant.delta` is
-        fanned out over SSE only: never stored, never replayed, never
-        counted against the 500-event window.
-      properties:
-        type:
-          type: string
-          enum:
-            - session.status
-            - assistant.message
-            - assistant.delta
-            - tool.call
-            - tool.result
-            - approval.asked
-            - approval.resolved
-            - question.asked
-            - question.answered
-            - todo.updated
-            - usage
-            - agent.started
-            - agent.finished
-            - agent.spawn_rejected
-            - turn.failed
-        roomId:
-          type: string
-        jobId:
-          type: string
-        sessionId:
-          type: string
-        turnId:
-          type: string
-        eventId:
-          type: string
-        occurredAt:
-          type: string
-          format: date-time
-        runtime:
-          type: string
-          description: |
-            Runtime that produced the event. The AgentScope worker sends
-            `agentscope`. `dsh` is not required.
-          example: agentscope
-        protocol:
-          type: string
-          description: Session protocol when present. `acp` is not required.
-        permissionPreset:
-          $ref: "#/components/schemas/PermissionPreset"
   responses:
-    NotImplemented:
-      description: W0 skeleton — path is not implemented.
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorBody"
-          example:
-            error: not implemented
-            code: NOT_IMPLEMENTED
-            message: "W0 skeleton: this endpoint is not implemented"
     Unauthorized:
       description: |
         Stub for later Sentinel tests. Missing or invalid credentials.
-        W0 does not emit this response.
+        Reserved for the auth layer.
       content:
         application/json:
           schema:
-            $ref: "#/components/schemas/ErrorBody"
+            $ref: '#/components/schemas/ErrorBody'
           example:
             error: unauthorized
             code: UNAUTHORIZED
@@ -2541,90 +1825,12 @@ components:
     Forbidden:
       description: |
         Stub for later Sentinel tests. Authenticated caller lacks permission.
-        W0 does not emit this response.
+        Reserved for the auth layer.
       content:
         application/json:
           schema:
-            $ref: "#/components/schemas/ErrorBody"
+            $ref: '#/components/schemas/ErrorBody'
           example:
             error: forbidden
             code: FORBIDDEN
             message: insufficient permissions
-    Unauthenticated:
-      description: |
-        No valid session (contract §17.6). Emitted before any storage lookup,
-        so the body is identical on every path.
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorBody"
-          example:
-            error: unauthenticated
-            code: UNAUTHENTICATED
-            message: authentication required
-    CsrfRejected:
-      description: |
-        State-changing request without an allowed `Origin` and
-        `X-Orbit-Request: 1` (contract §17.4).
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorBody"
-          example:
-            error: csrf rejected
-            code: CSRF_REJECTED
-            message: "state-changing requests need an allowed Origin and X-Orbit-Request: 1"
-    NotFound:
-      description: |
-        Missing, not owned by the caller, in another tenant, or deleted.
-        These cases share one body.
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorBody"
-          example:
-            error: not found
-            code: NOT_FOUND
-            message: room not found
-    ApprovalNotPending:
-      description: The approval was already decided (or lost a concurrent decision).
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorBody"
-          example:
-            error: approval not pending
-            code: APPROVAL_NOT_PENDING
-            message: approval is not pending
-    DecisionDeliveryFailed:
-      description: |
-        The decision is recorded, but delivering it to the workflow failed or
-        exceeded the delivery timeout. The delivery call is `resolveApproval`
-        on the direct worker path and the acceptance of the `decide` Update
-        (`UpdateID` = approval id) on the Temporal path; the resumed turn that
-        follows is not part of delivery.
-        The approval stays decided and is not re-delivered; a resubmit returns
-        409 `APPROVAL_NOT_PENDING`. The body is fixed and never includes
-        worker or Temporal error text.
-
-        The in-memory repository still returns this 502. When Postgres is
-        configured, an unconfirmed delivery is **202**
-        `{approval, deliveryState: "unknown"}` (C34 §2.4), not this response.
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorBody"
-          example:
-            error: decision delivery failed
-            code: DECISION_DELIVERY_FAILED
-            message: the decision is recorded but its delivery to the workflow failed or timed out; it is not retried
-    IdempotencyKeyReused:
-      description: The `Idempotency-Key` was already used with a different body.
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorBody"
-          example:
-            error: idempotency key reused
-            code: IDEMPOTENCY_KEY_REUSED
-            message: Idempotency-Key was already used with a different request body

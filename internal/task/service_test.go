@@ -10,10 +10,7 @@ import (
 func TestNewIDUsesCrockfordTaskAlphabet(t *testing.T) {
 	pattern := regexp.MustCompile(`^task_[0-9A-HJKMNP-TV-Z]{26}$`)
 	for range 100 {
-		id, err := newID("task")
-		if err != nil {
-			t.Fatal(err)
-		}
+		id := newID("task")
 		if !pattern.MatchString(id) {
 			t.Fatalf("invalid task id %q", id)
 		}

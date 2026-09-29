@@ -11,13 +11,13 @@ import (
 	"github.com/mindreon/orbit-control/internal/store/memstore"
 )
 
-func TestSaveArtifactBlobAcceptsTenantHintWithMemoryRepository(t *testing.T) {
+func TestSaveArtifactBlobStoresUnderTenant(t *testing.T) {
 	dir := t.TempDir()
 	payload := []byte("completed")
 	sum := sha256.Sum256(payload)
 	a := &App{Repo: memstore.New(), ArtifactDir: dir, ArtifactMaxBytes: 1024}
 
-	ref, err := a.SaveArtifactBlob("task_01ARZ3NDEKTSV4RRFFQ69G5FAV", "tenant", hex.EncodeToString(sum[:]), bytes.NewReader(payload))
+	ref, err := a.SaveArtifactBlob("tenant", hex.EncodeToString(sum[:]), bytes.NewReader(payload))
 	if err != nil {
 		t.Fatal(err)
 	}
