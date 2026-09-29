@@ -101,7 +101,7 @@ does (ISO-1 rules apply to its SQL as well).
 | `stage_attempts` | tenant | SELECT, INSERT | SELECT, DELETE | Control owns the projection; the worker maintenance schedule deletes attempts left STARTING or RUNNING for more than 24 hours. |
 | `plan_versions`, `task_messages`, `task_events` | tenant | SELECT, INSERT; **no UPDATE, no DELETE** | — | Immutable history, like `events` and `messages`. |
 | `runtime_outbox` | **none** | SELECT, UPDATE (`projected_at`) | INSERT, SELECT (`event_id`) | The Projector reads every tenant's rows in one pass (09 §3), so RLS would stall it. Rows carry `tenant_id`, and the Projector writes them into tenant tables under that tenant. The worker only appends. `INSERT … ON CONFLICT (event_id) DO NOTHING` (the idempotent publish, 04 §3) needs SELECT on the conflict column, so the worker may read `event_id` and nothing else; it still cannot read a body or another tenant's task id. Cleanup after 7 days is a later grant. |
-| `idempotency_ledger` | tenant | SELECT, INSERT | SELECT, INSERT, UPDATE (`status, result_ref, owner, last_seen`) | The worker moves a side effect from `started` to `succeeded` or `failed_permanent` (10 §1). |
+| `idempotency_ledger` | tenant | SELECT, INSERT, UPDATE (`status, result_ref, owner, last_seen`) (migration 00017); **no DELETE** | SELECT, INSERT, UPDATE (`status, result_ref, owner, last_seen`) | The worker moves a side effect from `started` to `succeeded` or `failed_permanent` (10 §1). Control keeps API commands (`scope = 'api_command'`, key `tenant/task/command_id`) in the same table: it INSERTs `started` with the request hash and its instance id as `owner`, writes the response into `result_ref` and sets `succeeded`, and on a failed orchestrator call sets `owner` to NULL so the same `command_id` can be retried. A `started` row whose `owner` is NULL, or whose `last_seen` is older than the lease, is taken over by the next request (UPDATE of `owner, last_seen` guarded by that condition). `key`, `request_hash`, `scope`, `tenant_id` and `first_seen` are never updated. The grant is column-level and cannot be limited to one scope, so the scope filter is in the code (ISO-24). Rows are never deleted. |
 | `checkpoints` | tenant | SELECT | SELECT, INSERT, UPDATE (`committed_in_history`), DELETE | The commit protocol (08 §3) marks a checkpoint once workflow history holds its ref; the maintenance GC deletes stale uncommitted rows and their blobs. |
 | `artifact_manifests` | tenant | SELECT, INSERT | SELECT, INSERT; **no UPDATE, no DELETE** | The control Projector creates the immutable projection from `artifact.manifest_created`; workers may also write the manifest before the event arrives (03 §9). |
 | `workspace_leases` | tenant | SELECT | SELECT, INSERT, UPDATE (`sandbox_id, expires_at, released_at`) | Heartbeats renew a lease; release and the reaper set `released_at` (08 §1). A partial unique index allows one live write lease per workspace key. `backend` is `docker` or `opensandbox` in production; `local` is the filesystem backend the dev stack and the acceptance E2E run with. |
@@ -375,3 +375,22 @@ properties are privileges.
   file is removed. A body over `ORBIT_ARTIFACT_MAX_BYTES` is **413**, counted while streaming, and leaves no temp file.
   On the public listener every `/internal/*` path, including `/internal/events` and `/internal/artifact-blobs`, is
   **404**.
+
+### ISO-24 — API command ledger: what `orbit_app` may change
+
+Connected as `orbit_app` with a tenant set, on rows of `idempotency_ledger` seeded by the owner:
+
+- UPDATE of `key`, `request_hash`, `scope`, `tenant_id` or `first_seen` fails with `42501`;
+- DELETE fails with `42501`;
+- UPDATE of `status`, `result_ref`, `owner` and `last_seen` works (the columns control's command claim, completion,
+  release and takeover write).
+
+- **FM-85.** `orbit_app` can rewrite `request_hash` (or `key`) of a ledger row. A different request body then replays
+  the first command's stored result instead of returning 409 (A7), or a row is moved onto another command's key.
+- **FM-86.** A control process that dies after inserting an `api_command` row as `started` leaves it behind, and the
+  same `command_id` returns IN_PROGRESS forever. The row carries an owner and a lease (`last_seen`); once the lease has
+  passed, or the owner released the row after a failed orchestrator call, the next request takes it over and sends the
+  Update again (the Update ID is the `command_id`, so the workflow deduplicates it).
+
+Why HTTP cannot catch FM-85: the API never exposes which columns the role could write. FM-86 is covered end to end (two
+`Service` instances on one database, one abandoned mid-command), not by an isolated check.
