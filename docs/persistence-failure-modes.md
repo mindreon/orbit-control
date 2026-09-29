@@ -415,3 +415,25 @@ Connected **as `orbit_worker`**, on a `stage_attempts` row seeded by the owner:
   every tenant; it must stay a list of ids.
 
 Why HTTP cannot catch these: the worker has no HTTP surface in control; the properties are privileges.
+
+### ISO-26 — `checkpoints` unique key includes the kind (migration 00019)
+
+Migration 00013 made `checkpoints_attempt_seq_key` unique on `(attempt_id, seq)`. The runtime writes a checkpoint with
+`INSERT … ON CONFLICT DO NOTHING`, so a second kind of checkpoint (`sop_run_state`, `workspace_snapshot`, `plan`) at the
+same seq as an `agent_state` row was silently dropped, and a later restore found nothing of that kind. Migration 00019
+replaces the key with `(attempt_id, kind, seq)`. There is no grant change. The check connects as the owner and as
+`orbit_worker`, in one tenant, on one attempt:
+
+- two rows with the same `attempt_id` and `seq` but different `kind` are both stored;
+- a second row with the same `attempt_id`, `kind` and `seq` fails with `23505`, and
+  `INSERT … ON CONFLICT (attempt_id, kind, seq) DO NOTHING` by `orbit_worker` stores nothing and does not fail;
+- the constraint is named `checkpoints_attempt_kind_seq_key`, and no unique constraint on `(attempt_id, seq)` alone is
+  left.
+
+- **FM-90.** The key does not contain `kind`. A checkpoint of one kind is discarded because another kind already holds
+  its seq, so an attempt recovers without its SOP run state, workspace snapshot or plan, and the loss produces no error.
+- **FM-91.** The key is dropped or widened past the kind (for example without `seq`, or without `attempt_id`). A retried
+  activity that writes the same checkpoint again then stores a duplicate row, or one attempt's checkpoint blocks
+  another's.
+
+Why HTTP cannot catch these: control serves no route that writes checkpoints; only the worker does, over SQL.
