@@ -25,7 +25,7 @@ var taskTenantTables = []string{
 var taskGlobalTables = []string{"node_type_registry", "runtime_outbox"}
 
 // workerReadable are the tenant tables orbit_worker may SELECT.
-var workerReadable = []string{"agent_profiles", "idempotency_ledger", "checkpoints", "artifact_manifests", "workspace_leases"}
+var workerReadable = []string{"agent_profiles", "idempotency_ledger", "checkpoints", "stage_attempts", "artifact_manifests", "workspace_leases"}
 
 const sha = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 
@@ -225,7 +225,7 @@ func TestISO22WorkerRoleGrants(t *testing.T) {
 
 	// FM-82: no privilege at all on room-era tables or control's projections.
 	forbidden := append(append([]string{}, tenantTables...),
-		"tenants", "sessions", "oidc_login_state", "tasks", "task_nodes", "stage_attempts",
+		"tenants", "sessions", "oidc_login_state", "tasks", "task_nodes",
 		"task_approvals", "plan_versions", "task_messages", "task_events")
 	const privSQL = `SELECT t FROM unnest($1::text[]) AS t
 	                  WHERE has_table_privilege(current_user, t, 'SELECT, INSERT, UPDATE, DELETE')`
@@ -278,4 +278,20 @@ func TestISO22WorkerRoleGrants(t *testing.T) {
 		sqlReq{Role: "orbit_worker", Tenant: tenant, SQL: okSQL},
 		map[string]any{"rows": 1, "error": "ok"}, map[string]any{"rows": n, "error": sqlState(okErr)},
 		okErr == nil && n == 1)
+
+	// The idempotent publish (INSERT ... ON CONFLICT (event_id)) needs SELECT on event_id, and only on event_id.
+	publishSQL := `INSERT INTO runtime_outbox (tenant_id, task_id, event_id, body) VALUES ($1, 'task_' || $1, 'evt_pub_' || $1, '{}')
+		ON CONFLICT (event_id) DO NOTHING`
+	_, pubErr := execAsApp(ctx, worker, tenant, publishSQL, tenant)
+	iso(t, "ISO-22/outbox-idempotent-publish", c, []string{"FM-84"},
+		"orbit_worker can append to runtime_outbox with ON CONFLICT (event_id) DO NOTHING",
+		sqlReq{Role: "orbit_worker", Tenant: tenant, SQL: publishSQL},
+		map[string]any{"error": "ok"}, map[string]any{"error": sqlState(pubErr)}, pubErr == nil)
+	readBodySQL := `SELECT body FROM runtime_outbox WHERE tenant_id = $1`
+	_, readErr := execAsApp(ctx, worker, tenant, readBodySQL, tenant)
+	iso(t, "ISO-22/outbox-body-not-readable", c, []string{"FM-84"},
+		"orbit_worker cannot read runtime_outbox.body (its SELECT is limited to event_id)",
+		sqlReq{Role: "orbit_worker", Tenant: tenant, SQL: readBodySQL},
+		map[string]any{"sqlstate": "42501"}, map[string]any{"sqlstate": sqlState(readErr)},
+		sqlState(readErr) == "42501")
 }

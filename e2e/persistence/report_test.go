@@ -20,12 +20,12 @@ import (
 	"time"
 )
 
-// contractGitRev is the merged C35 commit. The suite hashes that blob; it
-// does not hard-code the hash.
-const contractGitRev = "53ee38c053b48a58e7035940bbf050510554eac2"
+// contractGitRev is the newest commit that changed the contract file: C35 (53ee38c0) plus the AgentScope 2.0.9
+// baseline edit. The suite hashes that blob; it does not hard-code the hash.
+const contractGitRev = "1fd25aadcf3f28cdf1ae3f7594c92c74d5db5039"
 
 var (
-	contractRevision       = "C35 (merged " + contractGitRev + ")"
+	contractRevision       = "C35 with the AgentScope 2.0.9 baseline (" + contractGitRev + ")"
 	contractSHA256         string
 	contractLines          int
 	previousContractSHA256 string

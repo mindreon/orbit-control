@@ -122,9 +122,10 @@ raw tokens:
 Migration 00013 adds the TaskWorkflow tables from orbit-infra
 `docs/architecture` (03 domain model, 09 events, 10 ledger, 12 Step 2). They
 live next to the room tables until the cutover; nothing here reads or writes
-a room table. No code path uses them yet, so each role gets only the DML the
-design already fixes. An UPDATE or DELETE for a later code path (Projector,
-reconciliation, GC) needs a new line here first, like every other grant.
+a room table. The control task service now reads and writes the task, profile,
+event, and manifest projections. An UPDATE or DELETE for a later code path
+(Projector, reconciliation, GC) needs a new line here first, like every other
+grant.
 
 A new login role, **`orbit_worker`**, is what orbit-runtime's activity
 worker uses for `orbit_control` (U4, ADR-0012). It is `NOSUPERUSER
@@ -136,14 +137,17 @@ does (ISO-1 rules apply to its SQL as well).
 | Table | RLS | orbit_app | orbit_worker | Reason |
 |---|---|---|---|---|
 | `agent_profiles` | tenant | SELECT, INSERT | SELECT | Versions are immutable; a change is a new version (11 §2). |
+| `sop_definitions` | tenant | SELECT, INSERT; **no UPDATE, no DELETE** | SELECT | An SOP is an ordered list of step names; a version is immutable, a change is a new version, and a task locks `sop_id@version` (06 §2). The `sop_step` activity reads the definition it was started with; it never writes one. |
 | `node_type_registry` | **none** | SELECT | SELECT | Global, not tenant data. Seeded by the migration; `team_stage` is disabled in v1 (A20). |
-| `tasks`, `task_nodes`, `stage_attempts`, `task_approvals` | tenant | SELECT, INSERT | — | Projections written by the Projector in control. Their UPDATE columns are added with the Projector (orbit-infra 12 Step 7). |
+| `tasks` | tenant | SELECT, INSERT, UPDATE (`status, plan_version, budgets, usage, pending_approvals, updated_at`) | — | The v3 control service creates tasks, applies durable runtime projections, and may repair a projection from the authoritative workflow Query during T4.5 reconciliation. |
+| `task_nodes`, `task_approvals` | tenant | SELECT, INSERT | — | Projections written by the Projector in control. Their UPDATE columns are added with the Projector (orbit-infra 12 Step 7). |
+| `stage_attempts` | tenant | SELECT, INSERT | SELECT, DELETE | Control owns the projection; the worker maintenance schedule deletes attempts left STARTING or RUNNING for more than 24 hours. |
 | `plan_versions`, `task_messages`, `task_events` | tenant | SELECT, INSERT; **no UPDATE, no DELETE** | — | Immutable history, like `events` and `messages`. |
-| `runtime_outbox` | **none** | SELECT, UPDATE (`projected_at`) | INSERT | The Projector reads every tenant's rows in one pass (09 §3), so RLS would stall it. Rows carry `tenant_id`, and the Projector writes them into tenant tables under that tenant. The worker only appends. Cleanup after 7 days is a later grant. |
+| `runtime_outbox` | **none** | SELECT, UPDATE (`projected_at`) | INSERT, SELECT (`event_id`) | The Projector reads every tenant's rows in one pass (09 §3), so RLS would stall it. Rows carry `tenant_id`, and the Projector writes them into tenant tables under that tenant. The worker only appends. `INSERT … ON CONFLICT (event_id) DO NOTHING` (the idempotent publish, 04 §3) needs SELECT on the conflict column, so the worker may read `event_id` and nothing else; it still cannot read a body or another tenant's task id. Cleanup after 7 days is a later grant. |
 | `idempotency_ledger` | tenant | SELECT, INSERT | SELECT, INSERT, UPDATE (`status, result_ref, owner, last_seen`) | The worker moves a side effect from `started` to `succeeded` or `failed_permanent` (10 §1). |
-| `checkpoints` | tenant | SELECT | SELECT, INSERT, UPDATE (`committed_in_history`) | The commit protocol (08 §3) marks a checkpoint once workflow history holds its ref. |
-| `artifact_manifests` | tenant | SELECT | SELECT, INSERT; **no UPDATE, no DELETE** | Manifests are immutable (03 §9). |
-| `workspace_leases` | tenant | SELECT | SELECT, INSERT, UPDATE (`sandbox_id, expires_at, released_at`) | Heartbeats renew a lease; release and the reaper set `released_at` (08 §1). A partial unique index allows one live write lease per workspace key. |
+| `checkpoints` | tenant | SELECT | SELECT, INSERT, UPDATE (`committed_in_history`), DELETE | The commit protocol (08 §3) marks a checkpoint once workflow history holds its ref; the maintenance GC deletes stale uncommitted rows and their blobs. |
+| `artifact_manifests` | tenant | SELECT, INSERT | SELECT, INSERT; **no UPDATE, no DELETE** | The control Projector creates the immutable projection from `artifact.manifest_created`; workers may also write the manifest before the event arrives (03 §9). |
+| `workspace_leases` | tenant | SELECT | SELECT, INSERT, UPDATE (`sandbox_id, expires_at, released_at`) | Heartbeats renew a lease; release and the reaper set `released_at` (08 §1). A partial unique index allows one live write lease per workspace key. `backend` is `docker` or `opensandbox` in production; `local` is the filesystem backend the dev stack and the acceptance E2E run with. |
 
 `orbit_worker` also gets no TRUNCATE, REFERENCES or TRIGGER anywhere, for the
 reasons listed above for `orbit_app`.
@@ -731,7 +735,7 @@ Connected **as `orbit_worker`**:
   owns no table, and is not a member of a role that does;
 - it has no TRUNCATE, REFERENCES or TRIGGER on any `public` table;
 - it has no privilege at all on the room-era tables and on the control-only
-  task tables (`tasks`, `task_nodes`, `stage_attempts`, `task_approvals`,
+  task tables (`tasks`, `task_nodes`, `task_approvals`,
   `plan_versions`, `task_messages`, `task_events`);
 - an UPDATE of a column outside its grant on `idempotency_ledger`,
   `checkpoints` or `workspace_leases` fails with `42501`.
@@ -1015,6 +1019,10 @@ the text `NOT_DELIVERED`.
   than 200ms. The loop stops when the delivery context ends. That context
   is `ORBIT_DECISION_DELIVERY_TIMEOUT`. The waits, added together, do not
   run past that timeout. E2E: `FM-76/retry-bounded-by-delivery-timeout`.
+- **FM-85.** Artifact manifest projection stores the event's content-addressed
+  entries in the same transaction as the durable event. A repeated
+  `artifact.manifest_created` event is idempotent and never replaces an
+  existing manifest. E2E: `FM-85/manifest-entries-survive-replay`.
 
 S-ID cases this process runs through application code:
 

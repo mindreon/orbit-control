@@ -28,6 +28,7 @@ import (
 	"github.com/mindreon/orbit-control/internal/httpapi"
 	"github.com/mindreon/orbit-control/internal/orch"
 	"github.com/mindreon/orbit-control/internal/store/pgstore"
+	taskruntime "github.com/mindreon/orbit-control/internal/task"
 	"github.com/mindreon/orbit-control/internal/worker"
 )
 
@@ -221,6 +222,9 @@ type serverOpts struct {
 	turnTimeout       time.Duration
 	artifactDir       string
 	artifactMax       int64
+	// projector runs the runtime_outbox Projector, as in production. It holds one connection for LISTEN, so a
+	// test that sets it needs a pool of more than one.
+	projector bool
 }
 
 func startServer(t *testing.T, o serverOpts) *server {
@@ -236,6 +240,14 @@ func startServer(t *testing.T, o serverOpts) *server {
 		UnknownTimeout: o.unknownTimeout, TurnTimeout: o.turnTimeout,
 		ArtifactDir: o.artifactDir, ArtifactMaxBytes: o.artifactMax,
 	})
+	if o.projector {
+		projectorCtx, stopProjector := context.WithCancel(context.Background())
+		t.Cleanup(stopProjector)
+		go func() {
+			projector := &taskruntime.Projector{Store: repo, Tasks: runtime.Tasks}
+			_ = projector.Run(projectorCtx)
+		}()
+	}
 	tenant := o.tenant
 	auth := httpapi.AuthenticatorFunc(func(r *http.Request) (app.Principal, bool) {
 		user := r.Header.Get(userHeader)

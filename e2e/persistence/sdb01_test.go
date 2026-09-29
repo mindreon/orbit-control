@@ -29,6 +29,27 @@ var tenantParamAllowlist = map[string]bool{
 	"pgstore.FindRoomTenant": true,
 	// The reconciler lists every tenant, then opens a tenant-scoped transaction.
 	"pgstore.ListTenantIDs": true,
+	// Runtime outbox is intentionally cross-tenant and has no RLS; the
+	// projector claims and marks batches in one pass (09 §3).
+	"pgstore.ClaimRuntimeOutbox":         true,
+	"pgstore.MarkRuntimeOutboxProjected": true,
+	// One projector leads the whole cross-tenant outbox: a session advisory lock, not a tenant query.
+	"pgstore.AcquireProjectorLeadership": true,
+	// v3 task projection methods receive a tenant-scoped Principal rather than
+	// a bare tenantID string; each SQL statement still binds p.TenantID.
+	"pgstore.CreateTask":      true,
+	"pgstore.GetTask":         true,
+	"pgstore.ListTasks":       true,
+	"pgstore.UpdateTask":      true,
+	"pgstore.AppendTaskEvent": true,
+	"pgstore.ListTaskEvents":  true,
+	"pgstore.RegisterProfile": true,
+	"pgstore.ListProfiles":    true,
+	"pgstore.RegisterSOP":     true,
+	"pgstore.ListSOPs":        true,
+	"pgstore.GetProfile":      true,
+	"pgstore.ListManifests":   true,
+	"pgstore.GetManifest":     true,
 }
 
 var rePreLoginTableSQL = regexp.MustCompile(`(?i)\b(FROM|INTO|UPDATE|JOIN)\s+(public\.)?(sessions|oidc_login_state)\b`)

@@ -8,18 +8,24 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mindreon/orbit-control/internal/app"
+	"github.com/mindreon/orbit-control/internal/artifacts"
 	"github.com/mindreon/orbit-control/internal/internalauth"
 	"github.com/mindreon/orbit-control/internal/mcpmarket"
 	"github.com/mindreon/orbit-control/internal/orch"
 	"github.com/mindreon/orbit-control/internal/skillhub"
 	"github.com/mindreon/orbit-control/internal/store"
+	taskruntime "github.com/mindreon/orbit-control/internal/task"
 	"github.com/mindreon/orbit-control/internal/worker"
 )
 
@@ -34,6 +40,25 @@ type ErrorBody struct {
 
 type HealthBody struct {
 	Status string `json:"status"`
+}
+
+type localArtifactSigner struct{}
+
+func (localArtifactSigner) PresignArtifact(_ context.Context, _ taskruntime.Principal, manifest taskruntime.ArtifactManifest, entry map[string]any) (string, error) {
+	ref, _ := entry["blob_ref"].(string)
+	if !strings.HasPrefix(ref, "sha256:") || len(ref) != len("sha256:")+64 {
+		return "", errors.New("artifact entry has an invalid blob reference")
+	}
+	return "/v1/artifacts/" + url.PathEscape(manifest.ManifestID) + "/download?name=" + url.QueryEscape(fmt.Sprint(entry["name"])), nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -202,6 +227,16 @@ func Handlers() (public, internal http.Handler, closeStore func(), err error) {
 		ReconcileInterval: envSeconds("ORBIT_DELIVERY_RECONCILE_INTERVAL_S", 10*time.Second),
 		UnknownTimeout:    envSeconds("ORBIT_DELIVERY_UNKNOWN_TIMEOUT_S", 600*time.Second),
 	}
+	if endpoint := strings.TrimSpace(firstNonEmpty(os.Getenv("ORBIT_OBJECT_STORE_PUBLIC_ENDPOINT"), os.Getenv("ORBIT_OBJECT_STORE_ENDPOINT"))); endpoint != "" {
+		signer, err := artifacts.New(endpoint, os.Getenv("ORBIT_OBJECT_STORE_ACCESS_KEY"), os.Getenv("ORBIT_OBJECT_STORE_SECRET_KEY"), os.Getenv("ORBIT_OBJECT_STORE_BUCKET"), os.Getenv("ORBIT_OBJECT_STORE_SECURE") == "1")
+		if err != nil {
+			repo.Close()
+			return nil, nil, nil, err
+		}
+		opts.ArtifactSigner = signer
+	} else if opts.ArtifactDir != "" {
+		opts.ArtifactSigner = localArtifactSigner{}
+	}
 	if addr := os.Getenv("TEMPORAL_ADDRESS"); addr != "" {
 		oc, err := dialOrch(addr, os.Getenv("TEMPORAL_NAMESPACE"), os.Getenv("TEMPORAL_TASK_QUEUE"))
 		if err != nil {
@@ -209,9 +244,21 @@ func Handlers() (public, internal http.Handler, closeStore func(), err error) {
 			return nil, nil, nil, errors.New("temporal dial: " + err.Error())
 		}
 		opts.Orch = oc
+		opts.TaskClient = oc
 	}
 	runtime := app.NewWithOptions(opts)
 	runtime.Limits = app.LimitsFromEnv()
+	projectorCtx, projectorCancel := context.WithCancel(context.Background())
+	if outbox, ok := repo.(taskruntime.OutboxStore); ok {
+		go func() {
+			projector := &taskruntime.Projector{Store: outbox, Tasks: runtime.Tasks, OnDrop: func(row taskruntime.OutboxRecord, err error) {
+				runtime.Log.Printf("runtime projector: dropped outbox row %d (%s): %v", row.ID, row.EventID, err)
+			}}
+			if err := projector.Run(projectorCtx); err != nil && projectorCtx.Err() == nil {
+				runtime.Log.Printf("runtime projector stopped: %v", err)
+			}
+		}()
+	}
 	// The plaza snapshot ships with this binary. GET /v1/mcp-market only reads
 	// the store. It does not call modelscope.cn.
 	if err := mcpmarket.Install(context.Background(), repo, defaultTenant); err != nil {
@@ -225,8 +272,15 @@ func Handlers() (public, internal http.Handler, closeStore func(), err error) {
 	public = HandlerWithOptions(runtime, Options{
 		Auth:           authenticatorFromEnv(defaultTenant),
 		AllowedOrigins: allowedOriginsFromEnv(),
+		TaskMembers:    splitMembers(os.Getenv("ORBIT_CONTROL_MEMBERS")),
+		TaskMemberID:   strings.TrimSpace(os.Getenv("ORBIT_CONTROL_MEMBER_ID")),
 	})
-	return public, InternalHandler(runtime), repo.Close, nil
+	internalHandler := InternalHandlerWithForwarder(runtime, newEphemeralForwarder(Options{
+		TaskMembers:        splitMembers(os.Getenv("ORBIT_CONTROL_MEMBERS")),
+		TaskMemberID:       strings.TrimSpace(os.Getenv("ORBIT_CONTROL_MEMBER_ID")),
+		TaskMemberResolver: nil,
+	}))
+	return public, internalHandler, func() { projectorCancel(); repo.Close() }, nil
 }
 
 func dialOrch(addr, namespace, taskQueue string) (*orch.Client, error) {
@@ -246,7 +300,11 @@ func dialOrch(addr, namespace, taskQueue string) (*orch.Client, error) {
 type Options struct {
 	Auth Authenticator
 	// AllowedOrigins is the CSRF Origin allowlist (§17.4).
-	AllowedOrigins []string
+	AllowedOrigins     []string
+	TaskMembers        []string
+	TaskMemberID       string
+	TaskMemberResolver func() []string
+	TaskMemberRefresh  time.Duration
 }
 
 // HandlerWith serves runtime with the local dev principal.
@@ -254,6 +312,8 @@ func HandlerWith(runtime *app.App) http.Handler {
 	return HandlerWithOptions(runtime, Options{
 		Auth:           LocalAuthenticator(runtime.DefaultTenant),
 		AllowedOrigins: allowedOriginsFromEnv(),
+		TaskMembers:    splitMembers(os.Getenv("ORBIT_CONTROL_MEMBERS")),
+		TaskMemberID:   strings.TrimSpace(os.Getenv("ORBIT_CONTROL_MEMBER_ID")),
 	})
 }
 
@@ -290,6 +350,7 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, HealthBody{Status: "ok"})
 	})
+	registerTaskRoutes(mux, runtime, authed)
 	mux.HandleFunc("GET /v1/rooms", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		rooms, err := runtime.ListRooms(r.Context(), p)
 		if err != nil {
@@ -634,15 +695,177 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 	mux.HandleFunc("GET /ws", func(w http.ResponseWriter, _ *http.Request) {
 		writeErr(w, http.StatusNotImplemented, "NOT_IMPLEMENTED", "use GET /v1/rooms/{roomId}/events (SSE) in W1")
 	})
-	return cors(mux)
+	return cors(taskRouterWithResolver(
+		mux,
+		opts.TaskMembers,
+		opts.TaskMemberID,
+		memberResolver(opts),
+		runtime.Tasks.CloseAllSubscribers,
+		opts.TaskMemberRefresh,
+	))
+}
+
+func splitMembers(raw string) []string {
+	items := strings.Split(raw, ",")
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func taskRouter(next http.Handler, members []string, self string) http.Handler {
+	return taskRouterWithResolver(next, members, self, nil, nil, 0)
+}
+
+func memberResolver(opts Options) func() []string {
+	if opts.TaskMemberResolver != nil {
+		return opts.TaskMemberResolver
+	}
+	if os.Getenv("ORBIT_CONTROL_MEMBERS_FILE") == "" && os.Getenv("ORBIT_CONTROL_MEMBERS_REFRESH_SECONDS") == "" {
+		return nil
+	}
+	return func() []string {
+		if path := os.Getenv("ORBIT_CONTROL_MEMBERS_FILE"); path != "" {
+			data, err := os.ReadFile(path)
+			if err == nil {
+				return splitMembers(string(data))
+			}
+		}
+		return splitMembers(os.Getenv("ORBIT_CONTROL_MEMBERS"))
+	}
+}
+
+func taskRouterWithResolver(
+	next http.Handler,
+	members []string,
+	self string,
+	resolveMembers func() []string,
+	onMembersChanged func(),
+	refresh time.Duration,
+) http.Handler {
+	if resolveMembers != nil {
+		if resolved := resolveMembers(); len(resolved) >= 2 {
+			members = resolved
+		}
+	}
+	if len(members) < 2 || self == "" {
+		return next
+	}
+	ring := taskruntime.NewRing(64)
+	ring.SetMembers(members)
+	proxies := make(map[string]*httputil.ReverseProxy, len(members))
+	var proxiesMu sync.RWMutex
+	buildProxies := func(items []string) map[string]*httputil.ReverseProxy {
+		result := make(map[string]*httputil.ReverseProxy, len(items))
+		for _, member := range items {
+			target, err := url.Parse(member)
+			if err != nil || target.Scheme == "" || target.Host == "" {
+				continue
+			}
+			result[member] = httputil.NewSingleHostReverseProxy(target)
+		}
+		return result
+	}
+	proxies = buildProxies(members)
+	if resolveMembers != nil {
+		interval := refresh
+		if interval <= 0 {
+			interval = 5 * time.Second
+		}
+		if raw := os.Getenv("ORBIT_CONTROL_MEMBERS_REFRESH_SECONDS"); raw != "" {
+			if seconds, err := strconv.Atoi(raw); err == nil && seconds > 0 {
+				interval = time.Duration(seconds) * time.Second
+			}
+		}
+		go func() {
+			current := append([]string(nil), members...)
+			for range time.Tick(interval) {
+				nextMembers := resolveMembers()
+				if len(nextMembers) < 2 || slices.Equal(current, nextMembers) {
+					continue
+				}
+				ring.SetMembers(nextMembers)
+				proxiesMu.Lock()
+				proxies = buildProxies(nextMembers)
+				proxiesMu.Unlock()
+				current = append([]string(nil), nextMembers...)
+				if onMembersChanged != nil {
+					onMembersChanged()
+				}
+			}
+		}()
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Orbit-Task-Forwarded") == "1" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+		if len(parts) < 3 || parts[0] != "v1" || parts[1] != "tasks" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		owner, ok := ring.Owner(parts[2])
+		proxiesMu.RLock()
+		proxy := proxies[owner]
+		proxiesMu.RUnlock()
+		ownerURL, _ := url.Parse(owner)
+		ownerID := ownerURL.Hostname()
+		if !ok || owner == self || (ownerID != "" && (ownerID == self || strings.HasPrefix(ownerID, self+"."))) || proxy == nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+		r.Header.Set("X-Orbit-Task-Forwarded", "1")
+		proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {
+			writeErr(w, http.StatusBadGateway, "TASK_OWNER_UNAVAILABLE", "task owner is temporarily unavailable")
+		}
+		proxy.ServeHTTP(w, r)
+	})
 }
 
 // InternalHandler serves worker → control routes. It must be bound to a
 // listener that is not published (ORBIT_INTERNAL_ADDR), never the public one.
 func InternalHandler(runtime *app.App) http.Handler {
+	return InternalHandlerWithForwarder(runtime, nil)
+}
+
+// InternalHandlerWithForwarder is InternalHandler for a control replica that shares tasks with others: an ephemeral
+// event for a task another replica owns is handed to that replica (09 §4.1). A nil forwarder keeps every event local.
+func InternalHandlerWithForwarder(runtime *app.App, forwarder *ephemeralForwarder) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, HealthBody{Status: "ok"})
+	})
+	mux.HandleFunc("POST /internal/tasks/reconcile", func(w http.ResponseWriter, r *http.Request) {
+		if !internalauth.Authorized(r) {
+			writeErr(w, http.StatusUnauthorized, "UNAUTHORIZED", "internal token required")
+			return
+		}
+		var body struct {
+			TenantID string `json:"tenant_id"`
+			UserID   string `json:"user_id"`
+			TaskID   string `json:"task_id"`
+			Repair   bool   `json:"repair"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.TenantID == "" || body.UserID == "" || body.TaskID == "" {
+			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "tenant_id, user_id and task_id are required")
+			return
+		}
+		report, err := runtime.Tasks.Reconcile(r.Context(), taskruntime.Principal{TenantID: body.TenantID, UserID: body.UserID}, body.TaskID, body.Repair)
+		if err != nil {
+			if errors.Is(err, taskruntime.ErrNotFound) {
+				writeErr(w, http.StatusNotFound, "NOT_FOUND", "task not found")
+				return
+			}
+			runtime.Log.Printf("task reconcile: %v", err)
+			writeErr(w, http.StatusBadGateway, "RECONCILE_FAILED", "task reconciliation failed")
+			return
+		}
+		writeJSON(w, http.StatusOK, report)
 	})
 	registerE2ERoutes(mux, runtime)
 	mux.HandleFunc("POST /internal/events", func(w http.ResponseWriter, r *http.Request) {
@@ -662,6 +885,39 @@ func InternalHandler(runtime *app.App) http.Handler {
 			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "the request is invalid")
 			return
 		}
+		var v3 struct {
+			Schema     string          `json:"schema"`
+			EventID    string          `json:"event_id"`
+			TenantID   string          `json:"tenant_id"`
+			TaskID     string          `json:"task_id"`
+			Type       string          `json:"type"`
+			Source     map[string]any  `json:"source"`
+			Entity     map[string]any  `json:"entity"`
+			Retention  string          `json:"retention"`
+			OccurredAt time.Time       `json:"occurred_at"`
+			Payload    json.RawMessage `json:"payload"`
+		}
+		if json.Unmarshal(raw, &v3) == nil && v3.Schema == "orbit.event/3" {
+			// Durable events reach the projection only through runtime_outbox (09 §3); this path is for the live stream.
+			if v3.Retention != "ephemeral" {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"error": "BAD_REQUEST", "message": "durable events go through runtime_outbox"})
+				return
+			}
+			if forwarder != nil && forwarder.forward(r.Context(), r, v3.TaskID, raw) {
+				writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
+				return
+			}
+			source := "worker"
+			if kind, ok := v3.Source["kind"].(string); ok && kind != "" {
+				source = kind
+			}
+			if err := runtime.Tasks.AppendEvent(taskruntime.Event{EventID: v3.EventID, TenantID: v3.TenantID, TaskID: v3.TaskID, Type: v3.Type, Source: source, Payload: v3.Payload, Occurred: v3.OccurredAt, Durable: v3.Retention != "ephemeral"}); err != nil {
+				writeAppErr(runtime.Log, w, err, roomNotFound, http.StatusInternalServerError, "STORAGE_ERROR")
+				return
+			}
+			writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
+			return
+		}
 		if err := runtime.Ingest(r.Context(), raw); err != nil {
 			writeAppErr(runtime.Log, w, err, roomNotFound, http.StatusBadRequest, "BAD_REQUEST")
 			return
@@ -678,7 +934,7 @@ func InternalHandler(runtime *app.App) http.Handler {
 			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "taskId is required")
 			return
 		}
-		ref, err := runtime.SaveArtifactBlob(taskID, r.Header.Get("X-Content-Digest"), r.Body)
+		ref, err := runtime.SaveArtifactBlob(taskID, r.URL.Query().Get("tenantId"), r.Header.Get("X-Content-Digest"), r.Body)
 		if err != nil {
 			writeBlobErr(runtime.Log, w, err)
 			return

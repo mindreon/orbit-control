@@ -97,6 +97,9 @@ func errText(err error) string {
 
 // runSDB06Migrations is S-DB-6 (ISO-12). It leaves the database migrated
 // for the rest of the suite.
+// latestMigration is the number of the newest embedded migration: an empty database applies all of them.
+const latestMigration = 15
+
 func runSDB06Migrations(ctx context.Context) bool {
 	const c = "S-DB-6"
 	fms := []string{"FM-35", "FM-36", "FM-37"}
@@ -130,15 +133,15 @@ func runSDB06Migrations(ctx context.Context) bool {
 	first := up()
 	step("S-DB-6/up-on-empty", "up on an empty database succeeds and applies every migration",
 		[]string{"goose up", "read version", "snapshot schema"},
-		map[string]any{"applied": 13, "version": 13, "error": ""}, first,
-		first.Error == "" && first.Applied == 13 && first.Version == 13 && first.Schema.Fingerprint != "")
+		map[string]any{"applied": latestMigration, "version": latestMigration, "error": ""}, first,
+		first.Error == "" && first.Applied == latestMigration && first.Version == latestMigration && first.Schema.Fingerprint != "")
 
 	second := up()
 	step("S-DB-6/up-again-noop", "up on an already migrated database succeeds and changes nothing",
 		[]string{"goose up", "read version", "snapshot schema", "compare with the previous snapshot"},
-		map[string]any{"applied": 0, "version": 13, "error": "", "schemaFingerprint": first.Schema.Fingerprint},
+		map[string]any{"applied": 0, "version": latestMigration, "error": "", "schemaFingerprint": first.Schema.Fingerprint},
 		map[string]any{"applied": second.Applied, "version": second.Version, "error": second.Error, "schemaFingerprint": second.Schema.Fingerprint},
-		second.Error == "" && second.Applied == 0 && second.Version == 13 && second.Schema.Fingerprint == first.Schema.Fingerprint)
+		second.Error == "" && second.Applied == 0 && second.Version == latestMigration && second.Schema.Fingerprint == first.Schema.Fingerprint)
 
 	downErr := migrations.Reset(ctx, ownerURL)
 	down, derr := snapshot(ctx)
@@ -151,9 +154,9 @@ func runSDB06Migrations(ctx context.Context) bool {
 	third := up()
 	step("S-DB-6/up-after-down", "up after down reproduces the fresh schema exactly",
 		[]string{"goose up", "snapshot schema", "compare with the fresh-up snapshot"},
-		map[string]any{"applied": 13, "version": 13, "error": "", "schemaFingerprint": first.Schema.Fingerprint},
+		map[string]any{"applied": latestMigration, "version": latestMigration, "error": "", "schemaFingerprint": first.Schema.Fingerprint},
 		map[string]any{"applied": third.Applied, "version": third.Version, "error": third.Error, "schemaFingerprint": third.Schema.Fingerprint},
-		third.Error == "" && third.Applied == 13 && third.Version == 13 && third.Schema.Fingerprint == first.Schema.Fingerprint)
+		third.Error == "" && third.Applied == latestMigration && third.Version == latestMigration && third.Schema.Fingerprint == first.Schema.Fingerprint)
 	return ok
 }
 

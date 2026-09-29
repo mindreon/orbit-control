@@ -357,10 +357,13 @@ type AttemptParkedSignal struct {
 }
 
 type AttemptResult struct {
-	CheckpointRef   string  `json:"checkpoint_ref"`
-	HandoverSummary *string `json:"handover_summary,omitempty"`
-	ManifestID      *string `json:"manifest_id,omitempty"`
-	Usage           *Usage  `json:"usage,omitempty"`
+	BudgetExhausted *bool                        `json:"budget_exhausted,omitempty"`
+	CheckpointRef   string                       `json:"checkpoint_ref"`
+	HandoverSummary *string                      `json:"handover_summary,omitempty"`
+	ManifestEntries []map[string]json.RawMessage `json:"manifest_entries,omitempty"`
+	ManifestHash    *string                      `json:"manifest_hash,omitempty"`
+	ManifestID      *string                      `json:"manifest_id,omitempty"`
+	Usage           *Usage                       `json:"usage,omitempty"`
 }
 
 type AttemptResumedEvent struct {
@@ -994,16 +997,17 @@ type TaskView struct {
 
 // Start input of “TaskWorkflow“; id “task/{tenant_id}/{task_id}“.
 type TaskWorkflowInput struct {
-	Budgets                 Budget  `json:"budgets"`
-	CreatedBy               Actor   `json:"created_by"`
-	Goal                    string  `json:"goal"`
-	Mode                    *string `json:"mode,omitempty"`
-	NodeTypeRegistryVersion int64   `json:"node_type_registry_version"`
-	Profile                 string  `json:"profile"`
-	SOP                     *string `json:"sop,omitempty"`
-	TaskID                  string  `json:"task_id"`
-	TenantID                string  `json:"tenant_id"`
-	Title                   string  `json:"title"`
+	Budgets                 Budget                     `json:"budgets"`
+	Carry                   map[string]json.RawMessage `json:"carry,omitempty"`
+	CreatedBy               Actor                      `json:"created_by"`
+	Goal                    string                     `json:"goal"`
+	Mode                    *string                    `json:"mode,omitempty"`
+	NodeTypeRegistryVersion int64                      `json:"node_type_registry_version"`
+	Profile                 string                     `json:"profile"`
+	SOP                     *string                    `json:"sop,omitempty"`
+	TaskID                  string                     `json:"task_id"`
+	TenantID                string                     `json:"tenant_id"`
+	Title                   string                     `json:"title"`
 }
 
 type TeamStageNode struct {

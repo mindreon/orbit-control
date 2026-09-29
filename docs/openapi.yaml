@@ -60,6 +60,10 @@ tags:
     description: Tenant secrets metadata only (unimplemented; plaintext never in API)
   - name: cloud-agents
     description: Cloud agent jobs (unimplemented)
+  - name: tasks
+    description: TaskWorkflow v3 orchestration
+  - name: profiles
+    description: Immutable versioned agent profiles
   - name: websocket
     description: Public WebSocket upgrade (unimplemented)
 paths:
@@ -1221,6 +1225,243 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+  /v1/tasks:
+    get:
+      tags: [tasks]
+      operationId: listTasks
+      summary: List task workflows
+      responses:
+        "200":
+          description: Task list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Task" } }
+    post:
+      tags: [tasks]
+      operationId: createTask
+      summary: Create and start a TaskWorkflow
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateTaskRequest" }
+      responses:
+        "201":
+          description: Created task
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Task" }
+  /v1/profiles:
+    get:
+      tags: [profiles]
+      operationId: listProfiles
+      responses:
+        "200":
+          description: Immutable profile versions
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Profile" } }
+    post:
+      tags: [profiles]
+      operationId: registerProfile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegisterProfileRequest" }
+      responses:
+        "201":
+          description: Profile registered
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Profile" }
+  /v1/profiles/{profileRef}:
+    get:
+      tags: [profiles]
+      operationId: getProfile
+      parameters:
+        - { name: profileRef, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Immutable profile version
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Profile" }
+  /v1/sops:
+    get:
+      tags: [sops]
+      operationId: listSOPs
+      responses:
+        "200":
+          description: Immutable SOP versions
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/SOP" } }
+    post:
+      tags: [sops]
+      operationId: registerSOP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegisterSOPRequest" }
+      responses:
+        "201":
+          description: SOP registered (the same id, version and steps again is a no-op)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SOP" }
+        "409":
+          description: The version exists with different steps
+  /v1/tasks/{taskId}:
+    parameters: [{ name: taskId, in: path, required: true, schema: { type: string } }]
+    get:
+      tags: [tasks]
+      operationId: getTask
+      responses:
+        "200":
+          description: Task projection
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Task" }
+  /v1/tasks/{taskId}/messages:
+    post:
+      tags: [tasks]
+      operationId: sendTaskMessage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SendTaskMessageRequest" }
+      responses:
+        "202": { description: Update accepted }
+  /v1/tasks/{taskId}/control:
+    post:
+      tags: [tasks]
+      operationId: controlTask
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TaskControlRequest" }
+      responses:
+        "202": { description: Update accepted }
+  /v1/tasks/{taskId}/budget:
+    post:
+      tags: [tasks]
+      operationId: grantTaskBudget
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GrantBudgetRequest" }
+      responses:
+        "202": { description: Update accepted }
+  /v1/tasks/{taskId}/profile:
+    post:
+      tags: [tasks]
+      operationId: requestTaskProfileSwitch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RequestProfileSwitchRequest" }
+      responses:
+        "202": { description: Update accepted }
+  /v1/tasks/{taskId}/approvals/{approvalId}:
+    post:
+      tags: [tasks]
+      operationId: decideTaskApproval
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DecideTaskApprovalRequest" }
+      responses:
+        "202": { description: Update accepted }
+  /v1/tasks/{taskId}/plan:
+    post:
+      tags: [tasks]
+      operationId: submitPlanChange
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "202": { description: Update accepted }
+    get:
+      tags: [tasks]
+      operationId: getTaskPlan
+      responses:
+        "200": { description: Current plan, content: { application/json: { schema: { type: object } } } }
+  /v1/tasks/{taskId}/events:
+    get:
+      tags: [tasks]
+      operationId: streamTaskEvents
+      summary: Durable and ephemeral task events
+      parameters:
+        - { name: Last-Event-ID, in: header, required: false, schema: { type: string } }
+      responses:
+        "200": { description: SSE stream, content: { text/event-stream: { schema: { type: string } } } }
+  /v1/tasks/{taskId}/artifacts:
+    get:
+      tags: [tasks]
+      operationId: listTaskArtifacts
+      parameters:
+        - { name: taskId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Artifact manifests emitted by the task
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/ArtifactManifest" } }
+  /v1/artifacts/{manifestId}:
+    get:
+      tags: [tasks]
+      operationId: getArtifactManifest
+      parameters:
+        - { name: manifestId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Artifact manifest
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ArtifactManifest" }
+  /v1/artifacts/{manifestId}/url:
+    get:
+      tags: [tasks]
+      operationId: getArtifactDownloadURL
+      parameters:
+        - { name: manifestId, in: path, required: true, schema: { type: string } }
+        - { name: name, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Short lived tenant scoped presigned artifact URL
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url]
+                properties:
+                  url: { type: string, format: uri }
+
 components:
   parameters:
     IdempotencyKey:
@@ -1264,6 +1505,127 @@ components:
       schema:
         type: string
   schemas:
+    Task:
+      type: object
+      required: [task_id, tenant_id, workflow_id, title, goal, mode, status, profile, plan_version]
+      properties:
+        task_id: { type: string, pattern: '^task_[0-9A-HJKMNP-TV-Z]{26}$' }
+        tenant_id: { type: string }
+        workflow_id: { type: string }
+        title: { type: string }
+        goal: { type: string }
+        mode: { type: string, enum: [single, multi, long] }
+        status: { type: string }
+        profile: { type: string }
+        plan_version: { type: integer, minimum: 1 }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        budgets: { type: object, additionalProperties: true }
+        usage: { type: object, additionalProperties: true }
+        pending_approvals: { type: array, items: { type: string } }
+    Profile:
+      type: object
+      required: [profile_id, version, ref, spec, created_at]
+      properties:
+        profile_id: { type: string }
+        version: { type: integer, minimum: 1 }
+        ref: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]*@[1-9][0-9]*$' }
+        spec: { type: object, additionalProperties: true }
+        created_at: { type: string, format: date-time }
+    RegisterProfileRequest:
+      type: object
+      required: [profile_id, version, spec]
+      properties:
+        profile_id: { type: string, minLength: 1 }
+        version: { type: integer, minimum: 1 }
+        spec: { type: object, additionalProperties: true }
+    SOP:
+      type: object
+      required: [sop_id, version, ref, steps, created_at]
+      properties:
+        sop_id: { type: string }
+        version: { type: integer, minimum: 1 }
+        ref: { type: string, description: "sop_id@version, what a sop_stage node names" }
+        steps: { type: array, minItems: 1, items: { $ref: "#/components/schemas/SOPStep" } }
+        created_at: { type: string, format: date-time }
+    RegisterSOPRequest:
+      type: object
+      required: [sop_id, version, steps]
+      properties:
+        sop_id: { type: string, minLength: 1 }
+        version: { type: integer, minimum: 1 }
+        steps:
+          type: array
+          minItems: 1
+          description: A step is an object, or a bare string standing for a step whose subject and description are that text.
+          items:
+            oneOf:
+              - { type: string, minLength: 1 }
+              - { $ref: "#/components/schemas/SOPStep" }
+    SOPStep:
+      type: object
+      required: [subject]
+      properties:
+        subject: { type: string, minLength: 1 }
+        description: { type: string, description: "What the step must achieve; defaults to the subject" }
+        max_attempts: { type: integer, minimum: 1, description: "Refusals before the SOP gives up on the step; defaults to 3" }
+    ArtifactManifest:
+      type: object
+      required: [manifest_id, task_id, entries, created_at]
+      properties:
+        manifest_id: { type: string }
+        task_id: { type: string }
+        attempt_id: { type: string }
+        entries: { type: array, items: { type: object, additionalProperties: true } }
+        manifest_hash: { type: string }
+        created_at: { type: string, format: date-time }
+    CreateTaskRequest:
+      type: object
+      required: [title, goal]
+      properties:
+        title: { type: string, minLength: 1 }
+        goal: { type: string, minLength: 1 }
+        mode: { type: string, enum: [single, multi, long], default: single }
+        profile: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]*@[1-9][0-9]*$' }
+        sop: { type: string }
+        budgets: { type: object, additionalProperties: true }
+    SendTaskMessageRequest:
+      type: object
+      required: [text]
+      properties:
+        command_id: { type: string }
+        client_message_id: { type: string }
+        text: { type: string, minLength: 1 }
+        delivery: { type: string, enum: [queue, interrupt], default: queue }
+    TaskControlRequest:
+      type: object
+      required: [action]
+      properties:
+        command_id: { type: string }
+        action: { type: string, enum: [pause, resume, cancel, takeover, handback] }
+        reason: { type: string }
+    DecideTaskApprovalRequest:
+      type: object
+      required: [decision]
+      properties:
+        command_id: { type: string }
+        decision: { type: string, enum: [approve, reject] }
+        comment: { type: string }
+    GrantBudgetRequest:
+      type: object
+      required: [delta]
+      properties:
+        command_id: { type: string }
+        delta: { type: object, additionalProperties: true }
+    RequestProfileSwitchRequest:
+      type: object
+      required: [node_id, to_profile, reason]
+      properties:
+        command_id: { type: string }
+        node_id: { type: string }
+        to_profile: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]*@[1-9][0-9]*$' }
+        reason: { type: string, minLength: 1 }
     ErrorBody:
       type: object
       additionalProperties: false

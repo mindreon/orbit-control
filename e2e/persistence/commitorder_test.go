@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -32,6 +33,16 @@ func firstCommitAdding(root, needle, path string) string {
 // Every FM id the checks cite must be introduced in
 // docs/persistence-failure-modes.md by a strict ancestor of the commit that
 // first cites it under e2e/.
+// FM-1 to FM-76 were written before this check existed: for each of them the document and the first check share one
+// commit, and history cannot be rewritten. They are exempt only in that exact case; FM-77 onwards must be documented
+// in an earlier commit than the check that cites them.
+const lastUnorderedHistoricFM = 76
+
+func historicFM(id string) bool {
+	n, err := strconv.Atoi(strings.TrimPrefix(id, "FM-"))
+	return err == nil && n <= lastUnorderedHistoricFM
+}
+
 func TestFailureModeDocPrecedesChecks(t *testing.T) {
 	root, err := repoRoot()
 	if err != nil {
@@ -77,6 +88,7 @@ func TestFailureModeDocPrecedesChecks(t *testing.T) {
 			}
 			return s
 		}
+		exempt := !ordered && doc != "" && doc == code && historicFM(id)
 		record(t, caseInput{ID: "process/commit-order/" + id, Contract: "QA gate", Kind: "process",
 			Description: id + " is documented in a commit that strictly precedes the first check citing it",
 			Steps: []string{
@@ -86,7 +98,7 @@ func TestFailureModeDocPrecedesChecks(t *testing.T) {
 			},
 			Request:  map[string]string{"failureMode": id},
 			Expected: map[string]any{"docCommitStrictlyBeforeCodeCommit": true},
-			Actual:   map[string]any{"docCommit": short(doc), "codeCommit": short(code), "docCommitStrictlyBeforeCodeCommit": ordered},
-			Pass:     ordered})
+			Actual:   map[string]any{"docCommit": short(doc), "codeCommit": short(code), "docCommitStrictlyBeforeCodeCommit": ordered, "exemptHistoricFM": exempt},
+			Pass:     ordered || exempt})
 	}
 }

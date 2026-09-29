@@ -248,7 +248,7 @@ CREATE TABLE workspace_leases (
   -- tenant/task for the write lease, tenant/task/ro/<attempt> for a copy.
   lease_key      TEXT NOT NULL CHECK (lease_key <> ''),
   lease_mode     TEXT NOT NULL CHECK (lease_mode IN ('write', 'read')),
-  backend        TEXT NOT NULL CHECK (backend IN ('docker', 'opensandbox')),
+  backend        TEXT NOT NULL CHECK (backend IN ('local', 'docker', 'opensandbox')),
   sandbox_id     TEXT,
   holder_attempt TEXT NOT NULL,
   expires_at     TIMESTAMPTZ NOT NULL,
@@ -329,15 +329,20 @@ CREATE POLICY tenant_isolation ON workspace_leases FOR ALL
 GRANT SELECT ON node_type_registry TO orbit_app, orbit_worker;
 GRANT SELECT, INSERT ON agent_profiles TO orbit_app;
 GRANT SELECT ON agent_profiles TO orbit_worker;
-GRANT SELECT, INSERT ON tasks, task_nodes, stage_attempts, task_approvals TO orbit_app;
+GRANT SELECT, INSERT, UPDATE (status, plan_version, updated_at) ON tasks TO orbit_app;
+GRANT SELECT, INSERT ON task_nodes, stage_attempts, task_approvals TO orbit_app;
 GRANT SELECT, INSERT ON plan_versions, task_messages, task_events TO orbit_app;
 GRANT SELECT, UPDATE (projected_at) ON runtime_outbox TO orbit_app;
-GRANT INSERT ON runtime_outbox TO orbit_worker;
+GRANT INSERT, SELECT (event_id) ON runtime_outbox TO orbit_worker;
 GRANT USAGE ON SEQUENCE runtime_outbox_id_seq TO orbit_worker;
 GRANT SELECT, INSERT ON idempotency_ledger TO orbit_app, orbit_worker;
 GRANT UPDATE (status, result_ref, owner, last_seen) ON idempotency_ledger TO orbit_worker;
-GRANT SELECT ON checkpoints, artifact_manifests, workspace_leases TO orbit_app;
+GRANT SELECT, INSERT ON artifact_manifests TO orbit_app;
+GRANT SELECT ON checkpoints, workspace_leases TO orbit_app;
 GRANT SELECT, INSERT ON checkpoints, artifact_manifests, workspace_leases TO orbit_worker;
+GRANT DELETE ON stage_attempts TO orbit_worker;
+GRANT DELETE ON checkpoints TO orbit_worker;
+GRANT SELECT ON stage_attempts TO orbit_worker;
 GRANT UPDATE (committed_in_history) ON checkpoints TO orbit_worker;
 GRANT UPDATE (sandbox_id, expires_at, released_at) ON workspace_leases TO orbit_worker;
 

@@ -19,6 +19,7 @@ import (
 	"github.com/mindreon/orbit-control/internal/orch"
 	"github.com/mindreon/orbit-control/internal/store"
 	"github.com/mindreon/orbit-control/internal/store/memstore"
+	taskruntime "github.com/mindreon/orbit-control/internal/task"
 	"github.com/mindreon/orbit-control/internal/worker"
 )
 
@@ -220,6 +221,9 @@ type Options struct {
 	ArtifactDir string
 	// ArtifactMaxBytes caps one blob body. Zero uses 32 MiB.
 	ArtifactMaxBytes int64
+	Tasks            *taskruntime.Service
+	TaskClient       taskruntime.TaskClient
+	ArtifactSigner   taskruntime.ArtifactSigner
 }
 
 type App struct {
@@ -256,6 +260,7 @@ type App struct {
 	// them are discarded so the log is not recreated.
 	freedLogs map[string]struct{}
 	Limits    Limits
+	Tasks     *taskruntime.Service
 }
 
 func New(w *worker.Client) *App {
@@ -266,6 +271,7 @@ func NewWithOrch(w *worker.Client, o *orch.Client) *App {
 	opts := Options{Worker: w}
 	if o != nil {
 		opts.Orch = o
+		opts.TaskClient = o
 	}
 	return NewWithOptions(opts)
 }
@@ -322,6 +328,14 @@ func NewWithOptions(opts Options) *App {
 		clientStreams:     map[string]int{},
 		freedLogs:         map[string]struct{}{},
 		Limits:            DefaultLimits(),
+		Tasks:             opts.Tasks,
+	}
+	if a.Tasks == nil {
+		projection, _ := opts.Repo.(taskruntime.ProjectionStore)
+		a.Tasks = taskruntime.NewWithProjection(opts.TaskClient, projection)
+	}
+	if opts.ArtifactSigner != nil {
+		a.Tasks.SetArtifactSigner(opts.ArtifactSigner)
 	}
 	if a.ArtifactMaxBytes <= 0 {
 		a.ArtifactMaxBytes = 32 << 20
