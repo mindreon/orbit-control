@@ -46,7 +46,7 @@ func TestSDB02TenantIsolation(t *testing.T) {
 	// The same user id in both tenants: only the tenant tells them apart.
 	newTask := func(srv *server, label string) string {
 		act := srv.check(t, "S-DB-2/setup/create-"+label, c, "create a task in tenant "+label,
-			httpReq{Method: "POST", Path: "/v1/tasks", Headers: user(sharedUser), Body: `{"title":"tenant task","goal":"isolate"}`}, httpExp{Status: 201})
+			httpReq{Method: "POST", Path: "/v1/tasks", Headers: userCSRF(sharedUser), Body: `{"title":"tenant task","goal":"isolate"}`}, httpExp{Status: 201})
 		var body struct {
 			ID string `json:"task_id"`
 		}
@@ -67,7 +67,7 @@ func TestSDB02TenantIsolation(t *testing.T) {
 			httpReq{Method: "GET", Path: "/v1/tasks/" + taskA + p, Headers: user(seededUser)}, httpExp{Status: 404, BodyEquals: missing.Body})
 	}
 	sb.check(t, "S-DB-2/cross-tenant/POST-message", c, "tenant B posts to tenant A's task → 404",
-		httpReq{Method: "POST", Path: "/v1/tasks/" + taskA + "/messages", Headers: user(seededUser), Body: `{"text":"x","delivery":"queue"}`}, httpExp{Status: 404, BodyEquals: missing.Body})
+		httpReq{Method: "POST", Path: "/v1/tasks/" + taskA + "/messages", Headers: userCSRF(seededUser), Body: `{"text":"x","delivery":"queue"}`}, httpExp{Status: 404, BodyEquals: missing.Body})
 	sb.check(t, "S-DB-2/cross-tenant/list-tasks", c, "tenant B's task list has only its own task",
 		httpReq{Method: "GET", Path: "/v1/tasks", Headers: user(seededUser)}, httpExp{Status: 200, BodyIncludes: []string{taskB}, BodyExcludes: []string{taskA}})
 	sb.check(t, "S-DB-2/cross-tenant/list-personas", c, "tenant B's assistant list has only its own assistant",

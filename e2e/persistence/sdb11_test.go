@@ -250,7 +250,7 @@ func TestSDB11bPooledConnectionDoesNotLeakTenant(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv.check(t, "S-DB-11(b)/create", c, "create a task so the tenant has data",
-		httpReq{Method: "POST", Path: "/v1/tasks", Headers: user(u), Body: `{"title":"pooled","goal":"one connection"}`}, httpExp{Status: 201})
+		httpReq{Method: "POST", Path: "/v1/tasks", Headers: userCSRF(u), Body: `{"title":"pooled","goal":"one connection"}`}, httpExp{Status: 201})
 	srv.check(t, "S-DB-11(b)/request-A-commit", c, "request A: a committed tenant transaction that sees the task",
 		httpReq{Method: "GET", Path: "/v1/tasks", Headers: user(u)}, httpExp{Status: 200, BodyIncludes: []string{`"task_id":"task_`}})
 	srv.check(t, "S-DB-11(b)/request-A-rollback", c, "request A': a tenant transaction that finds nothing (404)",

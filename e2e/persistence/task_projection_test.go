@@ -18,7 +18,7 @@ func TestTaskProjectionPersistsAcrossControlRestart(t *testing.T) {
 		testUser = "u-task-projection"
 	)
 	first := startServer(t, serverOpts{tenant: tenant, projector: true, maxConns: 6})
-	principal := user(testUser)
+	principal := userCSRF(testUser)
 
 	created := first.check(t, "TASK-PROJECTION/create", contract, "create a v3 task through the PostgreSQL backed control API", httpReq{
 		Method: http.MethodPost, Path: "/v1/tasks", Headers: principal, Body: `{"title":"persisted","goal":"verify projection"}`,
