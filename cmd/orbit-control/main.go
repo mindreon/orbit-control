@@ -9,6 +9,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/mindreon/orbit-control/internal/config"
 	"github.com/mindreon/orbit-control/internal/httpapi"
 )
 
@@ -17,7 +18,7 @@ import (
 func installLogger() {
 	options := &slog.HandlerOptions{Level: slog.LevelInfo}
 	var handler slog.Handler = slog.NewTextHandler(os.Stderr, options)
-	if os.Getenv("ORBIT_LOG_FORMAT") == "json" {
+	if config.Load().LogFormat == "json" {
 		handler = slog.NewJSONHandler(os.Stderr, options)
 	}
 	slog.SetDefault(slog.New(handler))
@@ -25,11 +26,12 @@ func installLogger() {
 
 func main() {
 	installLogger()
-	addr := publicListenAddr()
+	cfg := config.Load()
+	addr := cfg.PublicListenAddr()
 	if err := checkPublicBind(addr); err != nil {
 		log.Fatal(err)
 	}
-	internalAddr := internalListenAddr()
+	internalAddr := cfg.InternalListenAddr()
 	public, internal, closeStore, err := httpapi.Handlers()
 	if err != nil {
 		log.Fatalf("orbit-control: %v", err)
@@ -53,18 +55,6 @@ func server(addr string, h http.Handler) *http.Server {
 	return &http.Server{Addr: addr, Handler: h, ReadHeaderTimeout: 10 * time.Second}
 }
 
-// publicListenAddr is ORBIT_PUBLIC_ADDR, else 127.0.0.1:$PORT (default 8080).
-func publicListenAddr() string {
-	if addr := os.Getenv("ORBIT_PUBLIC_ADDR"); addr != "" {
-		return addr
-	}
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
-	return "127.0.0.1:" + port
-}
-
 // checkPublicBind is the deploy gate for H1: until user auth (§17) lands,
 // every /v1 path, including SSE replay, is unauthenticated, so the public
 // listener may only bind loopback. ORBIT_ALLOW_UNAUTHENTICATED_BIND=1 lifts it
@@ -78,7 +68,7 @@ func checkPublicBind(addr string) error {
 	if isLoopbackHost(host) {
 		return nil
 	}
-	if os.Getenv("ORBIT_ALLOW_UNAUTHENTICATED_BIND") == "1" {
+	if config.Load().AllowUnauthenticatedBind {
 		log.Printf("WARNING: public listener %s is not loopback and control has no user auth (§17); "+
 			"ORBIT_ALLOW_UNAUTHENTICATED_BIND=1 is only for environments that are not externally reachable", addr)
 		return nil
@@ -94,14 +84,4 @@ func isLoopbackHost(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
-}
-
-// internalListenAddr defaults to loopback so /internal/* is never reachable
-// from outside the host unless a deployment opts in (e.g. ":8081" on a
-// private network).
-func internalListenAddr() string {
-	if addr := os.Getenv("ORBIT_INTERNAL_ADDR"); addr != "" {
-		return addr
-	}
-	return "127.0.0.1:8081"
 }

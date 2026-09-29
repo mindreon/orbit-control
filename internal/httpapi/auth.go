@@ -2,10 +2,9 @@ package httpapi
 
 import (
 	"net/http"
-	"os"
-	"strings"
 
 	"github.com/mindreon/orbit-control/internal/app"
+	"github.com/mindreon/orbit-control/internal/config"
 )
 
 // Authenticator resolves the caller from the request (§17). The OIDC session
@@ -36,21 +35,10 @@ var denyAllAuthenticator = AuthenticatorFunc(func(*http.Request) (app.Principal,
 })
 
 func authenticatorFromEnv(defaultTenant string) Authenticator {
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("ORBIT_AUTH_MODE")), "oidc") {
+	if config.Load().OIDC() {
 		return denyAllAuthenticator
 	}
 	return LocalAuthenticator(defaultTenant)
-}
-
-// allowedOriginsFromEnv reads ORBIT_ALLOWED_ORIGINS (comma separated).
-func allowedOriginsFromEnv() []string {
-	var out []string
-	for _, o := range strings.Split(os.Getenv("ORBIT_ALLOWED_ORIGINS"), ",") {
-		if o = strings.TrimSpace(o); o != "" {
-			out = append(out, o)
-		}
-	}
-	return out
 }
 
 // csrfOK implements §17.4: the Origin must be allowed AND X-Orbit-Request: 1

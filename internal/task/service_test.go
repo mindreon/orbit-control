@@ -3,17 +3,53 @@ package task
 import (
 	"context"
 	"regexp"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
-func TestNewIDUsesCrockfordTaskAlphabet(t *testing.T) {
-	pattern := regexp.MustCompile(`^task_[0-9A-HJKMNP-TV-Z]{26}$`)
-	for range 100 {
+func TestNewIDUsesUUIDv7(t *testing.T) {
+	// Version nibble is 7; the variant nibble is 8, 9, a, or b.
+	pattern := regexp.MustCompile(`^task_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	var previous time.Time
+	for range 20 {
 		id := newID("task")
 		if !pattern.MatchString(id) {
 			t.Fatalf("invalid task id %q", id)
 		}
+		parsed, err := uuid.Parse(strings.TrimPrefix(id, "task_"))
+		if err != nil {
+			t.Fatalf("parse %q: %v", id, err)
+		}
+		if parsed.Version() != 7 {
+			t.Fatalf("version = %d, want 7", parsed.Version())
+		}
+		sec, nsec := parsed.Time().UnixTime()
+		stamp := time.Unix(sec, nsec)
+		if !previous.IsZero() && stamp.Before(previous) {
+			t.Fatalf("ids went backwards in time: %s then %s", previous, stamp)
+		}
+		previous = stamp
+	}
+}
+
+func TestCommandCacheStaysBounded(t *testing.T) {
+	service := New(nil)
+	principal := Principal{TenantID: "tenant", UserID: "user"}
+	created, err := service.Create(context.Background(), principal, CreateInput{Title: "cache", Goal: "bound"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range commandCacheLimit + 32 {
+		if _, err := service.Update(context.Background(), principal, created.ID, "control", "cmd-"+strconv.Itoa(i), map[string]any{"action": "pause"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if service.commandCache.Len() > commandCacheLimit {
+		t.Fatalf("command cache len = %d, limit %d", service.commandCache.Len(), commandCacheLimit)
 	}
 }
 

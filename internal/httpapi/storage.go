@@ -5,28 +5,25 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/mindreon/orbit-control/internal/config"
 	"github.com/mindreon/orbit-control/internal/store"
 	"github.com/mindreon/orbit-control/internal/store/memstore"
 	"github.com/mindreon/orbit-control/internal/store/migrations"
 	"github.com/mindreon/orbit-control/internal/store/pgstore"
 )
 
-func prodConfig() bool {
-	return strings.EqualFold(strings.TrimSpace(os.Getenv("ORBIT_ENV")), "prod") ||
-		strings.EqualFold(strings.TrimSpace(os.Getenv("ORBIT_AUTH_MODE")), "oidc")
-}
+func prodConfig() bool { return config.Load().Prod() }
 
 // openRepository selects storage per §18.2. In prod configuration a missing
 // ORBIT_CONTROL_DB_URL is fatal; control never silently falls back to memory.
 // Neither URL is ever logged or returned in an error.
 func openRepository(ctx context.Context) (store.Repository, error) {
-	url := strings.TrimSpace(os.Getenv("ORBIT_CONTROL_DB_URL"))
+	cfg := config.Load()
+	url := cfg.ControlDBURL
 	if url == "" {
 		if prodConfig() {
 			return nil, errors.New("ORBIT_CONTROL_DB_URL is required when ORBIT_ENV=prod or ORBIT_AUTH_MODE=oidc; refusing to start with in-memory storage")
@@ -36,8 +33,8 @@ func openRepository(ctx context.Context) (store.Repository, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	if os.Getenv("ORBIT_CONTROL_MIGRATE_ON_START") == "1" {
-		migrateURL := strings.TrimSpace(os.Getenv("ORBIT_CONTROL_MIGRATE_DB_URL"))
+	if cfg.MigrateOnStart {
+		migrateURL := cfg.MigrateDBURL
 		if migrateURL == "" {
 			return nil, errors.New("ORBIT_CONTROL_MIGRATE_ON_START=1 needs ORBIT_CONTROL_MIGRATE_DB_URL (owner role)")
 		}

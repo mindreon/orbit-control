@@ -1,12 +1,14 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mindreon/orbit-control/internal/app"
 	taskruntime "github.com/mindreon/orbit-control/internal/task"
@@ -69,6 +71,66 @@ func TestTaskRouterReturnsOwnerUnavailable(t *testing.T) {
 	h.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/v1/tasks/"+taskID, nil))
 	if resp.Code != http.StatusBadGateway || !strings.Contains(resp.Body.String(), "TASK_OWNER_UNAVAILABLE") {
 		t.Fatalf("unexpected unavailable response: status=%d body=%s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestDialOrchStopsWhenContextIsCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	started := time.Now()
+	_, err := dialOrch(ctx, "127.0.0.1:1", "", "")
+	if err == nil {
+		t.Fatal("expected dial to fail")
+	}
+	if time.Since(started) > 2*time.Second {
+		t.Fatalf("cancelled dial took %s", time.Since(started))
+	}
+}
+
+func TestCSRFRejectsStateChangeWhenOriginsAreSet(t *testing.T) {
+	handler := HandlerWithOptions(app.NewWithOptions(app.Options{}), Options{
+		Auth:           LocalAuthenticator("default"),
+		AllowedOrigins: []string{"https://app.example"},
+	})
+	rejected := httptest.NewRecorder()
+	handler.ServeHTTP(rejected, internalReq(http.MethodPost, "/v1/tasks", `{"title":"demo","goal":"ship"}`))
+	if rejected.Code != http.StatusForbidden || !strings.Contains(rejected.Body.String(), "CSRF_REJECTED") {
+		t.Fatalf("csrf status = %d body %s", rejected.Code, rejected.Body.String())
+	}
+	allowed := httptest.NewRecorder()
+	req := internalReq(http.MethodPost, "/v1/tasks", `{"title":"demo","goal":"ship"}`)
+	req.Header.Set("Origin", "https://app.example")
+	req.Header.Set("X-Orbit-Request", "1")
+	handler.ServeHTTP(allowed, req)
+	if allowed.Code != http.StatusCreated {
+		t.Fatalf("allowed status = %d body %s", allowed.Code, allowed.Body.String())
+	}
+}
+
+func TestTaskEventStreamUsesFlusher(t *testing.T) {
+	runtime := app.NewWithOptions(app.Options{})
+	handler := HandlerWith(runtime)
+	created := httptest.NewRecorder()
+	handler.ServeHTTP(created, internalReq(http.MethodPost, "/v1/tasks", `{"title":"stream","goal":"flush"}`))
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create = %d: %s", created.Code, created.Body.String())
+	}
+	var task struct {
+		ID string `json:"task_id"`
+	}
+	if err := json.Unmarshal(created.Body.Bytes(), &task); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(http.MethodGet, "/v1/tasks/"+task.ID+"/events", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("stream status = %d body %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "text/event-stream" {
+		t.Fatalf("content type = %q", got)
 	}
 }
 

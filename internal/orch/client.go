@@ -54,6 +54,11 @@ type TaskPlan struct {
 }
 
 func Dial(address, namespace, taskQueue string) (*Client, error) {
+	return DialContext(context.Background(), address, namespace, taskQueue)
+}
+
+// DialContext is Dial that stops when ctx is cancelled.
+func DialContext(ctx context.Context, address, namespace, taskQueue string) (*Client, error) {
 	if address == "" {
 		return nil, fmt.Errorf("temporal address is empty")
 	}
@@ -63,7 +68,7 @@ func Dial(address, namespace, taskQueue string) (*Client, error) {
 	if taskQueue == "" {
 		taskQueue = DefaultTaskQueue
 	}
-	tc, err := client.Dial(client.Options{
+	tc, err := client.DialContext(ctx, client.Options{
 		HostPort:  address,
 		Namespace: namespace,
 	})

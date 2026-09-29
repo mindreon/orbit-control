@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -9,14 +8,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 
 	"github.com/mindreon/orbit-control/internal/app"
 	"github.com/mindreon/orbit-control/internal/store"
 	taskruntime "github.com/mindreon/orbit-control/internal/task"
 )
 
-func registerTaskRoutes(mux *http.ServeMux, runtime *app.App, authed func(principalHandler) http.HandlerFunc) {
+func registerTaskRoutes(router gin.IRoutes, runtime *app.App, authed func(principalHandler) gin.HandlerFunc) {
 	toPrincipal := func(p app.Principal) taskruntime.Principal {
 		return taskruntime.Principal{TenantID: p.TenantID, UserID: p.UserID}
 	}
@@ -24,8 +25,11 @@ func registerTaskRoutes(mux *http.ServeMux, runtime *app.App, authed func(princi
 		if strings.TrimSpace(raw) != "" {
 			return raw
 		}
-		sum := sha256.Sum256([]byte(time.Now().UTC().Format(time.RFC3339Nano)))
-		return hex.EncodeToString(sum[:])
+		id, err := uuid.NewV7()
+		if err != nil {
+			panic(err)
+		}
+		return id.String()
 	}
 	writeTaskErr := func(w http.ResponseWriter, err error) {
 		switch {
@@ -44,7 +48,7 @@ func registerTaskRoutes(mux *http.ServeMux, runtime *app.App, authed func(princi
 		}
 	}
 
-	mux.HandleFunc("GET /v1/tasks", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+	router.GET("/v1/tasks", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		items, err := runtime.Tasks.List(r.Context(), toPrincipal(p))
 		if err != nil {
 			writeTaskErr(w, err)
@@ -52,7 +56,7 @@ func registerTaskRoutes(mux *http.ServeMux, runtime *app.App, authed func(princi
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"items": items})
 	}))
-	mux.HandleFunc("GET /v1/profiles", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+	router.GET("/v1/profiles", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		items, err := runtime.Tasks.ListProfiles(r.Context(), toPrincipal(p))
 		if err != nil {
 			writeTaskErr(w, err)
@@ -60,14 +64,13 @@ func registerTaskRoutes(mux *http.ServeMux, runtime *app.App, authed func(princi
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"items": items})
 	}))
-	mux.HandleFunc("POST /v1/profiles", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+	router.POST("/v1/profiles", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		var body struct {
-			ProfileID string         `json:"profile_id"`
-			Version   int            `json:"version"`
+			ProfileID string         `json:"profile_id" binding:"required"`
+			Version   int            `json:"version" binding:"min=1"`
 			Spec      map[string]any `json:"spec"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "request body must be valid JSON")
+		if !bindJSON(w, r, &body) {
 			return
 		}
 		profile, err := runtime.Tasks.RegisterProfile(r.Context(), toPrincipal(p), taskruntime.Profile{ProfileID: body.ProfileID, Version: body.Version, Spec: body.Spec})
@@ -77,7 +80,7 @@ func registerTaskRoutes(mux *http.ServeMux, runtime *app.App, authed func(princi
 		}
 		writeJSON(w, http.StatusCreated, profile)
 	}))
-	mux.HandleFunc("GET /v1/profiles/{profileRef}", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+	router.GET("/v1/profiles/:profileRef", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		profile, err := runtime.Tasks.GetProfile(r.Context(), toPrincipal(p), r.PathValue("profileRef"))
 		if err != nil {
 			writeTaskErr(w, err)
@@ -85,7 +88,7 @@ func registerTaskRoutes(mux *http.ServeMux, runtime *app.App, authed func(princi
 		}
 		writeJSON(w, http.StatusOK, profile)
 	}))
-	mux.HandleFunc("GET /v1/policy", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+	router.GET("/v1/policy", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		policy, err := runtime.Tasks.GetTenantPolicy(r.Context(), toPrincipal(p))
 		if err != nil {
 			writeTaskErr(w, err)
@@ -93,10 +96,9 @@ func registerTaskRoutes(mux *http.ServeMux, runtime *app.App, authed func(princi
 		}
 		writeJSON(w, http.StatusOK, policy)
 	}))
-	mux.HandleFunc("PUT /v1/policy", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+	router.PUT("/v1/policy", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		var body taskruntime.Policy
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "request body must be valid JSON")
+		if !bindJSON(w, r, &body) {
 			return
 		}
 		policy, err := runtime.Tasks.SetTenantPolicy(r.Context(), toPrincipal(p), body)
@@ -106,7 +108,7 @@ func registerTaskRoutes(mux *http.ServeMux, runtime *app.App, authed func(princi
 		}
 		writeJSON(w, http.StatusOK, policy)
 	}))
-	mux.HandleFunc("GET /v1/sops", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+	router.GET("/v1/sops", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		items, err := runtime.Tasks.ListSOPs(r.Context(), toPrincipal(p))
 		if err != nil {
 			writeTaskErr(w, err)
@@ -114,14 +116,13 @@ func registerTaskRoutes(mux *http.ServeMux, runtime *app.App, authed func(princi
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"items": items})
 	}))
-	mux.HandleFunc("POST /v1/sops", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+	router.POST("/v1/sops", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		var body struct {
-			SOPID   string                `json:"sop_id"`
-			Version int                   `json:"version"`
+			SOPID   string                `json:"sop_id" binding:"required"`
+			Version int                   `json:"version" binding:"min=1"`
 			Steps   []taskruntime.SOPStep `json:"steps"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "request body must be valid JSON")
+		if !bindJSON(w, r, &body) {
 			return
 		}
 		sop, err := runtime.Tasks.RegisterSOP(r.Context(), toPrincipal(p), taskruntime.SOP{SOPID: body.SOPID, Version: body.Version, Steps: body.Steps})
@@ -131,18 +132,17 @@ func registerTaskRoutes(mux *http.ServeMux, runtime *app.App, authed func(princi
 		}
 		writeJSON(w, http.StatusCreated, sop)
 	}))
-	mux.HandleFunc("POST /v1/tasks", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+	router.POST("/v1/tasks", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		var body struct {
-			Title   string             `json:"title"`
-			Goal    string             `json:"goal"`
+			Title   string             `json:"title" binding:"required"`
+			Goal    string             `json:"goal" binding:"required"`
 			Mode    string             `json:"mode"`
 			Profile string             `json:"profile"`
 			SOP     string             `json:"sop"`
 			Budgets map[string]any     `json:"budgets"`
 			Policy  taskruntime.Policy `json:"policy"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "request body must be valid JSON")
+		if !bindJSON(w, r, &body) {
 			return
 		}
 		t, err := runtime.Tasks.Create(r.Context(), toPrincipal(p), taskruntime.CreateInput{Title: body.Title, Goal: body.Goal, Mode: body.Mode, Profile: body.Profile, SOP: body.SOP, Budgets: body.Budgets, Policy: body.Policy})
@@ -152,7 +152,7 @@ func registerTaskRoutes(mux *http.ServeMux, runtime *app.App, authed func(princi
 		}
 		writeJSON(w, http.StatusCreated, t)
 	}))
-	mux.HandleFunc("GET /v1/tasks/{taskId}", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+	router.GET("/v1/tasks/:taskId", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		t, err := runtime.Tasks.Get(r.Context(), toPrincipal(p), r.PathValue("taskId"))
 		if err != nil {
 			writeTaskErr(w, err)
@@ -160,7 +160,7 @@ func registerTaskRoutes(mux *http.ServeMux, runtime *app.App, authed func(princi
 		}
 		writeJSON(w, http.StatusOK, t)
 	}))
-	mux.HandleFunc("GET /v1/tasks/{taskId}/plan", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+	router.GET("/v1/tasks/:taskId/plan", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		plan, err := runtime.Tasks.Plan(r.Context(), toPrincipal(p), r.PathValue("taskId"))
 		if err != nil {
 			writeTaskErr(w, err)
@@ -168,7 +168,7 @@ func registerTaskRoutes(mux *http.ServeMux, runtime *app.App, authed func(princi
 		}
 		writeJSON(w, http.StatusOK, plan)
 	}))
-	mux.HandleFunc("GET /v1/tasks/{taskId}/artifacts", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+	router.GET("/v1/tasks/:taskId/artifacts", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		items, err := runtime.Tasks.Manifests(r.Context(), toPrincipal(p), r.PathValue("taskId"))
 		if err != nil {
 			writeTaskErr(w, err)
@@ -176,7 +176,7 @@ func registerTaskRoutes(mux *http.ServeMux, runtime *app.App, authed func(princi
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"items": items})
 	}))
-	mux.HandleFunc("GET /v1/artifacts/{manifestId}", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+	router.GET("/v1/artifacts/:manifestId", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		manifest, err := runtime.Tasks.GetManifest(r.Context(), toPrincipal(p), r.PathValue("manifestId"))
 		if err != nil {
 			writeTaskErr(w, err)
@@ -184,13 +184,13 @@ func registerTaskRoutes(mux *http.ServeMux, runtime *app.App, authed func(princi
 		}
 		writeJSON(w, http.StatusOK, manifest)
 	}))
-	mux.HandleFunc("GET /v1/artifacts/{manifestId}/url", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
-		name := strings.TrimSpace(r.URL.Query().Get("name"))
-		if name == "" {
+	router.GET("/v1/artifacts/:manifestId/url", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		name := artifactNameQuery{Name: strings.TrimSpace(r.URL.Query().Get("name"))}
+		if validateStruct(&name) != nil {
 			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "artifact entry name is required")
 			return
 		}
-		url, err := runtime.Tasks.PresignArtifact(r.Context(), toPrincipal(p), r.PathValue("manifestId"), name)
+		url, err := runtime.Tasks.PresignArtifact(r.Context(), toPrincipal(p), r.PathValue("manifestId"), name.Name)
 		if err != nil {
 			if strings.Contains(err.Error(), "not configured") {
 				writeErr(w, http.StatusServiceUnavailable, "ARTIFACT_STORE_UNAVAILABLE", "artifact storage is temporarily unavailable")
@@ -201,12 +201,13 @@ func registerTaskRoutes(mux *http.ServeMux, runtime *app.App, authed func(princi
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"url": url})
 	}))
-	mux.HandleFunc("GET /v1/artifacts/{manifestId}/download", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
-		name := strings.TrimSpace(r.URL.Query().Get("name"))
-		if name == "" || runtime.ArtifactDir == "" {
+	router.GET("/v1/artifacts/:manifestId/download", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		query := artifactNameQuery{Name: strings.TrimSpace(r.URL.Query().Get("name"))}
+		if validateStruct(&query) != nil || runtime.ArtifactDir == "" {
 			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "artifact entry name is required")
 			return
 		}
+		name := query.Name
 		manifest, err := runtime.Tasks.GetManifest(r.Context(), toPrincipal(p), r.PathValue("manifestId"))
 		if err != nil {
 			writeTaskErr(w, err)
@@ -233,11 +234,10 @@ func registerTaskRoutes(mux *http.ServeMux, runtime *app.App, authed func(princi
 		}
 		writeErr(w, http.StatusNotFound, "NOT_FOUND", "artifact entry not found")
 	}))
-	mux.HandleFunc("GET /v1/tasks/{taskId}/events", authed(streamTaskEvents(runtime)))
-	mux.HandleFunc("POST /v1/tasks/{taskId}/messages", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+	router.GET("/v1/tasks/:taskId/events", authed(streamTaskEvents(runtime)))
+	router.POST("/v1/tasks/:taskId/messages", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "request body must be valid JSON")
+		if !bindJSON(w, r, &body) {
 			return
 		}
 		id := commandID(stringValue(body, "command_id", "commandId"))
@@ -253,10 +253,9 @@ func registerTaskRoutes(mux *http.ServeMux, runtime *app.App, authed func(princi
 		}
 		writeJSON(w, http.StatusAccepted, json.RawMessage(raw))
 	}))
-	mux.HandleFunc("POST /v1/tasks/{taskId}/control", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+	router.POST("/v1/tasks/:taskId/control", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "request body must be valid JSON")
+		if !bindJSON(w, r, &body) {
 			return
 		}
 		id := commandID(stringValue(body, "command_id", "commandId"))
@@ -268,10 +267,9 @@ func registerTaskRoutes(mux *http.ServeMux, runtime *app.App, authed func(princi
 		}
 		writeJSON(w, http.StatusAccepted, json.RawMessage(raw))
 	}))
-	mux.HandleFunc("POST /v1/tasks/{taskId}/budget", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+	router.POST("/v1/tasks/:taskId/budget", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "request body must be valid JSON")
+		if !bindJSON(w, r, &body) {
 			return
 		}
 		id := commandID(stringValue(body, "command_id", "commandId"))
@@ -283,10 +281,9 @@ func registerTaskRoutes(mux *http.ServeMux, runtime *app.App, authed func(princi
 		}
 		writeJSON(w, http.StatusAccepted, json.RawMessage(raw))
 	}))
-	mux.HandleFunc("POST /v1/tasks/{taskId}/profile", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+	router.POST("/v1/tasks/:taskId/profile", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "request body must be valid JSON")
+		if !bindJSON(w, r, &body) {
 			return
 		}
 		id := commandID(stringValue(body, "command_id", "commandId"))
@@ -298,10 +295,9 @@ func registerTaskRoutes(mux *http.ServeMux, runtime *app.App, authed func(princi
 		}
 		writeJSON(w, http.StatusAccepted, json.RawMessage(raw))
 	}))
-	mux.HandleFunc("POST /v1/tasks/{taskId}/approvals/{approvalId}", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+	router.POST("/v1/tasks/:taskId/approvals/:approvalId", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "request body must be valid JSON")
+		if !bindJSON(w, r, &body) {
 			return
 		}
 		id := commandID(stringValue(body, "command_id", "commandId"))
@@ -313,10 +309,9 @@ func registerTaskRoutes(mux *http.ServeMux, runtime *app.App, authed func(princi
 		}
 		writeJSON(w, http.StatusAccepted, json.RawMessage(raw))
 	}))
-	mux.HandleFunc("POST /v1/tasks/{taskId}/plan", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+	router.POST("/v1/tasks/:taskId/plan", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "request body must be valid JSON")
+		if !bindJSON(w, r, &body) {
 			return
 		}
 		id := commandID(stringValue(body, "command_id", "commandId"))

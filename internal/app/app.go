@@ -6,10 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"strings"
 	"time"
 
-	"github.com/oklog/ulid/v2"
+	"github.com/google/uuid"
 
 	"github.com/mindreon/orbit-control/internal/store"
 	"github.com/mindreon/orbit-control/internal/store/memstore"
@@ -95,6 +94,12 @@ func NewWithOptions(opts Options) *App {
 	return a
 }
 
-func id(prefix string) string { return prefix + strings.ToLower(ulid.Make().String()) }
+func id(prefix string) string {
+	value, err := uuid.NewV7()
+	if err != nil {
+		panic(err)
+	}
+	return prefix + value.String()
+}
 
 func stamp(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }

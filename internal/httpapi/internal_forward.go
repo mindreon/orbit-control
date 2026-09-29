@@ -5,11 +5,11 @@ import (
 	"context"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/mindreon/orbit-control/internal/config"
 	"github.com/mindreon/orbit-control/internal/internalauth"
 	taskruntime "github.com/mindreon/orbit-control/internal/task"
 )
@@ -52,10 +52,11 @@ func newEphemeralForwarder(opts Options) *ephemeralForwarder {
 // internalAddressOf maps a member's public URL to its internal listener: the member's host with the internal port,
 // or, when ORBIT_CONTROL_INTERNAL_MEMBERS lists the internal URLs in the same order as the members, that entry.
 func internalAddressOf(member string) string {
-	if listed := splitMembers(os.Getenv("ORBIT_CONTROL_INTERNAL_MEMBERS")); len(listed) > 0 {
-		for index, public := range splitMembers(os.Getenv("ORBIT_CONTROL_MEMBERS")) {
-			if public == member && index < len(listed) {
-				return listed[index]
+	cfg := config.Load()
+	if len(cfg.InternalMembers) > 0 {
+		for index, public := range cfg.TaskMembers {
+			if public == member && index < len(cfg.InternalMembers) {
+				return cfg.InternalMembers[index]
 			}
 		}
 	}
@@ -64,7 +65,7 @@ func internalAddressOf(member string) string {
 		return ""
 	}
 	port := "8081"
-	if addr := os.Getenv("ORBIT_INTERNAL_ADDR"); addr != "" {
+	if addr := cfg.InternalAddr; addr != "" {
 		if index := strings.LastIndex(addr, ":"); index >= 0 && index+1 < len(addr) {
 			port = addr[index+1:]
 		}

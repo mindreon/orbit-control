@@ -4,15 +4,16 @@ import (
 	"crypto/subtle"
 	"net"
 	"net/http"
-	"os"
 	"strings"
+
+	"github.com/mindreon/orbit-control/internal/config"
 )
 
 const Header = "Authorization"
 
 // Token returns the shared internal service token, if configured.
 func Token() string {
-	return strings.TrimSpace(os.Getenv("ORBIT_INTERNAL_TOKEN"))
+	return config.Load().InternalToken
 }
 
 // Authorized reports whether the request carries a valid bearer token.

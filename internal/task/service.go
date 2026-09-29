@@ -7,14 +7,30 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/oklog/ulid/v2"
 	"sort"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+	lru "github.com/hashicorp/golang-lru/v2"
+
 	"github.com/mindreon/orbit-control/internal/orch"
 	"github.com/mindreon/orbit-control/internal/store"
 )
+
+// commandCacheLimit and seenEventCacheLimit bound the in-memory idempotency
+// and event-dedup tables so a long-lived process cannot grow them without limit.
+const (
+	commandCacheLimit   = 4096
+	seenEventCacheLimit = 16384
+)
+
+// commandRecord keeps the request hash and the cached response together, so
+// evicting one cannot leave a hash that replays an empty body.
+type commandRecord struct {
+	hash   string
+	result json.RawMessage
+}
 
 type Principal struct {
 	TenantID string
@@ -138,10 +154,9 @@ type Service struct {
 	events         map[string][]Event
 	subs           map[string]map[*subscriber]struct{}
 	seenMessage    map[string]map[string]uint64
-	commandHash    map[string]map[string]string
-	commandResult  map[string]map[string]json.RawMessage
+	commandCache   *lru.Cache[string, commandRecord]
 	nextSeq        map[string]uint64
-	seenEvents     map[string]map[string]struct{}
+	seenEvents     *lru.Cache[string, struct{}]
 	entityVersion  map[string]map[string]int64
 	profiles       map[string]map[string]Profile
 	manifests      map[string]ArtifactManifest
@@ -162,7 +177,9 @@ func NewWithProjection(client TaskClient, projection ProjectionStore) *Service {
 	return &Service{
 		orch: client, projection: projection, tasks: map[string]*Task{}, events: map[string][]Event{},
 		subs: map[string]map[*subscriber]struct{}{}, seenMessage: map[string]map[string]uint64{},
-		commandHash: map[string]map[string]string{}, commandResult: map[string]map[string]json.RawMessage{}, nextSeq: map[string]uint64{}, seenEvents: map[string]map[string]struct{}{}, entityVersion: map[string]map[string]int64{}, profiles: map[string]map[string]Profile{}, manifests: map[string]ArtifactManifest{}, maxEvents: 5000,
+		commandCache: mustCache[string, commandRecord](commandCacheLimit), nextSeq: map[string]uint64{},
+		seenEvents:    mustCache[string, struct{}](seenEventCacheLimit),
+		entityVersion: map[string]map[string]int64{}, profiles: map[string]map[string]Profile{}, manifests: map[string]ArtifactManifest{}, maxEvents: 5000,
 	}
 }
 
@@ -310,10 +327,7 @@ func (s *Service) Create(ctx context.Context, p Principal, in CreateInput) (*Tas
 	s.mu.Lock()
 	s.tasks[id] = t
 	s.seenMessage[id] = map[string]uint64{}
-	s.commandHash[id] = map[string]string{}
-	s.commandResult[id] = map[string]json.RawMessage{}
 	s.nextSeq[id] = 0
-	s.seenEvents[id] = map[string]struct{}{}
 	s.entityVersion[id] = map[string]int64{}
 	s.mu.Unlock()
 	// The durable task.created event comes from TaskWorkflow through the runtime outbox (09 §3).
@@ -388,17 +402,18 @@ func (s *Service) Update(ctx context.Context, p Principal, id, name, commandID s
 		return nil, err
 	}
 	hash := fmt.Sprintf("%x", sha256.Sum256(requestBytes))
+	key := commandKey(id, commandID)
 	s.mu.Lock()
-	if previous, ok := s.commandHash[id][commandID]; ok {
-		if previous != hash {
+	if previous, ok := s.commandCache.Get(key); ok {
+		if previous.hash != hash {
 			s.mu.Unlock()
 			return nil, ErrIdempotencyConflict
 		}
-		cached := append(json.RawMessage(nil), s.commandResult[id][commandID]...)
+		cached := append(json.RawMessage(nil), previous.result...)
 		s.mu.Unlock()
 		return cached, nil
 	}
-	s.commandHash[id][commandID] = hash
+	s.commandCache.Add(key, commandRecord{hash: hash})
 	s.mu.Unlock()
 	if s.orch != nil {
 		raw, err := s.orch.UpdateTask(ctx, p.TenantID, id, name, commandID, payload)
@@ -420,10 +435,16 @@ func (s *Service) Update(ctx context.Context, p Principal, id, name, commandID s
 func (s *Service) cacheCommandResult(taskID, commandID string, raw json.RawMessage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.commandResult[taskID] == nil {
-		s.commandResult[taskID] = map[string]json.RawMessage{}
+	key := commandKey(taskID, commandID)
+	record, ok := s.commandCache.Get(key)
+	if !ok {
+		// The hash entry was evicted before the response arrived. Drop the
+		// result instead of storing one with an empty hash, which would make
+		// the next retry look like a conflict.
+		return
 	}
-	s.commandResult[taskID][commandID] = append(json.RawMessage(nil), raw...)
+	record.result = append(json.RawMessage(nil), raw...)
+	s.commandCache.Add(key, record)
 }
 
 func (s *Service) Signal(ctx context.Context, p Principal, id, name string, payload any) error {
@@ -616,18 +637,15 @@ func (s *Service) appendEventRaw(ctx context.Context, event Event) error {
 			event.TenantID = task.TenantID
 		}
 	}
-	if s.seenEvents[event.TaskID] == nil {
-		s.seenEvents[event.TaskID] = map[string]struct{}{}
-	}
 	if s.entityVersion[event.TaskID] == nil {
 		s.entityVersion[event.TaskID] = map[string]int64{}
 	}
 	if event.EventID != "" {
-		if _, seen := s.seenEvents[event.TaskID][event.EventID]; seen {
+		if _, seen := s.seenEvents.Get(eventKey(event.TaskID, event.EventID)); seen {
 			s.mu.Unlock()
 			return nil
 		}
-		s.seenEvents[event.TaskID][event.EventID] = struct{}{}
+		s.seenEvents.Add(eventKey(event.TaskID, event.EventID), struct{}{})
 	}
 	if event.EntityKind != "" && event.EntityID != "" {
 		key := event.EntityKind + ":" + event.EntityID
@@ -657,7 +675,7 @@ func (s *Service) appendEventRaw(ctx context.Context, event Event) error {
 		projected, err := s.projection.AppendTaskEvent(ctx, event)
 		if err != nil {
 			s.mu.Lock()
-			delete(s.seenEvents[event.TaskID], event.EventID)
+			s.forgetEvent(event.TaskID, event.EventID)
 			s.mu.Unlock()
 			return err
 		}
@@ -743,7 +761,7 @@ func (s *Service) appendEventRaw(ctx context.Context, event Event) error {
 			} else {
 				s.tasks[event.TaskID] = previousTask
 			}
-			delete(s.seenEvents[event.TaskID], event.EventID)
+			s.forgetEvent(event.TaskID, event.EventID)
 			s.mu.Unlock()
 			return err
 		}
@@ -851,15 +869,6 @@ func (s *Service) cacheTask(task *Task) {
 	if s.seenMessage[task.ID] == nil {
 		s.seenMessage[task.ID] = map[string]uint64{}
 	}
-	if s.commandHash[task.ID] == nil {
-		s.commandHash[task.ID] = map[string]string{}
-	}
-	if s.commandResult[task.ID] == nil {
-		s.commandResult[task.ID] = map[string]json.RawMessage{}
-	}
-	if s.seenEvents[task.ID] == nil {
-		s.seenEvents[task.ID] = map[string]struct{}{}
-	}
 	if s.entityVersion[task.ID] == nil {
 		s.entityVersion[task.ID] = map[string]int64{}
 	}
@@ -937,6 +946,33 @@ func isClosed(status string) bool {
 	return status == "COMPLETED" || status == "FAILED" || status == "CANCELLED"
 }
 
-// newID is an identifier of the contract's shape: the prefix, then a 26 character Crockford ULID (time ordered, so
-// ids sort by creation).
-func newID(prefix string) string { return prefix + "_" + ulid.Make().String() }
+// newID is prefix plus a canonical 36-character UUIDv7 (task_018f...-....).
+// UUIDv7 is time-ordered, so ids created later sort after ids created earlier.
+func newID(prefix string) string { return prefix + "_" + mustUUIDv7() }
+
+func mustUUIDv7() string {
+	id, err := uuid.NewV7()
+	if err != nil {
+		panic(err)
+	}
+	return id.String()
+}
+
+func commandKey(taskID, commandID string) string { return taskID + "\x00" + commandID }
+
+func eventKey(taskID, eventID string) string { return taskID + "\x00" + eventID }
+
+func (s *Service) forgetEvent(taskID, eventID string) {
+	if eventID == "" {
+		return
+	}
+	s.seenEvents.Remove(eventKey(taskID, eventID))
+}
+
+func mustCache[K comparable, V any](size int) *lru.Cache[K, V] {
+	cache, err := lru.New[K, V](size)
+	if err != nil {
+		panic(err)
+	}
+	return cache
+}
