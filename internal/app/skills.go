@@ -96,7 +96,7 @@ func (a *App) SkillTextFiles(ctx context.Context, tenantID, handle, slug string)
 	if !ok {
 		return nil, store.ErrNotFound
 	}
-	files, known, err := a.Repo.GetSkillTextFiles(ctx, tenantID, id)
+	files, known, err := a.skillFiles(ctx, tenantID, id)
 	if err != nil {
 		return nil, err
 	}

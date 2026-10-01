@@ -52,8 +52,10 @@ func (s *Service) SetArtifactSigner(signer ArtifactSigner) {
 	s.artifactSigner = signer
 }
 
+// isClosed is true only for a cancelled task. A task is a conversation: COMPLETED means its plan is done for now, and the
+// next message starts another round.
 func isClosed(status string) bool {
-	return status == "COMPLETED" || status == "FAILED" || status == "CANCELLED"
+	return status == "CANCELLED"
 }
 
 // newID is prefix plus a canonical 36-character UUIDv7 (task_018f...-....).

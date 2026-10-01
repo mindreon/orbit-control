@@ -29,6 +29,7 @@ import (
 	"github.com/mindreon/orbit-control/internal/internalauth"
 	"github.com/mindreon/orbit-control/internal/msmarket"
 	"github.com/mindreon/orbit-control/internal/orch"
+	"github.com/mindreon/orbit-control/internal/skillstore"
 	"github.com/mindreon/orbit-control/internal/store"
 	taskruntime "github.com/mindreon/orbit-control/internal/task"
 )
@@ -216,6 +217,13 @@ func Handlers() (public, internal http.Handler, closeStore func(), err error) {
 		}
 		opts.TaskClient = oc
 	}
+	// A skills directory that is set but unusable stops the start: an empty library would hide the mistake.
+	skills, err := skillstore.Open(cfg.SkillsDir)
+	if err != nil {
+		repo.Close()
+		return nil, nil, nil, errors.New("skills directory: " + err.Error())
+	}
+	opts.Skills = skills
 	runtime := app.NewWithOptions(opts)
 	projectorCtx, projectorCancel := context.WithCancel(context.Background())
 	if outbox, ok := repo.(taskruntime.OutboxStore); ok {

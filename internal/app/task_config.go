@@ -101,7 +101,7 @@ func (a *App) checkSkill(ctx context.Context, tenantID, skillID string) error {
 		}
 		return err
 	}
-	files, known, err := a.Repo.GetSkillTextFiles(ctx, tenantID, skillID)
+	files, known, err := a.skillFiles(ctx, tenantID, skillID)
 	if err != nil {
 		return err
 	}
@@ -126,7 +126,8 @@ func skillUsable(files []store.SkillFile) bool {
 				return false
 			}
 		}
-		if strings.EqualFold(path.Base(name), "SKILL.md") {
+		// AgentScope loads a skill from a file named exactly SKILL.md at its root; the worker needs the same.
+		if name == "SKILL.md" {
 			hasSkillMd = true
 		}
 	}
@@ -156,7 +157,7 @@ func (a *App) SkillBundleForWorker(ctx context.Context, tenantID, handle, slug s
 	if err != nil {
 		return SkillBundle{}, err
 	}
-	files, known, err := a.Repo.GetSkillTextFiles(ctx, tenantID, skillID)
+	files, known, err := a.skillFiles(ctx, tenantID, skillID)
 	if err != nil {
 		return SkillBundle{}, err
 	}

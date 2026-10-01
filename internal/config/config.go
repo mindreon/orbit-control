@@ -58,6 +58,10 @@ type Config struct {
 	// (ORBIT_CATALOG_DIR). Without it the skill catalog runs without file text.
 	CatalogDir string
 
+	// SkillsDir is the skill library (ORBIT_SKILLS_DIR): <dir>/<handle>/<slug>/SKILL.md and the files beside it. A skill
+	// found there is served from disk; it is how skills are updated without re-importing anything.
+	SkillsDir string
+
 	TaskMembers     []string
 	TaskMemberID    string
 	InternalMembers []string
@@ -122,6 +126,7 @@ func Load() Config {
 		TemporalTaskQueue: strings.TrimSpace(v.GetString("TEMPORAL_TASK_QUEUE")),
 
 		CatalogDir: strings.TrimSpace(v.GetString("ORBIT_CATALOG_DIR")),
+		SkillsDir:  strings.TrimSpace(v.GetString("ORBIT_SKILLS_DIR")),
 
 		TaskMembers:              SplitCSV(v.GetString("ORBIT_CONTROL_MEMBERS")),
 		TaskMemberID:             strings.TrimSpace(v.GetString("ORBIT_CONTROL_MEMBER_ID")),

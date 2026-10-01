@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/mindreon/orbit-control/internal/skillstore"
 	"github.com/mindreon/orbit-control/internal/store"
 	"github.com/mindreon/orbit-control/internal/store/memstore"
 	taskruntime "github.com/mindreon/orbit-control/internal/task"
@@ -50,6 +51,8 @@ type Options struct {
 	Tasks            *taskruntime.Service
 	TaskClient       taskruntime.TaskClient
 	ArtifactSigner   taskruntime.ArtifactSigner
+	// Skills is the skill library on disk, if one is configured.
+	Skills *skillstore.Store
 }
 
 type App struct {
@@ -60,6 +63,7 @@ type App struct {
 	ArtifactMaxBytes int64
 	IngestMaxBytes   int64
 	Tasks            *taskruntime.Service
+	Skills           *skillstore.Store
 }
 
 func NewWithOptions(opts Options) *App {
@@ -83,6 +87,7 @@ func NewWithOptions(opts Options) *App {
 		ArtifactMaxBytes: opts.ArtifactMaxBytes,
 		IngestMaxBytes:   ingestMaxBytes(),
 		Tasks:            opts.Tasks,
+		Skills:           opts.Skills,
 	}
 	if a.Tasks == nil {
 		projection, _ := opts.Repo.(taskruntime.ProjectionStore)
