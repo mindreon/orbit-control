@@ -29,6 +29,8 @@ type mcpMarketServerRow struct {
 	Verified     bool
 	Hosted       bool
 	NeedsOnline  bool
+	Source       string
+	IconURL      string
 	Rank         int
 }
 
@@ -68,6 +70,8 @@ type mcpMarketListRow struct {
 	Verified     bool
 	Hosted       bool
 	NeedsOnline  bool
+	Source       string
+	IconURL      string
 	Rank         int
 	License      string
 	UpdatedOn    string
@@ -79,12 +83,12 @@ func (r mcpMarketListRow) record() store.McpMarketRecord {
 	return store.McpMarketRecord{
 		ID: r.ID, Name: r.Name, Summary: r.Summary, Author: r.Author, Category: r.Category, CategoryName: r.CategoryName,
 		CategoryMore: r.CategoryMore, Calls: r.Calls, Views: r.Views, Stars: r.Stars, Verified: r.Verified, Hosted: r.Hosted,
-		NeedsOnline: r.NeedsOnline, Rank: r.Rank,
+		NeedsOnline: r.NeedsOnline, Source: r.Source, IconURL: r.IconURL, Rank: r.Rank,
 	}
 }
 
 const mcpMarketSelect = `s.id, s.name, s.summary, s.author, s.category, COALESCE(c.name, '') AS category_name,
-	s.category_more, s.calls, s.views, s.stars, s.verified, s.hosted, s.needs_online, s.rank`
+	s.category_more, s.calls, s.views, s.stars, s.verified, s.hosted, s.needs_online, s.source, s.icon_url, s.rank`
 
 func mcpServers(tx *gorm.DB) *gorm.DB {
 	return tx.Table("mcp_market_servers AS s").Joins("LEFT JOIN mcp_market_categories c ON c.key = s.category")
@@ -208,7 +212,8 @@ func (s *Store) ReplaceMcpMarket(ctx context.Context, tenantID string, servers [
 		known[row.ID] = struct{}{}
 		serverRows = append(serverRows, mcpMarketServerRow{
 			ID: row.ID, Name: row.Name, Summary: row.Summary, Author: row.Author, Category: row.Category, CategoryMore: row.CategoryMore,
-			Calls: row.Calls, Views: row.Views, Stars: row.Stars, Verified: row.Verified, Hosted: row.Hosted, NeedsOnline: row.NeedsOnline, Rank: row.Rank,
+			Calls: row.Calls, Views: row.Views, Stars: row.Stars, Verified: row.Verified, Hosted: row.Hosted,
+			NeedsOnline: row.NeedsOnline, Source: row.Source, IconURL: row.IconURL, Rank: row.Rank,
 		})
 	}
 	detailRows := make([]mcpMarketDetailRow, 0, len(details))
@@ -285,6 +290,9 @@ func mcpMarketFilter(q store.McpMarketQuery, withSearch bool) func(*gorm.DB) *go
 			tx = tx.Where("s.hosted")
 		case "local":
 			tx = tx.Where("NOT s.hosted")
+		}
+		if q.Source != "" {
+			tx = tx.Where("s.source = ?", q.Source)
 		}
 		if q.Keyword != "" {
 			like := likeContains(q.Keyword)

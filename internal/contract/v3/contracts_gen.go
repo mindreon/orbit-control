@@ -130,6 +130,7 @@ const (
 	UpdateRejectCodeApprovalAlreadyDecided UpdateRejectCode = "APPROVAL_ALREADY_DECIDED"
 	UpdateRejectCodeInvalidTransition      UpdateRejectCode = "INVALID_TRANSITION"
 	UpdateRejectCodeNotAllowed             UpdateRejectCode = "NOT_ALLOWED"
+	UpdateRejectCodeConfigVersionConflict  UpdateRejectCode = "CONFIG_VERSION_CONFLICT"
 )
 
 // WorkspaceAccess is a named string set from the contract.
@@ -405,10 +406,11 @@ type AttemptStartedEvent struct {
 }
 
 type AttemptStartedPayload struct {
-	AttemptID string `json:"attempt_id"`
-	AttemptNo int64  `json:"attempt_no"`
-	NodeID    string `json:"node_id"`
-	Profile   string `json:"profile"`
+	AttemptID     string `json:"attempt_id"`
+	AttemptNo     int64  `json:"attempt_no"`
+	ConfigVersion *int64 `json:"config_version,omitempty"`
+	NodeID        string `json:"node_id"`
+	Profile       string `json:"profile"`
 }
 
 // Limits. A missing field means no limit at this level.
@@ -531,6 +533,20 @@ type CompletionRejected struct {
 	Status string           `json:"status,omitempty"`
 }
 
+// An MCP connector as the worker connects to it (15 M8): names and launch targets, never secret values.
+// Control resolves the tenant's connector to this when the configuration is set, so a running task keeps the
+// connector it was given even if the tenant's list changes.
+type ConnectorSnapshot struct {
+	Args       []string    `json:"args,omitempty"`
+	Command    *string     `json:"command,omitempty"`
+	EnvRefs    []string    `json:"env_refs,omitempty"`
+	HeaderRefs []HeaderRef `json:"header_refs,omitempty"`
+	ID         string      `json:"id"`
+	Name       string      `json:"name"`
+	Transport  *string     `json:"transport,omitempty"`
+	URL        *string     `json:"url,omitempty"`
+}
+
 type DecideApprovalInput struct {
 	ApprovalID string  `json:"approval_id"`
 	CommandID  string  `json:"command_id"`
@@ -606,6 +622,11 @@ type GrantBudgetInput struct {
 
 type GrantBudgetResult struct {
 	Budgets Budget `json:"budgets"`
+}
+
+type HeaderRef struct {
+	Env  string `json:"env"`
+	Name string `json:"name"`
 }
 
 type HeartbeatEvent struct {
@@ -923,6 +944,42 @@ type TaskCompletedEvent struct {
 	Visibility *string           `json:"visibility,omitempty"`
 }
 
+// What a task runs with, beside its goal (15 M8). `expert` replaces the task's profile for nodes that do not
+// name their own; `skills` and `connectors` are the complete sets to use, and None means the expert's defaults.
+// A change takes effect from the next attempt, never in the one that is running (11 §3).
+type TaskConfig struct {
+	ConfigVersion *int64              `json:"config_version,omitempty"`
+	Connectors    []ConnectorSnapshot `json:"connectors,omitempty"`
+	Expert        *string             `json:"expert,omitempty"`
+	Mode          *string             `json:"mode,omitempty"`
+	Skills        []string            `json:"skills,omitempty"`
+	Team          *Team               `json:"team,omitempty"`
+}
+
+type TaskConfigChangedEvent struct {
+	AfterSeq   *int64                   `json:"after_seq,omitempty"`
+	Entity     EntityRef                `json:"entity"`
+	EventID    string                   `json:"event_id"`
+	OccurredAt time.Time                `json:"occurred_at"`
+	Payload    TaskConfigChangedPayload `json:"payload"`
+	Retention  string                   `json:"retention,omitempty"`
+	Schema     string                   `json:"schema,omitempty"`
+	Seq        *int64                   `json:"seq,omitempty"`
+	Source     EventSource              `json:"source"`
+	TaskID     string                   `json:"task_id"`
+	Type       string                   `json:"type,omitempty"`
+	Visibility *string                  `json:"visibility,omitempty"`
+}
+
+// What the task runs with from its next attempt on. Connector ids only: the launch targets stay out of events.
+type TaskConfigChangedPayload struct {
+	ConfigVersion int64    `json:"config_version"`
+	ConnectorIDs  []string `json:"connector_ids,omitempty"`
+	Expert        *string  `json:"expert,omitempty"`
+	Mode          string   `json:"mode"`
+	Skills        []string `json:"skills,omitempty"`
+}
+
 // Updates “pause“, “resume“, “cancel“, “takeover“ and “handback“.
 type TaskControlInput struct {
 	Action    string  `json:"action"`
@@ -994,18 +1051,20 @@ type TaskStatusChangedPayload struct {
 
 // Query “getTaskView“.
 type TaskView struct {
-	Budgets          Budget     `json:"budgets"`
-	PendingApprovals []string   `json:"pending_approvals,omitempty"`
-	PlanVersion      int64      `json:"plan_version"`
-	Status           TaskStatus `json:"status"`
-	TaskID           string     `json:"task_id"`
-	Usage            *Usage     `json:"usage,omitempty"`
+	Budgets          Budget      `json:"budgets"`
+	Config           *TaskConfig `json:"config,omitempty"`
+	PendingApprovals []string    `json:"pending_approvals,omitempty"`
+	PlanVersion      int64       `json:"plan_version"`
+	Status           TaskStatus  `json:"status"`
+	TaskID           string      `json:"task_id"`
+	Usage            *Usage      `json:"usage,omitempty"`
 }
 
 // Start input of “TaskWorkflow“; id “task/{tenant_id}/{task_id}“.
 type TaskWorkflowInput struct {
 	Budgets                 Budget                     `json:"budgets"`
 	Carry                   map[string]json.RawMessage `json:"carry,omitempty"`
+	Config                  *TaskConfig                `json:"config,omitempty"`
 	CreatedBy               Actor                      `json:"created_by"`
 	Goal                    string                     `json:"goal"`
 	Mode                    *string                    `json:"mode,omitempty"`
@@ -1016,6 +1075,20 @@ type TaskWorkflowInput struct {
 	TaskID                  string                     `json:"task_id"`
 	TenantID                string                     `json:"tenant_id"`
 	Title                   string                     `json:"title"`
+}
+
+// A leader and members. The leader's expert plans the task; a node the leader gives to a role runs as that member's
+// expert, and one it gives to nobody runs as the leader. Teams do not nest (07 §1: depth 1).
+type Team struct {
+	Leader  string       `json:"leader"`
+	Members []TeamMember `json:"members"`
+}
+
+// One member of a team (15 M8, T8.6): a role the leader can give work to, and the expert who does it.
+type TeamMember struct {
+	Description *string `json:"description,omitempty"`
+	Expert      string  `json:"expert"`
+	Role        string  `json:"role"`
 }
 
 type TeamStageNode struct {
@@ -1145,6 +1218,23 @@ type UpdateNodeOp struct {
 	NodeID string    `json:"node_id"`
 	Op     string    `json:"op,omitempty"`
 	Patch  NodePatch `json:"patch"`
+}
+
+// Replaces the task's configuration. `base_config_version` is the version the caller read; a newer one in
+// place means the caller decided on stale data and gets CONFIG_VERSION_CONFLICT.
+type UpdateTaskConfigInput struct {
+	BaseConfigVersion int64               `json:"base_config_version"`
+	CommandID         string              `json:"command_id"`
+	Connectors        []ConnectorSnapshot `json:"connectors,omitempty"`
+	Expert            *string             `json:"expert,omitempty"`
+	Mode              *string             `json:"mode,omitempty"`
+	Skills            []string            `json:"skills,omitempty"`
+	Team              *Team               `json:"team,omitempty"`
+}
+
+type UpdateTaskConfigResult struct {
+	ConfigVersion int64  `json:"config_version"`
+	Effective     string `json:"effective,omitempty"`
 }
 
 type Usage struct {
@@ -1323,6 +1413,7 @@ type Event struct {
 	ProfileSwitchedEvent      *ProfileSwitchedEvent
 	TaskCancelledEvent        *TaskCancelledEvent
 	TaskCompletedEvent        *TaskCompletedEvent
+	TaskConfigChangedEvent    *TaskConfigChangedEvent
 	TaskCreatedEvent          *TaskCreatedEvent
 	TaskFailedEvent           *TaskFailedEvent
 	TaskStatusChangedEvent    *TaskStatusChangedEvent
@@ -1356,6 +1447,7 @@ const (
 	EventTagProfileSwitched         = "profile.switched"
 	EventTagTaskCancelled           = "task.cancelled"
 	EventTagTaskCompleted           = "task.completed"
+	EventTagTaskConfigChanged       = "task.config_changed"
 	EventTagTaskCreated             = "task.created"
 	EventTagTaskFailed              = "task.failed"
 	EventTagTaskStatusChanged       = "task.status_changed"
@@ -1412,6 +1504,8 @@ func (u Event) Tag() string {
 		return "task.cancelled"
 	case u.TaskCompletedEvent != nil:
 		return "task.completed"
+	case u.TaskConfigChangedEvent != nil:
+		return "task.config_changed"
 	case u.TaskCreatedEvent != nil:
 		return "task.created"
 	case u.TaskFailedEvent != nil:
@@ -1519,6 +1613,10 @@ func (u Event) MarshalJSON() ([]byte, error) {
 	case u.TaskCompletedEvent != nil:
 		v := *u.TaskCompletedEvent
 		v.Type = "task.completed"
+		return json.Marshal(v)
+	case u.TaskConfigChangedEvent != nil:
+		v := *u.TaskConfigChangedEvent
+		v.Type = "task.config_changed"
 		return json.Marshal(v)
 	case u.TaskCreatedEvent != nil:
 		v := *u.TaskCreatedEvent
@@ -1694,6 +1792,12 @@ func (u *Event) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("contract: decode Event task.completed: %w", err)
 		}
 		*u = Event{TaskCompletedEvent: &v}
+	case "task.config_changed":
+		var v TaskConfigChangedEvent
+		if err := json.Unmarshal(data, &v); err != nil {
+			return fmt.Errorf("contract: decode Event task.config_changed: %w", err)
+		}
+		*u = Event{TaskConfigChangedEvent: &v}
 	case "task.created":
 		var v TaskCreatedEvent
 		if err := json.Unmarshal(data, &v); err != nil {
@@ -1777,6 +1881,7 @@ var EventRetention = map[string]string{
 	"profile.switched":          "durable",
 	"task.cancelled":            "durable",
 	"task.completed":            "durable",
+	"task.config_changed":       "durable",
 	"task.created":              "durable",
 	"task.failed":               "durable",
 	"task.status_changed":       "durable",
@@ -2113,4 +2218,6 @@ var contractFactories = map[string]func() any{
 	"TaskNodeDraft":              func() any { return new(TaskNodeDraft) },
 	"TaskView":                   func() any { return new(TaskView) },
 	"TaskWorkflowInput":          func() any { return new(TaskWorkflowInput) },
+	"UpdateTaskConfigInput":      func() any { return new(UpdateTaskConfigInput) },
+	"UpdateTaskConfigResult":     func() any { return new(UpdateTaskConfigResult) },
 }

@@ -37,6 +37,8 @@ func registerTaskRoutes(router gin.IRoutes, runtime *app.App, authed func(princi
 			writeErr(w, http.StatusNotFound, "NOT_FOUND", "task not found")
 		case errors.Is(err, taskruntime.ErrClosed):
 			writeErr(w, http.StatusConflict, "TASK_CLOSED", "task is closed")
+		case errors.Is(err, taskruntime.ErrConfigConflict):
+			writeErr(w, http.StatusConflict, "CONFIG_VERSION_CONFLICT", "the task's configuration changed since it was read; read it and retry")
 		case errors.Is(err, taskruntime.ErrIdempotencyConflict):
 			writeErr(w, http.StatusConflict, "IDEMPOTENCY_KEY_REUSED", "command id was already used with a different request")
 		case errors.Is(err, taskruntime.ErrCommandInProgress):
@@ -91,6 +93,89 @@ func registerTaskRoutes(router gin.IRoutes, runtime *app.App, authed func(princi
 		}
 		writeJSON(w, http.StatusOK, profile)
 	}))
+	writeExpertErr := func(w http.ResponseWriter, err error) {
+		switch {
+		case errors.Is(err, taskruntime.ErrNotFound):
+			writeErr(w, http.StatusNotFound, "NOT_FOUND", "expert not found")
+		case errors.Is(err, taskruntime.ErrIdempotencyConflict):
+			writeErr(w, http.StatusConflict, "EXPERT_VERSION_TAKEN", "another update took the next version; read the expert and retry")
+		default:
+			writeTaskErr(w, err)
+		}
+	}
+	type expertBody struct {
+		Name         string   `json:"name"`
+		Instructions string   `json:"instructions"`
+		Model        string   `json:"model"`
+		ConnectorIDs []string `json:"connector_ids"`
+		SkillIDs     []string `json:"skill_ids"`
+	}
+	expertInput := func(b expertBody) app.ExpertInput {
+		return app.ExpertInput{Name: b.Name, Instructions: b.Instructions, Model: b.Model, ConnectorIDs: b.ConnectorIDs, SkillIDs: b.SkillIDs}
+	}
+	router.GET("/v1/experts", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		items, err := runtime.ListExperts(r.Context(), toPrincipal(p))
+		if err != nil {
+			writeExpertErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	}))
+	router.POST("/v1/experts", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		var body expertBody
+		if !bindJSON(w, r, &body) {
+			return
+		}
+		expert, err := runtime.CreateExpert(r.Context(), toPrincipal(p), expertInput(body))
+		if err != nil {
+			writeExpertErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, expert)
+	}))
+	router.POST("/v1/experts/from-agent", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		var body struct {
+			Handle string `json:"handle"`
+			Slug   string `json:"slug"`
+		}
+		if !bindJSON(w, r, &body) {
+			return
+		}
+		imported, err := runtime.ExpertFromAgent(r.Context(), toPrincipal(p), body.Handle, body.Slug)
+		if err != nil {
+			writeExpertErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, imported)
+	}))
+	router.POST("/v1/experts/import-personas", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		imported, skipped, err := runtime.ImportPersonas(r.Context(), toPrincipal(p))
+		if err != nil {
+			writeExpertErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]int{"imported": imported, "skipped": skipped})
+	}))
+	router.GET("/v1/experts/:expertId", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		expert, err := runtime.GetExpert(r.Context(), toPrincipal(p), r.PathValue("expertId"))
+		if err != nil {
+			writeExpertErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, expert)
+	}))
+	router.PUT("/v1/experts/:expertId", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		var body expertBody
+		if !bindJSON(w, r, &body) {
+			return
+		}
+		expert, err := runtime.UpdateExpert(r.Context(), toPrincipal(p), r.PathValue("expertId"), expertInput(body))
+		if err != nil {
+			writeExpertErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, expert)
+	}))
 	router.GET("/v1/policy", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		policy, err := runtime.Tasks.GetTenantPolicy(r.Context(), toPrincipal(p))
 		if err != nil {
@@ -144,11 +229,22 @@ func registerTaskRoutes(router gin.IRoutes, runtime *app.App, authed func(princi
 			SOP     string             `json:"sop"`
 			Budgets map[string]any     `json:"budgets"`
 			Policy  taskruntime.Policy `json:"policy"`
+			Config  *taskConfigBody    `json:"config"`
 		}
 		if !bindJSON(w, r, &body) {
 			return
 		}
-		t, err := runtime.Tasks.Create(r.Context(), toPrincipal(p), taskruntime.CreateInput{Title: body.Title, Goal: body.Goal, Mode: body.Mode, Profile: body.Profile, SOP: body.SOP, Budgets: body.Budgets, Policy: body.Policy})
+		input := taskruntime.CreateInput{Title: body.Title, Goal: body.Goal, Mode: body.Mode, Profile: body.Profile, SOP: body.SOP, Budgets: body.Budgets, Policy: body.Policy}
+		if body.Config != nil {
+			// Resolved before the task exists, so a refusal leaves nothing behind.
+			resolved, err := runtime.ResolveTaskConfig(r.Context(), toPrincipal(p), body.Config.request())
+			if err != nil {
+				writeTaskErr(w, err)
+				return
+			}
+			input.Config = &resolved
+		}
+		t, err := runtime.Tasks.Create(r.Context(), toPrincipal(p), input)
 		if err != nil {
 			writeTaskErr(w, err)
 			return
@@ -162,6 +258,39 @@ func registerTaskRoutes(router gin.IRoutes, runtime *app.App, authed func(princi
 			return
 		}
 		writeJSON(w, http.StatusOK, t)
+	}))
+	router.GET("/v1/tasks/:taskId/config", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		view, err := runtime.Tasks.TaskConfig(r.Context(), toPrincipal(p), r.PathValue("taskId"))
+		if err != nil {
+			writeTaskErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, view)
+	}))
+	router.PUT("/v1/tasks/:taskId/config", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		var body struct {
+			taskConfigBody
+			CommandID         string `json:"command_id"`
+			BaseConfigVersion int    `json:"base_config_version"`
+		}
+		if !bindJSON(w, r, &body) {
+			return
+		}
+		if body.BaseConfigVersion < 1 {
+			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "base_config_version is required: the version you read")
+			return
+		}
+		resolved, err := runtime.ResolveTaskConfig(r.Context(), toPrincipal(p), body.taskConfigBody.request())
+		if err != nil {
+			writeTaskErr(w, err)
+			return
+		}
+		result, err := runtime.Tasks.UpdateTaskConfig(r.Context(), toPrincipal(p), r.PathValue("taskId"), commandID(body.CommandID), body.BaseConfigVersion, resolved)
+		if err != nil {
+			writeTaskErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
 	}))
 	router.GET("/v1/tasks/:taskId/plan", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		plan, err := runtime.Tasks.Plan(r.Context(), toPrincipal(p), r.PathValue("taskId"))
@@ -343,4 +472,17 @@ func stringValue(body map[string]any, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+// taskConfigBody is the configuration as a request states it. A list that is absent or null keeps the expert's
+// defaults; an empty one removes them, which encoding/json keeps apart (nil against an empty slice).
+type taskConfigBody struct {
+	Expert       string   `json:"expert"`
+	Skills       []string `json:"skills"`
+	ConnectorIDs []string `json:"connector_ids"`
+	Mode         string   `json:"mode"`
+}
+
+func (b taskConfigBody) request() app.TaskConfigRequest {
+	return app.TaskConfigRequest{Expert: b.Expert, Skills: b.Skills, ConnectorIDs: b.ConnectorIDs, Mode: b.Mode}
 }

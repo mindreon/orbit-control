@@ -31,14 +31,3 @@ func TestIngestMaxFallsBack(t *testing.T) {
 		t.Fatalf("ingest max = %d, want %d", got, defaultIngestMax)
 	}
 }
-
-func TestSkillHubSyncDefaultsOn(t *testing.T) {
-	t.Setenv("ORBIT_SKILLHUB_SYNC", "")
-	if !Load().SkillHubSync {
-		t.Fatal("sync should stay on when unset")
-	}
-	t.Setenv("ORBIT_SKILLHUB_SYNC", "0")
-	if Load().SkillHubSync {
-		t.Fatal("sync should turn off only for 0")
-	}
-}

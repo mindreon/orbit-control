@@ -28,6 +28,16 @@ func (s *Service) Create(ctx context.Context, p Principal, in CreateInput) (*Tas
 		return nil, err
 	}
 	in.Policy = in.Policy.normalized()
+	config := ConfigInput{Mode: "default"}
+	if in.Config != nil {
+		var err error
+		if config, err = in.Config.normalized(); err != nil {
+			return nil, err
+		}
+		if in.Profile == "default@1" && config.Expert != "" {
+			in.Profile = config.Expert
+		}
+	}
 	id := newID("task")
 	now := time.Now().UTC()
 	t := &Task{ID: id, TenantID: p.TenantID, WorkflowID: orch.TaskWorkflowID(p.TenantID, id), Title: in.Title,
@@ -43,13 +53,14 @@ func (s *Service) Create(ctx context.Context, p Principal, in CreateInput) (*Tas
 	s.seenMessage[id] = map[string]uint64{}
 	s.nextSeq[id] = 0
 	s.entityVersion[id] = map[string]int64{}
+	s.configs[id] = localConfig{version: 1, input: config}
 	s.mu.Unlock()
 	// The durable task.created event comes from TaskWorkflow through the runtime outbox (09 §3).
 	if s.orch != nil {
 		_, err := s.orch.StartTask(ctx, orch.TaskWorkflowInput{
 			TaskID: id, TenantID: p.TenantID, CreatedBy: map[string]any{"kind": "user", "id": p.UserID},
 			Title: in.Title, Goal: in.Goal, Mode: in.Mode, Profile: in.Profile, SOP: in.SOP,
-			NodeTypeRegistryVersion: 1, Budgets: in.Budgets, Policy: in.Policy,
+			NodeTypeRegistryVersion: 1, Budgets: in.Budgets, Policy: in.Policy, Config: config.workflowConfig(1),
 		})
 		if err != nil {
 			// The durable task exists even if Temporal is temporarily unavailable;

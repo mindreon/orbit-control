@@ -4,8 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
+
+	"github.com/mindreon/orbit-control/internal/orch"
 )
 
 func (s *Service) Update(ctx context.Context, p Principal, id, name, commandID string, payload any) (json.RawMessage, error) {
@@ -14,7 +17,7 @@ func (s *Service) Update(ctx context.Context, p Principal, id, name, commandID s
 		return nil, err
 	}
 	s.mu.Lock()
-	if isClosed(t.Status) && name == "sendMessage" {
+	if isClosed(t.Status) && (name == "sendMessage" || name == "updateTaskConfig") {
 		s.mu.Unlock()
 		return nil, ErrClosed
 	}
@@ -37,7 +40,7 @@ func (s *Service) Update(ctx context.Context, p Principal, id, name, commandID s
 	raw, err := s.runUpdate(ctx, p, id, name, commandID, payload)
 	if err != nil {
 		s.releaseCommand(ctx, p.TenantID, key, owner)
-		return nil, err
+		return nil, mapOrchErr(err)
 	}
 	if err := s.ledger.CompleteCommand(ctx, p.TenantID, key, owner, raw); err != nil {
 		// The workflow accepted the command. Give the claim up so a retry with the same command_id does not have to
@@ -51,6 +54,9 @@ func (s *Service) Update(ctx context.Context, p Principal, id, name, commandID s
 // runUpdate sends the command to the workflow. Without an orchestrator the local projection stays usable in dev and
 // during an orchestrator restart; the durable event projector replaces it when connected.
 func (s *Service) runUpdate(ctx context.Context, p Principal, id, name, commandID string, payload any) (json.RawMessage, error) {
+	if config, ok := payload.(map[string]any); ok && name == "updateTaskConfig" {
+		return s.runConfigUpdate(ctx, p, id, commandID, config)
+	}
 	if s.orch != nil {
 		raw, err := s.orch.UpdateTask(ctx, p.TenantID, id, name, commandID, payload)
 		if err != nil {
@@ -79,4 +85,12 @@ func (s *Service) Signal(ctx context.Context, p Principal, id, name string, payl
 		return s.orch.SignalTask(ctx, p.TenantID, id, name, payload)
 	}
 	return nil
+}
+
+// mapOrchErr turns what the workflow's validators refuse with into the errors the API answers by.
+func mapOrchErr(err error) error {
+	if errors.Is(err, orch.ErrTaskClosed) {
+		return ErrClosed
+	}
+	return err
 }

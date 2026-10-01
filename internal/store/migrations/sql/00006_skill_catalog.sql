@@ -43,6 +43,5 @@ REVOKE TRUNCATE, REFERENCES, TRIGGER ON skill_categories, skill_catalog FROM orb
 
 -- +goose Down
 
-REVOKE ALL ON skill_categories, skill_catalog FROM orbit_app;
-DROP TABLE skill_catalog;
-DROP TABLE skill_categories;
+-- This migration was about the old skill catalog table. 00020 replaced it (and its Down drops the new one), so there is
+-- nothing left to undo here.

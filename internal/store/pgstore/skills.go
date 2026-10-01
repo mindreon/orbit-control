@@ -13,62 +13,62 @@ import (
 	"github.com/mindreon/orbit-control/internal/store"
 )
 
-// skill_catalog and skill_categories are shared marketplace metadata. They are not tenant tables: statements do not
-// filter by tenant_id, and no tenant GUC is set. tenantID is still required so a caller without a tenant cannot use
-// the repository.
+// skill_catalog and skill_categories are shared marketplace metadata (the
+// ModelScope snapshot). They are not tenant tables: statements do not filter
+// by tenant_id, and no tenant GUC is set. tenantID is still required so a
+// caller without a tenant cannot use the repository.
 
 type skillRow struct {
-	ID                string `gorm:"primaryKey"`
-	Slug              string
-	Handle            string
-	Name              string
-	Description       string
-	Category          string
-	IconURL           string
-	Downloads         int64
-	Stars             int64
-	Source            string
-	Version           string
-	NeedsUpstreamAuth bool
-	Paid              bool
-	Score             float64
-	UpdatedAt         time.Time `gorm:"autoUpdateTime:false"`
-	SyncedAt          time.Time `gorm:"autoUpdateTime:false"`
-	TrendingRank      int
-	TextFiles         []byte `gorm:"type:jsonb"`
-	DetailCopy        []byte `gorm:"type:jsonb"`
+	ID            string `gorm:"primaryKey"`
+	Handle        string
+	Slug          string
+	Name          string
+	Description   string
+	DescriptionEn string
+	Category      string
+	Tags          []byte `gorm:"type:jsonb"`
+	License       string
+	IconURL       string
+	SourceURL     string
+	Downloads     int64
+	Visits        int64
+	Likes         int64
+	UpdatedAt     time.Time `gorm:"autoUpdateTime:false"`
+	Source        string
+	TextFiles     []byte    `gorm:"type:jsonb"`
+	InstalledAt   time.Time `gorm:"autoUpdateTime:false"`
 }
 
 func (skillRow) TableName() string { return "skill_catalog" }
 
-// skillListRow is a catalog row with the label of its category: only what a list shows, flat (gorm skips embedded
-// structs of unexported type).
+// skillListRow is a catalog row with the label of its category: only what a
+// list shows, flat (gorm skips embedded structs of unexported type).
 type skillListRow struct {
-	ID                string
-	Slug              string
-	Handle            string
-	Name              string
-	Description       string
-	Category          string
-	CategoryName      string
-	IconURL           string
-	Downloads         int64
-	Stars             int64
-	Source            string
-	Version           string
-	NeedsUpstreamAuth bool
-	Paid              bool
-	Score             float64
-	UpdatedAt         time.Time
-	TrendingRank      int
+	ID            string
+	Handle        string
+	Slug          string
+	Name          string
+	Description   string
+	DescriptionEn string
+	Category      string
+	CategoryName  string
+	Tags          []byte
+	License       string
+	IconURL       string
+	SourceURL     string
+	Downloads     int64
+	Visits        int64
+	Likes         int64
+	UpdatedAt     time.Time
+	Source        string
 }
 
 func (r skillListRow) record() store.SkillRecord {
 	return store.SkillRecord{
-		ID: r.ID, Slug: r.Slug, Handle: r.Handle, Name: r.Name, Description: r.Description, Category: r.Category,
-		CategoryName: r.CategoryName, IconURL: r.IconURL, Downloads: r.Downloads, Stars: r.Stars, Source: r.Source,
-		Version: r.Version, RequiresAPIKey: r.NeedsUpstreamAuth, Paid: r.Paid, Score: r.Score, UpdatedAt: r.UpdatedAt,
-		TrendingRank: r.TrendingRank,
+		ID: r.ID, Handle: r.Handle, Slug: r.Slug, Name: r.Name, Description: r.Description, DescriptionEn: r.DescriptionEn,
+		Category: r.Category, CategoryName: r.CategoryName, Tags: decodeStrings(r.Tags), License: r.License,
+		IconURL: r.IconURL, SourceURL: r.SourceURL, Downloads: r.Downloads, Visits: r.Visits, Likes: r.Likes,
+		UpdatedAt: r.UpdatedAt, Source: r.Source,
 	}
 }
 
@@ -81,8 +81,9 @@ type skillCategoryRow struct {
 
 func (skillCategoryRow) TableName() string { return "skill_categories" }
 
-const skillSelect = `s.id, s.slug, s.handle, s.name, s.description, s.category, COALESCE(c.name, '') AS category_name,
-	s.icon_url, s.downloads, s.stars, s.source, s.version, s.needs_upstream_auth, s.paid, s.score, s.updated_at, s.trending_rank`
+const skillSelect = `s.id, s.handle, s.slug, s.name, s.description, s.description_en, s.category,
+	COALESCE(c.name, '') AS category_name, s.tags, s.license, s.icon_url, s.source_url,
+	s.downloads, s.visits, s.likes, s.updated_at, s.source`
 
 // inShared runs fn in one transaction on the shared (non-tenant) tables.
 func (s *Store) inShared(ctx context.Context, fn func(tx *gorm.DB) error) error {
@@ -105,12 +106,12 @@ func (s *Store) ListSkillCatalog(ctx context.Context, tenantID string, q store.S
 			return storageErr("count skill catalog", err)
 		}
 		page.Total = int(total)
-		var synced *time.Time
-		if err := tx.Model(&skillRow{}).Select("max(synced_at)").Scan(&synced).Error; err != nil {
-			return storageErr("skill catalog sync time", err)
+		var installed *time.Time
+		if err := tx.Model(&skillRow{}).Select("max(installed_at)").Scan(&installed).Error; err != nil {
+			return storageErr("skill catalog install time", err)
 		}
-		if synced != nil {
-			page.SyncedAt = *synced
+		if installed != nil {
+			page.InstalledAt = *installed
 		}
 		var rows []skillListRow
 		if err := skills(tx).Select(skillSelect).Scopes(skillFilter(q)).Order(skillOrder(q.Sort)).
@@ -142,48 +143,25 @@ func (s *Store) GetSkill(ctx context.Context, tenantID, id string) (store.SkillR
 	return row.record(), nil
 }
 
-// skillColumn reads one column of one catalog row: ErrNotFound when there is no such skill, nil bytes when the column
-// has never been filled.
-func (s *Store) skillColumn(ctx context.Context, id, column, op string) ([]byte, error) {
-	var row skillRow
-	err := s.inShared(ctx, func(tx *gorm.DB) error {
-		return tx.Select(column).Where("id = ?", id).Take(&row).Error
-	})
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, store.ErrNotFound
-	}
-	if err != nil {
-		return nil, storageErr(op, err)
-	}
-	if column == "text_files" {
-		return row.TextFiles, nil
-	}
-	return row.DetailCopy, nil
-}
-
-func (s *Store) saveSkillColumn(ctx context.Context, id, column string, raw []byte, op string) error {
-	return s.inShared(ctx, func(tx *gorm.DB) error {
-		res := tx.Model(&skillRow{}).Where("id = ?", id).Update(column, raw)
-		if res.Error != nil {
-			return storageErr(op, res.Error)
-		}
-		if res.RowsAffected == 0 {
-			return store.ErrNotFound
-		}
-		return nil
-	})
-}
-
 func (s *Store) GetSkillTextFiles(ctx context.Context, tenantID, id string) ([]store.SkillFile, bool, error) {
 	if tenantID == "" || id == "" {
 		return nil, false, store.ErrNotFound
 	}
-	raw, err := s.skillColumn(ctx, id, "text_files", "get skill text")
-	if err != nil || raw == nil {
-		return nil, false, err
+	var row skillRow
+	err := s.inShared(ctx, func(tx *gorm.DB) error {
+		return tx.Select("text_files").Where("id = ?", id).Take(&row).Error
+	})
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, false, store.ErrNotFound
+	}
+	if err != nil {
+		return nil, false, storageErr("get skill text", err)
+	}
+	if row.TextFiles == nil {
+		return nil, false, nil
 	}
 	var files []store.SkillFile
-	if err := json.Unmarshal(raw, &files); err != nil {
+	if err := json.Unmarshal(row.TextFiles, &files); err != nil {
 		return nil, false, storageErr("decode skill text", err)
 	}
 	if files == nil {
@@ -192,60 +170,109 @@ func (s *Store) GetSkillTextFiles(ctx context.Context, tenantID, id string) ([]s
 	return files, true, nil
 }
 
-func (s *Store) SaveSkillTextFiles(ctx context.Context, tenantID, id string, files []store.SkillFile) error {
-	if tenantID == "" || id == "" {
-		return store.ErrNotFound
-	}
-	if files == nil {
-		files = []store.SkillFile{}
-	}
-	raw, err := json.Marshal(files)
-	if err != nil {
-		return store.ErrStorage
-	}
-	return s.saveSkillColumn(ctx, id, "text_files", raw, "save skill text")
-}
+// textChunk is how many skills one UPDATE statement fills. One row can carry
+// hundreds of kilobytes of text, so the chunk stays small.
+const textChunk = 50
 
-func (s *Store) GetSkillDetail(ctx context.Context, tenantID, id string) ([]byte, bool, error) {
-	if tenantID == "" || id == "" {
-		return nil, false, store.ErrNotFound
-	}
-	raw, err := s.skillColumn(ctx, id, "detail_copy", "get skill detail")
-	if err != nil || raw == nil {
-		return nil, false, err
-	}
-	return raw, true, nil
-}
-
-func (s *Store) SaveSkillDetail(ctx context.Context, tenantID, id string, raw []byte) error {
-	if tenantID == "" || id == "" {
-		return store.ErrNotFound
-	}
-	if raw == nil {
-		raw = []byte("{}")
-	}
-	return s.saveSkillColumn(ctx, id, "detail_copy", raw, "save skill detail")
-}
-
-func (s *Store) UpsertSkillCatalog(ctx context.Context, tenantID string, rows []store.SkillRecord) error {
+// SaveSkillTextFilesBatch fills the text_files column of known skills. Rows
+// with unknown ids update nothing; empty file lists mark the row known-empty.
+func (s *Store) SaveSkillTextFilesBatch(ctx context.Context, tenantID string, rows []store.SkillTextFilesRow) error {
 	if tenantID == "" {
 		return store.ErrNotFound
 	}
 	if len(rows) == 0 {
 		return nil
 	}
-	return s.inShared(ctx, func(tx *gorm.DB) error { return upsertSkills(tx, rows, false) })
+	type blob struct {
+		id  string
+		raw []byte
+	}
+	blobs := make([]blob, 0, len(rows))
+	for _, row := range rows {
+		if row.ID == "" {
+			continue
+		}
+		files := row.Files
+		if files == nil {
+			files = []store.SkillFile{}
+		}
+		raw, err := json.Marshal(files)
+		if err != nil {
+			return store.ErrStorage
+		}
+		blobs = append(blobs, blob{id: row.ID, raw: raw})
+	}
+	return s.inShared(ctx, func(tx *gorm.DB) error {
+		for start := 0; start < len(blobs); start += textChunk {
+			end := min(start+textChunk, len(blobs))
+			query := strings.Builder{}
+			query.WriteString("UPDATE skill_catalog AS s SET text_files = v.f FROM (VALUES ")
+			args := make([]any, 0, 2*(end-start))
+			for i := start; i < end; i++ {
+				if i > start {
+					query.WriteString(", ")
+				}
+				query.WriteString("(?, ?::jsonb)")
+				args = append(args, blobs[i].id, string(blobs[i].raw))
+			}
+			query.WriteString(") AS v(id, f) WHERE s.id = v.id")
+			if err := tx.Exec(query.String(), args...).Error; err != nil {
+				return storageErr("save skill text", err)
+			}
+		}
+		return nil
+	})
 }
 
-func (s *Store) ReplaceSkillTrending(ctx context.Context, tenantID string, rows []store.SkillRecord) error {
+// ReplaceSkills swaps the stored skill snapshot for the given one in one
+// transaction. Text files are filled afterwards by SaveSkillTextFilesBatch.
+func (s *Store) ReplaceSkills(ctx context.Context, tenantID string, rows []store.SkillRecord, categories []store.SkillCategoryRecord) error {
 	if tenantID == "" {
 		return store.ErrNotFound
 	}
-	return s.inShared(ctx, func(tx *gorm.DB) error {
-		if err := tx.Model(&skillRow{}).Where("trending_rank <> 0").Update("trending_rank", 0).Error; err != nil {
-			return storageErr("clear skill trending", err)
+	now := time.Now().UTC()
+	skillRows := make([]skillRow, 0, len(rows))
+	for _, row := range rows {
+		if row.ID == "" {
+			continue
 		}
-		return upsertSkills(tx, rows, true)
+		tags := row.Tags
+		if tags == nil {
+			tags = []string{}
+		}
+		raw, err := json.Marshal(tags)
+		if err != nil {
+			return store.ErrStorage
+		}
+		skillRows = append(skillRows, skillRow{
+			ID: row.ID, Handle: row.Handle, Slug: row.Slug, Name: row.Name, Description: row.Description,
+			DescriptionEn: row.DescriptionEn, Category: row.Category, Tags: raw, License: row.License,
+			IconURL: row.IconURL, SourceURL: row.SourceURL, Downloads: row.Downloads, Visits: row.Visits,
+			Likes: row.Likes, UpdatedAt: row.UpdatedAt, Source: row.Source, InstalledAt: now,
+		})
+	}
+	categoryRows := make([]skillCategoryRow, 0, len(categories))
+	for _, row := range categories {
+		if row.Key != "" {
+			categoryRows = append(categoryRows, skillCategoryRow{Key: row.Key, Name: row.Name, NameEn: row.NameEn, SortOrder: row.SortOrder})
+		}
+	}
+	return s.inShared(ctx, func(tx *gorm.DB) error {
+		if err := tx.Where("TRUE").Delete(&skillRow{}).Error; err != nil {
+			return storageErr("clear skill catalog", err)
+		}
+		if err := tx.CreateInBatches(&skillRows, 200).Error; err != nil {
+			return storageErr("insert skill catalog", err)
+		}
+		if len(categoryRows) == 0 {
+			return nil
+		}
+		if err := tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "key"}}, DoUpdates: clause.AssignmentColumns([]string{"name", "name_en", "sort_order"}),
+		}).Create(&categoryRows).Error; err != nil {
+			return storageErr("upsert skill categories", err)
+		}
+		return nil
 	})
 }
 
@@ -265,71 +292,6 @@ func (s *Store) ListSkillCategories(ctx context.Context, tenantID string) ([]sto
 	return out, nil
 }
 
-func (s *Store) UpsertSkillCategories(ctx context.Context, tenantID string, rows []store.SkillCategoryRecord) error {
-	if tenantID == "" {
-		return store.ErrNotFound
-	}
-	if len(rows) == 0 {
-		return nil
-	}
-	models := make([]skillCategoryRow, 0, len(rows))
-	for _, row := range rows {
-		models = append(models, skillCategoryRow{Key: row.Key, Name: row.Name, NameEn: row.NameEn, SortOrder: row.SortOrder})
-	}
-	return s.inShared(ctx, func(tx *gorm.DB) error {
-		err := tx.Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "key"}}, DoUpdates: clause.AssignmentColumns([]string{"name", "name_en", "sort_order"}),
-		}).Create(&models).Error
-		if err != nil {
-			return storageErr("upsert skill categories", err)
-		}
-		return nil
-	})
-}
-
-var skillUpsertColumns = []string{
-	"slug", "handle", "name", "description", "category", "icon_url", "downloads", "stars", "source", "version",
-	"needs_upstream_auth", "paid", "score", "updated_at", "synced_at",
-}
-
-func upsertSkills(tx *gorm.DB, rows []store.SkillRecord, withRank bool) error {
-	if len(rows) == 0 {
-		return nil
-	}
-	now := time.Now().UTC()
-	models := make([]skillRow, 0, len(rows))
-	for _, row := range rows {
-		if row.Handle != "" && row.Slug != "" && row.ID == row.Handle+"/"+row.Slug {
-			// A skill that arrived without an author handle was stored under the slug alone. Once the handle is
-			// known, keep that same row.
-			err := tx.Model(&skillRow{}).
-				Where("id = ? AND handle = '' AND slug = ? AND NOT EXISTS (SELECT 1 FROM skill_catalog existing WHERE existing.id = ?)", row.Slug, row.Slug, row.ID).
-				Updates(map[string]any{"id": row.ID, "handle": row.Handle}).Error
-			if err != nil {
-				return storageErr("upsert skill catalog", err)
-			}
-		}
-		models = append(models, skillRow{
-			ID: row.ID, Slug: row.Slug, Handle: row.Handle, Name: row.Name, Description: row.Description, Category: row.Category,
-			IconURL: row.IconURL, Downloads: row.Downloads, Stars: row.Stars, Source: row.Source, Version: row.Version,
-			NeedsUpstreamAuth: row.RequiresAPIKey, Paid: row.Paid, Score: row.Score, UpdatedAt: row.UpdatedAt, SyncedAt: now,
-			TrendingRank: row.TrendingRank,
-		})
-	}
-	// The trending rank is only written by the trending refresh; the plain catalog sync leaves it alone.
-	columns := append([]string{"id"}, skillUpsertColumns...)
-	updates := skillUpsertColumns
-	if withRank {
-		columns, updates = append(columns, "trending_rank"), append(append([]string{}, skillUpsertColumns...), "trending_rank")
-	}
-	err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoUpdates: clause.AssignmentColumns(updates)}).
-		Select(columns).CreateInBatches(&models, 200).Error
-	if err != nil {
-		return storageErr("upsert skill catalog", err)
-	}
-	return nil
-}
-
 func skillFilter(q store.SkillCatalogQuery) func(*gorm.DB) *gorm.DB {
 	return func(tx *gorm.DB) *gorm.DB {
 		if q.Category != "" {
@@ -340,16 +302,7 @@ func skillFilter(q store.SkillCatalogQuery) func(*gorm.DB) *gorm.DB {
 		}
 		if q.Keyword != "" {
 			like := "%" + escapeLike(q.Keyword) + "%"
-			tx = tx.Where(`(s.name ILIKE ? ESCAPE E'\\' OR s.description ILIKE ? ESCAPE E'\\')`, like, like)
-		}
-		if q.RequiresAPIKey != "" {
-			tx = tx.Where("s.needs_upstream_auth = ?", q.RequiresAPIKey == "true")
-		}
-		if q.Paid != "" {
-			tx = tx.Where("s.paid = ?", q.Paid == "true")
-		}
-		if q.Sort == "trending" {
-			tx = tx.Where("s.trending_rank > 0")
+			tx = tx.Where(`(s.name ILIKE ? ESCAPE E'\\' OR s.description ILIKE ? ESCAPE E'\\' OR s.description_en ILIKE ? ESCAPE E'\\')`, like, like, like)
 		}
 		return tx
 	}
@@ -357,19 +310,27 @@ func skillFilter(q store.SkillCatalogQuery) func(*gorm.DB) *gorm.DB {
 
 func skillOrder(sort string) string {
 	switch sort {
-	case "downloads":
-		return "s.downloads DESC, s.id"
 	case "updated_at":
 		return "s.updated_at DESC, s.id"
-	case "stars":
-		return "s.stars DESC, s.id"
-	case "trending":
-		return "s.trending_rank ASC, s.id"
+	case "likes":
+		return "s.likes DESC, s.id"
 	default:
-		return "s.score DESC, s.downloads DESC, s.stars DESC, s.id"
+		return "s.downloads DESC, s.id"
 	}
 }
 
 func escapeLike(s string) string {
 	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+}
+
+// decodeStrings reads a JSONB string array; a missing column decodes to nil.
+func decodeStrings(raw []byte) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var out []string
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil
+	}
+	return out
 }

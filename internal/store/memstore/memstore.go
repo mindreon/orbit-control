@@ -26,6 +26,9 @@ type Store struct {
 	connectors      map[string]connectorRow
 	skills          map[string]store.SkillRecord
 	skillCategories map[string]store.SkillCategoryRecord
+	agents          map[string]store.AgentRecord
+	snapshots       map[string]string
+	icons           map[string]store.CatalogIcon
 	mcpMarket       map[string]store.McpMarketRecord
 	mcpCategories   map[string]store.McpMarketCategoryRecord
 	mcpDetails      map[string]store.McpMarketDetailRecord
@@ -39,6 +42,9 @@ func New() *Store {
 		connectors:      map[string]connectorRow{},
 		skills:          map[string]store.SkillRecord{},
 		skillCategories: map[string]store.SkillCategoryRecord{},
+		agents:          map[string]store.AgentRecord{},
+		snapshots:       map[string]string{},
+		icons:           map[string]store.CatalogIcon{},
 		mcpMarket:       map[string]store.McpMarketRecord{},
 		mcpCategories:   map[string]store.McpMarketCategoryRecord{},
 		mcpDetails:      map[string]store.McpMarketDetailRecord{},

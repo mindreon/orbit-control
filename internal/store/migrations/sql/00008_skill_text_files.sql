@@ -8,4 +8,5 @@ ALTER TABLE skill_catalog ADD COLUMN text_files JSONB;
 
 -- +goose Down
 
-ALTER TABLE skill_catalog DROP COLUMN text_files;
+-- This migration was about the old skill catalog table. 00020 replaced it (and its Down drops the new one), so there is
+-- nothing left to undo here.

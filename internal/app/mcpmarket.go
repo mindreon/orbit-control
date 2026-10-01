@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 
-	"github.com/mindreon/orbit-control/internal/mcpmarket"
 	"github.com/mindreon/orbit-control/internal/store"
 )
 
@@ -22,16 +21,16 @@ type McpMarketServer struct {
 	Verified     bool   `json:"verified"`
 	Hosted       bool   `json:"hosted"`
 	NeedsOnline  bool   `json:"needsOnline"`
+	Source       string `json:"source"`
 }
 
 // McpMarketList is one page of the stored plaza.
 type McpMarketList struct {
-	Items      []McpMarketServer `json:"items"`
-	Total      int               `json:"total"`
-	Stored     int               `json:"stored"`
-	PlazaTotal int               `json:"plazaTotal"`
-	Page       int               `json:"page"`
-	PageSize   int               `json:"pageSize"`
+	Items    []McpMarketServer `json:"items"`
+	Total    int               `json:"total"`
+	Stored   int               `json:"stored"`
+	Page     int               `json:"page"`
+	PageSize int               `json:"pageSize"`
 }
 
 // McpMarketCategory is one sidebar label and its stored count.
@@ -64,15 +63,15 @@ func (a *App) ListMcpMarket(ctx context.Context, tenantID string, q store.McpMar
 			Verified:     rec.Verified,
 			Hosted:       rec.Hosted,
 			NeedsOnline:  rec.NeedsOnline,
+			Source:       rec.Source,
 		})
 	}
 	return McpMarketList{
-		Items:      items,
-		Total:      page.Total,
-		Stored:     page.Stored,
-		PlazaTotal: mcpmarket.PlazaTotal,
-		Page:       page.Page,
-		PageSize:   page.PageSize,
+		Items:    items,
+		Total:    page.Total,
+		Stored:   page.Stored,
+		Page:     page.Page,
+		PageSize: page.PageSize,
 	}, nil
 }
 
@@ -110,12 +109,23 @@ func (a *App) GetMcpMarket(ctx context.Context, tenantID, id string) (McpMarketD
 			Verified:     rec.Verified,
 			Hosted:       rec.Hosted,
 			NeedsOnline:  rec.NeedsOnline,
+			Source:       rec.Source,
 		},
 		License:   rec.License,
 		UpdatedOn: rec.UpdatedOn,
 		Readme:    rec.Readme,
 		Tools:     tools,
 	}, nil
+}
+
+// McpMarketIcon returns the content type and bytes of one server's card icon.
+// A server without an icon, and an icon the sidecar did not ship, both 404.
+func (a *App) McpMarketIcon(ctx context.Context, tenantID, id string) (string, []byte, error) {
+	rec, err := a.Repo.GetMcpMarket(ctx, tenantID, id)
+	if err != nil {
+		return "", nil, err
+	}
+	return a.Repo.CatalogIcon(ctx, tenantID, rec.IconURL)
 }
 
 // ListMcpMarketCategories reads stored labels. It does not call ModelScope.

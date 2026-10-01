@@ -12,8 +12,8 @@ import (
 	"github.com/mindreon/orbit-control/internal/store/pgstore"
 )
 
-// The shared marketplace tables through the gorm store: filters, sort orders, paging, upserts that keep a renamed row,
-// the trending refresh, and the text a card keeps beside it.
+// The shared marketplace tables through the gorm store: filters, sort orders,
+// paging, snapshot replacement, the stored skill text, and the agents catalog.
 func TestMarketplaceStoreSkillCatalog(t *testing.T) {
 	const tenant = "t-market-store"
 	opsEnsureTenant(t, tenant)
@@ -24,20 +24,21 @@ func TestMarketplaceStoreSkillCatalog(t *testing.T) {
 	run := fmt.Sprintf("%d", when.UnixNano())
 	dev, ops := "dev-"+run, "ops-"+run
 
-	if err := repo.UpsertSkillCategories(ctx, tenant, []store.SkillCategoryRecord{{Key: dev, Name: "开发", NameEn: "Dev", SortOrder: 1}, {Key: ops, Name: "运维", NameEn: "Ops", SortOrder: 2}}); err != nil {
-		t.Fatalf("categories: %v", err)
-	}
 	skills := []store.SkillRecord{
-		{ID: "acme/lint", Slug: "lint", Handle: "acme", Name: "Lint", Description: "find 100% of issues", Category: dev, Downloads: 10, Stars: 5, Source: "clawhub", Version: "1", Score: 0.9, UpdatedAt: when},
-		{ID: "acme/deploy", Slug: "deploy", Handle: "acme", Name: "Deploy", Description: "ship it", Category: ops, Downloads: 99, Stars: 1, Source: "clawhub", Version: "2", RequiresAPIKey: true, Paid: true, Score: 0.5, UpdatedAt: when.Add(time.Minute)},
-		{ID: "rename-me", Slug: "rename-me", Name: "Renamed", Category: dev, Source: "community", Score: 0.1, UpdatedAt: when},
+		{ID: "@acme/lint-" + run, Handle: "@acme", Slug: "lint-" + run, Name: "Lint", Description: "find 100% of issues", Category: dev, Downloads: 10, Likes: 5, UpdatedAt: when},
+		{ID: "@acme/deploy-" + run, Handle: "@acme", Slug: "deploy-" + run, Name: "Deploy", Description: "ship it", Category: ops, Downloads: 99, Likes: 1, UpdatedAt: when.Add(time.Minute)},
+		{ID: "@acme/nexa-" + run, Handle: "@acme", Slug: "nexa-" + run, Name: "Nexa only", Category: dev, Downloads: 5, Source: "nexa", UpdatedAt: when},
 	}
-	if err := repo.UpsertSkillCatalog(ctx, tenant, skills); err != nil {
-		t.Fatalf("upsert: %v", err)
+	categories := []store.SkillCategoryRecord{{Key: dev, Name: "开发", NameEn: "Dev", SortOrder: 1}, {Key: ops, Name: "运维", NameEn: "Ops", SortOrder: 2}}
+	if err := repo.ReplaceSkills(ctx, tenant, skills, categories); err != nil {
+		t.Fatalf("replace: %v", err)
 	}
 	page, err := repo.ListSkillCatalog(ctx, tenant, store.SkillCatalogQuery{})
-	if err != nil || page.Total < 3 {
+	if err != nil || page.Total != 3 {
 		t.Fatalf("list: %v total=%d", err, page.Total)
+	}
+	if page.InstalledAt.IsZero() {
+		t.Fatal("installed time is empty")
 	}
 	want := func(name string, q store.SkillCatalogQuery, ids ...string) {
 		t.Helper()
@@ -57,53 +58,66 @@ func TestMarketplaceStoreSkillCatalog(t *testing.T) {
 			t.Fatalf("%s: want %v among %+v", name, ids, got.Items)
 		}
 	}
-	want("category", store.SkillCatalogQuery{Category: ops}, "acme/deploy")
-	want("paid", store.SkillCatalogQuery{Paid: "true"}, "acme/deploy")
-	want("needs key", store.SkillCatalogQuery{RequiresAPIKey: "true"}, "acme/deploy")
-	want("keyword escapes %", store.SkillCatalogQuery{Keyword: "100%"}, "acme/lint")
+	want("category", store.SkillCatalogQuery{Category: ops}, skills[1].ID)
+	want("source", store.SkillCatalogQuery{Source: "nexa"}, skills[2].ID)
+	want("keyword escapes %", store.SkillCatalogQuery{Keyword: "100%"}, skills[0].ID)
 	sorted, _ := repo.ListSkillCatalog(ctx, tenant, store.SkillCatalogQuery{Sort: "downloads", Category: dev})
-	if len(sorted.Items) != 2 || sorted.Items[0].ID != "acme/lint" || sorted.Items[0].CategoryName != "开发" {
+	if len(sorted.Items) != 2 || sorted.Items[0].ID != skills[0].ID || sorted.Items[0].CategoryName != "开发" {
 		t.Fatalf("downloads order with the category label: %+v", sorted.Items)
 	}
-
-	// The same skill arrives again with its handle: the row keeps its data and moves to the new id.
-	if err := repo.UpsertSkillCatalog(ctx, tenant, []store.SkillRecord{{ID: "acme/rename-me", Slug: "rename-me", Handle: "acme", Name: "Renamed", Category: dev, Source: "community", Score: 0.2, UpdatedAt: when}}); err != nil {
-		t.Fatalf("rename upsert: %v", err)
-	}
-	if _, err := repo.GetSkill(ctx, tenant, "rename-me"); err != store.ErrNotFound {
-		t.Fatalf("the old id is gone, got %v", err)
-	}
-	if got, err := repo.GetSkill(ctx, tenant, "acme/rename-me"); err != nil || got.Handle != "acme" {
-		t.Fatalf("the row moved: %v %+v", err, got)
-	}
-
-	// Trending: a refresh clears the ranks it does not name and sets the ones it does.
-	if err := repo.ReplaceSkillTrending(ctx, tenant, []store.SkillRecord{{ID: "acme/lint", Slug: "lint", Handle: "acme", Name: "Lint", Category: dev, Source: "clawhub", UpdatedAt: when, TrendingRank: 1}}); err != nil {
-		t.Fatalf("trending: %v", err)
-	}
-	trending, _ := repo.ListSkillCatalog(ctx, tenant, store.SkillCatalogQuery{Sort: "trending"})
-	if len(trending.Items) != 1 || trending.Items[0].ID != "acme/lint" || trending.Items[0].TrendingRank != 1 {
-		t.Fatalf("trending: %+v", trending.Items)
-	}
-
-	// The text kept beside a skill: unknown before it is saved, and saving to a skill that does not exist is ErrNotFound.
-	if _, known, err := repo.GetSkillTextFiles(ctx, tenant, "acme/lint"); err != nil || known {
-		t.Fatalf("text files before saving: known=%v err=%v", known, err)
-	}
-	if err := repo.SaveSkillTextFiles(ctx, tenant, "acme/lint", []store.SkillFile{{Path: "SKILL.md", Body: "hello"}}); err != nil {
+	// The text pass fills text for the ids it knows and ignores the rest.
+	if err := repo.SaveSkillTextFilesBatch(ctx, tenant, []store.SkillTextFilesRow{
+		{ID: skills[0].ID, Files: []store.SkillFile{{Path: "SKILL.md", Body: "hello"}}},
+		{ID: "no/such-row", Files: []store.SkillFile{{Path: "SKILL.md", Body: "ghost"}}},
+	}); err != nil {
 		t.Fatalf("save text: %v", err)
 	}
-	if files, known, err := repo.GetSkillTextFiles(ctx, tenant, "acme/lint"); err != nil || !known || len(files) != 1 || files[0].Body != "hello" {
+	if files, known, err := repo.GetSkillTextFiles(ctx, tenant, skills[0].ID); err != nil || !known || len(files) != 1 || files[0].Body != "hello" {
 		t.Fatalf("text files: %v %v %+v", err, known, files)
 	}
-	if err := repo.SaveSkillTextFiles(ctx, tenant, "no/such", nil); err != store.ErrNotFound {
-		t.Fatalf("saving to a missing skill: %v", err)
+	if _, known, err := repo.GetSkillTextFiles(ctx, tenant, skills[1].ID); err != nil || known {
+		t.Fatalf("text of a row without text: known=%v err=%v", known, err)
 	}
-	if err := repo.SaveSkillDetail(ctx, tenant, "acme/lint", []byte(`{"readme":"x"}`)); err != nil {
-		t.Fatalf("save detail: %v", err)
+	// Replacing swaps the snapshot: what the new one does not name is gone.
+	if err := repo.ReplaceSkills(ctx, tenant, skills[:1], categories[:1]); err != nil {
+		t.Fatalf("second replace: %v", err)
 	}
-	if raw, known, err := repo.GetSkillDetail(ctx, tenant, "acme/lint"); err != nil || !known || len(raw) == 0 {
-		t.Fatalf("detail: %v %v %s", err, known, raw)
+	if page, _ = repo.ListSkillCatalog(ctx, tenant, store.SkillCatalogQuery{}); page.Total != 1 {
+		t.Fatalf("after replace: %+v", page)
+	}
+
+	// Agents: replace, list, get.
+	agents := []store.AgentRecord{
+		{ID: "@acme/bot-" + run, Handle: "@acme", Slug: "bot-" + run, Name: "Bot", Description: "a helper", Catalogues: []string{"tools", "ops"}, Files: []store.SkillFile{{Path: "AGENTS.md", Body: "# bot"}}, Downloads: 7, UpdatedAt: when},
+		{ID: "@acme/calc-" + run, Handle: "@acme", Slug: "calc-" + run, Name: "Calc", Description: "math", Catalogues: []string{"tools"}, Downloads: 9, Stars: 2, UpdatedAt: when},
+	}
+	if err := repo.ReplaceAgents(ctx, tenant, agents); err != nil {
+		t.Fatalf("replace agents: %v", err)
+	}
+	agentPage, err := repo.ListAgentCatalog(ctx, tenant, store.AgentCatalogQuery{Catalogue: "tools"})
+	if err != nil || agentPage.Total != 2 || agentPage.Items[0].ID != agents[1].ID {
+		t.Fatalf("agent list: %v %+v", err, agentPage)
+	}
+	got, err := repo.GetAgent(ctx, tenant, agents[0].ID)
+	if err != nil || got.Catalogues[0] != "tools" {
+		t.Fatalf("agent get: %v %+v", err, got)
+	}
+	if len(got.Files) != 1 || got.Files[0].Body != "# bot" {
+		t.Fatalf("agent files: %+v", got.Files)
+	}
+	if _, err := repo.GetAgent(ctx, tenant, "@acme/none"); err != store.ErrNotFound {
+		t.Fatalf("a missing agent: %v", err)
+	}
+
+	// Snapshot bookkeeping: the hash is unknown until it is stored.
+	if sha, known, err := repo.CatalogSnapshot(ctx, tenant, "msmarket"); err != nil || known || sha != "" {
+		t.Fatalf("snapshot before storing: %v %v %q", err, known, sha)
+	}
+	if err := repo.SetCatalogSnapshot(ctx, tenant, "msmarket", "abc"); err != nil {
+		t.Fatalf("set snapshot: %v", err)
+	}
+	if sha, known, _ := repo.CatalogSnapshot(ctx, tenant, "msmarket"); !known || sha != "abc" {
+		t.Fatalf("snapshot after storing: known=%v sha=%q", known, sha)
 	}
 }
 
@@ -113,8 +127,8 @@ func TestMarketplaceStoreMcpPlaza(t *testing.T) {
 	repo := pgstore.New(newPool(t, appURL, 2))
 	ctx := context.Background()
 	servers := []store.McpMarketRecord{
-		{ID: "fs", Name: "Files", Summary: "read files", Author: "acme", Category: "dev", Hosted: false, NeedsOnline: false, Rank: 1},
-		{ID: "web", Name: "Web", Summary: "fetch pages", Author: "globex", Category: "dev", Hosted: true, NeedsOnline: true, Rank: 2},
+		{ID: "fs", Name: "Files", Summary: "read files", Author: "acme", Category: "dev", Hosted: false, NeedsOnline: false, Source: "common", Rank: 1},
+		{ID: "web", Name: "Web", Summary: "fetch pages", Author: "globex", Category: "dev", Hosted: true, NeedsOnline: true, Source: "nexa", Rank: 2},
 		{ID: "db", Name: "Database", Summary: "query sql", Author: "acme", Category: "data", Hosted: true, Rank: 3},
 	}
 	categories := []store.McpMarketCategoryRecord{{Key: "dev", Name: "开发", SortOrder: 1}, {Key: "data", Name: "数据", SortOrder: 2}, {Key: "empty", Name: "空", SortOrder: 3}}
@@ -132,6 +146,9 @@ func TestMarketplaceStoreMcpPlaza(t *testing.T) {
 	}
 	if page, _ = repo.ListMcpMarket(ctx, tenant, store.McpMarketQuery{ServiceType: "hosted"}); page.Total != 2 {
 		t.Fatalf("hosted: %+v", page)
+	}
+	if page, _ = repo.ListMcpMarket(ctx, tenant, store.McpMarketQuery{Source: "nexa"}); page.Total != 1 || page.Items[0].ID != "web" {
+		t.Fatalf("source: %+v", page)
 	}
 	if page, _ = repo.ListMcpMarket(ctx, tenant, store.McpMarketQuery{Category: "data"}); page.Total != 1 || page.Items[0].ID != "db" {
 		t.Fatalf("category: %+v", page)

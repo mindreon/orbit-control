@@ -174,6 +174,9 @@ func marketVisible(rec store.McpMarketRecord, categoryName string, q store.McpMa
 	if q.Category != "" && rec.Category != q.Category {
 		return false
 	}
+	if q.Source != "" && rec.Source != q.Source {
+		return false
+	}
 	if q.ServiceType == "hosted" && !rec.Hosted {
 		return false
 	}

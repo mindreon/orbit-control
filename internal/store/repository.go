@@ -33,33 +33,21 @@ type Repository interface {
 	// CreateMcpConnector inserts one connector. EnvRefs are names, never values.
 	CreateMcpConnector(ctx context.Context, tenantID string, c McpConnectorRecord) error
 
-	// ListSkillCatalog reads the shared SkillHub copy. tenantID is required so
-	// only an authenticated caller can ask; rows are not scoped by tenant.
+	// ListSkillCatalog reads the shared ModelScope snapshot. tenantID is
+	// required so only an authenticated caller can ask; rows are not scoped by tenant.
 	ListSkillCatalog(ctx context.Context, tenantID string, q SkillCatalogQuery) (SkillCatalogPage, error)
-	// GetSkill reads one stored row by id (handle/slug, or slug when there is no handle).
-	// It does not call SkillHub.
+	// GetSkill reads one stored row by id (handle/slug). It does not call ModelScope.
 	GetSkill(ctx context.Context, tenantID, id string) (SkillRecord, error)
-	// GetSkillTextFiles reads text copied out of a skill package. known is false
-	// until the first successful copy. It does not call SkillHub.
+	// GetSkillTextFiles reads the text files stored beside a skill row. known is
+	// false until the snapshot text pass has filled them. It does not call ModelScope.
 	GetSkillTextFiles(ctx context.Context, tenantID, id string) (files []SkillFile, known bool, err error)
-	// SaveSkillTextFiles stores that copy. Later reads do not download the package again.
-	SaveSkillTextFiles(ctx context.Context, tenantID, id string, files []SkillFile) error
-	// GetSkillDetail reads the extra public page fields copied once. known is
-	// false until that copy exists. It does not call SkillHub.
-	GetSkillDetail(ctx context.Context, tenantID, id string) (raw []byte, known bool, err error)
-	// SaveSkillDetail stores that copy. Later reads do not call SkillHub again.
-	SaveSkillDetail(ctx context.Context, tenantID, id string, raw []byte) error
-	// UpsertSkillCatalog inserts or refreshes catalog rows. An existing
-	// trending rank is left as it is.
-	UpsertSkillCatalog(ctx context.Context, tenantID string, rows []SkillRecord) error
-	// ReplaceSkillTrending marks the current trending order. Ranks not in rows
-	// are cleared. This does not call SkillHub.
-	ReplaceSkillTrending(ctx context.Context, tenantID string, rows []SkillRecord) error
+	// SaveSkillTextFilesBatch stores text for many skills in one call. Rows
+	// with unknown ids are ignored. An empty file list marks the row as known-empty.
+	SaveSkillTextFilesBatch(ctx context.Context, tenantID string, rows []SkillTextFilesRow) error
+	// ReplaceSkills swaps the stored skill snapshot for the given one in one transaction.
+	ReplaceSkills(ctx context.Context, tenantID string, rows []SkillRecord, categories []SkillCategoryRecord) error
 	// ListSkillCategories returns category labels for the shared catalog.
 	ListSkillCategories(ctx context.Context, tenantID string) ([]SkillCategoryRecord, error)
-	// UpsertSkillCategories stores category labels. It does not delete keys
-	// that disappeared upstream.
-	UpsertSkillCategories(ctx context.Context, tenantID string, rows []SkillCategoryRecord) error
 
 	// ListMcpMarket reads the shared ModelScope snapshot. tenantID is required
 	// so only an authenticated caller can ask; rows are not scoped by tenant.
@@ -72,6 +60,26 @@ type Repository interface {
 	GetMcpMarket(ctx context.Context, tenantID, id string) (McpMarketDetail, error)
 	// ReplaceMcpMarket replaces the shared snapshot. It does not call ModelScope.
 	ReplaceMcpMarket(ctx context.Context, tenantID string, servers []McpMarketRecord, categories []McpMarketCategoryRecord, details []McpMarketDetailRecord) error
+
+	// ReplaceCatalogIcons upserts icon bytes keyed by the source URL. Rows for
+	// other URLs are kept: the icon sidecar is additive.
+	ReplaceCatalogIcons(ctx context.Context, tenantID string, rows []CatalogIcon) error
+	// CatalogIcon reads one icon's content type and bytes by source URL.
+	CatalogIcon(ctx context.Context, tenantID, url string) (contentType string, data []byte, err error)
+
+	// ListAgentCatalog reads the shared agent snapshot. tenantID is required so
+	// only an authenticated caller can ask; rows are not scoped by tenant.
+	ListAgentCatalog(ctx context.Context, tenantID string, q AgentCatalogQuery) (AgentCatalogPage, error)
+	// GetAgent reads one stored agent row by id (handle/slug). It does not call ModelScope.
+	GetAgent(ctx context.Context, tenantID, id string) (AgentRecord, error)
+	// ReplaceAgents swaps the stored agent snapshot for the given one in one transaction.
+	ReplaceAgents(ctx context.Context, tenantID string, rows []AgentRecord) error
+
+	// CatalogSnapshot returns the stored hash of a named snapshot, or "" with
+	// known=false when that snapshot has never been stored.
+	CatalogSnapshot(ctx context.Context, tenantID, name string) (sha256 string, known bool, err error)
+	// SetCatalogSnapshot records the hash of a named snapshot after it was stored.
+	SetCatalogSnapshot(ctx context.Context, tenantID, name, sha256 string) error
 
 	Close()
 }
@@ -100,38 +108,43 @@ type McpConnectorRecord struct {
 	CreatedAt   time.Time
 }
 
-// SkillFile is one text file copied from a skill package for display.
-// The process does not run it.
+// SkillRecord is one row of the shared ModelScope skills snapshot. It is
+// display metadata only: no secret values. TextFiles carries the snapshot's
+// copy of the skill's text files when the text pass has filled it.
+type SkillRecord struct {
+	ID            string
+	Handle        string
+	Slug          string
+	Name          string
+	Description   string
+	DescriptionEn string
+	Category      string
+	CategoryName  string
+	Tags          []string
+	License       string
+	IconURL       string
+	SourceURL     string
+	Downloads     int64
+	Visits        int64
+	Likes         int64
+	UpdatedAt     time.Time
+	Source        string // "common", or "nexa" for the NEXA curated set
+	TextFiles     []SkillFile
+	FilesKnown    bool
+	InstalledAt   time.Time
+}
+
+// SkillFile is one text file stored beside a skill or agent row. The process
+// does not run it.
 type SkillFile struct {
 	Path string `json:"path"`
 	Body string `json:"body"`
 }
 
-// SkillRecord is one row of the shared SkillHub catalog. It is display
-// metadata only: no package bytes and no secret values.
-type SkillRecord struct {
-	ID             string
-	Slug           string
-	Handle         string
-	Name           string
-	Description    string
-	Category       string
-	CategoryName   string
-	IconURL        string
-	Downloads      int64
-	Stars          int64
-	Source         string
-	Version        string
-	RequiresAPIKey bool
-	Paid           bool
-	Score          float64
-	UpdatedAt      time.Time
-	SyncedAt       time.Time
-	TrendingRank   int
-	TextFiles      []SkillFile
-	FilesKnown     bool
-	DetailJSON     []byte
-	DetailKnown    bool
+// SkillTextFilesRow is the text of one skill for a batch write.
+type SkillTextFilesRow struct {
+	ID    string
+	Files []SkillFile
 }
 
 // SkillCategoryRecord is a display label for SkillRecord.Category.
@@ -143,44 +156,39 @@ type SkillCategoryRecord struct {
 }
 
 // SkillCatalogQuery selects a page of the local catalog.
-// Sort is score, downloads, updated_at, stars, or trending.
-// RequiresAPIKey and Paid are "", "true", or "false".
+// Sort is downloads, likes, or updated_at. Source is "", "common", or "nexa".
 type SkillCatalogQuery struct {
-	Sort           string
-	Category       string
-	Source         string
-	Keyword        string
-	RequiresAPIKey string
-	Paid           string
-	Page           int
-	PageSize       int
-}
-
-// SkillCatalogPage is one page plus the newest sync time (zero when empty).
-type SkillCatalogPage struct {
-	Items    []SkillRecord
-	Total    int
+	Sort     string
+	Category string
+	Source   string
+	Keyword  string
 	Page     int
 	PageSize int
-	SyncedAt time.Time
+}
+
+// SkillCatalogPage is one page plus the newest install time (zero when empty).
+type SkillCatalogPage struct {
+	Items       []SkillRecord
+	Total       int
+	Page        int
+	PageSize    int
+	InstalledAt time.Time
 }
 
 // NormalizeSkillQuery clamps a catalog query to the values the stores implement.
 func NormalizeSkillQuery(q SkillCatalogQuery) SkillCatalogQuery {
 	switch q.Sort {
-	case "downloads", "updated_at", "stars", "trending":
+	case "downloads", "updated_at", "likes":
 	default:
-		q.Sort = "score"
+		q.Sort = "downloads"
 	}
 	q.Category = clipToken(q.Category, 64)
 	switch q.Source {
-	case "clawhub", "community", "enterprise":
+	case "common", "nexa":
 	default:
 		q.Source = ""
 	}
 	q.Keyword = clipText(q.Keyword, 80)
-	q.RequiresAPIKey = boolWord(q.RequiresAPIKey)
-	q.Paid = boolWord(q.Paid)
 	if q.Page < 1 {
 		q.Page = 1
 	}
@@ -194,6 +202,36 @@ func NormalizeSkillQuery(q SkillCatalogQuery) SkillCatalogQuery {
 		q.PageSize = 48
 	}
 	return q
+}
+
+// SkillPathID builds the catalog id from a URL handle and slug. The handle is
+// an optional "@" plus one token; both parts reject slashes and spaces.
+func SkillPathID(handle, slug string) (string, bool) {
+	handle = clipHandle(handle, 100)
+	slug = clipSlug(slug, 200)
+	if handle == "" || slug == "" {
+		return "", false
+	}
+	return handle + "/" + slug, true
+}
+
+// clipHandle keeps one token with an optional leading "@".
+func clipHandle(s string, n int) string {
+	at := ""
+	if strings.HasPrefix(s, "@") {
+		at = "@"
+		s = s[1:]
+	}
+	body := clipToken(s, n)
+	if body == "" {
+		return ""
+	}
+	return at + body
+}
+
+// clipSlug keeps one token.
+func clipSlug(s string, n int) string {
+	return clipToken(s, n)
 }
 
 // McpMarketRecord is one row of the shared ModelScope plaza snapshot.
@@ -212,6 +250,8 @@ type McpMarketRecord struct {
 	Verified     bool
 	Hosted       bool
 	NeedsOnline  bool
+	Source       string // "common", or "nexa" for the NEXA curated set
+	IconURL      string // Source URL of the card icon; bytes live in catalog_icons.
 	Rank         int
 }
 
@@ -249,6 +289,13 @@ type McpMarketDetail struct {
 	Tools     []McpMarketTool
 }
 
+// CatalogIcon is one icon's bytes keyed by the source URL it came from.
+type CatalogIcon struct {
+	URL         string
+	ContentType string
+	Data        []byte
+}
+
 // McpMarketCategoryRecord is a plaza sidebar label.
 type McpMarketCategoryRecord struct {
 	Key       string
@@ -267,11 +314,13 @@ type McpMarketCategoryCount struct {
 // McpMarketQuery selects a page of the stored plaza.
 // ServiceType is "", "hosted", or "local".
 // NeedsOnline is "", "true", or "false".
+// Source is "", "common", or "nexa".
 type McpMarketQuery struct {
 	Keyword     string
 	Category    string
 	ServiceType string
 	NeedsOnline string
+	Source      string
 	Page        int
 	PageSize    int
 }
@@ -296,6 +345,11 @@ func NormalizeMcpMarketQuery(q McpMarketQuery) McpMarketQuery {
 		q.ServiceType = ""
 	}
 	q.NeedsOnline = boolWord(q.NeedsOnline)
+	switch q.Source {
+	case "common", "nexa":
+	default:
+		q.Source = ""
+	}
 	if q.Page < 1 {
 		q.Page = 1
 	}
@@ -304,6 +358,94 @@ func NormalizeMcpMarketQuery(q McpMarketQuery) McpMarketQuery {
 	}
 	if q.PageSize < 1 {
 		q.PageSize = 30
+	}
+	if q.PageSize > 48 {
+		q.PageSize = 48
+	}
+	return q
+}
+
+// AgentRecord is one row of the shared ModelScope agents snapshot. It is
+// display metadata only: no secret values. Files carries the snapshot's copy
+// of the agent's text files when the snapshot provided them.
+type AgentRecord struct {
+	ID            string
+	Handle        string
+	Slug          string
+	Name          string
+	Description   string
+	Framework     string
+	License       string
+	LogoURL       string
+	Catalogues    []string
+	Models        []AgentModel
+	Mcps          []AgentRef
+	Skills        []AgentRef
+	SystemPrompts []AgentPrompt
+	Readme        string
+	Files         []SkillFile
+	FilesKnown    bool
+	Stars         int64
+	Downloads     int64
+	Visits        int64
+	UpdatedAt     time.Time
+	Source        string // "common" (the agents plaza has no nexa view)
+}
+
+// AgentModel is one model an agent declares.
+type AgentModel struct {
+	Name     string `json:"name"`
+	Supplier string `json:"supplier"`
+	Protocol string `json:"protocol"`
+}
+
+// AgentRef is one skill or MCP server an agent declares, by name.
+type AgentRef struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// AgentPrompt is one prompt file of an agent.
+type AgentPrompt struct {
+	Filename string `json:"filename"`
+	Content  string `json:"content"`
+}
+
+// AgentCatalogQuery selects a page of the stored agents.
+// Sort is downloads, stars, or updated_at. Source is "", "common", or "nexa".
+type AgentCatalogQuery struct {
+	Sort      string
+	Catalogue string
+	Keyword   string
+	Page      int
+	PageSize  int
+}
+
+// AgentCatalogPage is one page.
+type AgentCatalogPage struct {
+	Items    []AgentRecord
+	Total    int
+	Page     int
+	PageSize int
+}
+
+// NormalizeAgentCatalogQuery clamps an agent query to the values the stores implement.
+func NormalizeAgentCatalogQuery(q AgentCatalogQuery) AgentCatalogQuery {
+	switch q.Sort {
+	case "downloads", "updated_at", "stars":
+	default:
+		q.Sort = "downloads"
+	}
+	q.Catalogue = clipToken(q.Catalogue, 64)
+	q.Keyword = clipText(q.Keyword, 80)
+	if q.Page < 1 {
+		q.Page = 1
+	}
+	if q.Page > 10000 {
+		q.Page = 10000
+	}
+	if q.PageSize < 1 {
+		q.PageSize = 24
 	}
 	if q.PageSize > 48 {
 		q.PageSize = 48
@@ -327,26 +469,6 @@ func clipText(s string, n int) string {
 		return string(r[:n])
 	}
 	return s
-}
-
-// SkillSlugID is the catalog id for a skill that has no author handle.
-func SkillSlugID(slug string) (string, bool) {
-	slug = NormalizeSkillQuery(SkillCatalogQuery{Category: slug}).Category
-	if slug == "" {
-		return "", false
-	}
-	return slug, true
-}
-
-// SkillPathID builds the catalog id from a URL handle and slug. Both parts
-// must be a single token. A slash, space, or empty part is rejected.
-func SkillPathID(handle, slug string) (string, bool) {
-	handle = NormalizeSkillQuery(SkillCatalogQuery{Category: handle}).Category
-	slug = NormalizeSkillQuery(SkillCatalogQuery{Category: slug}).Category
-	if handle == "" || slug == "" {
-		return "", false
-	}
-	return handle + "/" + slug, true
 }
 
 func clipToken(s string, n int) string {

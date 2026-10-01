@@ -98,10 +98,10 @@ func errText(err error) string {
 // runSDB06Migrations is S-DB-6 (ISO-12). It leaves the database migrated
 // for the rest of the suite.
 // latestMigration is the number of the newest embedded migration: an empty database applies all of them.
-const latestMigration = 19 // the highest migration number; numbers 3 to 5 are unused
+const latestMigration = 21 // the highest migration number; numbers 3 to 5 are unused
 
 // migrationFiles is how many migrations an empty database applies.
-const migrationFiles = 16
+const migrationFiles = 18
 
 func runSDB06Migrations(ctx context.Context) bool {
 	const c = "S-DB-6"

@@ -27,9 +27,8 @@ import (
 	"github.com/mindreon/orbit-control/internal/artifacts"
 	"github.com/mindreon/orbit-control/internal/config"
 	"github.com/mindreon/orbit-control/internal/internalauth"
-	"github.com/mindreon/orbit-control/internal/mcpmarket"
+	"github.com/mindreon/orbit-control/internal/msmarket"
 	"github.com/mindreon/orbit-control/internal/orch"
-	"github.com/mindreon/orbit-control/internal/skillhub"
 	"github.com/mindreon/orbit-control/internal/store"
 	taskruntime "github.com/mindreon/orbit-control/internal/task"
 )
@@ -229,16 +228,11 @@ func Handlers() (public, internal http.Handler, closeStore func(), err error) {
 			}
 		}()
 	}
-	// The plaza snapshot ships with this binary. GET /v1/mcp-market only reads
-	// the store. It does not call modelscope.cn.
-	if err := mcpmarket.Install(context.Background(), repo, defaultTenant); err != nil {
-		runtime.Log.Printf("mcp market: snapshot not stored: %v", err)
-	}
-	// The catalog is copied in the background. GET /v1/skills only reads the
-	// store. ORBIT_SKILLHUB_SYNC=0 turns the copy off.
-	if cfg.SkillHubSync {
-		go skillhub.Run(context.Background(), repo, defaultTenant, skillhub.NewClient(""), runtime.Log)
-	}
+	// The ModelScope snapshot ships with this binary, so GET /v1/skills,
+	// /v1/mcp-market and /v1/agents only read the store. The copy runs in the
+	// background; a restart with an unchanged snapshot skips it. When
+	// ORBIT_CATALOG_DIR provides skills_text.json.gz, the file text is filled too.
+	go msmarket.InstallAll(context.Background(), repo, defaultTenant, cfg.CatalogDir, runtime.Log)
 	public = HandlerWithOptions(runtime, Options{
 		Auth:           authenticatorFromEnv(defaultTenant),
 		AllowedOrigins: cfg.AllowedOrigins,
@@ -371,6 +365,7 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 			Category:    q.Get("category"),
 			ServiceType: q.Get("serviceType"),
 			NeedsOnline: q.Get("needsOnline"),
+			Source:      q.Get("source"),
 			Page:        page,
 			PageSize:    pageSize,
 		})
@@ -388,6 +383,23 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, detail)
 	}))
+	writeIcon := func(w http.ResponseWriter, r *http.Request, p app.Principal, fetch func(context.Context, string) (string, []byte, error)) {
+		contentType, data, err := fetch(r.Context(), p.TenantID)
+		if err != nil {
+			writeAppErr(runtime.Log, w, err, "icon not found", http.StatusInternalServerError, "INTERNAL")
+			return
+		}
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Cache-Control", "private, max-age=86400")
+		w.WriteHeader(http.StatusOK)
+		w.Write(data)
+	}
+	engine.GET("/v1/mcp-market/:id/icon", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		id := r.PathValue("id")
+		writeIcon(w, r, p, func(ctx context.Context, tenantID string) (string, []byte, error) {
+			return runtime.McpMarketIcon(ctx, tenantID, id)
+		})
+	}))
 	engine.GET("/v1/mcp-market-categories", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		items, err := runtime.ListMcpMarketCategories(r.Context(), p.TenantID, r.URL.Query().Get("needsOnline"))
 		if err != nil {
@@ -401,14 +413,12 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 		page, _ := strconv.Atoi(q.Get("page"))
 		pageSize, _ := strconv.Atoi(q.Get("pageSize"))
 		list, err := runtime.ListSkills(r.Context(), p.TenantID, store.SkillCatalogQuery{
-			Sort:           q.Get("sortBy"),
-			Category:       q.Get("category"),
-			Source:         q.Get("source"),
-			Keyword:        q.Get("keyword"),
-			RequiresAPIKey: q.Get("requiresApiKey"),
-			Paid:           q.Get("paid"),
-			Page:           page,
-			PageSize:       pageSize,
+			Sort:     q.Get("sortBy"),
+			Category: q.Get("category"),
+			Source:   q.Get("source"),
+			Keyword:  q.Get("keyword"),
+			Page:     page,
+			PageSize: pageSize,
 		})
 		if err != nil {
 			writeAppErr(runtime.Log, w, err, "skill not found", http.StatusInternalServerError, "INTERNAL")
@@ -425,17 +435,12 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 		writeJSON(w, http.StatusOK, skill)
 	}
 	writeSkillFiles := func(w http.ResponseWriter, r *http.Request, p app.Principal, handle, slug string) {
-		client := skillhub.NewClient("")
-		files, meta, err := runtime.SkillPage(r.Context(), p.TenantID, handle, slug, client.TextFiles, client.PageCopy)
+		files, err := runtime.SkillTextFiles(r.Context(), p.TenantID, handle, slug)
 		if err != nil {
 			writeAppErr(runtime.Log, w, err, "skill not found", http.StatusInternalServerError, "INTERNAL")
 			return
 		}
-		body := map[string]any{"items": files}
-		if len(meta) > 0 {
-			body["meta"] = json.RawMessage(meta)
-		}
-		writeJSON(w, http.StatusOK, body)
+		writeJSON(w, http.StatusOK, map[string]any{"items": files})
 	}
 	engine.GET("/v1/skills/:handle/:slug", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		writeSkill(w, r, p, r.PathValue("handle"), r.PathValue("slug"))
@@ -449,6 +454,30 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 	engine.GET("/v1/skill-files/:handle", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		writeSkillFiles(w, r, p, "", r.PathValue("handle"))
 	}))
+	engine.GET("/v1/skills/:handle/:slug/icon", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		handle, slug := r.PathValue("handle"), r.PathValue("slug")
+		writeIcon(w, r, p, func(ctx context.Context, tenantID string) (string, []byte, error) {
+			return runtime.SkillIcon(ctx, tenantID, handle, slug)
+		})
+	}))
+	engine.GET("/v1/skills/:handle/icon", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		handle := r.PathValue("handle")
+		writeIcon(w, r, p, func(ctx context.Context, tenantID string) (string, []byte, error) {
+			return runtime.SkillIcon(ctx, tenantID, handle, "")
+		})
+	}))
+	engine.GET("/v1/agents/:handle/:slug/icon", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		handle, slug := r.PathValue("handle"), r.PathValue("slug")
+		writeIcon(w, r, p, func(ctx context.Context, tenantID string) (string, []byte, error) {
+			return runtime.AgentIcon(ctx, tenantID, handle, slug)
+		})
+	}))
+	engine.GET("/v1/agents/:handle/icon", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		handle := r.PathValue("handle")
+		writeIcon(w, r, p, func(ctx context.Context, tenantID string) (string, []byte, error) {
+			return runtime.AgentIcon(ctx, tenantID, handle, "")
+		})
+	}))
 	engine.GET("/v1/skill-categories", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		items, err := runtime.ListSkillCategories(r.Context(), p.TenantID)
 		if err != nil {
@@ -456,6 +485,37 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	}))
+	engine.GET("/v1/agents", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		q := r.URL.Query()
+		page, _ := strconv.Atoi(q.Get("page"))
+		pageSize, _ := strconv.Atoi(q.Get("pageSize"))
+		list, err := runtime.ListAgents(r.Context(), p.TenantID, store.AgentCatalogQuery{
+			Sort:      q.Get("sortBy"),
+			Catalogue: q.Get("catalogue"),
+			Keyword:   q.Get("keyword"),
+			Page:      page,
+			PageSize:  pageSize,
+		})
+		if err != nil {
+			writeAppErr(runtime.Log, w, err, "agent not found", http.StatusInternalServerError, "INTERNAL")
+			return
+		}
+		writeJSON(w, http.StatusOK, list)
+	}))
+	writeAgent := func(w http.ResponseWriter, r *http.Request, p app.Principal, handle, slug string) {
+		agent, err := runtime.GetAgent(r.Context(), p.TenantID, handle, slug)
+		if err != nil {
+			writeAppErr(runtime.Log, w, err, "agent not found", http.StatusInternalServerError, "INTERNAL")
+			return
+		}
+		writeJSON(w, http.StatusOK, agent)
+	}
+	engine.GET("/v1/agents/:handle/:slug", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		writeAgent(w, r, p, r.PathValue("handle"), r.PathValue("slug"))
+	}))
+	engine.GET("/v1/agents/:handle", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		writeAgent(w, r, p, "", r.PathValue("handle"))
 	}))
 	engine.POST("/v1/mcp-connectors", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		var body struct {
@@ -616,6 +676,7 @@ func InternalHandlerWithForwarder(runtime *app.App, forwarder *ephemeralForwarde
 	engine.GET("/health", ginAdapt(func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, HealthBody{Status: "ok"})
 	}))
+	registerInternalSkills(engine, runtime)
 	engine.POST("/internal/tasks/reconcile", ginAdapt(func(w http.ResponseWriter, r *http.Request) {
 		if !internalauth.Authorized(r) {
 			writeErr(w, http.StatusUnauthorized, "UNAUTHORIZED", "internal token required")

@@ -9,4 +9,5 @@ ALTER TABLE skill_catalog RENAME COLUMN requires_api_key TO needs_upstream_auth;
 
 -- +goose Down
 
-ALTER TABLE skill_catalog RENAME COLUMN needs_upstream_auth TO requires_api_key;
+-- This migration was about the old skill catalog table. 00020 replaced it (and its Down drops the new one), so there is
+-- nothing left to undo here.

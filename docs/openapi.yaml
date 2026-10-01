@@ -25,6 +25,8 @@ tags:
   description: TaskWorkflow orchestration
 - name: profiles
   description: Immutable versioned agent profiles
+- name: experts
+  description: Custom experts, each version one immutable profile (15 M8)
 - name: policy
   description: Tenant policy layer (tighten-only)
 - name: sops
@@ -205,6 +207,13 @@ paths:
           enum:
           - 'true'
           - 'false'
+      - name: source
+        in: query
+        schema:
+          type: string
+          enum:
+          - common
+          - nexa
       - name: page
         in: query
         schema:
@@ -261,6 +270,40 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+  /v1/mcp-market/{id}/icon:
+    get:
+      tags:
+      - mcp-market
+      operationId: getMcpMarketIcon
+      summary: Read one stored server's card icon
+      description: |
+        Returns the icon bytes the icon sidecar stored for this server. 404
+        when the server has no icon or the sidecar did not ship it.
+      x-unimplemented: false
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: The icon bytes, with its image content type.
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: No stored icon for this server
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /v1/mcp-market-categories:
     get:
       tags:
@@ -295,12 +338,12 @@ paths:
       tags:
       - skills
       operationId: listSkills
-      summary: List the local SkillHub catalog
+      summary: List the stored ModelScope skills snapshot
       description: |
-        Reads the catalog stored by this service. The handler does not call
-        SkillHub. A background sync copies public skill metadata (name,
-        description, counts). Skill packages are not downloaded and this
-        operation does not install a skill.
+        Reads the skills snapshot stored by this service. The handler does not
+        call modelscope.cn. The snapshot ships with the binary; when
+        ORBIT_CATALOG_DIR provides skills_text.json.gz, file text is filled too.
+        This operation does not install a skill.
       x-unimplemented: false
       parameters:
       - name: sortBy
@@ -308,11 +351,9 @@ paths:
         schema:
           type: string
           enum:
-          - score
           - downloads
+          - likes
           - updated_at
-          - stars
-          - trending
       - name: category
         in: query
         schema:
@@ -322,27 +363,12 @@ paths:
         schema:
           type: string
           enum:
-          - clawhub
-          - community
-          - enterprise
+          - common
+          - nexa
       - name: keyword
         in: query
         schema:
           type: string
-      - name: requiresApiKey
-        in: query
-        schema:
-          type: string
-          enum:
-          - 'true'
-          - 'false'
-      - name: paid
-        in: query
-        schema:
-          type: string
-          enum:
-          - 'true'
-          - 'false'
       - name: page
         in: query
         schema:
@@ -356,7 +382,7 @@ paths:
           maximum: 48
       responses:
         '200':
-          description: One page of the stored catalog. items is empty until the first sync writes rows.
+          description: One page of the stored catalog. items is empty until startup stores the snapshot.
           content:
             application/json:
               schema:
@@ -372,8 +398,8 @@ paths:
       operationId: getSkill
       summary: Read one stored skill
       description: |
-        Reads one row of the local catalog. The handler does not call
-        SkillHub, and it does not download or install the skill package.
+        Reads one row of the stored snapshot. The handler does not call
+        modelscope.cn, and it does not download or install the skill package.
       x-unimplemented: false
       parameters:
       - name: handle
@@ -408,10 +434,10 @@ paths:
       tags:
       - skills
       operationId: getSkillBySlug
-      summary: Read one stored skill that has no author handle
+      summary: Read one stored skill by slug alone
       description: |
-        Reads one row whose id is the slug alone. The handler does not call
-        SkillHub, and it does not download or install the skill package.
+        The ModelScope snapshot always carries a handle, so this route answers
+        404. Kept for older links that address a skill without its author.
       x-unimplemented: false
       parameters:
       - name: slug
@@ -441,16 +467,12 @@ paths:
       tags:
       - skills
       operationId: listSkillFiles
-      summary: Read text files saved for one skill
+      summary: Read the text files stored beside one skill
       description: |
-        Returns text copied once from the public package so the page can show
-        it, plus meta when the extra public page fields have been copied.
-        The first call may read SkillHub. A saved copy that is missing a listed
-        text file, including one under a subdirectory, is read once more.
-        A failed copy is not remembered, so the next open tries again.
-        Later calls read the stored copy.
+        Returns the text files the snapshot stored beside the skill. The text
+        arrives with the skills_text.json.gz sidecar (ORBIT_CATALOG_DIR);
+        without it, or before the text pass has run, items is empty.
         The files are not installed or executed, and this response is not a zip.
-        meta omits signed report URLs.
       x-unimplemented: false
       parameters:
       - name: handle
@@ -485,9 +507,10 @@ paths:
       tags:
       - skills
       operationId: listSkillFilesBySlug
-      summary: Read text files for a skill that has no author handle
+      summary: Read text files addressed by slug alone
       description: |
-        Same as listSkillFiles, for a row whose id is the slug alone.
+        Same as listSkillFiles. The ModelScope snapshot always carries a
+        handle, so this route answers 404.
       x-unimplemented: false
       parameters:
       - name: slug
@@ -512,13 +535,52 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+  /v1/skills/{handle}/{slug}/icon:
+    get:
+      tags:
+      - skills
+      operationId: getSkillIcon
+      summary: Read one skill's card icon
+      description: |
+        Returns the icon bytes the icon sidecar stored for this skill. 404
+        when the skill has no icon or the sidecar did not ship it.
+      x-unimplemented: false
+      parameters:
+      - name: handle
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: slug
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: The icon bytes, with its image content type.
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: No stored icon for this skill
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /v1/skill-categories:
     get:
       tags:
       - skills
       operationId: listSkillCategories
       summary: List stored skill category labels
-      description: Reads labels stored with the local catalog. Does not call SkillHub.
+      description: Reads labels stored with the snapshot. Does not call modelscope.cn.
       x-unimplemented: false
       responses:
         '200':
@@ -527,6 +589,165 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SkillCategoryList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /v1/agents:
+    get:
+      tags:
+      - agents
+      operationId: listAgents
+      summary: List the stored ModelScope agents snapshot
+      description: |
+        Reads the agents snapshot stored by this service. The handler does not
+        call modelscope.cn. This operation does not run an agent.
+      x-unimplemented: false
+      parameters:
+      - name: sortBy
+        in: query
+        schema:
+          type: string
+          enum:
+          - downloads
+          - stars
+          - updated_at
+      - name: catalogue
+        in: query
+        schema:
+          type: string
+      - name: keyword
+        in: query
+        schema:
+          type: string
+      - name: page
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+      - name: pageSize
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 48
+      responses:
+        '200':
+          description: One page of the stored agents. items is empty until startup stores the snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /v1/agents/{handle}/{slug}:
+    get:
+      tags:
+      - agents
+      operationId: getAgent
+      summary: Read one stored agent
+      description: |
+        Reads one agent row with its files. The handler does not call
+        modelscope.cn, and it does not run the agent.
+      x-unimplemented: false
+      parameters:
+      - name: handle
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: slug
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: The stored agent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Agent'
+        '404':
+          description: No stored agent matches this handle and slug
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /v1/agents/{slug}:
+    get:
+      tags:
+      - agents
+      operationId: getAgentBySlug
+      summary: Read one stored agent by slug alone
+      description: |
+        The snapshot always carries a handle, so this route answers 404.
+        Kept for older links that address an agent without its author.
+      x-unimplemented: false
+      parameters:
+      - name: slug
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: The stored agent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Agent'
+        '404':
+          description: No stored agent matches this slug
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /v1/agents/{handle}/{slug}/icon:
+    get:
+      tags:
+      - agents
+      operationId: getAgentIcon
+      summary: Read one agent's logo
+      description: |
+        Returns the logo bytes the icon sidecar stored for this agent. 404
+        when the agent has no logo or the sidecar did not ship it.
+      x-unimplemented: false
+      parameters:
+      - name: handle
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: slug
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: The logo bytes, with its image content type.
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: No stored logo for this agent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -623,6 +844,94 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Profile'
+  /v1/experts:
+    get:
+      tags:
+      - experts
+      operationId: listExperts
+      responses:
+        '200':
+          description: The latest version of each expert of the tenant
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Expert'
+    post:
+      tags:
+      - experts
+      operationId: createExpert
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExpertInput'
+      responses:
+        '201':
+          description: Expert created as version 1
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Expert'
+        '400':
+          description: Invalid input, or a connector id that is not the tenant's (the same answer for both)
+  /v1/experts/{expertId}:
+    get:
+      tags:
+      - experts
+      operationId: getExpert
+      parameters:
+      - name: expertId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: The latest version of the expert
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Expert'
+        '404':
+          description: No such expert in this tenant
+    put:
+      tags:
+      - experts
+      operationId: updateExpert
+      description: Replaces the expert's content as a new version. Earlier versions never change.
+      parameters:
+      - name: expertId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExpertInput'
+      responses:
+        '200':
+          description: The new latest version
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Expert'
+        '400':
+          description: Invalid input, or a connector id that is not the tenant's
+        '404':
+          description: No such expert in this tenant
+        '409':
+          description: Another update took the next version first; read and retry
   /v1/policy:
     get:
       tags:
@@ -813,6 +1122,79 @@ paths:
             response has Retry-After: 1); retry with the same command_id. The server does not wait for it. A command
             whose orchestrator call failed can be retried with the same command_id; the record is kept in
             idempotency_ledger (scope api_command), so this holds across replicas and restarts.
+  /v1/tasks/{taskId}/config:
+    get:
+      tags:
+      - tasks
+      operationId: getTaskConfig
+      description: What the task runs with. Read from the workflow, which owns it.
+      parameters:
+      - name: taskId
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: The current configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskConfigView'
+        '404':
+          description: No such task for this caller
+    put:
+      tags:
+      - tasks
+      operationId: updateTaskConfig
+      description: |
+        Replaces the configuration. It applies from the task's next attempt; the attempt that is running keeps what it
+        started with. Send the version you read as base_config_version: a newer one in place answers 409
+        CONFIG_VERSION_CONFLICT. Repeating a command_id answers the first result.
+      parameters:
+      - name: taskId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+              - $ref: '#/components/schemas/TaskConfigInput'
+              - type: object
+                required:
+                - base_config_version
+                properties:
+                  base_config_version:
+                    type: integer
+                    minimum: 1
+                  command_id:
+                    type: string
+      responses:
+        '200':
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - config_version
+                properties:
+                  config_version:
+                    type: integer
+                  effective:
+                    type: string
+                    enum:
+                    - next_attempt
+        '400':
+          description: Invalid input, or an expert, skill or connector this caller cannot use
+        '404':
+          description: No such task for this caller
+        '409':
+          description: CONFIG_VERSION_CONFLICT, or TASK_CLOSED
   /v1/tasks/{taskId}/plan:
     post:
       tags:
@@ -1019,6 +1401,70 @@ components:
         created_at:
           type: string
           format: date-time
+    ExpertInput:
+      type: object
+      required:
+      - name
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        instructions:
+          type: string
+          maxLength: 20000
+          description: Appended to the agent's system prompt
+        model:
+          type: string
+          maxLength: 100
+          description: Another model of the worker's provider; ignored under a mock model
+        connector_ids:
+          type: array
+          maxItems: 20
+          uniqueItems: true
+          items:
+            type: string
+          description: Ids of the tenant's MCP connectors
+        skill_ids:
+          type: array
+          maxItems: 20
+          uniqueItems: true
+          items:
+            type: string
+          description: Catalog skills the expert brings by default (each needs a SKILL.md and readable text)
+    Expert:
+      type: object
+      required:
+      - expert_id
+      - ref
+      - version
+      - name
+      properties:
+        expert_id:
+          type: string
+        ref:
+          type: string
+          description: '"<expert_id>@<version>", what a task names as its profile'
+        version:
+          type: integer
+          minimum: 1
+        name:
+          type: string
+        instructions:
+          type: string
+        model:
+          type: string
+        connector_ids:
+          type: array
+          items:
+            type: string
+        skill_ids:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
     RegisterProfileRequest:
       type: object
       required:
@@ -1134,6 +1580,63 @@ components:
         created_at:
           type: string
           format: date-time
+    TaskConfigInput:
+      type: object
+      description: |
+        What a task runs with. skills and connector_ids are the complete sets to use: null (or absent) keeps the
+        expert's defaults, an empty list removes them.
+      properties:
+        expert:
+          type: string
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*@[1-9][0-9]*$
+          description: A profile or expert version. Absent keeps the task's profile.
+        skills:
+          type: array
+          nullable: true
+          maxItems: 20
+          uniqueItems: true
+          items:
+            type: string
+          description: Catalog skill ids ("handle/slug") that have a SKILL.md and readable text; others are refused
+        connector_ids:
+          type: array
+          nullable: true
+          maxItems: 20
+          uniqueItems: true
+          items:
+            type: string
+        mode:
+          type: string
+          enum:
+          - default
+          - plan
+          - ask
+          default: default
+          description: ask runs read-only
+    TaskConfigView:
+      type: object
+      required:
+      - config_version
+      - mode
+      properties:
+        config_version:
+          type: integer
+          minimum: 1
+        expert:
+          type: string
+          nullable: true
+        skills:
+          type: array
+          nullable: true
+          items:
+            type: string
+        connector_ids:
+          type: array
+          nullable: true
+          items:
+            type: string
+        mode:
+          type: string
     CreateTaskRequest:
       type: object
       required:
@@ -1163,6 +1666,8 @@ components:
           additionalProperties: true
         policy:
           $ref: '#/components/schemas/Policy'
+        config:
+          $ref: '#/components/schemas/TaskConfigInput'
           description: 'The task layer of the policy: it can only tighten the tenant layer.'
     SendTaskMessageRequest:
       type: object
@@ -1555,7 +2060,6 @@ components:
       - items
       - total
       - stored
-      - plazaTotal
       - page
       - pageSize
       properties:
@@ -1568,9 +2072,6 @@ components:
         stored:
           type: integer
           description: Catalog size after the needsOnline filter, before keyword and category.
-        plazaTotal:
-          type: integer
-          description: Count labeled on the upstream plaza. The stored snapshot can be smaller.
         page:
           type: integer
         pageSize:
@@ -1611,21 +2112,22 @@ components:
       - handle
       - name
       - description
+      - descriptionEn
       - category
       - categoryName
+      - tags
+      - license
       - iconUrl
+      - sourceUrl
       - downloads
-      - stars
-      - source
-      - version
-      - requiresApiKey
-      - paid
-      - score
+      - visits
+      - likes
       - updatedAt
-      - trendingRank
+      - source
       properties:
         id:
           type: string
+          description: handle/slug. The handle is an optional @ plus one token.
         slug:
           type: string
         handle:
@@ -1634,32 +2136,37 @@ components:
           type: string
         description:
           type: string
+        descriptionEn:
+          type: string
         category:
           type: string
         categoryName:
           type: string
+        tags:
+          type: array
+          items:
+            type: string
+        license:
+          type: string
         iconUrl:
           type: string
           description: Empty, or an https URL on an allowlisted image host.
+        sourceUrl:
+          type: string
         downloads:
           type: integer
-        stars:
+        visits:
           type: integer
-        source:
-          type: string
-        version:
-          type: string
-        requiresApiKey:
-          type: boolean
-        paid:
-          type: boolean
-        score:
-          type: number
+        likes:
+          type: integer
         updatedAt:
           type: string
           format: date-time
-        trendingRank:
-          type: integer
+        source:
+          type: string
+          enum:
+          - common
+          - nexa
     SkillList:
       type: object
       additionalProperties: false
@@ -1668,7 +2175,7 @@ components:
       - total
       - page
       - pageSize
-      - syncedAt
+      - installedAt
       properties:
         items:
           type: array
@@ -1680,9 +2187,9 @@ components:
           type: integer
         pageSize:
           type: integer
-        syncedAt:
+        installedAt:
           type: string
-          description: RFC3339 time of the newest stored row, or empty before the first sync.
+          description: RFC3339 time of the newest stored row, or empty before the snapshot is stored.
     SkillCategory:
       type: object
       additionalProperties: false
@@ -1710,6 +2217,144 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/SkillCategory'
+    AgentModel:
+      type: object
+      additionalProperties: false
+      required:
+      - name
+      - supplier
+      - protocol
+      properties:
+        name:
+          type: string
+        supplier:
+          type: string
+        protocol:
+          type: string
+    AgentRef:
+      type: object
+      additionalProperties: false
+      required:
+      - name
+      - description
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+    AgentPrompt:
+      type: object
+      additionalProperties: false
+      required:
+      - filename
+      - content
+      properties:
+        filename:
+          type: string
+        content:
+          type: string
+    Agent:
+      type: object
+      additionalProperties: false
+      required:
+      - id
+      - handle
+      - slug
+      - name
+      - description
+      - framework
+      - license
+      - logoUrl
+      - catalogues
+      - models
+      - mcps
+      - skills
+      - systemPrompts
+      - readme
+      - files
+      - stars
+      - downloads
+      - visits
+      - updatedAt
+      - source
+      properties:
+        id:
+          type: string
+          description: handle/slug. The handle is an optional @ plus one token.
+        handle:
+          type: string
+        slug:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        framework:
+          type: string
+        license:
+          type: string
+        logoUrl:
+          type: string
+          description: Empty, or an https URL on an allowlisted image host.
+        catalogues:
+          type: array
+          items:
+            type: string
+        models:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentModel'
+        mcps:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentRef'
+        skills:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentRef'
+        systemPrompts:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentPrompt'
+        readme:
+          type: string
+        files:
+          type: array
+          description: Text files stored with the agent; empty in list responses.
+          items:
+            $ref: '#/components/schemas/SkillTextFile'
+        stars:
+          type: integer
+        downloads:
+          type: integer
+        visits:
+          type: integer
+        updatedAt:
+          type: string
+          format: date-time
+        source:
+          type: string
+          enum:
+          - common
+    AgentList:
+      type: object
+      additionalProperties: false
+      required:
+      - items
+      - total
+      - page
+      - pageSize
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Agent'
+        total:
+          type: integer
+        page:
+          type: integer
+        pageSize:
+          type: integer
     SkillTextFile:
       type: object
       additionalProperties: false

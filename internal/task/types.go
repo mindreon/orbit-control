@@ -26,6 +26,8 @@ type CreateInput struct {
 	SOP     string
 	Budgets map[string]any
 	Policy  Policy
+	// Config is what the task runs with (15 M8), already checked and resolved by the caller.
+	Config *ConfigInput
 }
 
 type Task struct {

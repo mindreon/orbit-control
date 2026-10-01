@@ -54,8 +54,9 @@ type Config struct {
 	TemporalNamespace string
 	TemporalTaskQueue string
 
-	// SkillHubSync stays on unless ORBIT_SKILLHUB_SYNC is exactly "0".
-	SkillHubSync bool
+	// CatalogDir is where an optional skills_text.json.gz sidecar lives
+	// (ORBIT_CATALOG_DIR). Without it the skill catalog runs without file text.
+	CatalogDir string
 
 	TaskMembers     []string
 	TaskMemberID    string
@@ -120,7 +121,7 @@ func Load() Config {
 		TemporalNamespace: strings.TrimSpace(v.GetString("TEMPORAL_NAMESPACE")),
 		TemporalTaskQueue: strings.TrimSpace(v.GetString("TEMPORAL_TASK_QUEUE")),
 
-		SkillHubSync: strings.TrimSpace(v.GetString("ORBIT_SKILLHUB_SYNC")) != "0",
+		CatalogDir: strings.TrimSpace(v.GetString("ORBIT_CATALOG_DIR")),
 
 		TaskMembers:              SplitCSV(v.GetString("ORBIT_CONTROL_MEMBERS")),
 		TaskMemberID:             strings.TrimSpace(v.GetString("ORBIT_CONTROL_MEMBER_ID")),
