@@ -216,6 +216,7 @@ type ApprovalDecidedEvent struct {
 }
 
 type ApprovalDecidedPayload struct {
+	Always     *bool   `json:"always,omitempty"`
 	ApprovalID string  `json:"approval_id"`
 	Comment    *string `json:"comment,omitempty"`
 	DecidedBy  *string `json:"decided_by,omitempty"`
@@ -224,10 +225,11 @@ type ApprovalDecidedPayload struct {
 
 // Parent to child: the decision the parked agent is waiting for.
 type ApprovalDecidedSignal struct {
-	ApprovalID string  `json:"approval_id"`
-	Comment    *string `json:"comment,omitempty"`
-	Decision   string  `json:"decision"`
-	ToolCallID *string `json:"tool_call_id,omitempty"`
+	ApprovalID string              `json:"approval_id"`
+	Comment    *string             `json:"comment,omitempty"`
+	Decision   string              `json:"decision"`
+	Rule       *PermissionRuleSpec `json:"rule,omitempty"`
+	ToolCallID *string             `json:"tool_call_id,omitempty"`
 }
 
 type ApprovalNode struct {
@@ -274,10 +276,12 @@ type ApprovalSpec struct {
 }
 
 type ApprovalSubject struct {
-	Digest  string              `json:"digest"`
-	Kind    ApprovalSubjectKind `json:"kind"`
-	Risk    string              `json:"risk"`
-	Summary string              `json:"summary"`
+	AllowRule *PermissionRuleSpec `json:"allow_rule,omitempty"`
+	Detail    *string             `json:"detail,omitempty"`
+	Digest    string              `json:"digest"`
+	Kind      ApprovalSubjectKind `json:"kind"`
+	Risk      string              `json:"risk"`
+	Summary   string              `json:"summary"`
 }
 
 type ArtifactRequirement struct {
@@ -548,6 +552,7 @@ type ConnectorSnapshot struct {
 }
 
 type DecideApprovalInput struct {
+	Always     *bool   `json:"always,omitempty"`
 	ApprovalID string  `json:"approval_id"`
 	CommandID  string  `json:"command_id"`
 	Comment    *string `json:"comment,omitempty"`
@@ -731,6 +736,13 @@ type NodeView struct {
 type ParkedToolCall struct {
 	Subject    ApprovalSubject `json:"subject"`
 	ToolCallID string          `json:"tool_call_id"`
+}
+
+// A permission rule a person allowed for the rest of a task: this tool, and what it is called with (a command
+// prefix for Bash, a path pattern for Write). It is what AgentScope suggests with the approval.
+type PermissionRuleSpec struct {
+	RuleContent *string `json:"rule_content,omitempty"`
+	ToolName    string  `json:"tool_name"`
 }
 
 type PlanChangeAccepted struct {
@@ -980,7 +992,7 @@ type TaskConfigChangedPayload struct {
 	Skills        []string `json:"skills,omitempty"`
 }
 
-// Updates “pause“, “resume“, “cancel“, “takeover“ and “handback“.
+// Updates “pause“, “resume“, “stop“, “cancel“, “takeover“ and “handback“.
 type TaskControlInput struct {
 	Action    string  `json:"action"`
 	CommandID string  `json:"command_id"`
@@ -1113,8 +1125,9 @@ type TeamStageSpec struct {
 }
 
 type TextDeltaPayload struct {
-	AttemptID string `json:"attempt_id"`
-	Text      string `json:"text"`
+	AttemptID string  `json:"attempt_id"`
+	BlockID   *string `json:"block_id,omitempty"`
+	Text      string  `json:"text"`
 }
 
 type ThinkingDeltaEvent struct {

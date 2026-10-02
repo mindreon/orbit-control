@@ -1699,6 +1699,7 @@ components:
           enum:
           - pause
           - resume
+          - stop
           - cancel
           - takeover
           - handback
@@ -1718,6 +1719,9 @@ components:
           - reject
         comment:
           type: string
+        always:
+          type: boolean
+          description: With approve, also allow what the approval offered (its subject's allow_rule) for the rest of the task.
     GrantBudgetRequest:
       type: object
       required:

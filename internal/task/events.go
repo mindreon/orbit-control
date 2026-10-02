@@ -132,7 +132,6 @@ func (s *Service) appendEventRaw(ctx context.Context, event Event) error {
 		s.nextSeq[event.TaskID] = event.Seq
 	}
 	items := append(s.events[event.TaskID], event)
-	previousTask := cloneTask(s.tasks[event.TaskID])
 	if task := s.tasks[event.TaskID]; task != nil {
 		var payload map[string]any
 		if json.Unmarshal(event.Payload, &payload) == nil {
@@ -192,24 +191,10 @@ func (s *Service) appendEventRaw(ctx context.Context, event Event) error {
 	} else {
 		items = append([]Event(nil), items...)
 	}
-	var updatedTask *Task
-	if task := s.tasks[event.TaskID]; task != nil {
-		updatedTask = cloneTask(task)
-	}
 	s.mu.Unlock()
-	if s.projection != nil && updatedTask != nil {
-		if err := s.projection.UpdateTask(ctx, Principal{TenantID: updatedTask.TenantID, UserID: updatedTask.CreatedBy}, updatedTask); err != nil {
-			s.mu.Lock()
-			if previousTask == nil {
-				delete(s.tasks, event.TaskID)
-			} else {
-				s.tasks[event.TaskID] = previousTask
-			}
-			s.forgetEvent(event.TaskID, event.EventID)
-			s.mu.Unlock()
-			return err
-		}
-	}
+	// The projection store has already applied the event to the task row, in the same transaction that stored it. Writing
+	// the cached copy back as a whole row would race with a read that refreshed the cache, and put an old list of
+	// pending approvals over the new one.
 	s.mu.Lock()
 	if event.Type == "artifact.manifest_created" {
 		var manifest ArtifactManifest

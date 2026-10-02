@@ -438,7 +438,9 @@ func registerTaskRoutes(router gin.IRoutes, runtime *app.App, authed func(princi
 			return
 		}
 		id := commandID(stringValue(body, "command_id", "commandId"))
-		payload := map[string]any{"command_id": id, "approval_id": r.PathValue("approvalId"), "decision": stringValue(body, "decision"), "comment": stringValue(body, "comment")}
+		// "Always": also allow what the approval offered for the rest of the task.
+		always, _ := body["always"].(bool)
+		payload := map[string]any{"command_id": id, "approval_id": r.PathValue("approvalId"), "decision": stringValue(body, "decision"), "comment": stringValue(body, "comment"), "always": always}
 		raw, err := runtime.Tasks.Update(r.Context(), toPrincipal(p), r.PathValue("taskId"), "decideApproval", id, payload)
 		if err != nil {
 			writeTaskErr(w, err)
