@@ -5,6 +5,9 @@ import (
 	"errors"
 )
 
+// subscriberBuffer is the room a subscriber has for live events beyond its replay.
+const subscriberBuffer = 256
+
 func (s *Service) Subscribe(ctx context.Context, p Principal, id string, after uint64) (*Subscriber, error) {
 	if _, err := s.Get(ctx, p, id); err != nil {
 		return nil, err
@@ -16,7 +19,9 @@ func (s *Service) Subscribe(ctx context.Context, p Principal, id string, after u
 	if err != nil {
 		items = nil
 	}
-	sub := &subscriber{ch: make(chan Event, 256), closed: make(chan struct{})}
+	// The replay is queued below while the service lock is held: the buffer must take all of it, or a replay longer than the
+	// buffer blocks here with the lock held and stops every call of the service.
+	sub := &subscriber{ch: make(chan Event, subscriberBuffer+len(items)), closed: make(chan struct{})}
 	s.mu.Lock()
 	if s.subs[id] == nil {
 		s.subs[id] = map[*subscriber]struct{}{}
