@@ -3,16 +3,22 @@ package task
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 )
 
 // Policy limits what an attempt may do (05 §6). The tenant, the task and the agent profile each carry one, and they
-// only ever tighten each other: denied tools add up and the smallest exploration cap wins. A missing field limits
-// nothing.
+// only ever tighten each other: denied tools add up and the smallest exploration cap and the smallest concurrency win.
+// A missing field limits nothing.
 type Policy struct {
 	DeniedTools             []string `json:"denied_tools"`
 	ExplorationMaxToolCalls *int     `json:"exploration_max_tool_calls,omitempty"`
+	// MaxConcurrency is how many attempts of a task may run at once. Missing means the orchestrator's default (4).
+	MaxConcurrency *int `json:"max_concurrency,omitempty"`
 }
+
+// MaxConcurrencyLimit is the most attempts one task may be allowed to run at once.
+const MaxConcurrencyLimit = 64
 
 func (p Policy) validate() error {
 	for _, name := range p.DeniedTools {
@@ -23,6 +29,9 @@ func (p Policy) validate() error {
 	if p.ExplorationMaxToolCalls != nil && *p.ExplorationMaxToolCalls < 0 {
 		return errors.New("exploration_max_tool_calls must not be negative")
 	}
+	if p.MaxConcurrency != nil && (*p.MaxConcurrency < 1 || *p.MaxConcurrency > MaxConcurrencyLimit) {
+		return fmt.Errorf("max_concurrency must be between 1 and %d", MaxConcurrencyLimit)
+	}
 	return nil
 }
 
@@ -31,6 +40,19 @@ func (p Policy) normalized() Policy {
 		p.DeniedTools = []string{}
 	}
 	return p
+}
+
+// smallest is the tighter of two optional caps; a missing one limits nothing.
+func smallest(a, b *int) *int {
+	switch {
+	case a == nil && b == nil:
+		return nil
+	case a == nil:
+		return &[]int{*b}[0]
+	case b == nil || *a <= *b:
+		return &[]int{*a}[0]
+	}
+	return &[]int{*b}[0]
 }
 
 func (s *Service) GetTenantPolicy(ctx context.Context, p Principal) (Policy, error) {

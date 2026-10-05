@@ -2,6 +2,7 @@
 package task
 
 import (
+	"log"
 	"sync"
 
 	"github.com/google/uuid"
@@ -14,6 +15,7 @@ type Service struct {
 	orch           TaskClient
 	projection     ProjectionStore
 	artifactSigner ArtifactSigner
+	log            *log.Logger
 	tasks          map[string]*Task
 	events         map[string][]Event
 	subs           map[string]map[*subscriber]struct{}
@@ -50,6 +52,12 @@ func NewWithProjection(client TaskClient, projection ProjectionStore) *Service {
 
 func (s *Service) SetArtifactSigner(signer ArtifactSigner) {
 	s.artifactSigner = signer
+}
+
+// SetLog wires the process logger for background work that has no caller to
+// report to. A nil logger is fine; the work just stays silent.
+func (s *Service) SetLog(log *log.Logger) {
+	s.log = log
 }
 
 // isClosed is true only for a cancelled task. A task is a conversation: COMPLETED means its plan is done for now, and the

@@ -93,6 +93,7 @@ func NewWithOptions(opts Options) *App {
 		projection, _ := opts.Repo.(taskruntime.ProjectionStore)
 		a.Tasks = taskruntime.NewWithProjection(opts.TaskClient, projection)
 	}
+	a.Tasks.SetLog(a.Log)
 	if opts.ArtifactSigner != nil {
 		a.Tasks.SetArtifactSigner(opts.ArtifactSigner)
 	}

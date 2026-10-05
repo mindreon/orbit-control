@@ -1,12 +1,14 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -47,6 +49,7 @@ func registerTaskRoutes(router gin.IRoutes, runtime *app.App, authed func(princi
 		case errors.Is(err, store.ErrStorage):
 			runtime.Log.Printf("task storage error: %v", err)
 			writeErr(w, http.StatusInternalServerError, "STORAGE_ERROR", "task storage is temporarily unavailable")
+		case writeOrchRefusal(w, err):
 		default:
 			runtime.Log.Printf("bad task request: %v", err)
 			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "the request is invalid")
@@ -206,14 +209,23 @@ func registerTaskRoutes(router gin.IRoutes, runtime *app.App, authed func(princi
 	}))
 	router.POST("/v1/sops", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		var body struct {
-			SOPID   string                `json:"sop_id" binding:"required"`
-			Version int                   `json:"version" binding:"min=1"`
-			Steps   []taskruntime.SOPStep `json:"steps"`
+			SOPID       string                `json:"sop_id" binding:"required"`
+			Version     int                   `json:"version" binding:"min=1"`
+			Name        string                `json:"name"`
+			Description string                `json:"description"`
+			Steps       []taskruntime.SOPStep `json:"steps"`
 		}
 		if !bindJSON(w, r, &body) {
 			return
 		}
-		sop, err := runtime.Tasks.RegisterSOP(r.Context(), toPrincipal(p), taskruntime.SOP{SOPID: body.SOPID, Version: body.Version, Steps: body.Steps})
+		sop, err := runtime.Tasks.RegisterSOP(r.Context(), toPrincipal(p), taskruntime.SOP{
+			SOPID: body.SOPID, Version: body.Version, Name: body.Name, Description: body.Description, Steps: body.Steps,
+		})
+		var invalid *taskruntime.InvalidSOPError
+		if errors.As(err, &invalid) {
+			writeErr(w, http.StatusBadRequest, "INVALID_SOP", invalid.Reason)
+			return
+		}
 		if err != nil {
 			writeTaskErr(w, err)
 			return
@@ -258,6 +270,13 @@ func registerTaskRoutes(router gin.IRoutes, runtime *app.App, authed func(princi
 			return
 		}
 		writeJSON(w, http.StatusOK, t)
+	}))
+	router.DELETE("/v1/tasks/:taskId", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		if err := runtime.Tasks.Delete(r.Context(), toPrincipal(p), r.PathValue("taskId")); err != nil {
+			writeTaskErr(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}))
 	router.GET("/v1/tasks/:taskId/config", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		view, err := runtime.Tasks.TaskConfig(r.Context(), toPrincipal(p), r.PathValue("taskId"))
@@ -423,6 +442,24 @@ func registerTaskRoutes(router gin.IRoutes, runtime *app.App, authed func(princi
 		if !bindJSON(w, r, &body) {
 			return
 		}
+		// What the workflow takes is checked here, where a refusal reaches the caller: the node and the reason must be
+		// named, and the profile must be the tenant's own. An unknown one is refused before anything is sent (11 §3).
+		toProfile := stringValue(body, "to_profile")
+		if !nodeRef.MatchString(stringValue(body, "node_id")) || strings.TrimSpace(stringValue(body, "reason")) == "" {
+			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "node_id and reason are required")
+			return
+		}
+		if err := runtime.CheckProfile(r.Context(), toPrincipal(p), toProfile); err != nil {
+			switch {
+			case errors.Is(err, app.ErrUnknownProfile):
+				writeErr(w, http.StatusUnprocessableEntity, "UNKNOWN_PROFILE", "to_profile is not a profile of this tenant")
+			case errors.Is(err, app.ErrInvalid):
+				writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "to_profile must be a versioned reference like coder@3")
+			default:
+				writeTaskErr(w, err)
+			}
+			return
+		}
 		id := commandID(stringValue(body, "command_id", "commandId"))
 		body["command_id"] = id
 		raw, err := runtime.Tasks.Update(r.Context(), toPrincipal(p), r.PathValue("taskId"), "requestProfileSwitch", id, body)
@@ -430,7 +467,34 @@ func registerTaskRoutes(router gin.IRoutes, runtime *app.App, authed func(princi
 			writeTaskErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusAccepted, json.RawMessage(raw))
+		writeJSON(w, resultStatus(raw, "effective_attempt_no"), json.RawMessage(raw))
+	}))
+	router.POST("/v1/tasks/:taskId/nodes/:nodeId/complete", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		var body map[string]any
+		if !bindJSON(w, r, &body) {
+			return
+		}
+		nodeID := r.PathValue("nodeId")
+		if !nodeRef.MatchString(nodeID) {
+			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "the node id is invalid")
+			return
+		}
+		if refused := completeNodeRefusal(r.Context(), runtime, toPrincipal(p), r.PathValue("taskId"), nodeID); refused != nil {
+			if refused.err != nil {
+				writeTaskErr(w, refused.err)
+				return
+			}
+			writeErr(w, refused.status, refused.code, refused.message)
+			return
+		}
+		id := commandID(stringValue(body, "command_id", "commandId"))
+		payload := map[string]any{"command_id": id, "node_id": nodeID, "reason": stringValue(body, "reason")}
+		raw, err := runtime.Tasks.Update(r.Context(), toPrincipal(p), r.PathValue("taskId"), "completeNode", id, payload)
+		if err != nil {
+			writeTaskErr(w, err)
+			return
+		}
+		writeJSON(w, resultStatus(raw, "node_id"), json.RawMessage(raw))
 	}))
 	router.POST("/v1/tasks/:taskId/approvals/:approvalId", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		var body map[string]any
@@ -465,6 +529,68 @@ func registerTaskRoutes(router gin.IRoutes, runtime *app.App, authed func(princi
 		}
 		writeJSON(w, http.StatusAccepted, json.RawMessage(raw))
 	}))
+}
+
+// resultStatus is 200 when the update's answer carries its result (the field the result always has), and 202 when the
+// update was only accepted. It reads the stored body, so a replay answers with the status of the first response.
+func resultStatus(raw json.RawMessage, resultField string) int {
+	var body map[string]json.RawMessage
+	if json.Unmarshal(raw, &body) == nil {
+		if _, ok := body[resultField]; ok {
+			return http.StatusOK
+		}
+	}
+	return http.StatusAccepted
+}
+
+// nodeRef is the id of a node as the workflow mints it: n_ and 26 characters of Crockford base32.
+var nodeRef = regexp.MustCompile(`^n_[0-9A-HJKMNP-TV-Z]{26}$`)
+
+// held are the task statuses in which a person may complete a node by hand: the agents are not working.
+var held = map[string]bool{"TAKEN_OVER": true, "PAUSED": true, "PAUSED_NEEDS_REVIEW": true}
+
+type refusal struct {
+	status  int
+	code    string
+	message string
+	err     error
+}
+
+// completeNodeRefusal says why the node cannot be completed by hand now, or nil. The workflow's validator is the judge and
+// refuses the same things; its refusal reaches an API caller that waits only for the update to be accepted as a 202, so the
+// obvious cases are answered here. A node that is already complete is let through: it is how a repeat of a command that was
+// applied is answered from the command ledger instead of refused.
+func completeNodeRefusal(ctx context.Context, runtime *app.App, p taskruntime.Principal, taskID, nodeID string) *refusal {
+	task, err := runtime.Tasks.Get(ctx, p, taskID)
+	if err != nil {
+		return &refusal{err: err}
+	}
+	plan, err := runtime.Tasks.Plan(ctx, p, taskID)
+	if err != nil {
+		return &refusal{err: err}
+	}
+	if len(plan.Nodes) > 0 {
+		var node map[string]any
+		for _, candidate := range plan.Nodes {
+			if candidate["node_id"] == nodeID {
+				node = candidate
+			}
+		}
+		if node == nil {
+			return &refusal{status: http.StatusNotFound, code: "NOT_FOUND", message: "node not found"}
+		}
+		status, _ := node["status"].(string)
+		if frozen, _ := node["frozen"].(bool); frozen || status == "COMPLETED" || status == "SKIPPED" {
+			return nil
+		}
+		if status == "RUNNING" || status == "VERIFYING" {
+			return &refusal{status: http.StatusConflict, code: "NODE_RUNNING", message: "an attempt is running on this node; take the task over first"}
+		}
+	}
+	if !held[task.Status] {
+		return &refusal{status: http.StatusConflict, code: "INVALID_TRANSITION", message: "pause or take over the task before completing a node"}
+	}
+	return nil
 }
 
 func stringValue(body map[string]any, keys ...string) string {

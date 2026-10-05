@@ -136,6 +136,9 @@ func removeString(items []string, wanted string) []string {
 func addNumbers(base, delta map[string]any) map[string]any {
 	out := cloneMap(base)
 	for key, value := range delta {
+		if value == nil {
+			continue // an unknown amount (a cost that is null) adds nothing and never erases a known one
+		}
 		n, ok := value.(float64)
 		if !ok {
 			out[key] = value

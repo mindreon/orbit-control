@@ -29,6 +29,9 @@ type taskRow struct {
 	CreatedBy        string
 	CreatedAt        time.Time `gorm:"autoCreateTime:false"`
 	UpdatedAt        time.Time `gorm:"autoUpdateTime:false"`
+	// DeletedAt is the soft-delete stamp (00022). A plain pointer, not
+	// gorm.DeletedAt, so reads only hide rows where the queries say so.
+	DeletedAt *time.Time
 }
 
 func (taskRow) TableName() string { return "tasks" }

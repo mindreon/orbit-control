@@ -1085,6 +1085,10 @@ paths:
       tags:
       - tasks
       operationId: requestTaskProfileSwitch
+      description: >-
+        Switch a node to another profile for its next attempt; the attempt that is running is not interrupted (11 §3). A
+        profile the task is allowed (its expert, a team member) applies at once; any other one waits for a profile_switch
+        approval. The profile must exist in the caller's tenant.
       requestBody:
         required: true
         content:
@@ -1092,8 +1096,22 @@ paths:
             schema:
               $ref: '#/components/schemas/RequestProfileSwitchRequest'
       responses:
+        '200':
+          description: >-
+            The update finished within about 3 seconds. The body is `accepted`, `command_id` and the workflow's result
+            (effective_attempt_no, needs_approval, approval_id). A replay with the same command_id returns the same body.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestProfileSwitchResponse'
         '202':
-          description: Update accepted, or the stored response of an earlier request with the same command_id (replay)
+          description: >-
+            Update accepted but its result was not available in time: the body is `{accepted: true, command_id}`. Also the
+            stored response of an earlier request with the same command_id (replay) that was answered that way.
+        '400':
+          description: node_id, to_profile (a versioned reference) or reason is missing or malformed.
+        '422':
+          description: 'UNKNOWN_PROFILE: to_profile is not a profile of the caller''s tenant. Nothing was sent to the orchestrator.'
         '409':
           description: >-
             IDEMPOTENCY_KEY_REUSED: the command_id was already used with a different request body or for a different
@@ -1101,6 +1119,44 @@ paths:
             response has Retry-After: 1); retry with the same command_id. The server does not wait for it. A command
             whose orchestrator call failed can be retried with the same command_id; the record is kept in
             idempotency_ledger (scope api_command), so this holds across replicas and restarts.
+  /v1/tasks/{taskId}/nodes/{nodeId}/complete:
+    post:
+      tags:
+      - tasks
+      operationId: completeTaskNode
+      description: >-
+        A person completes a node by hand, without verification (04 §4). Only while the task is paused or taken over (the
+        agents are not working), for a node that is not already complete and has no attempt running. The node is frozen and
+        what depends on it goes on when the agents have the task back.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompleteNodeRequest'
+      responses:
+        '200':
+          description: >-
+            The update finished within about 3 seconds. The body is `accepted`, `command_id` and the workflow's result
+            (node_id, status). A replay with the same command_id returns the same body.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompleteNodeResponse'
+        '202':
+          description: >-
+            Update accepted but its result was not available in time: the body is `{accepted: true, command_id}`. Also the
+            stored response of an earlier request with the same command_id (replay) that was answered that way.
+        '400':
+          description: The node id is malformed.
+        '404':
+          description: NOT_FOUND, the task or the node is not found.
+        '409':
+          description: >-
+            INVALID_TRANSITION: pause or take over the task first. NODE_RUNNING: an attempt is running on the node.
+            IDEMPOTENCY_KEY_REUSED: the command_id was already used with a different request body or for a different
+            command. IN_PROGRESS: another request with the same command_id and body is still being processed (the
+            response has Retry-After: 1); retry with the same command_id.
   /v1/tasks/{taskId}/approvals/{approvalId}:
     post:
       tags:
@@ -1221,6 +1277,10 @@ paths:
       tags:
       - tasks
       operationId: getTaskPlan
+      description: >-
+        The plan as the task's workflow reports it (getPlan). A node that a compiled SOP made also carries `sop_step`, and
+        `parent_node_id` when it nests: the workflow's own values win, and what it does not send (the SOP step) is added
+        from what the projection kept of node.status_changed, so "SOP X: step i/n" survives a reload.
       responses:
         '200':
           description: Current plan
@@ -1228,6 +1288,20 @@ paths:
             application/json:
               schema:
                 type: object
+                properties:
+                  plan_version:
+                    type: integer
+                  hash:
+                    type: string
+                  nodes:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PlanNode'
+                  edges:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
   /v1/tasks/{taskId}/events:
     get:
       tags:
@@ -1321,6 +1395,41 @@ paths:
                     format: uri
 components:
   schemas:
+    PlanNode:
+      type: object
+      additionalProperties: true
+      required:
+      - node_id
+      properties:
+        node_id:
+          type: string
+        parent_node_id:
+          type: string
+          description: The node this one nests under (a compiled SOP's steps nest under its sop_stage node). Absent when it nests under none.
+        sop_step:
+          $ref: '#/components/schemas/SopStepInfo'
+    SopStepInfo:
+      type: object
+      description: Which part of a compiled SOP a node is. `index` (1-based) and `total` count the steps ("SOP X - step i/n").
+      required:
+      - sop
+      - role
+      - total
+      properties:
+        sop:
+          type: string
+          description: The SOP reference (name@version).
+        role:
+          type: string
+          enum: [sop, step, approval_before, approval_after]
+        total:
+          type: integer
+        step_id:
+          type: string
+        index:
+          type: integer
+        subject:
+          type: string
     Task:
       type: object
       required:
@@ -1493,6 +1602,11 @@ components:
         exploration_max_tool_calls:
           type: integer
           minimum: 0
+        max_concurrency:
+          type: integer
+          minimum: 1
+          maximum: 64
+          description: How many attempts of a task may run at once (default 4 when absent). The tenant's value and the task's tighten each other (the smaller wins).
     SOP:
       type: object
       required:
@@ -1510,6 +1624,11 @@ components:
         ref:
           type: string
           description: sop_id@version, what a sop_stage node names
+        name:
+          type: string
+          description: Defaults to the sop_id
+        description:
+          type: string
         steps:
           type: array
           minItems: 1
@@ -1531,11 +1650,21 @@ components:
         version:
           type: integer
           minimum: 1
+        name:
+          type: string
+          maxLength: 200
+          description: Defaults to the sop_id. A version is immutable, so the name is part of what a re-registration must repeat.
+        description:
+          type: string
+          maxLength: 8000
         steps:
           type: array
           minItems: 1
+          maxItems: 50
           description: A step is an object, or a bare string standing for a step whose subject and description are
-            that text.
+            that text. Definition v2 (names as AgentScope 2.0.9's SOP where the concept matches); a v1 definition is a valid
+            v2 one, linear. A definition that is not a DAG, or that holds a field the runtime's contract does not know, is
+            refused with 400 INVALID_SOP (the reason is the message).
           items:
             oneOf:
             - type: string
@@ -1546,16 +1675,61 @@ components:
       required:
       - subject
       properties:
+        id:
+          type: string
+          pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$'
+          description: Names the step in depends_on; defaults to s<position>
         subject:
           type: string
           minLength: 1
+          maxLength: 200
         description:
           type: string
           description: What the step must achieve; defaults to the subject
         max_attempts:
           type: integer
           minimum: 1
-          description: Refusals before the SOP gives up on the step; defaults to 3
+          maximum: 20
+          description: Refusals before the SOP gives up on the step; defaults to 3. It is the step node's retry.max_attempts.
+        executor:
+          type: string
+          description: Profile ref (expert@3) that does the step; the task's expert when absent. A profile ref, not an Agent object.
+        verifier:
+          type: object
+          description: Who judges the step and by what; absent is the default verifier, which still judges it.
+          properties:
+            instructions:
+              type: string
+              description: Extra criteria on top of the step's description
+            expert:
+              type: string
+              description: Profile ref whose instructions the verifier is given
+        depends_on:
+          type: array
+          items:
+            type: string
+          description: Ids of the steps this one waits for. Absent is the step before it; an empty list starts at once. Stored
+            and returned spelled out.
+        output_schema_ref:
+          type: string
+          pattern: '^schema://\S+/[1-9][0-9]*$'
+        required_artifacts:
+          type: array
+          items:
+            type: object
+            required: [name, media_type]
+            properties:
+              name:
+                type: string
+              media_type:
+                type: string
+              min_count:
+                type: integer
+                minimum: 1
+        human_approval:
+          type: string
+          enum: [before, after]
+          description: A person approves before the step starts, or after it finished
     ArtifactManifest:
       type: object
       required:
@@ -1732,6 +1906,14 @@ components:
         delta:
           type: object
           additionalProperties: true
+    CompleteNodeRequest:
+      type: object
+      properties:
+        command_id:
+          type: string
+        reason:
+          type: string
+          description: Why the person completed the node; recorded with the node's status change.
     RequestProfileSwitchRequest:
       type: object
       required:
@@ -1749,6 +1931,44 @@ components:
         reason:
           type: string
           minLength: 1
+    CompleteNodeResponse:
+      type: object
+      required:
+      - accepted
+      - command_id
+      - node_id
+      properties:
+        accepted:
+          type: boolean
+        command_id:
+          type: string
+        node_id:
+          type: string
+        status:
+          type: string
+          enum: [COMPLETED]
+    RequestProfileSwitchResponse:
+      type: object
+      required:
+      - accepted
+      - command_id
+      - effective_attempt_no
+      - needs_approval
+      properties:
+        accepted:
+          type: boolean
+        command_id:
+          type: string
+        effective_attempt_no:
+          type: integer
+          minimum: 1
+          description: The attempt number from which the new profile applies.
+        needs_approval:
+          type: boolean
+          description: True when the profile is not one the task is allowed; the switch waits for a profile_switch approval.
+        approval_id:
+          type: string
+          nullable: true
     ErrorBody:
       type: object
       additionalProperties: false

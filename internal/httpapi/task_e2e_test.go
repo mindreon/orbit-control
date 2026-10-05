@@ -94,3 +94,51 @@ func TestMessageRetryWithoutClientMessageIDIsReplayedNotConflicted(t *testing.T)
 		t.Fatalf("first = %d %q, retry = %d %q", first.Code, first.Body.String(), retry.Code, retry.Body.String())
 	}
 }
+
+func TestTaskDeleteHidesTaskEverywhere(t *testing.T) {
+	runtime := app.NewWithOptions(app.Options{})
+	h := HandlerWith(runtime)
+	create := httptest.NewRecorder()
+	h.ServeHTTP(create, internalReq(http.MethodPost, "/v1/tasks", `{"title":"doomed","goal":"vanish"}`))
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create task = %d: %s", create.Code, create.Body.String())
+	}
+	var task struct {
+		ID string `json:"task_id"`
+	}
+	if err := json.Unmarshal(create.Body.Bytes(), &task); err != nil {
+		t.Fatal(err)
+	}
+	deleted := httptest.NewRecorder()
+	h.ServeHTTP(deleted, internalReq(http.MethodDelete, "/v1/tasks/"+task.ID, ""))
+	if deleted.Code != http.StatusNoContent {
+		t.Fatalf("delete = %d: %s", deleted.Code, deleted.Body.String())
+	}
+	gone := httptest.NewRecorder()
+	h.ServeHTTP(gone, internalReq(http.MethodGet, "/v1/tasks/"+task.ID, ""))
+	if gone.Code != http.StatusNotFound {
+		t.Fatalf("get after delete = %d: %s", gone.Code, gone.Body.String())
+	}
+	list := httptest.NewRecorder()
+	h.ServeHTTP(list, internalReq(http.MethodGet, "/v1/tasks", ""))
+	if list.Code != http.StatusOK || strings.Contains(list.Body.String(), task.ID) {
+		t.Fatalf("list after delete = %d: %s", list.Code, list.Body.String())
+	}
+	again := httptest.NewRecorder()
+	h.ServeHTTP(again, internalReq(http.MethodDelete, "/v1/tasks/"+task.ID, ""))
+	if again.Code != http.StatusNotFound {
+		t.Fatalf("second delete = %d: %s", again.Code, again.Body.String())
+	}
+	message := httptest.NewRecorder()
+	h.ServeHTTP(message, internalReq(http.MethodPost, "/v1/tasks/"+task.ID+"/messages", `{"command_id":"00000000000000000000000003","text":"hello"}`))
+	if message.Code != http.StatusNotFound {
+		t.Fatalf("message after delete = %d: %s", message.Code, message.Body.String())
+	}
+	// A workflow event that still arrives applies without resurrecting the task.
+	runtime.Tasks.AppendEvent(taskruntime.Event{EventID: "evt_01ARZ3NDEKTSV4RRFFQ69G5FBX", TaskID: task.ID, Type: "usage.recorded", Source: "workflow", Durable: true, Payload: []byte(`{"usage":{"tokens":5}}`)})
+	relisted := httptest.NewRecorder()
+	h.ServeHTTP(relisted, internalReq(http.MethodGet, "/v1/tasks", ""))
+	if relisted.Code != http.StatusOK || strings.Contains(relisted.Body.String(), task.ID) {
+		t.Fatalf("list after late event = %d: %s", relisted.Code, relisted.Body.String())
+	}
+}

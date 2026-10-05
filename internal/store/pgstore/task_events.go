@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
+	"strings"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -50,8 +52,16 @@ func (s *Store) AppendTaskEvent(ctx context.Context, event taskruntime.Event) (t
 		if err := tx.Exec(`SELECT pg_notify('task_events', ?)`, event.TaskID).Error; err != nil {
 			return err
 		}
-		if err := applyEvent(tx, event); err != nil {
-			return err
+		// The event is stored; what it changes in the projections is rebuildable. A payload a projection table cannot
+		// hold (a status or id outside its constraints, a type it has not met) is skipped inside a savepoint, so it
+		// cannot fail the transaction and stall every event behind it. Anything else, such as a lost connection, is
+		// still an error.
+		if err := tx.Transaction(func(sp *gorm.DB) error { return applyEvent(sp, event) }); err != nil {
+			if !projectionDataError(err) {
+				return err
+			}
+			code, constraint := pgCode(err)
+			log.Printf("task projection: skipped event %s (%s) of task %s: sqlstate=%s constraint=%s", event.EventID, event.Type, event.TaskID, code, constraint)
 		}
 		projected.Seq = seq
 		return nil
@@ -60,6 +70,13 @@ func (s *Store) AppendTaskEvent(ctx context.Context, event taskruntime.Event) (t
 		return event, projectionErr("append task event", err)
 	}
 	return projected, nil
+}
+
+// projectionDataError reports a failure caused by the data of one event: a data exception (class 22) or a constraint
+// violation (class 23).
+func projectionDataError(err error) bool {
+	code, _ := pgCode(err)
+	return strings.HasPrefix(code, "22") || strings.HasPrefix(code, "23")
 }
 
 // applyEvent updates what an event of the given type changes in the projection tables.
@@ -78,15 +95,34 @@ func applyEvent(tx *gorm.DB, event taskruntime.Event) error {
 		return updateTaskColumns(tx, event.TenantID, event.TaskID, map[string]any{"status": "COMPLETED", "updated_at": event.Occurred})
 	case "plan.version_committed":
 		if payload.PlanVersion > 0 {
-			return updateTaskColumns(tx, event.TenantID, event.TaskID, map[string]any{
+			if err := updateTaskColumns(tx, event.TenantID, event.TaskID, map[string]any{
 				"plan_version": gorm.Expr("GREATEST(plan_version, ?)", payload.PlanVersion), "updated_at": event.Occurred,
-			})
+			}); err != nil {
+				return err
+			}
 		}
+		return insertPlanVersion(tx, event)
+	case "node.status_changed":
+		return projectNodeStatus(tx, event)
+	case "attempt.started":
+		return insertAttempt(tx, event)
+	case "attempt.parked", "attempt.resumed", "attempt.finished":
+		return projectAttemptEvent(tx, event)
 	case "message.user":
 		return insertMessage(tx, event)
 	case "artifact.manifest_created":
 		return insertManifest(tx, event)
-	case "approval.requested", "approval.decided", "budget.granted", "usage.recorded":
+	case "approval.requested":
+		if err := insertApproval(tx, event); err != nil {
+			return err
+		}
+		return updateTaskAccumulators(tx, event)
+	case "approval.decided":
+		if err := decideApproval(tx, event); err != nil {
+			return err
+		}
+		return updateTaskAccumulators(tx, event)
+	case "budget.granted", "usage.recorded":
 		return updateTaskAccumulators(tx, event)
 	}
 	return nil
@@ -140,6 +176,9 @@ func updateTaskAccumulators(tx *gorm.DB, event taskruntime.Event) error {
 	var row taskRow
 	if err := tx.Select("budgets", "usage", "pending_approvals").
 		Where("tenant_id = ? AND id = ?", event.TenantID, event.TaskID).Take(&row).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil // no task row to fold into; the event is stored
+		}
 		return err
 	}
 	var budgets, usage map[string]any
@@ -153,16 +192,16 @@ func updateTaskAccumulators(tx *gorm.DB, event taskruntime.Event) error {
 		}
 	}
 	var payload map[string]any
-	if err := json.Unmarshal(event.Payload, &payload); err != nil {
-		return err
-	}
+	_ = json.Unmarshal(event.Payload, &payload) // a payload that is not an object changes nothing
 	switch event.Type {
 	case "approval.requested":
-		if approvalID, ok := payload["approval_id"].(string); ok && approvalID != "" && !containsString(pending, approvalID) {
+		if approvalID, ok := payload["approval_id"].(string); ok && strings.HasPrefix(approvalID, "apr_") && !containsString(pending, approvalID) {
 			pending = append(pending, approvalID)
 		}
 	case "approval.decided":
-		if approvalID, ok := payload["approval_id"].(string); ok {
+		// Only a decision the approvals table would take leaves the pending list, so the two agree.
+		status, _ := payload["status"].(string)
+		if approvalID, ok := payload["approval_id"].(string); ok && approvalDecisions[status] {
 			pending = removeString(pending, approvalID)
 		}
 	case "budget.granted":
@@ -213,6 +252,9 @@ func addJSONNumbers(base, delta map[string]any) map[string]any {
 		out[key] = value
 	}
 	for key, value := range delta {
+		if value == nil {
+			continue // an unknown amount (a cost that is null) adds nothing and never erases a known one
+		}
 		n, ok := value.(float64)
 		if !ok {
 			out[key] = value

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -27,7 +28,7 @@ func (s *Store) CreateTask(ctx context.Context, p taskruntime.Principal, task *t
 func (s *Store) GetTask(ctx context.Context, p taskruntime.Principal, id string) (*taskruntime.Task, error) {
 	var row taskRow
 	err := s.inTenant(ctx, p.TenantID, func(tx *gorm.DB) error {
-		return tx.Where("id = ? AND tenant_id = ? AND created_by = ?", id, p.TenantID, p.UserID).Take(&row).Error
+		return tx.Where("id = ? AND tenant_id = ? AND created_by = ? AND deleted_at IS NULL", id, p.TenantID, p.UserID).Take(&row).Error
 	})
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, store.ErrNotFound
@@ -45,7 +46,7 @@ func (s *Store) GetTask(ctx context.Context, p taskruntime.Principal, id string)
 func (s *Store) ListTasks(ctx context.Context, p taskruntime.Principal) ([]*taskruntime.Task, error) {
 	var rows []taskRow
 	err := s.inTenant(ctx, p.TenantID, func(tx *gorm.DB) error {
-		return tx.Where("tenant_id = ? AND created_by = ?", p.TenantID, p.UserID).Order("updated_at DESC").Find(&rows).Error
+		return tx.Where("tenant_id = ? AND created_by = ? AND deleted_at IS NULL", p.TenantID, p.UserID).Order("updated_at DESC").Find(&rows).Error
 	})
 	if err != nil {
 		return nil, storageErr("list tasks", err)
@@ -79,6 +80,28 @@ func (s *Store) UpdateTask(ctx context.Context, p taskruntime.Principal, task *t
 func updateTaskColumns(tx *gorm.DB, tenantID, taskID string, values map[string]any) error {
 	return tx.Model(&taskRow{}).Where("id = ? AND tenant_id = ?", taskID, tenantID).
 		Select(taskUpdatable).Updates(values).Error
+}
+
+// DeleteTask soft-deletes one task: deleted_at hides it from reads while the
+// row stays so late workflow events still apply instead of erroring. The
+// granted column lives outside taskUpdatable because a delete is not an
+// update of the task's visible state.
+func (s *Store) DeleteTask(ctx context.Context, p taskruntime.Principal, id string) error {
+	var found bool
+	err := s.inTenant(ctx, p.TenantID, func(tx *gorm.DB) error {
+		result := tx.Model(&taskRow{}).
+			Where("id = ? AND tenant_id = ? AND created_by = ? AND deleted_at IS NULL", id, p.TenantID, p.UserID).
+			Update("deleted_at", time.Now().UTC())
+		found = result.Error == nil && result.RowsAffected > 0
+		return result.Error
+	})
+	if err != nil {
+		return projectionErr("delete task", err)
+	}
+	if !found {
+		return store.ErrNotFound
+	}
+	return nil
 }
 
 func (s *Store) RegisterProfile(ctx context.Context, p taskruntime.Principal, profile taskruntime.Profile) (taskruntime.Profile, error) {

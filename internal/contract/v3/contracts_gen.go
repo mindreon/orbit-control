@@ -18,6 +18,8 @@ const (
 	ApprovalSubjectKindProfileSwitch      ApprovalSubjectKind = "profile_switch"
 	ApprovalSubjectKindCompletion         ApprovalSubjectKind = "completion"
 	ApprovalSubjectKindNonIdempotentRetry ApprovalSubjectKind = "non_idempotent_retry"
+	ApprovalSubjectKindSOPStep            ApprovalSubjectKind = "sop_step"
+	ApprovalSubjectKindNodeApproval       ApprovalSubjectKind = "node_approval"
 )
 
 // AttemptStatus is a named string set from the contract.
@@ -186,6 +188,7 @@ type AgentTurnNode struct {
 	DependsOn          []string            `json:"depends_on,omitempty"`
 	NodeID             string              `json:"node_id"`
 	OwnerProfile       *string             `json:"owner_profile,omitempty"`
+	ParentNodeID       *string             `json:"parent_node_id,omitempty"`
 	Retry              *RetryPolicy        `json:"retry,omitempty"`
 	Spec               AgentTurnSpec       `json:"spec"`
 	Timeout            *NodeTimeout        `json:"timeout,omitempty"`
@@ -238,6 +241,7 @@ type ApprovalNode struct {
 	DependsOn          []string            `json:"depends_on,omitempty"`
 	NodeID             string              `json:"node_id"`
 	OwnerProfile       *string             `json:"owner_profile,omitempty"`
+	ParentNodeID       *string             `json:"parent_node_id,omitempty"`
 	Retry              *RetryPolicy        `json:"retry,omitempty"`
 	Spec               ApprovalSpec        `json:"spec"`
 	Timeout            *NodeTimeout        `json:"timeout,omitempty"`
@@ -312,22 +316,29 @@ type AttemptFinishedEvent struct {
 }
 
 type AttemptFinishedPayload struct {
-	AttemptID string   `json:"attempt_id"`
-	Failure   *Failure `json:"failure,omitempty"`
-	NodeID    string   `json:"node_id"`
-	Outcome   string   `json:"outcome"`
-	Usage     *Usage   `json:"usage,omitempty"`
+	AttemptID       string                     `json:"attempt_id"`
+	AttemptNo       *int64                     `json:"attempt_no,omitempty"`
+	ConfigVersion   *int64                     `json:"config_version,omitempty"`
+	Failure         *Failure                   `json:"failure,omitempty"`
+	NodeID          string                     `json:"node_id"`
+	Outcome         string                     `json:"outcome"`
+	Output          map[string]json.RawMessage `json:"output,omitempty"`
+	OutputTruncated *bool                      `json:"output_truncated,omitempty"`
+	Profile         *string                    `json:"profile,omitempty"`
+	Usage           *Usage                     `json:"usage,omitempty"`
 }
 
 // Child AttemptWorkflow to parent, sent to the workflow id without a run id.
 type AttemptFinishedSignal struct {
-	AttemptID         string         `json:"attempt_id"`
-	AttemptNo         int64          `json:"attempt_no"`
-	AttemptWorkflowID string         `json:"attempt_workflow_id"`
-	Failure           *Failure       `json:"failure,omitempty"`
-	NodeID            string         `json:"node_id"`
-	Outcome           string         `json:"outcome"`
-	Result            *AttemptResult `json:"result,omitempty"`
+	AttemptID          string         `json:"attempt_id"`
+	AttemptNo          int64          `json:"attempt_no"`
+	AttemptWorkflowID  string         `json:"attempt_workflow_id"`
+	Failure            *Failure       `json:"failure,omitempty"`
+	NodeID             string         `json:"node_id"`
+	Outcome            string         `json:"outcome"`
+	Result             *AttemptResult `json:"result,omitempty"`
+	UnconsumedMessages []InboxMessage `json:"unconsumed_messages,omitempty"`
+	Usage              *Usage         `json:"usage,omitempty"`
 }
 
 type AttemptParkedEvent struct {
@@ -368,6 +379,7 @@ type AttemptResult struct {
 	ManifestEntries []map[string]json.RawMessage `json:"manifest_entries,omitempty"`
 	ManifestHash    *string                      `json:"manifest_hash,omitempty"`
 	ManifestID      *string                      `json:"manifest_id,omitempty"`
+	Output          map[string]json.RawMessage   `json:"output,omitempty"`
 	Usage           *Usage                       `json:"usage,omitempty"`
 }
 
@@ -386,12 +398,17 @@ type AttemptResumedEvent struct {
 	Visibility *string               `json:"visibility,omitempty"`
 }
 
-// A Temporal retry inside the same attempt, e.g. after a worker crash.
+// A Temporal retry inside the same attempt, e.g. after a worker crash, or an activity that carries on after an approval or
+// an answer. The worker emits it (entity.version 0), so the entity version cannot order it against the workflow's events of
+// the attempt. The rule for a consumer: events of one attempt are ordered by (`activity_attempt`, `state_version`), and
+// against the workflow's events by `occurred_at`; a resumed event never changes the attempt's status by itself, it only
+// says the attempt is running again.
 type AttemptResumedPayload struct {
 	ActivityAttempt int64  `json:"activity_attempt"`
 	AttemptID       string `json:"attempt_id"`
 	AttemptNo       int64  `json:"attempt_no"`
 	NodeID          string `json:"node_id"`
+	StateVersion    *int64 `json:"state_version,omitempty"`
 }
 
 type AttemptStartedEvent struct {
@@ -410,11 +427,13 @@ type AttemptStartedEvent struct {
 }
 
 type AttemptStartedPayload struct {
-	AttemptID     string `json:"attempt_id"`
-	AttemptNo     int64  `json:"attempt_no"`
-	ConfigVersion *int64 `json:"config_version,omitempty"`
-	NodeID        string `json:"node_id"`
-	Profile       string `json:"profile"`
+	AttemptID      string  `json:"attempt_id"`
+	AttemptNo      int64   `json:"attempt_no"`
+	BudgetReserved *Budget `json:"budget_reserved,omitempty"`
+	ConfigVersion  *int64  `json:"config_version,omitempty"`
+	NodeID         string  `json:"node_id"`
+	Profile        string  `json:"profile"`
+	SwitchedFrom   *string `json:"switched_from,omitempty"`
 }
 
 // Limits. A missing field means no limit at this level.
@@ -443,6 +462,7 @@ type BudgetExhaustedEvent struct {
 }
 
 type BudgetExhaustedPayload struct {
+	Detail *string `json:"detail,omitempty"`
 	NodeID *string `json:"node_id,omitempty"`
 	Scope  string  `json:"scope"`
 }
@@ -495,6 +515,7 @@ type CheckpointNode struct {
 	DependsOn          []string            `json:"depends_on,omitempty"`
 	NodeID             string              `json:"node_id"`
 	OwnerProfile       *string             `json:"owner_profile,omitempty"`
+	ParentNodeID       *string             `json:"parent_node_id,omitempty"`
 	Retry              *RetryPolicy        `json:"retry,omitempty"`
 	Spec               CheckpointSpec      `json:"spec"`
 	Timeout            *NodeTimeout        `json:"timeout,omitempty"`
@@ -506,6 +527,19 @@ type CheckpointNode struct {
 
 type CheckpointSpec struct {
 	Label string `json:"label"`
+}
+
+// Update “completeNode“: a person completes a node by hand (04 §4). Allowed while the task is paused or taken over,
+// for a node that is not frozen and has no attempt running. It is not verified: the person is the verdict.
+type CompleteNodeInput struct {
+	CommandID string  `json:"command_id"`
+	NodeID    string  `json:"node_id"`
+	Reason    *string `json:"reason,omitempty"`
+}
+
+type CompleteNodeResult struct {
+	NodeID string `json:"node_id"`
+	Status string `json:"status,omitempty"`
 }
 
 type CompletionAccepted struct {
@@ -709,10 +743,20 @@ type NodeStatusChangedEvent struct {
 }
 
 type NodeStatusChangedPayload struct {
-	FromStatus NodeStatus `json:"from_status"`
-	NodeID     string     `json:"node_id"`
-	Reason     *string    `json:"reason,omitempty"`
-	ToStatus   NodeStatus `json:"to_status"`
+	AttemptCount     *int64           `json:"attempt_count,omitempty"`
+	CurrentAttemptID *string          `json:"current_attempt_id,omitempty"`
+	DependsOn        []string         `json:"depends_on,omitempty"`
+	FromStatus       NodeStatus       `json:"from_status"`
+	Frozen           *bool            `json:"frozen,omitempty"`
+	NodeID           string           `json:"node_id"`
+	NodeType         *NodeType        `json:"node_type,omitempty"`
+	OwnerProfile     *string          `json:"owner_profile,omitempty"`
+	ParentNodeID     *string          `json:"parent_node_id,omitempty"`
+	Reason           *string          `json:"reason,omitempty"`
+	SOPStep          *SopStepInfo     `json:"sop_step,omitempty"`
+	Title            *string          `json:"title,omitempty"`
+	ToStatus         NodeStatus       `json:"to_status"`
+	WorkspaceAccess  *WorkspaceAccess `json:"workspace_access,omitempty"`
 }
 
 type NodeTimeout struct {
@@ -727,6 +771,8 @@ type NodeView struct {
 	Frozen           *bool           `json:"frozen,omitempty"`
 	NodeID           string          `json:"node_id"`
 	OwnerProfile     string          `json:"owner_profile"`
+	ParentNodeID     *string         `json:"parent_node_id,omitempty"`
+	SOPStep          *SopStepInfo    `json:"sop_step,omitempty"`
 	Status           NodeStatus      `json:"status"`
 	Title            string          `json:"title"`
 	Type             NodeType        `json:"type"`
@@ -743,6 +789,14 @@ type ParkedToolCall struct {
 type PermissionRuleSpec struct {
 	RuleContent *string `json:"rule_content,omitempty"`
 	ToolName    string  `json:"tool_name"`
+}
+
+// What was compacted out of the live plan: completed, frozen nodes nothing unfinished depends on. The nodes
+// themselves stay in the projection; this is the summary that keeps the plan's history explainable (04 §7).
+type PlanArchive struct {
+	Count        int64    `json:"count"`
+	Hash         string   `json:"hash"`
+	RecentTitles []string `json:"recent_titles,omitempty"`
 }
 
 type PlanChangeAccepted struct {
@@ -819,14 +873,17 @@ type PlanVersionCommittedPayload struct {
 	Hash            string  `json:"hash"`
 	ParentVersion   int64   `json:"parent_version"`
 	PlanVersion     int64   `json:"plan_version"`
+	Reason          *string `json:"reason,omitempty"`
+	SOPNodeID       *string `json:"sop_node_id,omitempty"`
 }
 
 // Query “getPlan“: the graph as the asking actor may see it.
 type PlanView struct {
-	Edges       []PlanEdge `json:"edges,omitempty"`
-	Hash        string     `json:"hash"`
-	Nodes       []NodeView `json:"nodes,omitempty"`
-	PlanVersion int64      `json:"plan_version"`
+	Archived    *PlanArchive `json:"archived,omitempty"`
+	Edges       []PlanEdge   `json:"edges,omitempty"`
+	Hash        string       `json:"hash"`
+	Nodes       []NodeView   `json:"nodes,omitempty"`
+	PlanVersion int64        `json:"plan_version"`
 }
 
 // What an attempt may do (05 §6). Every layer (tenant, task, profile) can carry one; layers only tighten each
@@ -834,6 +891,7 @@ type PlanView struct {
 type Policy struct {
 	DeniedTools             []string `json:"denied_tools,omitempty"`
 	ExplorationMaxToolCalls *int64   `json:"exploration_max_tool_calls,omitempty"`
+	MaxConcurrency          *int64   `json:"max_concurrency,omitempty"`
 }
 
 type ProfileSwitchedEvent struct {
@@ -878,8 +936,9 @@ type RequestProfileSwitchInput struct {
 }
 
 type RequestProfileSwitchResult struct {
-	EffectiveAttemptNo int64 `json:"effective_attempt_no"`
-	NeedsApproval      bool  `json:"needs_approval"`
+	ApprovalID         *string `json:"approval_id,omitempty"`
+	EffectiveAttemptNo int64   `json:"effective_attempt_no"`
+	NeedsApproval      bool    `json:"needs_approval"`
 }
 
 type RetryPolicy struct {
@@ -901,12 +960,20 @@ type SendMessageResult struct {
 	MessageSeq int64 `json:"message_seq"`
 }
 
+// What control stores for `sop_id@version`, and what the workflow compiles.
+type SopDefinition struct {
+	Description *string   `json:"description,omitempty"`
+	Name        string    `json:"name"`
+	Steps       []SopStep `json:"steps"`
+}
+
 type SopStageNode struct {
 	Budget             *Budget             `json:"budget,omitempty"`
 	CompletionContract *CompletionContract `json:"completion_contract,omitempty"`
 	DependsOn          []string            `json:"depends_on,omitempty"`
 	NodeID             string              `json:"node_id"`
 	OwnerProfile       *string             `json:"owner_profile,omitempty"`
+	ParentNodeID       *string             `json:"parent_node_id,omitempty"`
 	Retry              *RetryPolicy        `json:"retry,omitempty"`
 	Spec               SopStageSpec        `json:"spec"`
 	Timeout            *NodeTimeout        `json:"timeout,omitempty"`
@@ -919,6 +986,38 @@ type SopStageNode struct {
 type SopStageSpec struct {
 	Inputs []string `json:"inputs,omitempty"`
 	SOP    string   `json:"sop"`
+}
+
+type SopStep struct {
+	DependsOn         []string              `json:"depends_on,omitempty"`
+	Description       *string               `json:"description,omitempty"`
+	Executor          *string               `json:"executor,omitempty"`
+	HumanApproval     *string               `json:"human_approval,omitempty"`
+	ID                *string               `json:"id,omitempty"`
+	MaxAttempts       *int64                `json:"max_attempts,omitempty"`
+	OutputSchemaRef   *string               `json:"output_schema_ref,omitempty"`
+	RequiredArtifacts []ArtifactRequirement `json:"required_artifacts,omitempty"`
+	Subject           string                `json:"subject"`
+	Verifier          *SopVerifier          `json:"verifier,omitempty"`
+}
+
+// Which part of a compiled SOP a node is (the plan keeps no other trace of the SOP): `role` `sop` is the `sop_stage`
+// node itself, `step` one step's agent node, `approval_before` and `approval_after` the approval nodes of a step with
+// `human_approval`. `index` (1-based) and `total` count the steps: "SOP X: step i/n".
+type SopStepInfo struct {
+	Index   *int64  `json:"index,omitempty"`
+	Role    string  `json:"role"`
+	SOP     string  `json:"sop"`
+	StepID  *string `json:"step_id,omitempty"`
+	Subject *string `json:"subject,omitempty"`
+	Total   int64   `json:"total"`
+}
+
+// Who judges a step and by what: extra criteria on top of the step's own description. A verifier is an independent
+// agent session of its own: it does not see how the executor worked, only the result.
+type SopVerifier struct {
+	Expert       *string `json:"expert,omitempty"`
+	Instructions *string `json:"instructions,omitempty"`
 }
 
 type TaskCancelledEvent struct {
@@ -1063,6 +1162,7 @@ type TaskStatusChangedPayload struct {
 
 // Query “getTaskView“.
 type TaskView struct {
+	BudgetReserved   *Budget     `json:"budget_reserved,omitempty"`
 	Budgets          Budget      `json:"budgets"`
 	Config           *TaskConfig `json:"config,omitempty"`
 	PendingApprovals []string    `json:"pending_approvals,omitempty"`
@@ -1092,8 +1192,9 @@ type TaskWorkflowInput struct {
 // A leader and members. The leader's expert plans the task; a node the leader gives to a role runs as that member's
 // expert, and one it gives to nobody runs as the leader. Teams do not nest (07 §1: depth 1).
 type Team struct {
-	Leader  string       `json:"leader"`
-	Members []TeamMember `json:"members"`
+	Leader   string       `json:"leader"`
+	MaxDepth *int64       `json:"max_depth,omitempty"`
+	Members  []TeamMember `json:"members"`
 }
 
 // One member of a team (15 M8, T8.6): a role the leader can give work to, and the expert who does it.
@@ -1109,6 +1210,7 @@ type TeamStageNode struct {
 	DependsOn          []string            `json:"depends_on,omitempty"`
 	NodeID             string              `json:"node_id"`
 	OwnerProfile       *string             `json:"owner_profile,omitempty"`
+	ParentNodeID       *string             `json:"parent_node_id,omitempty"`
 	Retry              *RetryPolicy        `json:"retry,omitempty"`
 	Spec               TeamStageSpec       `json:"spec"`
 	Timeout            *NodeTimeout        `json:"timeout,omitempty"`
@@ -1327,6 +1429,7 @@ type WaitNode struct {
 	DependsOn          []string            `json:"depends_on,omitempty"`
 	NodeID             string              `json:"node_id"`
 	OwnerProfile       *string             `json:"owner_profile,omitempty"`
+	ParentNodeID       *string             `json:"parent_node_id,omitempty"`
 	Retry              *RetryPolicy        `json:"retry,omitempty"`
 	Spec               WaitSpec            `json:"spec"`
 	Timeout            *NodeTimeout        `json:"timeout,omitempty"`
@@ -2208,6 +2311,8 @@ var contractFactories = map[string]func() any{
 	"ApprovalDecidedSignal":      func() any { return new(ApprovalDecidedSignal) },
 	"AttemptFinishedSignal":      func() any { return new(AttemptFinishedSignal) },
 	"AttemptParkedSignal":        func() any { return new(AttemptParkedSignal) },
+	"CompleteNodeInput":          func() any { return new(CompleteNodeInput) },
+	"CompleteNodeResult":         func() any { return new(CompleteNodeResult) },
 	"CompletionProposal":         func() any { return new(CompletionProposal) },
 	"CompletionResult":           func() any { return new(CompletionResult) },
 	"DecideApprovalInput":        func() any { return new(DecideApprovalInput) },
@@ -2226,6 +2331,7 @@ var contractFactories = map[string]func() any{
 	"RequestProfileSwitchResult": func() any { return new(RequestProfileSwitchResult) },
 	"SendMessageInput":           func() any { return new(SendMessageInput) },
 	"SendMessageResult":          func() any { return new(SendMessageResult) },
+	"SopDefinition":              func() any { return new(SopDefinition) },
 	"TaskControlInput":           func() any { return new(TaskControlInput) },
 	"TaskControlResult":          func() any { return new(TaskControlResult) },
 	"TaskNodeDraft":              func() any { return new(TaskNodeDraft) },

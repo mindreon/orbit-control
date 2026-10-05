@@ -175,3 +175,25 @@ func (a *App) SkillBundleForWorker(ctx context.Context, tenantID, handle, slug s
 	}
 	return SkillBundle{ID: skillID, Name: rec.Name, Description: rec.Description, Files: out}, nil
 }
+
+// ErrUnknownProfile marks a profile a caller named that is not a profile of their tenant.
+var ErrUnknownProfile = errors.New("unknown profile")
+
+// CheckProfile accepts a profile a task node may be switched to (11 §3): the built-in default, or one of the tenant's own.
+// It fails with ErrInvalid when the reference is malformed and with ErrUnknownProfile when the tenant has no such profile
+// (what belongs to another tenant looks the same).
+func (a *App) CheckProfile(ctx context.Context, p taskruntime.Principal, ref string) error {
+	if ref == "default@1" {
+		return nil
+	}
+	if !versionedRef.MatchString(ref) {
+		return invalidf("profile is not a versioned reference")
+	}
+	if _, err := a.Tasks.GetProfile(ctx, p, ref); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return ErrUnknownProfile
+		}
+		return err
+	}
+	return nil
+}

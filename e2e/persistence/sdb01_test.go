@@ -43,7 +43,9 @@ var tenantParamAllowlist = map[string]bool{
 	"pgstore.ListSOPs":        true,
 	"pgstore.GetProfile":      true,
 	"pgstore.ListManifests":   true,
+	"pgstore.NodeStructure":   true,
 	"pgstore.GetManifest":     true,
+	"pgstore.DeleteTask":      true,
 }
 
 var reTenantTableSQL = regexp.MustCompile(`(?i)\b(FROM|INTO|UPDATE|JOIN)\s+(public\.)?(agent_profiles|tasks|plan_versions|task_nodes|stage_attempts|task_approvals|task_messages|task_events|idempotency_ledger|checkpoints|artifact_manifests|workspace_leases|sop_definitions|tenant_policy|personas|mcp_connectors)\b`)

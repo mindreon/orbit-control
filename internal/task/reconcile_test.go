@@ -100,3 +100,66 @@ func TestDurableEventsMaintainReconcileFields(t *testing.T) {
 		t.Fatalf("event projection fields = %+v", got)
 	}
 }
+
+// failingQueryClient is an orchestrator that accepts a start but cannot answer a Query, as when no orch worker polls.
+type failingQueryClient struct {
+	reconcileClient
+	queries int
+}
+
+func (c *failingQueryClient) GetTaskView(context.Context, string, string) (orch.TaskView, error) {
+	c.queries++
+	return orch.TaskView{}, context.DeadlineExceeded
+}
+
+func TestCreateDoesNotQueryTheWorkflow(t *testing.T) {
+	client := &failingQueryClient{}
+	service := New(client)
+	created, err := service.Create(context.Background(), Principal{TenantID: "tenant", UserID: "user"}, CreateInput{Title: "t", Goal: "g"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.ID == "" || client.queries != 0 {
+		t.Fatalf("create must not query the workflow: id=%q queries=%d", created.ID, client.queries)
+	}
+}
+
+func TestReconcileTreatsUnknownCostAndReservationAsNoDifference(t *testing.T) {
+	client := &reconcileClient{view: orch.TaskView{
+		Status:         "CREATED",
+		PlanVersion:    1,
+		Budgets:        map[string]any{"tokens": float64(100), "cost_usd_micros": nil},
+		Usage:          map[string]any{"tokens_in": float64(0), "tokens_out": float64(0), "cost_usd_micros": nil},
+		BudgetReserved: map[string]any{"tokens": float64(40)},
+	}}
+	service := New(client)
+	principal := Principal{TenantID: "tenant", UserID: "user"}
+	created, err := service.Create(context.Background(), principal, CreateInput{Title: "t", Goal: "g", Budgets: map[string]any{"tokens": float64(100)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := service.Reconcile(context.Background(), principal, created.ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Healthy {
+		t.Fatalf("unknown cost or a reservation is not drift: %+v", report)
+	}
+	// A cost that is known on one side only is drift, and a repair stores no nulls.
+	client.view.Usage = map[string]any{"cost_usd_micros": float64(7), "tool_calls": nil}
+	report, _ = service.Reconcile(context.Background(), principal, created.ID, true)
+	if report.Healthy || !report.Repaired {
+		t.Fatalf("a known cost must differ: %+v", report)
+	}
+	got, _ := service.Get(context.Background(), principal, created.ID)
+	if _, ok := got.Usage["tool_calls"]; ok || got.Usage["cost_usd_micros"] != float64(7) {
+		t.Fatalf("repaired usage = %v", got.Usage)
+	}
+}
+
+func TestAddNumbersIgnoresUnknownAmounts(t *testing.T) {
+	out := addNumbers(map[string]any{"cost_usd_micros": float64(5)}, map[string]any{"cost_usd_micros": nil, "tokens_in": float64(2)})
+	if out["cost_usd_micros"] != float64(5) || out["tokens_in"] != float64(2) {
+		t.Fatalf("out = %v", out)
+	}
+}
