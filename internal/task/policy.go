@@ -15,7 +15,13 @@ type Policy struct {
 	ExplorationMaxToolCalls *int     `json:"exploration_max_tool_calls,omitempty"`
 	// MaxConcurrency is how many attempts of a task may run at once. Missing means the orchestrator's default (4).
 	MaxConcurrency *int `json:"max_concurrency,omitempty"`
+	// MaxReviewRounds is how many times a reviewer may send a node back (0 turns review off). Missing means the
+	// runtime's default (5). Layers tighten each other: the smaller wins, so a 0 anywhere switches review off.
+	MaxReviewRounds *int `json:"max_review_rounds,omitempty"`
 }
+
+// MaxReviewRoundsLimit is the most review rounds a policy may allow.
+const MaxReviewRoundsLimit = 20
 
 // MaxConcurrencyLimit is the most attempts one task may be allowed to run at once.
 const MaxConcurrencyLimit = 64
@@ -31,6 +37,9 @@ func (p Policy) validate() error {
 	}
 	if p.MaxConcurrency != nil && (*p.MaxConcurrency < 1 || *p.MaxConcurrency > MaxConcurrencyLimit) {
 		return fmt.Errorf("max_concurrency must be between 1 and %d", MaxConcurrencyLimit)
+	}
+	if p.MaxReviewRounds != nil && (*p.MaxReviewRounds < 0 || *p.MaxReviewRounds > MaxReviewRoundsLimit) {
+		return fmt.Errorf("max_review_rounds must be between 0 and %d", MaxReviewRoundsLimit)
 	}
 	return nil
 }

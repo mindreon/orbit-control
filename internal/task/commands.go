@@ -12,6 +12,14 @@ import (
 )
 
 func (s *Service) Update(ctx context.Context, p Principal, id, name, commandID string, payload any) (json.RawMessage, error) {
+	return s.UpdateChecked(ctx, p, id, name, commandID, payload, nil)
+}
+
+// UpdateChecked is Update with a check that runs only for a command seen for the first time, after the ledger has
+// claimed it and before the workflow is called. A replay of a finished command returns the stored result without
+// running it, so a retry still gets its answer when what the check looks at has changed since. A check that fails
+// gives the claim up, so the same command id can be sent again.
+func (s *Service) UpdateChecked(ctx context.Context, p Principal, id, name, commandID string, payload any, check func(context.Context) error) (json.RawMessage, error) {
 	t, err := s.Get(ctx, p, id)
 	if err != nil {
 		return nil, err
@@ -36,6 +44,12 @@ func (s *Service) Update(ctx context.Context, p Principal, id, name, commandID s
 	}
 	if !claimed {
 		return stored, nil
+	}
+	if check != nil {
+		if err := check(ctx); err != nil {
+			s.releaseCommand(ctx, p.TenantID, key, owner)
+			return nil, err
+		}
 	}
 	raw, err := s.runUpdate(ctx, p, id, name, commandID, payload)
 	if err != nil {

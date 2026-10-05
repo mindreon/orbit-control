@@ -79,17 +79,17 @@ jobs:
           /tmp/gitleaks git --config .gitleaks.toml --redact --no-banner \
             --report-format json --report-path artifacts/gitleaks-git.json . 2>&1 | tee artifacts/logs/gitleaks-git.log
 
+      # The fault-injection hooks (orbitE2EFaults, WriteResultAgain, ORBIT_E2E_FAULTS) went away with the Room runtime
+      # (073ae6a), so the e2e binary no longer carries them and only the negative check stays meaningful: no e2e hook may
+      # ever reach the production binary. If a fault hook is reintroduced behind the e2e tag, add its symbol to the list
+      # and require it in the e2e binary again.
       - name: Production build has no e2e fault injection
         run: |
           go build -o /tmp/orbit-control ./cmd/orbit-control
           go build -tags e2e -o /tmp/orbit-control-e2e ./cmd/orbit-control
-          for sym in orbitE2EFaults WriteResultAgain; do
-            if go tool nm /tmp/orbit-control | grep -F "$sym"; then
+          for sym in orbitE2EFaults WriteResultAgain ORBIT_E2E_FAULTS; do
+            if go tool nm /tmp/orbit-control | grep -F "$sym" || grep -aF "$sym" /tmp/orbit-control >/dev/null; then
               echo "::error::production binary contains $sym"
-              exit 1
-            fi
-            if ! go tool nm /tmp/orbit-control-e2e | grep -F "$sym" >/dev/null; then
-              echo "::error::e2e binary is missing $sym"
               exit 1
             fi
           done

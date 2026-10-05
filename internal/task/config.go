@@ -24,6 +24,71 @@ type ConfigInput struct {
 	Skills     []string
 	Connectors []map[string]any
 	Mode       string
+	// Team is set when Expert was a team (15 M8, T8.6): Expert is then the leader's expert and Team says who the
+	// members are. Nil for a single expert, which is also how a change from a team back to one clears it.
+	Team *ConfigTeam
+}
+
+// ConfigTeam is TaskConfig.team: a leader role and members, each a role and the single expert who does its work. Name is
+// the member expert's name for a reader; it is never sent to the workflow.
+type ConfigTeam struct {
+	// Ref is the team expert's own version ("team_x@3") that was selected.
+	Ref     string             `json:"ref,omitempty"`
+	Leader  string             `json:"leader"`
+	Members []ConfigTeamMember `json:"members"`
+}
+
+type ConfigTeamMember struct {
+	Role        string `json:"role"`
+	Expert      string `json:"expert"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
+	Label       string `json:"label,omitempty"`
+}
+
+// workflowTeam is the team as the workflow's TaskConfig.team has it, built from maps like the rest of the payload.
+func (t *ConfigTeam) workflowTeam() any {
+	if t == nil {
+		return nil
+	}
+	members := make([]any, 0, len(t.Members))
+	for _, member := range t.Members {
+		entry := map[string]any{"role": member.Role, "expert": member.Expert}
+		if member.Description != "" {
+			entry["description"] = member.Description
+		}
+		if member.Label != "" {
+			entry["label"] = member.Label
+		}
+		members = append(members, entry)
+	}
+	out := map[string]any{"leader": t.Leader, "members": members}
+	if t.Ref != "" {
+		out["ref"] = t.Ref
+	}
+	return out
+}
+
+// teamFromWorkflow reads a team out of a workflow config (JSON, so lists are []any) or out of an update payload.
+func teamFromWorkflow(raw any) *ConfigTeam {
+	fields, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	team := &ConfigTeam{}
+	team.Leader, _ = fields["leader"].(string)
+	team.Ref, _ = fields["ref"].(string)
+	items, _ := fields["members"].([]any)
+	for _, item := range items {
+		entry, _ := item.(map[string]any)
+		member := ConfigTeamMember{}
+		member.Role, _ = entry["role"].(string)
+		member.Expert, _ = entry["expert"].(string)
+		member.Description, _ = entry["description"].(string)
+		member.Label, _ = entry["label"].(string)
+		team.Members = append(team.Members, member)
+	}
+	return team
 }
 
 // ConfigView is what a caller reads. Connector launch targets stay in the workflow; the ids are what a page needs.
@@ -33,6 +98,10 @@ type ConfigView struct {
 	Skills       []string `json:"skills"`
 	ConnectorIDs []string `json:"connector_ids"`
 	Mode         string   `json:"mode"`
+	// Team is set while the task's expert is a team. Its members carry the member experts' names.
+	Team *ConfigTeam `json:"team,omitempty"`
+	// TeamRef is the selected team expert's own ref ("team_x@3"); send it back as team_ref to keep the team.
+	TeamRef string `json:"team_ref,omitempty"`
 }
 
 type ConfigUpdateResult struct {
@@ -52,7 +121,7 @@ func (c ConfigInput) normalized() (ConfigInput, error) {
 
 // workflowConfig is the TaskConfig of the workflow input, at the given version.
 func (c ConfigInput) workflowConfig(version int) map[string]any {
-	out := map[string]any{"config_version": version, "mode": c.Mode, "skills": nil, "connectors": nil, "expert": nil}
+	out := map[string]any{"config_version": version, "mode": c.Mode, "skills": nil, "connectors": nil, "expert": nil, "team": c.Team.workflowTeam()}
 	if c.Expert != "" {
 		out["expert"] = c.Expert
 	}
@@ -66,7 +135,10 @@ func (c ConfigInput) workflowConfig(version int) map[string]any {
 }
 
 func (c ConfigInput) view(version int) ConfigView {
-	view := ConfigView{Version: version, Skills: c.Skills, Mode: c.Mode}
+	view := ConfigView{Version: version, Skills: c.Skills, Mode: c.Mode, Team: c.Team}
+	if c.Team != nil {
+		view.TeamRef = c.Team.Ref
+	}
 	if c.Expert != "" {
 		expert := c.Expert
 		view.Expert = &expert
@@ -91,15 +163,32 @@ func (s *Service) TaskConfig(ctx context.Context, p Principal, id string) (Confi
 		if err != nil {
 			return ConfigView{}, err
 		}
-		return configFromWorkflow(view.Config), nil
+		return s.withMemberNames(ctx, p, configFromWorkflow(view.Config)), nil
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	local, ok := s.configs[id]
+	s.mu.Unlock()
 	if !ok {
 		return ConfigInput{Mode: "default"}.view(1), nil
 	}
-	return local.input.view(local.version), nil
+	return s.withMemberNames(ctx, p, local.input.view(local.version)), nil
+}
+
+// withMemberNames fills in the names of a team's member experts, so a page can show roles and names from one read. A
+// member whose profile cannot be read keeps an empty name; the configuration itself is still right.
+func (s *Service) withMemberNames(ctx context.Context, p Principal, view ConfigView) ConfigView {
+	if view.Team == nil {
+		return view
+	}
+	team := &ConfigTeam{Ref: view.Team.Ref, Leader: view.Team.Leader, Members: make([]ConfigTeamMember, len(view.Team.Members))}
+	for i, member := range view.Team.Members {
+		if profile, err := s.GetProfile(ctx, p, member.Expert); err == nil {
+			member.Name, _ = profile.Spec["name"].(string)
+		}
+		team.Members[i] = member
+	}
+	view.Team = team
+	return view
 }
 
 // UpdateTaskConfig replaces the configuration, building on the version the caller read. It applies from the task's
@@ -160,6 +249,7 @@ func (s *Service) applyLocalConfig(id string, base int, payload map[string]any) 
 	in.Expert, _ = payload["expert"].(string)
 	in.Skills, _ = payload["skills"].([]string)
 	in.Connectors, _ = payload["connectors"].([]map[string]any)
+	in.Team = teamFromWorkflow(payload["team"])
 	s.configs[id] = localConfig{version: current + 1, input: in}
 	return nil
 }
@@ -174,6 +264,10 @@ func configFromWorkflow(raw map[string]any) ConfigView {
 	}
 	if expert, ok := raw["expert"].(string); ok && expert != "" {
 		view.Expert = &expert
+	}
+	view.Team = teamFromWorkflow(raw["team"])
+	if view.Team != nil {
+		view.TeamRef = view.Team.Ref
 	}
 	if skills, ok := raw["skills"].([]any); ok {
 		view.Skills = make([]string, 0, len(skills))

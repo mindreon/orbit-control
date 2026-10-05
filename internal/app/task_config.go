@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path"
 	"regexp"
 	"strings"
@@ -14,7 +15,10 @@ import (
 // A task's configuration as a caller states it (15 M8). Skills and ConnectorIDs are the complete sets to use: nil keeps
 // the expert's defaults, an empty list removes them.
 type TaskConfigRequest struct {
-	Expert       string
+	Expert string
+	// TeamRef is the team expert to keep or select. Expert may then be left out or be the leader's expert, which is what
+	// a task's configuration reads back as; any other expert next to it is refused.
+	TeamRef      string
 	Skills       []string
 	ConnectorIDs []string
 	Mode         string
@@ -33,15 +37,47 @@ func (a *App) ResolveTaskConfig(ctx context.Context, p taskruntime.Principal, in
 		out.Mode = "default"
 	}
 	if out.Mode != "default" && out.Mode != "plan" && out.Mode != "ask" {
-		return out, invalidf("mode must be default, plan or ask")
+		return out, invalidField("MODE_INVALID", "mode", "mode must be default, plan or ask")
 	}
-	if err := a.checkExpert(ctx, p, in.Expert); err != nil {
+	selected := in.Expert
+	if in.TeamRef != "" {
+		selected = in.TeamRef
+	}
+	profile, err := a.checkExpert(ctx, p, selected)
+	if err != nil {
+		var fe *FieldError
+		if in.TeamRef != "" && errors.As(err, &fe) {
+			fe.Field = "team_ref"
+		}
 		return out, err
 	}
-	if err := checkRefList("skills", in.Skills); err != nil {
+	if in.TeamRef != "" && profile.Spec["kind"] != teamKind {
+		return out, invalidField("TEAM_REF_NOT_TEAM", "team_ref", "team_ref is not a team expert")
+	}
+	if profile.Spec["kind"] == teamKind {
+		// A team runs as its leader's expert; the members ride along in config.team (15 M8, T8.6). Choosing a single
+		// expert leaves out.Team nil, which replaces any team the task had.
+		team, err := a.resolveTeam(ctx, p, profile)
+		if err != nil {
+			return out, err
+		}
+		team.Ref = profile.Ref
+		out.Team = team
+		leader := ""
+		for _, member := range team.Members {
+			if member.Role == team.Leader {
+				leader = member.Expert
+			}
+		}
+		if in.TeamRef != "" && in.Expert != "" && in.Expert != in.TeamRef && in.Expert != leader {
+			return out, invalidField("EXPERT_TEAM_MISMATCH", "expert", "expert is neither the team nor its leader's expert")
+		}
+		out.Expert = leader
+	}
+	if err := checkRefList("skills", "SKILLS_INVALID", in.Skills); err != nil {
 		return out, err
 	}
-	if err := checkRefList("connectors", in.ConnectorIDs); err != nil {
+	if err := checkRefList("connector_ids", "CONNECTORS_INVALID", in.ConnectorIDs); err != nil {
 		return out, err
 	}
 	if in.ConnectorIDs != nil {
@@ -53,8 +89,8 @@ func (a *App) ResolveTaskConfig(ctx context.Context, p taskruntime.Principal, in
 	}
 	if in.Skills != nil {
 		out.Skills = append([]string{}, in.Skills...)
-		for _, skillID := range in.Skills {
-			if err := a.checkSkill(ctx, p.TenantID, skillID); err != nil {
+		for i, skillID := range in.Skills {
+			if err := a.checkSkill(ctx, p.TenantID, skillID, fmt.Sprintf("skills[%d]", i)); err != nil {
 				return out, err
 			}
 		}
@@ -62,30 +98,32 @@ func (a *App) ResolveTaskConfig(ctx context.Context, p taskruntime.Principal, in
 	return out, nil
 }
 
-func (a *App) checkExpert(ctx context.Context, p taskruntime.Principal, ref string) error {
+// checkExpert returns the profile a task names as its expert; the zero Profile for none or the built-in default.
+func (a *App) checkExpert(ctx context.Context, p taskruntime.Principal, ref string) (taskruntime.Profile, error) {
 	if ref == "" || ref == "default@1" {
-		return nil
+		return taskruntime.Profile{}, nil
 	}
 	if !versionedRef.MatchString(ref) {
-		return invalidf("expert is not a versioned reference")
+		return taskruntime.Profile{}, invalidField("EXPERT_REF_INVALID", "expert", "expert is not a versioned reference (id@version)")
 	}
-	if _, err := a.Tasks.GetProfile(ctx, p, ref); err != nil {
+	profile, err := a.Tasks.GetProfile(ctx, p, ref)
+	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return invalidf("unknown expert")
+			return taskruntime.Profile{}, invalidField("EXPERT_NOT_FOUND", "expert", "unknown expert")
 		}
-		return err
+		return taskruntime.Profile{}, err
 	}
-	return nil
+	return profile, nil
 }
 
-func checkRefList(what string, ids []string) error {
+func checkRefList(field, code string, ids []string) error {
 	if len(ids) > maxTaskConfigRefs {
-		return invalidf("more than %d %s", maxTaskConfigRefs, what)
+		return invalidField(code, field, fmt.Sprintf("more than %d entries", maxTaskConfigRefs))
 	}
 	seen := make(map[string]struct{}, len(ids))
-	for _, id := range ids {
+	for i, id := range ids {
 		if _, dup := seen[id]; dup {
-			return invalidf("%s lists one entry twice", what)
+			return invalidField(code, fmt.Sprintf("%s[%d]", field, i), "one entry is listed twice")
 		}
 		seen[id] = struct{}{}
 	}
@@ -94,10 +132,10 @@ func checkRefList(what string, ids []string) error {
 
 // checkSkill accepts a skill only when the worker can actually use it: the catalog has it, its text is filled, it has a
 // SKILL.md and no file name could leave the skill's directory. The others are skipped, not half-installed.
-func (a *App) checkSkill(ctx context.Context, tenantID, skillID string) error {
+func (a *App) checkSkill(ctx context.Context, tenantID, skillID, field string) error {
 	if _, err := a.Repo.GetSkill(ctx, tenantID, skillID); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return invalidf("unknown skill")
+			return invalidField("SKILL_NOT_FOUND", field, "unknown skill")
 		}
 		return err
 	}
@@ -106,7 +144,7 @@ func (a *App) checkSkill(ctx context.Context, tenantID, skillID string) error {
 		return err
 	}
 	if !known || !skillUsable(files) {
-		return invalidf("skill cannot be used")
+		return invalidField("SKILL_UNUSABLE", field, "skill cannot be used")
 	}
 	return nil
 }
@@ -189,11 +227,16 @@ func (a *App) CheckProfile(ctx context.Context, p taskruntime.Principal, ref str
 	if !versionedRef.MatchString(ref) {
 		return invalidf("profile is not a versioned reference")
 	}
-	if _, err := a.Tasks.GetProfile(ctx, p, ref); err != nil {
+	profile, err := a.Tasks.GetProfile(ctx, p, ref)
+	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return ErrUnknownProfile
 		}
 		return err
+	}
+	if profile.Spec["kind"] == teamKind {
+		// A team has no agent to run; a node switches to one of its members' experts instead.
+		return invalidf("a team cannot be a node's profile")
 	}
 	return nil
 }

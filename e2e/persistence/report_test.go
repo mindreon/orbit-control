@@ -79,6 +79,9 @@ var volatile = []struct {
 	{regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})`), "<ts>"},
 	{regexp.MustCompile(`\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}`), "<logts>"},
 	{regexp.MustCompile(`\b(rm|ap|msg|ev|tn|persona|mcp|caj|grant)_[0-9a-f]{16}\b`), "<$1_id>"},
+	// Ids minted as UUIDv7 (task_, expert_, mcp_, persona_ ...) differ on every run; without this the two CI runs of the
+	// same commit would not compare equal (the "Reruns match (cmp)" step).
+	{regexp.MustCompile(`\b([a-z]+)_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}\b`), "<$1_id>"},
 	{regexp.MustCompile(`(listening on |127\.0\.0\.1|localhost):\d+`), "$1:<port>"},
 }
 

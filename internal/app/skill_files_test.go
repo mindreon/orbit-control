@@ -83,7 +83,7 @@ func TestAnUnusableSkillOnDiskIsRefusedEvenIfTheCatalogHasOne(t *testing.T) {
 	if _, err := a.SkillBundleForWorker(context.Background(), tenant, "h", "nomd"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("no SKILL.md on disk: want not found, got %v", err)
 	}
-	if err := a.checkSkill(context.Background(), tenant, "h/nomd"); err == nil {
+	if err := a.checkSkill(context.Background(), tenant, "h/nomd", "skills"); err == nil {
 		t.Fatal("choosing it is refused too")
 	}
 }
@@ -104,7 +104,7 @@ func TestWithoutALibraryTheCatalogWorksAsBefore(t *testing.T) {
 	repo := memstore.New()
 	a := NewWithOptions(Options{Repo: repo})
 	catalogSkill(t, repo, "h/s", "S", "from the catalog")
-	if err := a.checkSkill(context.Background(), tenant, "h/s"); err != nil {
+	if err := a.checkSkill(context.Background(), tenant, "h/s", "skills"); err != nil {
 		t.Fatal(err)
 	}
 	files, err := a.SkillTextFiles(context.Background(), tenant, "h", "s")

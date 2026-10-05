@@ -29,6 +29,23 @@ func invalidf(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrInvalid, fmt.Sprintf(format, args...))
 }
 
+// FieldError is a caller error that says what is wrong and where: a stable Code, the request Field it is about
+// ("members[2].expert") and a human Reason. It is an ErrInvalid, so it is a 400 wherever those are.
+type FieldError struct {
+	Code   string
+	Field  string
+	Reason string
+}
+
+func (e *FieldError) Error() string {
+	return fmt.Sprintf("%s: %s: %s (%s)", ErrInvalid, e.Field, e.Reason, e.Code)
+}
+func (e *FieldError) Unwrap() error { return ErrInvalid }
+
+func invalidField(code, field, reason string) error {
+	return &FieldError{Code: code, Field: field, Reason: reason}
+}
+
 // ErrNotFound is the repository sentinel.
 var ErrNotFound = store.ErrNotFound
 

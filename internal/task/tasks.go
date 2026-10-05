@@ -37,6 +37,7 @@ func (s *Service) Create(ctx context.Context, p Principal, in CreateInput) (*Tas
 			return nil, err
 		}
 		workflowPolicy.MaxConcurrency = smallest(in.Policy.MaxConcurrency, tenantPolicy.MaxConcurrency)
+		workflowPolicy.MaxReviewRounds = smallest(in.Policy.MaxReviewRounds, tenantPolicy.MaxReviewRounds)
 	}
 	config := ConfigInput{Mode: "default"}
 	if in.Config != nil {

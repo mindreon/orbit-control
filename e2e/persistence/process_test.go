@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -218,5 +219,16 @@ func outputLines(s string) []string {
 			out = append(out, l)
 		}
 	}
+	// The public and the internal listener log from separate goroutines, so their order is not stable between runs;
+	// order by message (not by the leading time=) so the report compares equal across the two CI runs.
+	key := func(l string) string {
+		if strings.HasPrefix(l, "time=") {
+			if _, rest, ok := strings.Cut(l, " "); ok {
+				return rest
+			}
+		}
+		return l
+	}
+	sort.SliceStable(out, func(a, b int) bool { return key(out[a]) < key(out[b]) })
 	return out
 }

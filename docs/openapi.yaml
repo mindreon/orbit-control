@@ -26,7 +26,7 @@ tags:
 - name: profiles
   description: Immutable versioned agent profiles
 - name: experts
-  description: Custom experts, each version one immutable profile (15 M8)
+  description: Custom experts and team experts, each version one immutable profile (15 M8)
 - name: policy
   description: Tenant policy layer (tighten-only)
 - name: sops
@@ -1031,6 +1031,14 @@ paths:
       responses:
         '202':
           description: Update accepted, or the stored response of an earlier request with the same command_id (replay)
+        '422':
+          description: >-
+            UNKNOWN_MENTION (field `mentions[i]`): a mention is not a role of the task's team.
+            MENTIONS_NOT_ALLOWED (field `mentions`): the task has no team. Nothing was sent to the workflow.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
         '409':
           description: >-
             IDEMPOTENCY_KEY_REUSED: the command_id was already used with a different request body or for a different
@@ -1541,16 +1549,107 @@ components:
           items:
             type: string
           description: Catalog skills the expert brings by default (each needs a SKILL.md and readable text)
+        kind:
+          type: string
+          enum:
+          - expert
+          - team
+          default: expert
+          description: |
+            A team (15 M8, T8.6) is a leader and 1 to 8 members, each a single expert; it has no instructions, model,
+            connector_ids or skill_ids of its own, and those are refused. On an update, absent means the expert's
+            current kind; a different kind is refused, since a team never turns into a single expert or back.
+        leader:
+          type: string
+          pattern: ^[a-z][a-z0-9_-]{0,31}$
+          description: A team's leader. Must be the role of one of the members. Refused on a single expert.
+        members:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items:
+            $ref: '#/components/schemas/TeamMemberInput'
+          description: A team's members. Roles are unique. Refused on a single expert.
+    TeamMemberInput:
+      type: object
+      required:
+      - role
+      - expert
+      properties:
+        role:
+          type: string
+          pattern: ^[a-z][a-z0-9_-]{0,31}$
+        expert:
+          type: string
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*@[1-9][0-9]*$
+          description: A version of a single expert of the tenant; a team, an unknown ref or another tenant's expert is refused
+        description:
+          type: string
+          maxLength: 300
+          description: What the leader should give this member
+        label:
+          type: string
+          maxLength: 40
+          description: What a person sees for the role (for example "研究员"); the role stays the id
+    TeamMember:
+      type: object
+      required:
+      - role
+      - expert
+      - name
+      properties:
+        role:
+          type: string
+        expert:
+          type: string
+          description: The member expert's ref, pinned to a version
+        name:
+          type: string
+          description: The member expert's name at that version
+        description:
+          type: string
+        label:
+          type: string
+    Team:
+      type: object
+      description: A leader and members, as a task runs with them (TaskConfig.team)
+      required:
+      - leader
+      - members
+      properties:
+        ref:
+          type: string
+          description: The team expert's own ref ("team_x@3") that the task selected
+        leader:
+          type: string
+        members:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeamMember'
     Expert:
       type: object
       required:
       - expert_id
+      - kind
       - ref
       - version
       - name
       properties:
         expert_id:
           type: string
+        kind:
+          type: string
+          enum:
+          - expert
+          - team
+        leader:
+          type: string
+          description: Team only
+        members:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeamMember'
+          description: Team only
         ref:
           type: string
           description: '"<expert_id>@<version>", what a task names as its profile'
@@ -1607,6 +1706,11 @@ components:
           minimum: 1
           maximum: 64
           description: How many attempts of a task may run at once (default 4 when absent). The tenant's value and the task's tighten each other (the smaller wins).
+        max_review_rounds:
+          type: integer
+          minimum: 0
+          maximum: 20
+          description: How many times a reviewer may send a node back (default 5 when absent, 0 turns review off). The tenant's value and the task's tighten each other (the smaller wins, so 0 anywhere switches review off).
     SOP:
       type: object
       required:
@@ -1760,10 +1864,17 @@ components:
         What a task runs with. skills and connector_ids are the complete sets to use: null (or absent) keeps the
         expert's defaults, an empty list removes them.
       properties:
+        team_ref:
+          type: string
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*@[1-9][0-9]*$
+          description: A team expert version to run the task with. Refused (TEAM_REF_NOT_TEAM) for a single expert, and EXPERT_TEAM_MISMATCH when `expert` names something else than the team or its leader's expert.
         expert:
           type: string
           pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*@[1-9][0-9]*$
-          description: A profile or expert version. Absent keeps the task's profile.
+          description: |
+            A profile or expert version. Absent keeps the task's profile. A team expert is resolved: the task gets
+            `team` and runs with the leader's expert as `expert`. Choosing a single expert clears the team.
+            To keep or select a team, send `team_ref` (what GET returns); `expert` may then be left out or be the leader's expert.
         skills:
           type: array
           nullable: true
@@ -1811,6 +1922,13 @@ components:
             type: string
         mode:
           type: string
+        team_ref:
+          type: string
+          description: The selected team expert's own ref; send it back in team_ref to keep the team
+        team:
+          allOf:
+          - $ref: '#/components/schemas/Team'
+          description: Set while the task's expert was chosen as a team; expert is then the leader's expert
     CreateTaskRequest:
       type: object
       required:
@@ -1861,6 +1979,17 @@ components:
           - queue
           - interrupt
           default: queue
+        mentions:
+          type: array
+          maxItems: 8
+          uniqueItems: true
+          items:
+            type: string
+            pattern: ^@?[a-z][a-z0-9_-]{0,31}$
+          description: |
+            Roles of the task's team the user @-mentioned (a leading @ is dropped; repeats are dropped). Checked against the
+            team in the task's configuration when the message is sent. Part of the request body for idempotency: the same
+            command_id with other mentions is IDEMPOTENCY_KEY_REUSED.
     TaskControlRequest:
       type: object
       required:
@@ -1986,6 +2115,20 @@ components:
         message:
           type: string
           description: Human-readable explanation (not a secret)
+        field:
+          type: string
+          description: |
+            Set on validation refusals that have one: the request field at fault, e.g. `members[2].expert`.
+            Expert and task-config refusals use these codes: NAME_INVALID, KIND_INVALID, KIND_IMMUTABLE,
+            FIELD_NOT_ALLOWED, INSTRUCTIONS_TOO_LONG, MODEL_INVALID, CONNECTORS_INVALID, CONNECTOR_NOT_FOUND,
+            SKILLS_INVALID, SKILL_NOT_FOUND, SKILL_UNUSABLE, TEAM_NO_MEMBERS, TEAM_TOO_MANY_MEMBERS,
+            TEAM_DUPLICATE_ROLE, TEAM_LEADER_NOT_MEMBER, ROLE_INVALID, TEAM_MEMBER_REF_INVALID,
+            TEAM_MEMBER_NOT_FOUND, TEAM_MEMBER_IS_TEAM, TEAM_SELF_REFERENCE, DESCRIPTION_TOO_LONG, LABEL_TOO_LONG,
+            TEAM_MALFORMED, MODE_INVALID, EXPERT_REF_INVALID, EXPERT_NOT_FOUND, TEAM_REF_NOT_TEAM, EXPERT_TEAM_MISMATCH.
+            An unknown member (or expert) and another tenant's are answered with the same code, field and reason.
+        reason:
+          type: string
+          description: Same text as `message` on a field refusal
       example:
         error: not implemented
         code: NOT_IMPLEMENTED

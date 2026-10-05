@@ -40,6 +40,9 @@ type ErrorBody struct {
 	Error   string `json:"error"`
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	// Field and Reason say which part of the request was refused and why; set on validation refusals that have one.
+	Field  string `json:"field,omitempty"`
+	Reason string `json:"reason,omitempty"`
 }
 
 type HealthBody struct {
@@ -66,6 +69,18 @@ func writeErr(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, status, ErrorBody{Error: strings.ToLower(strings.ReplaceAll(code, "_", " ")), Code: code, Message: message})
 }
 
+// writeFieldErr answers a validation refusal that names its field. It reports whether err was one.
+func writeFieldErr(w http.ResponseWriter, err error) bool {
+	var fe *app.FieldError
+	if !errors.As(err, &fe) {
+		return false
+	}
+	writeJSON(w, http.StatusBadRequest, ErrorBody{
+		Error: strings.ToLower(strings.ReplaceAll(fe.Code, "_", " ")), Code: fe.Code, Message: fe.Reason, Field: fe.Field, Reason: fe.Reason,
+	})
+	return true
+}
+
 func writeBlobErr(lg *log.Logger, w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, app.ErrTooLarge):
@@ -86,6 +101,7 @@ func writeAppErr(lg *log.Logger, w http.ResponseWriter, err error, notFound stri
 	case errors.Is(err, store.ErrStorage):
 		lg.Printf("storage error: %v", err)
 		writeErr(w, http.StatusInternalServerError, "INTERNAL", "internal error")
+	case writeFieldErr(w, err):
 	case errors.Is(err, app.ErrInvalid):
 		lg.Printf("bad request: %v", err)
 		writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "the request is invalid")

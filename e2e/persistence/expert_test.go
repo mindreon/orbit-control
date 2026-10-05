@@ -151,7 +151,7 @@ func TestExpertLifecycleAndIsolation(t *testing.T) {
 		Method: http.MethodGet, Path: "/v1/experts", Headers: headers,
 	}, httpExp{Status: http.StatusOK, BodyExcludes: []string{expertID}})
 
-	concurrentUpdates(t, a, headers, expertID)
+	concurrentUpdates(t, a, headers)
 
 	again := startServer(t, serverOpts{tenant: expertTenant, maxConns: 4})
 	again.check(t, "EXPERT/survives-restart", expertContract, "the expert is still there, at its latest version, in a fresh control process", httpReq{
@@ -161,8 +161,16 @@ func TestExpertLifecycleAndIsolation(t *testing.T) {
 
 // Two updates at once: each is answered 200 with its own version, or 409 when it lost the race. Never the same
 // version twice, and never a lost version.
-func concurrentUpdates(t *testing.T, s *server, headers map[string]string, expertID string) {
+//
+// The race runs on an expert of its own: which racer wins varies between runs, and the lifecycle expert is read again
+// after the restart, so it must stay at a fixed version for the two CI reports to compare equal.
+func concurrentUpdates(t *testing.T, s *server, headers map[string]string) {
 	t.Helper()
+	made := sendTo(t, s.base, httpReq{Method: http.MethodPost, Path: "/v1/experts", Headers: headers, Body: `{"name":"Racer"}`})
+	if made.Status != http.StatusCreated {
+		t.Fatalf("create the expert the updates race on: %d %s", made.Status, made.Body)
+	}
+	expertID := decodeField(t, made.Body, "expert_id")
 	acts := make([]httpAct, 2)
 	var wg sync.WaitGroup
 	for i := range acts {
@@ -171,20 +179,20 @@ func concurrentUpdates(t *testing.T, s *server, headers map[string]string, exper
 			defer wg.Done()
 			acts[i] = sendTo(t, s.base, httpReq{
 				Method: http.MethodPut, Path: "/v1/experts/" + expertID, Headers: headers,
-				Body: `{"name":"Writer","instructions":"racer ` + string(rune('A'+i)) + `"}`,
+				Body: `{"name":"Racer","instructions":"racer ` + string(rune('A'+i)) + `"}`,
 			})
 		}()
 	}
 	wg.Wait()
 	refs := map[string]bool{}
-	ok, pass := 0, true
+	ok, pass, dup := 0, true, false
 	for _, act := range acts {
 		switch act.Status {
 		case http.StatusOK:
 			ok++
 			ref := decodeField(t, act.Body, "ref")
 			if refs[ref] {
-				pass = false
+				pass, dup = false, true
 			}
 			refs[ref] = true
 		case http.StatusConflict:
@@ -199,7 +207,7 @@ func concurrentUpdates(t *testing.T, s *server, headers map[string]string, exper
 	record(t, caseInput{
 		ID: "EXPERT/concurrent-update", Contract: expertContract, Kind: "e2e",
 		Description: "two updates at once never claim the same version",
-		Request:     map[string]any{"updates": 2}, Expected: map[string]any{"statuses": "200 or 409, distinct refs, one 200 at least"},
-		Actual: map[string]any{"statuses": []int{acts[0].Status, acts[1].Status}, "refs": len(refs), "latest": latest.Body}, Pass: pass,
+		Request:     map[string]any{"updates": 2}, Expected: map[string]any{"distinctRefs": true, "oneUpdateAccepted": true, "latestServed": true},
+		Actual: map[string]any{"distinctRefs": !dup, "oneUpdateAccepted": ok > 0, "latestServed": latest.Status == http.StatusOK}, Pass: pass,
 	})
 }

@@ -124,7 +124,7 @@ func (a *App) matchSkills(ctx context.Context, tenantID string, names []string) 
 		}
 		found := ""
 		for _, rec := range page.Items {
-			if strings.EqualFold(strings.TrimSpace(rec.Name), name) && a.checkSkill(ctx, tenantID, rec.ID) == nil {
+			if strings.EqualFold(strings.TrimSpace(rec.Name), name) && a.checkSkill(ctx, tenantID, rec.ID, "skills") == nil {
 				found = rec.ID
 				break
 			}

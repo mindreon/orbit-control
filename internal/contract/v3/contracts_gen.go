@@ -133,6 +133,7 @@ const (
 	UpdateRejectCodeInvalidTransition      UpdateRejectCode = "INVALID_TRANSITION"
 	UpdateRejectCodeNotAllowed             UpdateRejectCode = "NOT_ALLOWED"
 	UpdateRejectCodeConfigVersionConflict  UpdateRejectCode = "CONFIG_VERSION_CONFLICT"
+	UpdateRejectCodeUnknownMention         UpdateRejectCode = "UNKNOWN_MENTION"
 )
 
 // WorkspaceAccess is a named string set from the contract.
@@ -178,8 +179,11 @@ type AgentFinalMessageEvent struct {
 }
 
 type AgentFinalMessagePayload struct {
-	AttemptID string `json:"attempt_id"`
-	Text      string `json:"text"`
+	AttemptID   string  `json:"attempt_id"`
+	TeamLabel   *string `json:"team_label,omitempty"`
+	TeamRole    *string `json:"team_role,omitempty"`
+	TeamSession *string `json:"team_session,omitempty"`
+	Text        string  `json:"text"`
 }
 
 type AgentTurnNode struct {
@@ -285,6 +289,8 @@ type ApprovalSubject struct {
 	Digest    string              `json:"digest"`
 	Kind      ApprovalSubjectKind `json:"kind"`
 	Risk      string              `json:"risk"`
+	Role      *string             `json:"role,omitempty"`
+	RoleLabel *string             `json:"role_label,omitempty"`
 	Summary   string              `json:"summary"`
 }
 
@@ -334,6 +340,7 @@ type AttemptFinishedSignal struct {
 	AttemptNo          int64          `json:"attempt_no"`
 	AttemptWorkflowID  string         `json:"attempt_workflow_id"`
 	Failure            *Failure       `json:"failure,omitempty"`
+	HeardMessageSeqs   []int64        `json:"heard_message_seqs,omitempty"`
 	NodeID             string         `json:"node_id"`
 	Outcome            string         `json:"outcome"`
 	Result             *AttemptResult `json:"result,omitempty"`
@@ -638,9 +645,12 @@ type ExecOutputEvent struct {
 }
 
 type ExecOutputPayload struct {
-	AttemptID string `json:"attempt_id"`
-	Stream    string `json:"stream"`
-	Text      string `json:"text"`
+	AttemptID   string  `json:"attempt_id"`
+	Stream      string  `json:"stream"`
+	TeamLabel   *string `json:"team_label,omitempty"`
+	TeamRole    *string `json:"team_role,omitempty"`
+	TeamSession *string `json:"team_session,omitempty"`
+	Text        string  `json:"text"`
 }
 
 type ExternalEventSignal struct {
@@ -690,6 +700,7 @@ type InboxMessage struct {
 	Attachments     []Attachment `json:"attachments,omitempty"`
 	ClientMessageID string       `json:"client_message_id"`
 	Delivery        *Delivery    `json:"delivery,omitempty"`
+	Mentions        []string     `json:"mentions,omitempty"`
 	MessageSeq      int64        `json:"message_seq"`
 	Text            string       `json:"text"`
 }
@@ -750,10 +761,14 @@ type NodeStatusChangedPayload struct {
 	Frozen           *bool            `json:"frozen,omitempty"`
 	NodeID           string           `json:"node_id"`
 	NodeType         *NodeType        `json:"node_type,omitempty"`
+	OwnerLabel       *string          `json:"owner_label,omitempty"`
 	OwnerProfile     *string          `json:"owner_profile,omitempty"`
+	OwnerRole        *string          `json:"owner_role,omitempty"`
 	ParentNodeID     *string          `json:"parent_node_id,omitempty"`
 	Reason           *string          `json:"reason,omitempty"`
+	ReviewRound      *int64           `json:"review_round,omitempty"`
 	SOPStep          *SopStepInfo     `json:"sop_step,omitempty"`
+	Team             *TeamStageInfo   `json:"team,omitempty"`
 	Title            *string          `json:"title,omitempty"`
 	ToStatus         NodeStatus       `json:"to_status"`
 	WorkspaceAccess  *WorkspaceAccess `json:"workspace_access,omitempty"`
@@ -770,10 +785,14 @@ type NodeView struct {
 	DependsOn        []string        `json:"depends_on,omitempty"`
 	Frozen           *bool           `json:"frozen,omitempty"`
 	NodeID           string          `json:"node_id"`
+	OwnerLabel       *string         `json:"owner_label,omitempty"`
 	OwnerProfile     string          `json:"owner_profile"`
+	OwnerRole        *string         `json:"owner_role,omitempty"`
 	ParentNodeID     *string         `json:"parent_node_id,omitempty"`
+	ReviewRound      *int64          `json:"review_round,omitempty"`
 	SOPStep          *SopStepInfo    `json:"sop_step,omitempty"`
 	Status           NodeStatus      `json:"status"`
+	Team             *TeamStageInfo  `json:"team,omitempty"`
 	Title            string          `json:"title"`
 	Type             NodeType        `json:"type"`
 	WorkspaceAccess  WorkspaceAccess `json:"workspace_access"`
@@ -852,6 +871,30 @@ type PlanEdge struct {
 	To   string `json:"to"`
 }
 
+type PlanReviewLimitReachedEvent struct {
+	AfterSeq   *int64                        `json:"after_seq,omitempty"`
+	Entity     EntityRef                     `json:"entity"`
+	EventID    string                        `json:"event_id"`
+	OccurredAt time.Time                     `json:"occurred_at"`
+	Payload    PlanReviewLimitReachedPayload `json:"payload"`
+	Retention  string                        `json:"retention,omitempty"`
+	Schema     string                        `json:"schema,omitempty"`
+	Seq        *int64                        `json:"seq,omitempty"`
+	Source     EventSource                   `json:"source"`
+	TaskID     string                        `json:"task_id"`
+	Type       string                        `json:"type,omitempty"`
+	Visibility *string                       `json:"visibility,omitempty"`
+}
+
+// The leader's reviews reached `Policy.max_review_rounds` (05 §7): the tasks created in the last round are done and
+// nobody reviewed them. The task asks for a review of its own (`task.status_changed`).
+type PlanReviewLimitReachedPayload struct {
+	Children  int64  `json:"children"`
+	MaxRounds int64  `json:"max_rounds"`
+	NodeID    string `json:"node_id"`
+	Round     int64  `json:"round"`
+}
+
 type PlanVersionCommittedEvent struct {
 	AfterSeq   *int64                      `json:"after_seq,omitempty"`
 	Entity     EntityRef                   `json:"entity"`
@@ -892,6 +935,7 @@ type Policy struct {
 	DeniedTools             []string `json:"denied_tools,omitempty"`
 	ExplorationMaxToolCalls *int64   `json:"exploration_max_tool_calls,omitempty"`
 	MaxConcurrency          *int64   `json:"max_concurrency,omitempty"`
+	MaxReviewRounds         *int64   `json:"max_review_rounds,omitempty"`
 }
 
 type ProfileSwitchedEvent struct {
@@ -953,6 +997,7 @@ type SendMessageInput struct {
 	ClientMessageID string       `json:"client_message_id"`
 	CommandID       string       `json:"command_id"`
 	Delivery        *Delivery    `json:"delivery,omitempty"`
+	Mentions        []string     `json:"mentions,omitempty"`
 	Text            string       `json:"text"`
 }
 
@@ -1195,12 +1240,190 @@ type Team struct {
 	Leader   string       `json:"leader"`
 	MaxDepth *int64       `json:"max_depth,omitempty"`
 	Members  []TeamMember `json:"members"`
+	Ref      *string      `json:"ref,omitempty"`
+}
+
+type TeamArtifactRef struct {
+	BlobRef *string `json:"blob_ref,omitempty"`
+	Name    string  `json:"name"`
 }
 
 // One member of a team (15 M8, T8.6): a role the leader can give work to, and the expert who does it.
 type TeamMember struct {
 	Description *string `json:"description,omitempty"`
 	Expert      string  `json:"expert"`
+	Label       *string `json:"label,omitempty"`
+	Role        string  `json:"role"`
+}
+
+type TeamMemberTurnFinishedEvent struct {
+	AfterSeq   *int64                        `json:"after_seq,omitempty"`
+	Entity     EntityRef                     `json:"entity"`
+	EventID    string                        `json:"event_id"`
+	OccurredAt time.Time                     `json:"occurred_at"`
+	Payload    TeamMemberTurnFinishedPayload `json:"payload"`
+	Retention  string                        `json:"retention,omitempty"`
+	Schema     string                        `json:"schema,omitempty"`
+	Seq        *int64                        `json:"seq,omitempty"`
+	Source     EventSource                   `json:"source"`
+	TaskID     string                        `json:"task_id"`
+	Type       string                        `json:"type,omitempty"`
+	Visibility *string                       `json:"visibility,omitempty"`
+}
+
+type TeamMemberTurnFinishedPayload struct {
+	Artifacts       []string `json:"artifacts,omitempty"`
+	AttemptID       string   `json:"attempt_id"`
+	Executor        string   `json:"executor"`
+	Label           *string  `json:"label,omitempty"`
+	MemberAttemptID string   `json:"member_attempt_id"`
+	NodeID          string   `json:"node_id"`
+	Outcome         string   `json:"outcome"`
+	Role            string   `json:"role"`
+	Round           int64    `json:"round"`
+	Summary         *string  `json:"summary,omitempty"`
+	Usage           *Usage   `json:"usage,omitempty"`
+}
+
+type TeamMemberTurnStartedEvent struct {
+	AfterSeq   *int64                       `json:"after_seq,omitempty"`
+	Entity     EntityRef                    `json:"entity"`
+	EventID    string                       `json:"event_id"`
+	OccurredAt time.Time                    `json:"occurred_at"`
+	Payload    TeamMemberTurnStartedPayload `json:"payload"`
+	Retention  string                       `json:"retention,omitempty"`
+	Schema     string                       `json:"schema,omitempty"`
+	Seq        *int64                       `json:"seq,omitempty"`
+	Source     EventSource                  `json:"source"`
+	TaskID     string                       `json:"task_id"`
+	Type       string                       `json:"type,omitempty"`
+	Visibility *string                      `json:"visibility,omitempty"`
+}
+
+type TeamMemberTurnStartedPayload struct {
+	AttemptID       string  `json:"attempt_id"`
+	Executor        string  `json:"executor"`
+	Label           *string `json:"label,omitempty"`
+	MemberAttemptID string  `json:"member_attempt_id"`
+	NodeID          string  `json:"node_id"`
+	Role            string  `json:"role"`
+	Round           int64   `json:"round"`
+	Task            *string `json:"task,omitempty"`
+}
+
+type TeamMessageEvent struct {
+	AfterSeq   *int64             `json:"after_seq,omitempty"`
+	Entity     EntityRef          `json:"entity"`
+	EventID    string             `json:"event_id"`
+	OccurredAt time.Time          `json:"occurred_at"`
+	Payload    TeamMessagePayload `json:"payload"`
+	Retention  string             `json:"retention,omitempty"`
+	Schema     string             `json:"schema,omitempty"`
+	Seq        *int64             `json:"seq,omitempty"`
+	Source     EventSource        `json:"source"`
+	TaskID     string             `json:"task_id"`
+	Type       string             `json:"type,omitempty"`
+	Visibility *string            `json:"visibility,omitempty"`
+}
+
+// One utterance in the team's group conversation, whatever made it (07 §5): the leader assigning work (`assign`), a member
+// answering (`reply`), a note posted for the team (`note`), the leader's review or final answer (`review`), the user (`user`) or
+// the runtime explaining a refusal (`system`). `to_roles` is who it is addressed to (mentions); empty is the whole group. A stage
+// emits them with entity {team, attempt_id}; plan-level ones (a TaskCreate given to a member, its result, a user message to a
+// member) have no stage: `attempt_id` is the attempt that made it (None for the user) and `round` is 0.
+// `role` and `label` repeat `from_role` and `from_label` (kept for consumers of the first shape of this event).
+type TeamMessagePayload struct {
+	Artifacts []TeamArtifactRef `json:"artifacts,omitempty"`
+	AttemptID *string           `json:"attempt_id,omitempty"`
+	FromLabel *string           `json:"from_label,omitempty"`
+	FromRole  *string           `json:"from_role,omitempty"`
+	Hop       *int64            `json:"hop,omitempty"`
+	Kind      *string           `json:"kind,omitempty"`
+	Label     *string           `json:"label,omitempty"`
+	NodeID    string            `json:"node_id"`
+	Role      string            `json:"role"`
+	Round     *int64            `json:"round,omitempty"`
+	Seq       *int64            `json:"seq,omitempty"`
+	Text      string            `json:"text"`
+	ToRoles   []string          `json:"to_roles,omitempty"`
+}
+
+type TeamRoundFinishedEvent struct {
+	AfterSeq   *int64                   `json:"after_seq,omitempty"`
+	Entity     EntityRef                `json:"entity"`
+	EventID    string                   `json:"event_id"`
+	OccurredAt time.Time                `json:"occurred_at"`
+	Payload    TeamRoundFinishedPayload `json:"payload"`
+	Retention  string                   `json:"retention,omitempty"`
+	Schema     string                   `json:"schema,omitempty"`
+	Seq        *int64                   `json:"seq,omitempty"`
+	Source     EventSource              `json:"source"`
+	TaskID     string                   `json:"task_id"`
+	Type       string                   `json:"type,omitempty"`
+	Visibility *string                  `json:"visibility,omitempty"`
+}
+
+type TeamRoundFinishedPayload struct {
+	Assignments *int64  `json:"assignments,omitempty"`
+	AttemptID   string  `json:"attempt_id"`
+	Messages    *int64  `json:"messages,omitempty"`
+	NodeID      string  `json:"node_id"`
+	Outcome     string  `json:"outcome"`
+	Reason      *string `json:"reason,omitempty"`
+	Round       int64   `json:"round"`
+	Usage       *Usage  `json:"usage,omitempty"`
+}
+
+type TeamRoundStartedEvent struct {
+	AfterSeq   *int64                  `json:"after_seq,omitempty"`
+	Entity     EntityRef               `json:"entity"`
+	EventID    string                  `json:"event_id"`
+	OccurredAt time.Time               `json:"occurred_at"`
+	Payload    TeamRoundStartedPayload `json:"payload"`
+	Retention  string                  `json:"retention,omitempty"`
+	Schema     string                  `json:"schema,omitempty"`
+	Seq        *int64                  `json:"seq,omitempty"`
+	Source     EventSource             `json:"source"`
+	TaskID     string                  `json:"task_id"`
+	Type       string                  `json:"type,omitempty"`
+	Visibility *string                 `json:"visibility,omitempty"`
+}
+
+// The leader of a team stage starts its `round`-th turn (07 §5). Team events carry the stage's attempt as their entity:
+// {kind: team, id: attempt_id}, with a version of their own.
+type TeamRoundStartedPayload struct {
+	AttemptID   string `json:"attempt_id"`
+	MaxHops     *int64 `json:"max_hops,omitempty"`
+	MaxMembers  *int64 `json:"max_members,omitempty"`
+	MaxMessages *int64 `json:"max_messages,omitempty"`
+	MaxRounds   int64  `json:"max_rounds"`
+	Messages    *int64 `json:"messages,omitempty"`
+	NodeID      string `json:"node_id"`
+	Round       int64  `json:"round"`
+}
+
+// What a view of a `team_stage` node says about its stage: the limits it runs under (from its spec, so nobody assumes the
+// defaults). The counters ({round, messages}) are on the stage's `team.*` events (`team.round_started` and `team.round_finished`).
+type TeamStageInfo struct {
+	MaxHops     *int64 `json:"max_hops,omitempty"`
+	MaxMembers  int64  `json:"max_members"`
+	MaxMessages int64  `json:"max_messages"`
+	MaxRounds   int64  `json:"max_rounds"`
+}
+
+// What bounds one team stage (07 §4). Whichever is reached first ends the stage with a reason, never silently.
+type TeamStageLimits struct {
+	MaxHops     *int64 `json:"max_hops,omitempty"`
+	MaxMembers  *int64 `json:"max_members,omitempty"`
+	MaxMessages *int64 `json:"max_messages,omitempty"`
+	MaxRounds   *int64 `json:"max_rounds,omitempty"`
+}
+
+// One member of a team stage: the role the leader assigns work to, and the profile (an expert) that does it.
+type TeamStageMember struct {
+	Description *string `json:"description,omitempty"`
+	Executor    string  `json:"executor"`
+	Label       *string `json:"label,omitempty"`
 	Role        string  `json:"role"`
 }
 
@@ -1220,16 +1443,26 @@ type TeamStageNode struct {
 	WorkspaceAccess    *WorkspaceAccess    `json:"workspace_access,omitempty"`
 }
 
-// Registered but disabled in phase 1 (07, A20).
+// A bounded team inside one attempt (07): a leader and its members work on `goal` together. The leader runs as the
+// `leader` member's executor and hands work to the others; what it finishes with is the stage's result. `workspace_access`
+// is what the members get of the task workspace: a copy of its latest snapshot that is thrown away (`read`), or nothing
+// (`none`). Only the leader writes the task's workspace (the node's own `workspace_access`).
 type TeamStageSpec struct {
-	MemberProfiles []string `json:"member_profiles,omitempty"`
-	Objective      string   `json:"objective"`
+	Goal            string            `json:"goal"`
+	Inputs          []string          `json:"inputs,omitempty"`
+	Leader          string            `json:"leader"`
+	Limits          *TeamStageLimits  `json:"limits,omitempty"`
+	Members         []TeamStageMember `json:"members"`
+	WorkspaceAccess *string           `json:"workspace_access,omitempty"`
 }
 
 type TextDeltaPayload struct {
-	AttemptID string  `json:"attempt_id"`
-	BlockID   *string `json:"block_id,omitempty"`
-	Text      string  `json:"text"`
+	AttemptID   string  `json:"attempt_id"`
+	BlockID     *string `json:"block_id,omitempty"`
+	TeamLabel   *string `json:"team_label,omitempty"`
+	TeamRole    *string `json:"team_role,omitempty"`
+	TeamSession *string `json:"team_session,omitempty"`
+	Text        string  `json:"text"`
 }
 
 type ThinkingDeltaEvent struct {
@@ -1282,6 +1515,9 @@ type ToolCallFinishedPayload struct {
 	AttemptID     string  `json:"attempt_id"`
 	ResultPreview *string `json:"result_preview,omitempty"`
 	State         string  `json:"state"`
+	TeamLabel     *string `json:"team_label,omitempty"`
+	TeamRole      *string `json:"team_role,omitempty"`
+	TeamSession   *string `json:"team_session,omitempty"`
 	ToolCallID    string  `json:"tool_call_id"`
 	ToolName      string  `json:"tool_name"`
 }
@@ -1304,6 +1540,9 @@ type ToolCallStartedEvent struct {
 type ToolCallStartedPayload struct {
 	ArgsPreview *string `json:"args_preview,omitempty"`
 	AttemptID   string  `json:"attempt_id"`
+	TeamLabel   *string `json:"team_label,omitempty"`
+	TeamRole    *string `json:"team_role,omitempty"`
+	TeamSession *string `json:"team_session,omitempty"`
 	ToolCallID  string  `json:"tool_call_id"`
 	ToolName    string  `json:"tool_name"`
 }
@@ -1324,9 +1563,12 @@ type ToolProgressEvent struct {
 }
 
 type ToolProgressPayload struct {
-	AttemptID  string `json:"attempt_id"`
-	Text       string `json:"text"`
-	ToolCallID string `json:"tool_call_id"`
+	AttemptID   string  `json:"attempt_id"`
+	TeamLabel   *string `json:"team_label,omitempty"`
+	TeamRole    *string `json:"team_role,omitempty"`
+	TeamSession *string `json:"team_session,omitempty"`
+	Text        string  `json:"text"`
+	ToolCallID  string  `json:"tool_call_id"`
 }
 
 type UpdateNodeOp struct {
@@ -1376,8 +1618,11 @@ type UsageDeltaEvent struct {
 }
 
 type UsagePayload struct {
-	AttemptID string `json:"attempt_id"`
-	Usage     Usage  `json:"usage"`
+	AttemptID   string  `json:"attempt_id"`
+	TeamLabel   *string `json:"team_label,omitempty"`
+	TeamRole    *string `json:"team_role,omitempty"`
+	TeamSession *string `json:"team_session,omitempty"`
+	Usage       Usage   `json:"usage"`
 }
 
 type UsageRecordedEvent struct {
@@ -1414,6 +1659,7 @@ type UserMessagePayload struct {
 	Attachments     []Attachment `json:"attachments,omitempty"`
 	ClientMessageID string       `json:"client_message_id"`
 	Delivery        *Delivery    `json:"delivery,omitempty"`
+	Mentions        []string     `json:"mentions,omitempty"`
 	MessageSeq      int64        `json:"message_seq"`
 	Text            string       `json:"text"`
 }
@@ -1508,37 +1754,43 @@ func (u *CompletionResult) UnmarshalJSON(data []byte) error {
 
 // Event is exactly one of its members, chosen by "type".
 type Event struct {
-	ThinkingDeltaEvent        *ThinkingDeltaEvent
-	TokenDeltaEvent           *TokenDeltaEvent
-	ApprovalDecidedEvent      *ApprovalDecidedEvent
-	ApprovalRequestedEvent    *ApprovalRequestedEvent
-	ManifestCreatedEvent      *ManifestCreatedEvent
-	AttemptFinishedEvent      *AttemptFinishedEvent
-	AttemptParkedEvent        *AttemptParkedEvent
-	AttemptResumedEvent       *AttemptResumedEvent
-	AttemptStartedEvent       *AttemptStartedEvent
-	BudgetExhaustedEvent      *BudgetExhaustedEvent
-	BudgetGrantedEvent        *BudgetGrantedEvent
-	CheckpointCommittedEvent  *CheckpointCommittedEvent
-	HeartbeatEvent            *HeartbeatEvent
-	AgentFinalMessageEvent    *AgentFinalMessageEvent
-	UserMessageEvent          *UserMessageEvent
-	NodeStatusChangedEvent    *NodeStatusChangedEvent
-	PlanChangeRejectedEvent   *PlanChangeRejectedEvent
-	PlanVersionCommittedEvent *PlanVersionCommittedEvent
-	ProfileSwitchedEvent      *ProfileSwitchedEvent
-	TaskCancelledEvent        *TaskCancelledEvent
-	TaskCompletedEvent        *TaskCompletedEvent
-	TaskConfigChangedEvent    *TaskConfigChangedEvent
-	TaskCreatedEvent          *TaskCreatedEvent
-	TaskFailedEvent           *TaskFailedEvent
-	TaskStatusChangedEvent    *TaskStatusChangedEvent
-	ToolCallFinishedEvent     *ToolCallFinishedEvent
-	ToolCallStartedEvent      *ToolCallStartedEvent
-	ToolProgressEvent         *ToolProgressEvent
-	UsageDeltaEvent           *UsageDeltaEvent
-	UsageRecordedEvent        *UsageRecordedEvent
-	ExecOutputEvent           *ExecOutputEvent
+	ThinkingDeltaEvent          *ThinkingDeltaEvent
+	TokenDeltaEvent             *TokenDeltaEvent
+	ApprovalDecidedEvent        *ApprovalDecidedEvent
+	ApprovalRequestedEvent      *ApprovalRequestedEvent
+	ManifestCreatedEvent        *ManifestCreatedEvent
+	AttemptFinishedEvent        *AttemptFinishedEvent
+	AttemptParkedEvent          *AttemptParkedEvent
+	AttemptResumedEvent         *AttemptResumedEvent
+	AttemptStartedEvent         *AttemptStartedEvent
+	BudgetExhaustedEvent        *BudgetExhaustedEvent
+	BudgetGrantedEvent          *BudgetGrantedEvent
+	CheckpointCommittedEvent    *CheckpointCommittedEvent
+	HeartbeatEvent              *HeartbeatEvent
+	AgentFinalMessageEvent      *AgentFinalMessageEvent
+	UserMessageEvent            *UserMessageEvent
+	NodeStatusChangedEvent      *NodeStatusChangedEvent
+	PlanChangeRejectedEvent     *PlanChangeRejectedEvent
+	PlanReviewLimitReachedEvent *PlanReviewLimitReachedEvent
+	PlanVersionCommittedEvent   *PlanVersionCommittedEvent
+	ProfileSwitchedEvent        *ProfileSwitchedEvent
+	TaskCancelledEvent          *TaskCancelledEvent
+	TaskCompletedEvent          *TaskCompletedEvent
+	TaskConfigChangedEvent      *TaskConfigChangedEvent
+	TaskCreatedEvent            *TaskCreatedEvent
+	TaskFailedEvent             *TaskFailedEvent
+	TaskStatusChangedEvent      *TaskStatusChangedEvent
+	TeamMemberTurnFinishedEvent *TeamMemberTurnFinishedEvent
+	TeamMemberTurnStartedEvent  *TeamMemberTurnStartedEvent
+	TeamMessageEvent            *TeamMessageEvent
+	TeamRoundFinishedEvent      *TeamRoundFinishedEvent
+	TeamRoundStartedEvent       *TeamRoundStartedEvent
+	ToolCallFinishedEvent       *ToolCallFinishedEvent
+	ToolCallStartedEvent        *ToolCallStartedEvent
+	ToolProgressEvent           *ToolProgressEvent
+	UsageDeltaEvent             *UsageDeltaEvent
+	UsageRecordedEvent          *UsageRecordedEvent
+	ExecOutputEvent             *ExecOutputEvent
 }
 
 const (
@@ -1559,6 +1811,7 @@ const (
 	EventTagMessageUser             = "message.user"
 	EventTagNodeStatusChanged       = "node.status_changed"
 	EventTagPlanChangeRejected      = "plan.change_rejected"
+	EventTagPlanReviewLimitReached  = "plan.review_limit_reached"
 	EventTagPlanVersionCommitted    = "plan.version_committed"
 	EventTagProfileSwitched         = "profile.switched"
 	EventTagTaskCancelled           = "task.cancelled"
@@ -1567,6 +1820,11 @@ const (
 	EventTagTaskCreated             = "task.created"
 	EventTagTaskFailed              = "task.failed"
 	EventTagTaskStatusChanged       = "task.status_changed"
+	EventTagTeamMemberTurnFinished  = "team.member_turn_finished"
+	EventTagTeamMemberTurnStarted   = "team.member_turn_started"
+	EventTagTeamMessage             = "team.message"
+	EventTagTeamRoundFinished       = "team.round_finished"
+	EventTagTeamRoundStarted        = "team.round_started"
 	EventTagToolCallFinished        = "tool.call_finished"
 	EventTagToolCallStarted         = "tool.call_started"
 	EventTagToolProgress            = "tool.progress"
@@ -1612,6 +1870,8 @@ func (u Event) Tag() string {
 		return "node.status_changed"
 	case u.PlanChangeRejectedEvent != nil:
 		return "plan.change_rejected"
+	case u.PlanReviewLimitReachedEvent != nil:
+		return "plan.review_limit_reached"
 	case u.PlanVersionCommittedEvent != nil:
 		return "plan.version_committed"
 	case u.ProfileSwitchedEvent != nil:
@@ -1628,6 +1888,16 @@ func (u Event) Tag() string {
 		return "task.failed"
 	case u.TaskStatusChangedEvent != nil:
 		return "task.status_changed"
+	case u.TeamMemberTurnFinishedEvent != nil:
+		return "team.member_turn_finished"
+	case u.TeamMemberTurnStartedEvent != nil:
+		return "team.member_turn_started"
+	case u.TeamMessageEvent != nil:
+		return "team.message"
+	case u.TeamRoundFinishedEvent != nil:
+		return "team.round_finished"
+	case u.TeamRoundStartedEvent != nil:
+		return "team.round_started"
 	case u.ToolCallFinishedEvent != nil:
 		return "tool.call_finished"
 	case u.ToolCallStartedEvent != nil:
@@ -1714,6 +1984,10 @@ func (u Event) MarshalJSON() ([]byte, error) {
 		v := *u.PlanChangeRejectedEvent
 		v.Type = "plan.change_rejected"
 		return json.Marshal(v)
+	case u.PlanReviewLimitReachedEvent != nil:
+		v := *u.PlanReviewLimitReachedEvent
+		v.Type = "plan.review_limit_reached"
+		return json.Marshal(v)
 	case u.PlanVersionCommittedEvent != nil:
 		v := *u.PlanVersionCommittedEvent
 		v.Type = "plan.version_committed"
@@ -1745,6 +2019,26 @@ func (u Event) MarshalJSON() ([]byte, error) {
 	case u.TaskStatusChangedEvent != nil:
 		v := *u.TaskStatusChangedEvent
 		v.Type = "task.status_changed"
+		return json.Marshal(v)
+	case u.TeamMemberTurnFinishedEvent != nil:
+		v := *u.TeamMemberTurnFinishedEvent
+		v.Type = "team.member_turn_finished"
+		return json.Marshal(v)
+	case u.TeamMemberTurnStartedEvent != nil:
+		v := *u.TeamMemberTurnStartedEvent
+		v.Type = "team.member_turn_started"
+		return json.Marshal(v)
+	case u.TeamMessageEvent != nil:
+		v := *u.TeamMessageEvent
+		v.Type = "team.message"
+		return json.Marshal(v)
+	case u.TeamRoundFinishedEvent != nil:
+		v := *u.TeamRoundFinishedEvent
+		v.Type = "team.round_finished"
+		return json.Marshal(v)
+	case u.TeamRoundStartedEvent != nil:
+		v := *u.TeamRoundStartedEvent
+		v.Type = "team.round_started"
 		return json.Marshal(v)
 	case u.ToolCallFinishedEvent != nil:
 		v := *u.ToolCallFinishedEvent
@@ -1884,6 +2178,12 @@ func (u *Event) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("contract: decode Event plan.change_rejected: %w", err)
 		}
 		*u = Event{PlanChangeRejectedEvent: &v}
+	case "plan.review_limit_reached":
+		var v PlanReviewLimitReachedEvent
+		if err := json.Unmarshal(data, &v); err != nil {
+			return fmt.Errorf("contract: decode Event plan.review_limit_reached: %w", err)
+		}
+		*u = Event{PlanReviewLimitReachedEvent: &v}
 	case "plan.version_committed":
 		var v PlanVersionCommittedEvent
 		if err := json.Unmarshal(data, &v); err != nil {
@@ -1932,6 +2232,36 @@ func (u *Event) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("contract: decode Event task.status_changed: %w", err)
 		}
 		*u = Event{TaskStatusChangedEvent: &v}
+	case "team.member_turn_finished":
+		var v TeamMemberTurnFinishedEvent
+		if err := json.Unmarshal(data, &v); err != nil {
+			return fmt.Errorf("contract: decode Event team.member_turn_finished: %w", err)
+		}
+		*u = Event{TeamMemberTurnFinishedEvent: &v}
+	case "team.member_turn_started":
+		var v TeamMemberTurnStartedEvent
+		if err := json.Unmarshal(data, &v); err != nil {
+			return fmt.Errorf("contract: decode Event team.member_turn_started: %w", err)
+		}
+		*u = Event{TeamMemberTurnStartedEvent: &v}
+	case "team.message":
+		var v TeamMessageEvent
+		if err := json.Unmarshal(data, &v); err != nil {
+			return fmt.Errorf("contract: decode Event team.message: %w", err)
+		}
+		*u = Event{TeamMessageEvent: &v}
+	case "team.round_finished":
+		var v TeamRoundFinishedEvent
+		if err := json.Unmarshal(data, &v); err != nil {
+			return fmt.Errorf("contract: decode Event team.round_finished: %w", err)
+		}
+		*u = Event{TeamRoundFinishedEvent: &v}
+	case "team.round_started":
+		var v TeamRoundStartedEvent
+		if err := json.Unmarshal(data, &v); err != nil {
+			return fmt.Errorf("contract: decode Event team.round_started: %w", err)
+		}
+		*u = Event{TeamRoundStartedEvent: &v}
 	case "tool.call_finished":
 		var v ToolCallFinishedEvent
 		if err := json.Unmarshal(data, &v); err != nil {
@@ -1993,6 +2323,7 @@ var EventRetention = map[string]string{
 	"message.user":              "durable",
 	"node.status_changed":       "durable",
 	"plan.change_rejected":      "durable",
+	"plan.review_limit_reached": "durable",
 	"plan.version_committed":    "durable",
 	"profile.switched":          "durable",
 	"task.cancelled":            "durable",
@@ -2001,6 +2332,11 @@ var EventRetention = map[string]string{
 	"task.created":              "durable",
 	"task.failed":               "durable",
 	"task.status_changed":       "durable",
+	"team.member_turn_finished": "durable",
+	"team.member_turn_started":  "durable",
+	"team.message":              "durable",
+	"team.round_finished":       "durable",
+	"team.round_started":        "durable",
 	"tool.call_finished":        "durable",
 	"tool.call_started":         "ephemeral",
 	"tool.progress":             "ephemeral",

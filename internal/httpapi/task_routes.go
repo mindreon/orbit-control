@@ -50,6 +50,7 @@ func registerTaskRoutes(router gin.IRoutes, runtime *app.App, authed func(princi
 			runtime.Log.Printf("task storage error: %v", err)
 			writeErr(w, http.StatusInternalServerError, "STORAGE_ERROR", "task storage is temporarily unavailable")
 		case writeOrchRefusal(w, err):
+		case writeFieldErr(w, err):
 		default:
 			runtime.Log.Printf("bad task request: %v", err)
 			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "the request is invalid")
@@ -112,9 +113,21 @@ func registerTaskRoutes(router gin.IRoutes, runtime *app.App, authed func(princi
 		Model        string   `json:"model"`
 		ConnectorIDs []string `json:"connector_ids"`
 		SkillIDs     []string `json:"skill_ids"`
+		Kind         string   `json:"kind"`
+		Leader       string   `json:"leader"`
+		Members      []struct {
+			Role        string `json:"role"`
+			Expert      string `json:"expert"`
+			Description string `json:"description"`
+			Label       string `json:"label"`
+		} `json:"members"`
 	}
 	expertInput := func(b expertBody) app.ExpertInput {
-		return app.ExpertInput{Name: b.Name, Instructions: b.Instructions, Model: b.Model, ConnectorIDs: b.ConnectorIDs, SkillIDs: b.SkillIDs}
+		in := app.ExpertInput{Name: b.Name, Instructions: b.Instructions, Model: b.Model, ConnectorIDs: b.ConnectorIDs, SkillIDs: b.SkillIDs, Kind: b.Kind, Leader: b.Leader}
+		for _, member := range b.Members {
+			in.Members = append(in.Members, app.TeamMemberInput{Role: member.Role, Expert: member.Expert, Description: member.Description, Label: member.Label})
+		}
+		return in
 	}
 	router.GET("/v1/experts", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		items, err := runtime.ListExperts(r.Context(), toPrincipal(p))
@@ -402,8 +415,29 @@ func registerTaskRoutes(router gin.IRoutes, runtime *app.App, authed func(princi
 		if payload["delivery"] == "" {
 			payload["delivery"] = "queue"
 		}
-		raw, err := runtime.Tasks.Update(r.Context(), toPrincipal(p), r.PathValue("taskId"), "sendMessage", id, payload)
+		mentions, ok := stringList(body["mentions"])
+		if !ok || len(mentions) > taskruntime.MaxMentions {
+			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "mentions must be a list of at most 8 roles")
+			return
+		}
+		// Left out of the payload when empty, so a message without mentions hashes as it always did. Only the shape is
+		// settled here; the team check runs for a command seen for the first time, so a replay never depends on it.
+		mentions = taskruntime.NormalizeMentions(mentions)
+		if len(mentions) > 0 {
+			payload["mentions"] = mentions
+		}
+		taskID := r.PathValue("taskId")
+		raw, err := runtime.Tasks.UpdateChecked(r.Context(), toPrincipal(p), taskID, "sendMessage", id, payload, func(ctx context.Context) error {
+			return runtime.Tasks.CheckMentions(ctx, toPrincipal(p), taskID, mentions)
+		})
 		if err != nil {
+			var refused *taskruntime.MentionError
+			if errors.As(err, &refused) {
+				writeJSON(w, http.StatusUnprocessableEntity, ErrorBody{
+					Error: strings.ToLower(strings.ReplaceAll(refused.Code, "_", " ")), Code: refused.Code, Message: refused.Reason, Field: refused.Field, Reason: refused.Reason,
+				})
+				return
+			}
 			writeTaskErr(w, err)
 			return
 		}
@@ -606,11 +640,32 @@ func stringValue(body map[string]any, keys ...string) string {
 // defaults; an empty one removes them, which encoding/json keeps apart (nil against an empty slice).
 type taskConfigBody struct {
 	Expert       string   `json:"expert"`
+	TeamRef      string   `json:"team_ref"`
 	Skills       []string `json:"skills"`
 	ConnectorIDs []string `json:"connector_ids"`
 	Mode         string   `json:"mode"`
 }
 
 func (b taskConfigBody) request() app.TaskConfigRequest {
-	return app.TaskConfigRequest{Expert: b.Expert, Skills: b.Skills, ConnectorIDs: b.ConnectorIDs, Mode: b.Mode}
+	return app.TaskConfigRequest{Expert: b.Expert, TeamRef: b.TeamRef, Skills: b.Skills, ConnectorIDs: b.ConnectorIDs, Mode: b.Mode}
+}
+
+// stringList reads an optional JSON list of strings. Absent or null is an empty list; anything else is not ok.
+func stringList(value any) ([]string, bool) {
+	if value == nil {
+		return nil, true
+	}
+	items, ok := value.([]any)
+	if !ok {
+		return nil, false
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		text, ok := item.(string)
+		if !ok {
+			return nil, false
+		}
+		out = append(out, text)
+	}
+	return out, true
 }
