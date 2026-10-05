@@ -94,12 +94,13 @@ does (ISO-1 rules apply to its SQL as well).
 |---|---|---|---|---|
 | `agent_profiles` | tenant | SELECT, INSERT | SELECT | Versions are immutable; a change is a new version (11 §2). |
 | `tenant_policy` | tenant | SELECT, INSERT, UPDATE (`spec, updated_at`); **no DELETE** | SELECT | One row per tenant: the outermost policy layer (05 §6). It can only be tightened further by a task or a profile, never loosened by them. A worker reads it at the start of each attempt; it never writes it. |
-| `sop_definitions` | tenant | SELECT, INSERT; **no UPDATE, no DELETE** | SELECT | An SOP is an ordered list of step names; a version is immutable, a change is a new version, and a task locks `sop_id@version` (06 §2). The `sop_step` activity reads the definition it was started with; it never writes one. |
+| `sop_definitions` | tenant | SELECT, INSERT; **no UPDATE, no DELETE** | SELECT | An SOP is a named definition (`name`, `description`, `steps`; steps with ids and dependencies, migration 00026; a v1 definition without them reads as a linear v2 one); a version is immutable, a change is a new version, and a task locks `sop_id@version` (06 §2). The runtime's `load_sop` activity reads the definition when a `sop_stage` node is compiled into the plan; it never writes one. |
 | `node_type_registry` | **none** | SELECT | SELECT | Global, not tenant data. Seeded by the migration; `team_stage` is disabled in v1 (A20). |
-| `tasks` | tenant | SELECT, INSERT, UPDATE (`status, plan_version, budgets, usage, pending_approvals, updated_at`); `policy` is written at creation and never updated | — | The v3 control service creates tasks, applies durable runtime projections, and may repair a projection from the authoritative workflow Query during T4.5 reconciliation. |
-| `task_nodes`, `task_approvals` | tenant | SELECT, INSERT | — | Projections written by the Projector in control. Their UPDATE columns are added with the Projector (orbit-infra 12 Step 7). |
-| `stage_attempts` | tenant | SELECT, INSERT | SELECT, UPDATE (`status, failure, finished_at, entity_version`) (migration 00018); **no DELETE** | Control owns the projection. The worker maintenance schedule looks at attempts left STARTING or RUNNING for more than 24 hours and, only when their AttemptWorkflow no longer exists or has closed, moves them to a terminal status (`LOST` or `ABORTED`) with the reason in `failure`. An attempt parked on an approval or on user input can legitimately stay RUNNING for days, so age alone never changes a row, and nothing deletes one: the row is history. |
-| `plan_versions`, `task_messages`, `task_events` | tenant | SELECT, INSERT; **no UPDATE, no DELETE** | — | Immutable history, like `events` and `messages`. |
+| `tasks` | tenant | SELECT, INSERT, UPDATE (`status, plan_version, budgets, usage, pending_approvals, updated_at`, and `deleted_at` since migration 00022: a task is deleted softly so late workflow events still find their row); `policy` is written at creation and never updated | — | The v3 control service creates tasks, applies durable runtime projections, and may repair a projection from the authoritative workflow Query during T4.5 reconciliation. |
+| `task_nodes` | tenant | SELECT, INSERT, UPDATE (`status, reason, frozen, entity_version, updated_at`) (migration 00024) and (`node_type, title, workspace_mode, owner_profile, depends_on, attempt_count, current_attempt_id`) (migration 00025) and (`parent_node_id, sop_step`) (migration 00027); **no DELETE** | — | Projection written by the Projector from `node.status_changed`: the row is inserted when missing and then follows the node's status and, when the event carries them, the node's type, title, workspace mode, owner, dependencies and attempt counters; a fact the event lacks never blanks one the row has. A node that compaction drops from the live plan keeps its row. `node_type`, `title`, `workspace_mode`, `owner_profile` and `depends_on` are nullable (00024, 00025) because events from before the runtime enriched them do not carry them (ISO-28, ISO-29). `parent_node_id` and `sop_step` (a JSON object) say where a node sits in a compiled SOP; both are nullable, never blanked by an event that lacks them, and read by `GET /v1/tasks/{id}/plan` (ISO-30). |
+| `task_approvals` | tenant | SELECT, INSERT, UPDATE (`status, comment, always, decided_at, entity_version`) (migration 00023); **no DELETE** | — | The Projector inserts a `PENDING` row from `approval.requested` and moves it to `APPROVED`, `REJECTED`, `CANCELLED` or `TAKEN_OVER` from `approval.decided`; the decision's comment and the "always" flag are its columns. Identity and the request (`approval_id, task_id, node_id, attempt_id, tool_call_id, subject, requested_at`) are never updated, and a row is history, never deleted (ISO-27). |
+| `stage_attempts` | tenant | SELECT, INSERT, UPDATE (`status, failure, usage, finished_at, entity_version`) (migration 00024) and (`status_changed_at, resumed_activity_attempt, resumed_state_version`) (migration 00025) | SELECT, UPDATE (`status, failure, finished_at, entity_version`) (migration 00018); **no DELETE** | Control owns the projection: the Projector inserts a row from `attempt.started` (its `runtime` JSON keeps `config_version`, `switched_from` and `budget_reserved` when the event has them) and moves it with `attempt.parked`, `attempt.resumed` and `attempt.finished` (which creates the row when `attempt.started` was missed and the event names `attempt_no` and `profile`), never out of a terminal status (ISO-28, ISO-29). The worker maintenance schedule looks at attempts left STARTING or RUNNING for more than 24 hours and, only when their AttemptWorkflow no longer exists or has closed, moves them to a terminal status (`LOST` or `ABORTED`) with the reason in `failure`. An attempt parked on an approval or on user input can legitimately stay RUNNING for days, so age alone never changes a row, and nothing deletes one: the row is history. |
+| `plan_versions`, `task_messages`, `task_events` | tenant | SELECT, INSERT; **no UPDATE, no DELETE** | — | Immutable history, like `events` and `messages`. `plan_versions` is written from `plan.version_committed`; its `graph` is nullable (00024) because the event carries the hash, not the graph. |
 | `runtime_outbox` | **none** | SELECT, UPDATE (`projected_at`) | INSERT, SELECT (`event_id`) | The Projector reads every tenant's rows in one pass (09 §3), so RLS would stall it. Rows carry `tenant_id`, and the Projector writes them into tenant tables under that tenant. The worker only appends. `INSERT … ON CONFLICT (event_id) DO NOTHING` (the idempotent publish, 04 §3) needs SELECT on the conflict column, so the worker may read `event_id` and nothing else; it still cannot read a body or another tenant's task id. Cleanup after 7 days is a later grant. |
 | `idempotency_ledger` | tenant | SELECT, INSERT, UPDATE (`status, result_ref, owner, last_seen`) (migration 00017); **no DELETE** | SELECT, INSERT, UPDATE (`status, result_ref, owner, last_seen`) | The worker moves a side effect from `started` to `succeeded` or `failed_permanent` (10 §1). Control keeps API commands (`scope = 'api_command'`, key `tenant/task/command_id`) in the same table: it INSERTs `started` with the request hash and its instance id as `owner`, writes the response into `result_ref` and sets `succeeded`, and on a failed orchestrator call sets `owner` to NULL so the same `command_id` can be retried. A `started` row whose `owner` is NULL, or whose `last_seen` is older than the lease, is taken over by the next request (UPDATE of `owner, last_seen` guarded by that condition). `key`, `request_hash`, `scope`, `tenant_id` and `first_seen` are never updated. The grant is column-level and cannot be limited to one scope, so the scope filter is in the code (ISO-24). Rows are never deleted. |
 | `tenants` | **none** | SELECT | SELECT (`id`) only, no INSERT, UPDATE or DELETE (migration 00018) | The maintenance schedules run once per tenant under that tenant's RLS, so the worker has to know which tenants exist; a tenant created after the worker started is then covered on the next tick. The column grant limits it to the id: the worker cannot read a tenant's name. |
@@ -437,3 +438,133 @@ replaces the key with `(attempt_id, kind, seq)`. There is no grant change. The c
   another's.
 
 Why HTTP cannot catch these: control serves no route that writes checkpoints; only the worker does, over SQL.
+
+### ISO-27 — `task_approvals`: what `orbit_app` may change (migration 00023)
+
+The Projector keeps `task_approvals` from durable events: `approval.requested` inserts a `PENDING` row, and
+`approval.decided` sets `status` (`APPROVED`, `REJECTED`, `CANCELLED`, `TAKEN_OVER`), `comment`, `always` and
+`decided_at`. An `approval.decided` applies only when its entity version is newer than the row's (an event without a
+version applies only to a `PENDING` row), and an `approval.requested` for a row that exists changes nothing. A payload
+a table cannot hold (an `approval_id` without the `apr_` prefix, a status outside the four decisions) is skipped, and
+an event whose projection violates a constraint is stored in `task_events` while its projection step is rolled back to
+a savepoint, so one such event never stops the events behind it. Connected as `orbit_app` with a tenant set, on a row
+seeded by the owner:
+
+- UPDATE of `status`, `comment`, `always`, `decided_at` and `entity_version` works;
+- UPDATE of `approval_id`, `tenant_id`, `task_id`, `node_id`, `attempt_id`, `tool_call_id`, `subject` or `requested_at`
+  fails with `42501`;
+- DELETE fails with `42501`;
+- with tenant A set, tenant B's approval is neither visible nor updatable, and without a tenant nothing is.
+
+An end-to-end case (`TASK-APPROVALS`) projects requested and decided events through `runtime_outbox` and reads the
+table, a pending list and one approval back.
+
+- **FM-92.** The Projector does not write `task_approvals`. The table stays empty while tasks wait for approval, so
+  nothing reads the subject, the decision or the comment from the database, and a restarted control knows only the ids
+  in `tasks.pending_approvals`.
+- **FM-93.** A replayed or late event moves an approval backwards: a second `approval.requested` makes a decided
+  approval `PENDING` again, or an older `approval.decided` overwrites a newer one (`CANCELLED` over `APPROVED`).
+- **FM-94.** An event with a payload the projection does not expect (a status or id outside a constraint, a new field,
+  a non-object payload) fails the Projector's transaction. It retries the same outbox row forever and every event
+  behind it, for every task, stops.
+- **FM-95.** `orbit_app` can rewrite what was asked (`subject`, ids, `requested_at`) or delete an approval, so the
+  record of what a person approved no longer matches what the agent asked for.
+
+Why HTTP cannot catch FM-95: control serves no route that updates these columns; the properties are privileges.
+
+### ISO-28 — plan, node and attempt projections (migration 00024)
+
+The Projector writes `plan_versions`, `task_nodes` and `stage_attempts` from durable events, which the worker's
+maintenance (`cleanup_attempts`) reads. Migration 00024 gives `orbit_app` column-level UPDATE on `task_nodes`
+(`status, reason, frozen, entity_version, updated_at`) and on `stage_attempts` (`status, failure, usage, finished_at,
+entity_version`), adds `task_nodes.reason`, and makes `plan_versions.graph` and the node columns an event does not carry
+(`node_type, title, workspace_mode, owner_profile`) nullable (a down drops `reason` and the grants but leaves the columns nullable: under FORCE RLS the owner cannot fill other tenants' NULLs). Rules the check pins:
+
+- `plan.version_committed` inserts a `plan_versions` row once per `(task, plan_version)`; a replay or a second event for
+  the version changes nothing, and rows are never updated or deleted (compaction commits a new version and keeps the old
+  rows);
+- `node.status_changed` inserts a minimal `task_nodes` row when none exists and otherwise sets `status` and `reason`;
+  an event whose entity version is not newer than the row's changes nothing, and a node that compaction removed from
+  the plan keeps its row;
+- `attempt.started` inserts a `stage_attempts` row (`RUNNING`, with the task configuration version in `runtime`);
+  `attempt.parked` sets `PARKED_HITL` or `PARKED_INPUT`, `attempt.resumed` sets `RUNNING` from a parked or `STARTING`
+  state, `attempt.finished` sets `ACCEPTED`, `REJECTED` or `ABORTED` with `failure`, `usage` and `finished_at`;
+- a row in a terminal status (`ACCEPTED`, `REJECTED`, `ABORTED`, `LOST`) is never changed by an event, so the `LOST` or
+  `ABORTED` that the maintenance wrote stays, and an older event never changes a newer state;
+- every swallowed projection error is logged with the event id, type and SQLSTATE.
+
+Connected as `orbit_app` with a tenant set, on rows seeded by the owner: UPDATE of the granted columns works, UPDATE of
+`attempt_no`, `node_id`, `task_id`, `profile_ref` or `started_at` of `stage_attempts` and of `node_id` or `task_id` of
+`task_nodes` fails with `42501`, UPDATE and DELETE on `plan_versions` and DELETE on the other two fail with `42501`,
+and with tenant A set tenant B's rows are neither visible nor updatable.
+
+- **FM-96.** The Projector does not write these tables. `cleanup_attempts` never finds an attempt to correct, an attempt
+  that crashed stays `RUNNING` forever, and there is no plan or node history to show or rebuild from (09 §3).
+- **FM-97.** A replayed or late event moves a row backwards: a second `attempt.started` or `plan.version_committed`
+  creates a duplicate or rewrites history, an older `node.status_changed` overwrites a newer status.
+- **FM-98.** An event after the maintenance closed an attempt (`LOST`, `ABORTED`) or after a terminal `attempt.finished`
+  turns the attempt `RUNNING` again, so it is nominated for cleanup again and its history is wrong.
+- **FM-99.** A projection error is swallowed without a trace. The event is stored but its rows are missing, and nothing
+  says which event or why.
+
+Why HTTP cannot catch these: control serves no route that reads these tables.
+
+### ISO-29 — enriched node, plan and attempt events; ordering of attempt.resumed (migration 00025)
+
+The runtime's durable events now carry what a projection needs (`node.status_changed`: `node_type, title,
+workspace_access, owner_profile, depends_on, frozen, attempt_count, current_attempt_id`; `plan.version_committed`:
+`change_command_id, parent_version, actor`; `attempt.finished`: `attempt_no, profile, config_version`; `attempt.resumed`:
+`activity_attempt, state_version`). Events from before that stay in `task_events` and must still project. Migration 00025
+adds `task_nodes.depends_on` (nullable JSONB) and, on `stage_attempts`, `status_changed_at`, `resumed_activity_attempt` and
+`resumed_state_version`, and gives `orbit_app` column-level UPDATE on `task_nodes` (`node_type, title, workspace_mode,
+owner_profile, depends_on, attempt_count, current_attempt_id`) and on those three `stage_attempts` columns (a down revokes
+the grants and drops the columns). Rules the check pins:
+
+- `node.status_changed` creates or updates a node's identity columns from the facts the event names and from nothing else:
+  a missing, empty or (for `workspace_access`) unknown value never blanks or replaces a known one, and a first event without
+  facts still creates the minimal row;
+- `plan.version_committed` stores `change_command_id` (the legacy `command_id` only when it is absent), `parent_version` and
+  `actor`;
+- `attempt.finished` creates the attempt's row when none exists and the event names `attempt_no` and `profile`; a row that
+  exists (terminal or not) is changed only by the existing rules, and a terminal row is never changed;
+- `attempt.resumed` (a worker's event, entity version 0) sets `RUNNING` only when its `occurred_at` is not older than the
+  attempt's `status_changed_at` (the last workflow event that set its status: `attempt.started`, `attempt.parked`,
+  `attempt.finished`) and its (`activity_attempt`, `state_version`) is greater than the last resumed event applied since
+  that status change; an applied event records its pair, and a park clears the pair (a new activity after an approval or an
+  answer counts `activity_attempt` again). An event without `activity_attempt` is ordered by time alone.
+
+- **FM-100.** A redelivered or late `attempt.resumed` turns a parked attempt back to `RUNNING`, so the task center shows an
+  attempt working that is waiting for a person, and the maintenance sees it as running.
+- **FM-101.** An event that lacks a fact the row already has (an old-shape `node.status_changed`) blanks it, so a node
+  loses its title, type or dependencies after its next status change.
+
+Why HTTP cannot catch these: control serves no route that reads these tables.
+
+### ISO-30 — a node's place in a compiled SOP (migration 00027)
+
+The runtime compiles an SOP into a subgraph; `node.status_changed` then carries `parent_node_id` (the node it nests under)
+and `sop_step` (`sop, role, total, step_id, index, subject`; `role` is `sop`, `step`, `approval_before` or
+`approval_after`). `getPlan` carries the parent but not the SOP step, so without a projection "SOP X: step i/n" is lost on
+reload. Migration 00027 adds `task_nodes.parent_node_id` (nullable TEXT) and `task_nodes.sop_step` (nullable JSONB, a
+CHECK keeps it an object) and gives `orbit_app` column-level UPDATE on exactly those two (a down revokes the grant and
+drops the columns); nothing else about the table's grants or its RLS changes. Rules the check pins:
+
+- `node.status_changed` fills the two columns from the event, on insert and on update, and only when it names them: a
+  missing, `null`, non-object (`sop_step`) or not-a-node-id (`parent_node_id`) value never blanks or replaces a known one
+  and never fails the event's status;
+- an event from before the runtime sent them (old shape) still projects, and a node outside an SOP keeps both NULL;
+- `GET /v1/tasks/{id}/plan` adds `parent_node_id` and `sop_step` from these columns to a node of the workflow's plan that
+  lacks them, for that task and tenant only; a value the workflow sends is never replaced.
+
+- **FM-102.** The Projector does not store the two facts (or an event that names them is dropped), so after a reload the
+  plan has no SOP step to show, and the task center cannot say which step of which SOP a node is.
+- **FM-103.** A later `node.status_changed` that lacks the facts (the runtime sends them with every change, an old event
+  or a retry may not) blanks them, so a node loses its SOP step after its next status change.
+- **FM-104.** A `sop_step` that is not a JSON object, or a `parent_node_id` that is not a node id, reaches the table and
+  fails the CHECK, so the whole event (its status included) is lost, or an earlier valid value is replaced.
+- **FM-105.** The plan API adds another task's or tenant's SOP step to a node, or replaces what the workflow reports for
+  it, so a person sees a step that is not theirs or a stale one.
+
+Why HTTP cannot catch FM-102 to FM-104: the columns are not served alone; the plan route merges them into a live
+workflow query, which these cases cannot run without a Temporal server. FM-105's cross-tenant side is the existing
+FM-77 (RLS) and is checked with the grants.
