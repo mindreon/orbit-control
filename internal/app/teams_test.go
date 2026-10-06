@@ -73,7 +73,7 @@ func TestTeamInputValidation(t *testing.T) {
 		{"members on a single expert", ExpertInput{Name: "x", Members: []TeamMemberInput{member("lead")}}, false},
 		{"leader on a single expert", ExpertInput{Name: "x", Kind: expertKind, Leader: "lead"}, false},
 		{"unknown kind", ExpertInput{Name: "x", Kind: "crew"}, false},
-		{"single expert", ExpertInput{Name: "x"}, true},
+		{"single expert", ExpertInput{Name: "x", Instructions: "do x"}, true},
 	}
 	for _, c := range cases {
 		_, err := c.in.validate()
@@ -299,7 +299,7 @@ func TestTeamRefusalsNameTheirCodeAndField(t *testing.T) {
 		{"instructions", ExpertInput{Name: "t", Kind: teamKind, Instructions: "x", Leader: "w", Members: []TeamMemberInput{ok}}, "FIELD_NOT_ALLOWED", "instructions"},
 		{"kind", ExpertInput{Name: "t", Kind: "crew"}, "KIND_INVALID", "kind"},
 		{"name", ExpertInput{Name: " "}, "NAME_INVALID", "name"},
-		{"connector", ExpertInput{Name: "x", ConnectorIDs: []string{"mcp_none"}}, "CONNECTOR_NOT_FOUND", "connector_ids[0]"},
+		{"connector", ExpertInput{Name: "x", Instructions: "do x", ConnectorIDs: []string{"mcp_none"}}, "CONNECTOR_NOT_FOUND", "connector_ids[0]"},
 	}
 	for _, c := range cases {
 		_, err := a.CreateExpert(ctx, mine, c.in)

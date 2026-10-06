@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -36,6 +38,8 @@ var expertModelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$
 type ExpertInput struct {
 	Name         string
 	Instructions string
+	// Soul is SOUL.md: persona, tone and values, put before the instructions in the system prompt (ADR-0013).
+	Soul         string
 	Model        string
 	ConnectorIDs []string
 	SkillIDs     []string
@@ -46,6 +50,11 @@ type ExpertInput struct {
 	Kind    string
 	Leader  string
 	Members []TeamMemberInput
+
+	// description and baseFiles are set by the market import: the agent.json description, and the files the bundle starts
+	// from. An update starts from the files of the version before it.
+	description string
+	baseFiles   bundleFiles
 }
 
 // TeamMemberInput is one member as a caller names it: a role and the single expert, as a versioned reference, who
@@ -74,10 +83,14 @@ type Expert struct {
 	Version      int      `json:"version"`
 	Name         string   `json:"name"`
 	Instructions string   `json:"instructions"`
+	Soul         string   `json:"soul"`
 	Model        string   `json:"model"`
 	ConnectorIDs []string `json:"connector_ids"`
 	SkillIDs     []string `json:"skill_ids"`
 	Source       string   `json:"source,omitempty"`
+	// McpUnbound are the entries of the expert's mcp.json that no connector of the tenant is bound to: they are kept but
+	// not loaded (ADR-0013).
+	McpUnbound []MCPUnbound `json:"mcp_unbound"`
 	// Leader and Members are set on a team only.
 	Leader    string       `json:"leader,omitempty"`
 	Members   []TeamMember `json:"members,omitempty"`
@@ -87,6 +100,7 @@ type Expert struct {
 func (in ExpertInput) validate() (ExpertInput, error) {
 	in.Name = strings.TrimSpace(in.Name)
 	in.Instructions = strings.TrimSpace(in.Instructions)
+	in.Soul = strings.TrimSpace(in.Soul)
 	in.Model = strings.TrimSpace(in.Model)
 	switch in.Kind {
 	case "":
@@ -106,8 +120,12 @@ func (in ExpertInput) validate() (ExpertInput, error) {
 		return in, invalidField("FIELD_NOT_ALLOWED", "leader", "leader belongs to a team")
 	case len(in.Members) > 0:
 		return in, invalidField("FIELD_NOT_ALLOWED", "members", "members belong to a team")
+	case in.Instructions == "":
+		return in, errAgentsRequired()
 	case len([]rune(in.Instructions)) > maxExpertInstructions:
 		return in, invalidField("INSTRUCTIONS_TOO_LONG", "instructions", fmt.Sprintf("instructions are over %d characters", maxExpertInstructions))
+	case len([]rune(in.Soul))+len([]rune(in.Instructions)) > maxExpertInstructions:
+		return in, invalidField("INSTRUCTIONS_TOO_LONG", "soul", fmt.Sprintf("soul and instructions together are over %d characters", maxExpertInstructions))
 	case in.Model != "" && !expertModelPattern.MatchString(in.Model):
 		return in, invalidField("MODEL_INVALID", "model", "model is not a model name")
 	case len(in.ConnectorIDs) > maxExpertConnectors:
@@ -133,7 +151,7 @@ func (in ExpertInput) validateTeam() (ExpertInput, error) {
 	notAllowed := []struct {
 		field string
 		set   bool
-	}{{"instructions", in.Instructions != ""}, {"model", in.Model != ""}, {"connector_ids", len(in.ConnectorIDs) > 0}, {"skill_ids", len(in.SkillIDs) > 0}}
+	}{{"instructions", in.Instructions != ""}, {"soul", in.Soul != ""}, {"model", in.Model != ""}, {"connector_ids", len(in.ConnectorIDs) > 0}, {"skill_ids", len(in.SkillIDs) > 0}}
 	for _, f := range notAllowed {
 		if f.set {
 			return in, invalidField("FIELD_NOT_ALLOWED", f.field, "a team has no "+f.field+" of its own; its members have them")
@@ -204,22 +222,65 @@ func (a *App) writeExpert(ctx context.Context, p taskruntime.Principal, expertID
 	if in.Kind == teamKind {
 		return a.writeTeam(ctx, p, expertID, version, in)
 	}
-	snapshots, err := a.connectorSnapshots(ctx, p.TenantID, in.ConnectorIDs)
+	records, err := a.Repo.ListMcpConnectors(ctx, p.TenantID)
 	if err != nil {
 		return Expert{}, err
 	}
+	connectors := make(map[string]store.McpConnectorRecord, len(records))
+	for _, rec := range records {
+		connectors[rec.ID] = rec
+	}
+	if _, err := snapshotsFor(connectors, in.ConnectorIDs); err != nil {
+		return Expert{}, err
+	}
+	skillNames := make(map[string]string, len(in.SkillIDs))
 	for i, skillID := range in.SkillIDs {
 		if err := a.checkSkill(ctx, p.TenantID, skillID, fmt.Sprintf("skill_ids[%d]", i)); err != nil {
 			return Expert{}, err
 		}
+		if rec, err := a.Repo.GetSkill(ctx, p.TenantID, skillID); err == nil {
+			skillNames[skillID] = rec.Name
+		}
+	}
+	base := in.baseFiles
+	if base == nil {
+		base = bundleFiles{}
+		if version > 1 {
+			// What the form has no field for (README.md, skill directories, unbound servers) carries over.
+			prev, err := a.Tasks.ProfileFiles(ctx, p, fmt.Sprintf("%s@%d", expertID, version-1))
+			if err != nil && !errors.Is(err, store.ErrNotFound) {
+				return Expert{}, err
+			}
+			base = bundleFromProfileFiles(prev)
+		}
+	}
+	files := renderBundle(in, base, connectors, skillNames)
+	d, err := deriveBundle(files)
+	if err != nil {
+		return Expert{}, err
+	}
+	for i, skillID := range d.CatalogSkills {
+		if _, known := skillNames[skillID]; !known {
+			if err := a.checkSkill(ctx, p.TenantID, skillID, fmt.Sprintf("skill_ids[%d]", i)); err != nil {
+				return Expert{}, err
+			}
+		}
+	}
+	snapshots, err := snapshotsFor(connectors, d.ConnectorIDs)
+	if err != nil {
+		return Expert{}, err
 	}
 	spec := map[string]any{
 		"kind":           expertKind,
 		"name":           in.Name,
-		"instructions":   in.Instructions,
-		"connector_ids":  nonNil(in.ConnectorIDs),
+		"instructions":   d.Instructions,
+		"soul":           d.Soul,
+		"connector_ids":  nonNil(d.ConnectorIDs),
 		"mcp_connectors": snapshots,
-		"skills":         nonNil(in.SkillIDs),
+		"skills":         nonNil(d.CatalogSkills),
+		"bundle_skills":  nonNil(d.BundleSkills),
+		"bundle_sha":     bundleSHA(files),
+		"mcp_unbound":    nonNilUnbound(d.Unbound),
 	}
 	if in.Model != "" {
 		spec["model"] = in.Model
@@ -227,7 +288,7 @@ func (a *App) writeExpert(ctx context.Context, p taskruntime.Principal, expertID
 	if in.Source != "" {
 		spec["source"] = in.Source
 	}
-	profile, err := a.Tasks.RegisterProfile(ctx, p, taskruntime.Profile{ProfileID: expertID, Version: version, Spec: spec})
+	profile, err := a.Tasks.RegisterProfile(ctx, p, taskruntime.Profile{ProfileID: expertID, Version: version, Spec: spec, Files: files.profileFiles()})
 	if err != nil {
 		return Expert{}, err
 	}
@@ -278,9 +339,8 @@ func (a *App) latestExperts(ctx context.Context, p taskruntime.Principal) ([]Exp
 // connectorSnapshots resolves the tenant's own connectors to what the worker connects with: names and launch
 // targets, never secret values. An id that is unknown and an id of another tenant fail alike.
 func (a *App) connectorSnapshots(ctx context.Context, tenantID string, ids []string) ([]map[string]any, error) {
-	snapshots := make([]map[string]any, 0, len(ids))
 	if len(ids) == 0 {
-		return snapshots, nil
+		return []map[string]any{}, nil
 	}
 	records, err := a.Repo.ListMcpConnectors(ctx, tenantID)
 	if err != nil {
@@ -290,6 +350,11 @@ func (a *App) connectorSnapshots(ctx context.Context, tenantID string, ids []str
 	for _, rec := range records {
 		byID[rec.ID] = rec
 	}
+	return snapshotsFor(byID, ids)
+}
+
+func snapshotsFor(byID map[string]store.McpConnectorRecord, ids []string) ([]map[string]any, error) {
+	snapshots := make([]map[string]any, 0, len(ids))
 	for i, connectorID := range ids {
 		rec, ok := byID[connectorID]
 		if !ok {
@@ -298,6 +363,13 @@ func (a *App) connectorSnapshots(ctx context.Context, tenantID string, ids []str
 		snapshots = append(snapshots, connectorSnapshot(rec))
 	}
 	return snapshots, nil
+}
+
+func nonNilUnbound(in []MCPUnbound) []MCPUnbound {
+	if in == nil {
+		return []MCPUnbound{}
+	}
+	return in
 }
 
 func connectorSnapshot(rec store.McpConnectorRecord) map[string]any {
@@ -337,7 +409,7 @@ func expertFrom(profile taskruntime.Profile) Expert {
 	}
 	expert := Expert{
 		ID: profile.ProfileID, Kind: text("kind"), Ref: profile.Ref, Version: profile.Version, Name: text("name"),
-		Instructions: text("instructions"), Model: text("model"), ConnectorIDs: list("connector_ids"), SkillIDs: list("skills"), Source: text("source"),
+		Instructions: text("instructions"), Soul: text("soul"), McpUnbound: unboundFrom(profile.Spec["mcp_unbound"]), Model: text("model"), ConnectorIDs: list("connector_ids"), SkillIDs: list("skills"), Source: text("source"),
 		CreatedAt: stamp(profile.CreatedAt),
 	}
 	if expert.Kind == teamKind {
@@ -345,6 +417,19 @@ func expertFrom(profile taskruntime.Profile) Expert {
 		expert.Leader, expert.Members, _ = teamFromSpec(profile.Spec)
 	}
 	return expert
+}
+
+func unboundFrom(raw any) []MCPUnbound {
+	out := []MCPUnbound{}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return out
+	}
+	_ = json.Unmarshal(encoded, &out)
+	if out == nil {
+		return []MCPUnbound{}
+	}
+	return out
 }
 
 func nonNil(in []string) []string {

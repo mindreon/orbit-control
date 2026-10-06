@@ -13,6 +13,7 @@ func (s *Service) RegisterProfile(ctx context.Context, p Principal, profile Prof
 	}
 	profile.Ref = fmt.Sprintf("%s@%d", profile.ProfileID, profile.Version)
 	profile.Spec = cloneMap(profile.Spec)
+	profile.Files = append([]ProfileFile(nil), profile.Files...)
 	if s.projection != nil {
 		return s.projection.RegisterProfile(ctx, p, profile)
 	}
@@ -58,6 +59,24 @@ func (s *Service) GetProfile(ctx context.Context, p Principal, ref string) (Prof
 	}
 	profile.Spec = cloneMap(profile.Spec)
 	return profile, nil
+}
+
+// ProfileFiles are the stored bundle files of a profile version, sorted by path. A version without any (every one
+// written before bundles) has none.
+func (s *Service) ProfileFiles(ctx context.Context, p Principal, ref string) ([]ProfileFile, error) {
+	if s.projection != nil {
+		if reader, ok := s.projection.(ProfileFileReader); ok {
+			return reader.ProfileFiles(ctx, p, ref)
+		}
+		return nil, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	profile, ok := s.profiles[p.TenantID][ref]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return append([]ProfileFile(nil), profile.Files...), nil
 }
 
 func PersonaProfileRef(id string) string { return "persona_" + id + "@1" }

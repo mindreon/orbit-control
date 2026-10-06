@@ -73,15 +73,15 @@ func TestExpertLifecycleAndIsolation(t *testing.T) {
 	theirs := newConnector(t, other, "secret-docs")
 
 	rejected := []struct{ id, desc, body string }{
-		{"unknown-connector", "a connector id that does not exist", `{"name":"x","connector_ids":["mcp_does-not-exist"]}`},
-		{"foreign-connector", "another tenant's connector id, answered like an unknown one", `{"name":"x","connector_ids":["` + theirs + `"]}`},
+		{"unknown-connector", "a connector id that does not exist", `{"name":"x","instructions":"do x","connector_ids":["mcp_does-not-exist"]}`},
+		{"foreign-connector", "another tenant's connector id, answered like an unknown one", `{"name":"x","instructions":"do x","connector_ids":["` + theirs + `"]}`},
 		{"empty-name", "an empty name", `{"name":"  "}`},
-		{"long-instructions", "instructions over 20000 characters", `{"name":"x","instructions":"` + strings.Repeat("a", 20001) + `"}`},
-		{"bad-model", "a model name with a space", `{"name":"x","model":"not a model"}`},
-		{"unknown-skill", "a skill that is not in the catalog", `{"name":"x","skill_ids":["nobody/none"]}`},
-		{"duplicate-skill", "the same skill twice", `{"name":"x","skill_ids":["a/b","a/b"]}`},
-		{"duplicate-connector", "the same connector twice", `{"name":"x","connector_ids":["` + mine + `","` + mine + `"]}`},
-		{"too-many-connectors", "more than 20 connectors", `{"name":"x","connector_ids":` + distinctIDs(21) + `}`},
+		{"long-instructions", "instructions over 20000 characters", `{"name":"x","instructions":"do x","instructions":"` + strings.Repeat("a", 20001) + `"}`},
+		{"bad-model", "a model name with a space", `{"name":"x","instructions":"do x","model":"not a model"}`},
+		{"unknown-skill", "a skill that is not in the catalog", `{"name":"x","instructions":"do x","skill_ids":["nobody/none"]}`},
+		{"duplicate-skill", "the same skill twice", `{"name":"x","instructions":"do x","skill_ids":["a/b","a/b"]}`},
+		{"duplicate-connector", "the same connector twice", `{"name":"x","instructions":"do x","connector_ids":["` + mine + `","` + mine + `"]}`},
+		{"too-many-connectors", "more than 20 connectors", `{"name":"x","instructions":"do x","connector_ids":` + distinctIDs(21) + `}`},
 	}
 	var unknownBody string
 	for _, c := range rejected {
@@ -166,7 +166,7 @@ func TestExpertLifecycleAndIsolation(t *testing.T) {
 // after the restart, so it must stay at a fixed version for the two CI reports to compare equal.
 func concurrentUpdates(t *testing.T, s *server, headers map[string]string) {
 	t.Helper()
-	made := sendTo(t, s.base, httpReq{Method: http.MethodPost, Path: "/v1/experts", Headers: headers, Body: `{"name":"Racer"}`})
+	made := sendTo(t, s.base, httpReq{Method: http.MethodPost, Path: "/v1/experts", Headers: headers, Body: `{"name":"Racer","instructions":"race"}`})
 	if made.Status != http.StatusCreated {
 		t.Fatalf("create the expert the updates race on: %d %s", made.Status, made.Body)
 	}

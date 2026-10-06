@@ -86,6 +86,18 @@ type profileRow struct {
 
 func (profileRow) TableName() string { return "agent_profiles" }
 
+type profileFileRow struct {
+	TenantID  string `gorm:"primaryKey"`
+	ProfileID string `gorm:"primaryKey"`
+	Version   int    `gorm:"primaryKey"`
+	Path      string `gorm:"primaryKey"`
+	Content   string
+	Size      int
+	SHA256    string `gorm:"column:sha256"`
+}
+
+func (profileFileRow) TableName() string { return "agent_profile_files" }
+
 func newTaskRow(tenantID string, t *taskruntime.Task) (taskRow, error) {
 	row := taskRow{
 		ID: t.ID, TenantID: tenantID, WorkflowID: t.WorkflowID, Title: t.Title, Goal: t.Goal, Mode: t.Mode,

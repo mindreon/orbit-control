@@ -132,6 +132,15 @@ func (s *Store) RegisterProfile(ctx context.Context, p taskruntime.Principal, pr
 		if !jsonEqual(existing, profile.Spec) {
 			return taskruntime.ErrIdempotencyConflict
 		}
+		// The bundle files belong to the version: they are written in the same transaction, and a repeat of the same
+		// write leaves them as they are.
+		for _, file := range profile.Files {
+			row := profileFileRow{TenantID: p.TenantID, ProfileID: profile.ProfileID, Version: profile.Version,
+				Path: file.Path, Content: file.Content, Size: len(file.Content), SHA256: file.SHA256}
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error; err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -176,6 +185,27 @@ func (s *Store) GetProfile(ctx context.Context, p taskruntime.Principal, ref str
 		return taskruntime.Profile{}, storageErr("get profile", err)
 	}
 	return row.profile()
+}
+
+// ProfileFiles are the bundle files of one profile version, by path. A version without stored files has none.
+func (s *Store) ProfileFiles(ctx context.Context, p taskruntime.Principal, ref string) ([]taskruntime.ProfileFile, error) {
+	profileID, version, ok := splitRef(ref)
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	var rows []profileFileRow
+	err := s.inTenant(ctx, p.TenantID, func(tx *gorm.DB) error {
+		return tx.Where("tenant_id = ? AND profile_id = ? AND version = ?", p.TenantID, profileID, version).
+			Order("path").Find(&rows).Error
+	})
+	if err != nil {
+		return nil, projectionErr("list profile files", err)
+	}
+	files := make([]taskruntime.ProfileFile, 0, len(rows))
+	for _, row := range rows {
+		files = append(files, taskruntime.ProfileFile{Path: row.Path, Content: row.Content, SHA256: row.SHA256})
+	}
+	return files, nil
 }
 
 func (s *Store) ListManifests(ctx context.Context, p taskruntime.Principal, taskID string) ([]taskruntime.ArtifactManifest, error) {

@@ -68,6 +68,21 @@ type Profile struct {
 	Ref       string         `json:"ref"`
 	Spec      map[string]any `json:"spec"`
 	CreatedAt time.Time      `json:"created_at"`
+	// Files are the bundle files of an expert version (ADR-0013). They are written with the profile in one
+	// transaction, never listed with it, and read through Service.ProfileFiles.
+	Files []ProfileFile `json:"-"`
+}
+
+// ProfileFile is one UTF-8 text file of an expert version's bundle.
+type ProfileFile struct {
+	Path    string
+	Content string
+	SHA256  string
+}
+
+// ProfileFileReader is implemented by a projection that stores the files of profile versions.
+type ProfileFileReader interface {
+	ProfileFiles(ctx context.Context, p Principal, ref string) ([]ProfileFile, error)
 }
 
 type ArtifactManifest struct {

@@ -701,6 +701,7 @@ func InternalHandlerWithForwarder(runtime *app.App, forwarder *ephemeralForwarde
 		writeJSON(w, http.StatusOK, HealthBody{Status: "ok"})
 	}))
 	registerInternalSkills(engine, runtime)
+	registerInternalExpertSkills(engine, runtime)
 	engine.POST("/internal/tasks/reconcile", ginAdapt(func(w http.ResponseWriter, r *http.Request) {
 		if !internalauth.Authorized(r) {
 			writeErr(w, http.StatusUnauthorized, "UNAUTHORIZED", "internal token required")

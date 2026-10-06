@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -110,6 +111,7 @@ func registerTaskRoutes(router gin.IRoutes, runtime *app.App, authed func(princi
 	type expertBody struct {
 		Name         string   `json:"name"`
 		Instructions string   `json:"instructions"`
+		Soul         string   `json:"soul"`
 		Model        string   `json:"model"`
 		ConnectorIDs []string `json:"connector_ids"`
 		SkillIDs     []string `json:"skill_ids"`
@@ -123,7 +125,7 @@ func registerTaskRoutes(router gin.IRoutes, runtime *app.App, authed func(princi
 		} `json:"members"`
 	}
 	expertInput := func(b expertBody) app.ExpertInput {
-		in := app.ExpertInput{Name: b.Name, Instructions: b.Instructions, Model: b.Model, ConnectorIDs: b.ConnectorIDs, SkillIDs: b.SkillIDs, Kind: b.Kind, Leader: b.Leader}
+		in := app.ExpertInput{Name: b.Name, Instructions: b.Instructions, Soul: b.Soul, Model: b.Model, ConnectorIDs: b.ConnectorIDs, SkillIDs: b.SkillIDs, Kind: b.Kind, Leader: b.Leader}
 		for _, member := range b.Members {
 			in.Members = append(in.Members, app.TeamMemberInput{Role: member.Role, Expert: member.Expert, Description: member.Description, Label: member.Label})
 		}
@@ -179,6 +181,43 @@ func registerTaskRoutes(router gin.IRoutes, runtime *app.App, authed func(princi
 			return
 		}
 		writeJSON(w, http.StatusOK, expert)
+	}))
+	// versionQuery reads ?version=N; absent means the latest (0). Anything else that is not a positive whole number is a 400.
+	versionQuery := func(w http.ResponseWriter, r *http.Request) (int, bool) {
+		raw := r.URL.Query().Get("version")
+		if raw == "" {
+			return 0, true
+		}
+		version, err := strconv.Atoi(raw)
+		if err != nil || version < 1 {
+			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "version must be a positive whole number")
+			return 0, false
+		}
+		return version, true
+	}
+	router.GET("/v1/experts/:expertId/files", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		version, ok := versionQuery(w, r)
+		if !ok {
+			return
+		}
+		version, files, err := runtime.ExpertFiles(r.Context(), toPrincipal(p), r.PathValue("expertId"), version)
+		if err != nil {
+			writeExpertErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"version": version, "files": files})
+	}))
+	router.GET("/v1/experts/:expertId/files/*filePath", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		version, ok := versionQuery(w, r)
+		if !ok {
+			return
+		}
+		file, err := runtime.ExpertFile(r.Context(), toPrincipal(p), r.PathValue("expertId"), version, strings.TrimPrefix(r.PathValue("filePath"), "/"))
+		if err != nil {
+			writeExpertErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, file)
 	}))
 	router.PUT("/v1/experts/:expertId", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		var body expertBody

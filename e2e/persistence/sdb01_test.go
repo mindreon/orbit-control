@@ -37,6 +37,7 @@ var tenantParamAllowlist = map[string]bool{
 	"pgstore.ListTaskEvents":  true,
 	"pgstore.RegisterProfile": true,
 	"pgstore.ListProfiles":    true,
+	"pgstore.ProfileFiles":    true,
 	"pgstore.RegisterSOP":     true,
 	"pgstore.GetTenantPolicy": true,
 	"pgstore.SetTenantPolicy": true,

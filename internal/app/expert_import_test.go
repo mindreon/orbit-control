@@ -43,21 +43,22 @@ func TestMatchNamesDoesNotGuess(t *testing.T) {
 func TestAgentInstructionsFromItsPrompts(t *testing.T) {
 	long := strings.Repeat("字", maxExpertInstructions+50)
 	cases := []struct {
-		name        string
+		title       string
 		prompts     []string
+		name        string
 		description string
 		want        string
 	}{
-		{"prompts are joined", []string{" first ", "second"}, "d", "first\n\nsecond"},
-		{"empty prompts fall back to the description", []string{"  ", ""}, "about it", "about it"},
-		{"nothing at all", nil, "", ""},
+		{"prompts are joined", []string{" first ", "second"}, "n", "d", "first\n\nsecond"},
+		{"empty prompts fall back to the name and description", []string{"  ", ""}, "Helper", "about it", "Helper\n\nabout it"},
+		{"nothing but a name", nil, "Helper", "", "Helper"},
 	}
 	for _, c := range cases {
-		if got := agentInstructions(c.prompts, c.description); got != c.want {
-			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		if got := agentInstructions(c.prompts, c.name, c.description); got != c.want {
+			t.Errorf("%s: %q, want %q", c.title, got, c.want)
 		}
 	}
-	if got := agentInstructions([]string{long}, ""); len([]rune(got)) != maxExpertInstructions {
+	if got := agentInstructions([]string{long}, "n", ""); len([]rune(got)) != maxExpertInstructions {
 		t.Errorf("a long prompt is cut to %d characters, got %d", maxExpertInstructions, len([]rune(got)))
 	}
 }

@@ -932,6 +932,65 @@ paths:
           description: No such expert in this tenant
         '409':
           description: Another update took the next version first; read and retry
+  /v1/experts/{expertId}/files:
+    get:
+      tags:
+      - experts
+      operationId: listExpertFiles
+      parameters:
+      - name: expertId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: version
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+        description: Defaults to the latest version
+      responses:
+        '200':
+          description: The files of that version of a single expert
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExpertFiles'
+        '400':
+          description: version is not a positive whole number
+        '404':
+          description: No such expert or version in this tenant, or the expert is a team
+  /v1/experts/{expertId}/files/{path}:
+    get:
+      tags:
+      - experts
+      operationId: getExpertFile
+      parameters:
+      - name: expertId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: path
+        in: path
+        required: true
+        description: Relative path inside the bundle; may contain slashes
+        schema:
+          type: string
+      - name: version
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+      responses:
+        '200':
+          description: The file's UTF-8 text
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExpertFile'
+        '404':
+          description: No such file, version or expert in this tenant
   /v1/policy:
     get:
       tags:
@@ -1530,7 +1589,12 @@ components:
         instructions:
           type: string
           maxLength: 20000
-          description: Appended to the agent's system prompt
+          description: |
+            The expert's AGENTS.md, appended to the agent's system prompt. Required on a single expert: blank is refused
+            (AGENTS_MD_REQUIRED). Together with `soul` at most 20000 characters.
+        soul:
+          type: string
+          description: The expert's SOUL.md (persona, tone, values); goes into the system prompt before the instructions
         model:
           type: string
           maxLength: 100
@@ -1626,6 +1690,55 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/TeamMember'
+    McpUnbound:
+      type: object
+      required:
+      - name
+      - reason
+      properties:
+        name:
+          type: string
+        reason:
+          type: string
+    ExpertFileInfo:
+      type: object
+      required:
+      - path
+      - size
+      - sha256
+      properties:
+        path:
+          type: string
+        size:
+          type: integer
+        sha256:
+          type: string
+    ExpertFiles:
+      type: object
+      required:
+      - version
+      - files
+      properties:
+        version:
+          type: integer
+        files:
+          type: array
+          description: The files of the version's bundle (ADR-0013); empty for a version written before bundles
+          items:
+            $ref: '#/components/schemas/ExpertFileInfo'
+    ExpertFile:
+      type: object
+      required:
+      - path
+      - content
+      - sha256
+      properties:
+        path:
+          type: string
+        content:
+          type: string
+        sha256:
+          type: string
     Expert:
       type: object
       required:
@@ -1660,6 +1773,13 @@ components:
           type: string
         instructions:
           type: string
+        soul:
+          type: string
+        mcp_unbound:
+          type: array
+          description: Entries of the expert's mcp.json that no connector of the tenant is bound to; kept, not loaded
+          items:
+            $ref: '#/components/schemas/McpUnbound'
         model:
           type: string
         connector_ids:
