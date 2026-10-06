@@ -300,6 +300,20 @@ type ArtifactRequirement struct {
 	Name      string `json:"name"`
 }
 
+type AskUserOption struct {
+	Description *string `json:"description,omitempty"`
+	Label       string  `json:"label"`
+}
+
+// One structured question of `ask_user`: a short chip label, the question and 0-4 options. The user can always type
+// their own answer, so there is no "other" option.
+type AskUserQuestion struct {
+	Header      string          `json:"header"`
+	MultiSelect *bool           `json:"multi_select,omitempty"`
+	Options     []AskUserOption `json:"options,omitempty"`
+	Question    string          `json:"question"`
+}
+
 type Attachment struct {
 	MediaType string `json:"media_type"`
 	Name      string `json:"name"`
@@ -364,19 +378,21 @@ type AttemptParkedEvent struct {
 }
 
 type AttemptParkedPayload struct {
-	AttemptID string  `json:"attempt_id"`
-	NodeID    string  `json:"node_id"`
-	Question  *string `json:"question,omitempty"`
-	Reason    string  `json:"reason"`
+	AttemptID string            `json:"attempt_id"`
+	NodeID    string            `json:"node_id"`
+	Question  *string           `json:"question,omitempty"`
+	Questions []AskUserQuestion `json:"questions,omitempty"`
+	Reason    string            `json:"reason"`
 }
 
 type AttemptParkedSignal struct {
-	Approvals []ParkedToolCall `json:"approvals,omitempty"`
-	AttemptID string           `json:"attempt_id"`
-	AttemptNo int64            `json:"attempt_no"`
-	NodeID    string           `json:"node_id"`
-	Question  *string          `json:"question,omitempty"`
-	Reason    string           `json:"reason"`
+	Approvals []ParkedToolCall  `json:"approvals,omitempty"`
+	AttemptID string            `json:"attempt_id"`
+	AttemptNo int64             `json:"attempt_no"`
+	NodeID    string            `json:"node_id"`
+	Question  *string           `json:"question,omitempty"`
+	Questions []AskUserQuestion `json:"questions,omitempty"`
+	Reason    string            `json:"reason"`
 }
 
 type AttemptResult struct {
