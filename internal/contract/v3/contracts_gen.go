@@ -1124,6 +1124,7 @@ type TaskConfig struct {
 	Connectors    []ConnectorSnapshot `json:"connectors,omitempty"`
 	Expert        *string             `json:"expert,omitempty"`
 	Mode          *string             `json:"mode,omitempty"`
+	Model         *string             `json:"model,omitempty"`
 	Skills        []string            `json:"skills,omitempty"`
 	Team          *Team               `json:"team,omitempty"`
 }
@@ -1149,6 +1150,7 @@ type TaskConfigChangedPayload struct {
 	ConnectorIDs  []string `json:"connector_ids,omitempty"`
 	Expert        *string  `json:"expert,omitempty"`
 	Mode          string   `json:"mode"`
+	Model         *string  `json:"model,omitempty"`
 	Skills        []string `json:"skills,omitempty"`
 }
 
@@ -1601,6 +1603,7 @@ type UpdateTaskConfigInput struct {
 	Connectors        []ConnectorSnapshot `json:"connectors,omitempty"`
 	Expert            *string             `json:"expert,omitempty"`
 	Mode              *string             `json:"mode,omitempty"`
+	Model             *string             `json:"model,omitempty"`
 	Skills            []string            `json:"skills,omitempty"`
 	Team              *Team               `json:"team,omitempty"`
 }

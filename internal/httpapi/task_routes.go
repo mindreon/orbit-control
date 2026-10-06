@@ -678,15 +678,21 @@ func stringValue(body map[string]any, keys ...string) string {
 // taskConfigBody is the configuration as a request states it. A list that is absent or null keeps the expert's
 // defaults; an empty one removes them, which encoding/json keeps apart (nil against an empty slice).
 type taskConfigBody struct {
-	Expert       string   `json:"expert"`
-	TeamRef      string   `json:"team_ref"`
+	Expert  string `json:"expert"`
+	TeamRef string `json:"team_ref"`
+	// Model is a pointer so an update can tell "clear the model" (an explicit "") from "absent".
+	Model        *string  `json:"model"`
 	Skills       []string `json:"skills"`
 	ConnectorIDs []string `json:"connector_ids"`
 	Mode         string   `json:"mode"`
 }
 
 func (b taskConfigBody) request() app.TaskConfigRequest {
-	return app.TaskConfigRequest{Expert: b.Expert, TeamRef: b.TeamRef, Skills: b.Skills, ConnectorIDs: b.ConnectorIDs, Mode: b.Mode}
+	req := app.TaskConfigRequest{Expert: b.Expert, TeamRef: b.TeamRef, Skills: b.Skills, ConnectorIDs: b.ConnectorIDs, Mode: b.Mode}
+	if b.Model != nil {
+		req.Model = *b.Model
+	}
+	return req
 }
 
 // stringList reads an optional JSON list of strings. Absent or null is an empty list; anything else is not ok.

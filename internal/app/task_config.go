@@ -18,7 +18,10 @@ type TaskConfigRequest struct {
 	Expert string
 	// TeamRef is the team expert to keep or select. Expert may then be left out or be the leader's expert, which is what
 	// a task's configuration reads back as; any other expert next to it is refused.
-	TeamRef      string
+	TeamRef string
+	// Model overrides the expert's model for this task; empty keeps it (an expert without one runs the deployment's
+	// default).
+	Model        string
 	Skills       []string
 	ConnectorIDs []string
 	Mode         string
@@ -32,12 +35,15 @@ var versionedRef = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*@[1-9][0-9]*$`
 // snapshots. Anything that is not the tenant's own, or does not exist, fails alike, so a caller learns nothing about
 // what exists elsewhere.
 func (a *App) ResolveTaskConfig(ctx context.Context, p taskruntime.Principal, in TaskConfigRequest) (taskruntime.ConfigInput, error) {
-	out := taskruntime.ConfigInput{Expert: in.Expert, Mode: in.Mode}
+	out := taskruntime.ConfigInput{Expert: in.Expert, Model: in.Model, Mode: in.Mode}
 	if out.Mode == "" {
 		out.Mode = "default"
 	}
 	if out.Mode != "default" && out.Mode != "plan" && out.Mode != "ask" {
 		return out, invalidField("MODE_INVALID", "mode", "mode must be default, plan or ask")
+	}
+	if in.Model != "" && !expertModelPattern.MatchString(in.Model) {
+		return out, invalidField("MODEL_INVALID", "model", "model is not a model name")
 	}
 	selected := in.Expert
 	if in.TeamRef != "" {

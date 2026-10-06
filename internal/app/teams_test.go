@@ -223,6 +223,54 @@ func TestSelectingATeamResolvesItIntoTheTaskConfig(t *testing.T) {
 	}
 }
 
+func TestTheTaskModelFlowsThroughTheConfigAndIsChecked(t *testing.T) {
+	ctx := context.Background()
+	a := teamApp()
+	p := teamPrincipal("t-a")
+	writer := singleExpert(t, a, p, "Writer")
+
+	resolved, err := a.ResolveTaskConfig(ctx, p, TaskConfigRequest{Expert: writer.Ref, Model: "glm-5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Model != "glm-5" {
+		t.Fatalf("config.model: %q", resolved.Model)
+	}
+	task, err := a.Tasks.Create(ctx, p, taskruntime.CreateInput{Title: "t", Goal: "g", Config: &resolved})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := a.Tasks.TaskConfig(ctx, p, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Model != "glm-5" {
+		t.Fatalf("view.model: %q", view.Model)
+	}
+
+	// An update without a model clears the override; the expert's own model (then the default) applies again.
+	cleared, err := a.ResolveTaskConfig(ctx, p, TaskConfigRequest{Expert: writer.Ref})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Tasks.UpdateTaskConfig(ctx, p, task.ID, "cmd-model-1", view.Version, cleared); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := a.Tasks.TaskConfig(ctx, p, task.ID)
+	if after.Model != "" {
+		t.Errorf("an update without a model must clear it: %q", after.Model)
+	}
+
+	if _, err := a.ResolveTaskConfig(ctx, p, TaskConfigRequest{Expert: writer.Ref, Model: "../etc/passwd"}); err == nil {
+		t.Error("a malformed model name must be refused")
+	} else {
+		var fe *FieldError
+		if !errors.As(err, &fe) || fe.Code != "MODEL_INVALID" || fe.Field != "model" {
+			t.Errorf("refusal: %v", err)
+		}
+	}
+}
+
 func TestATeamSelectedByAnotherTenantOrMalformedIsRefused(t *testing.T) {
 	ctx := context.Background()
 	a := teamApp()

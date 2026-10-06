@@ -20,8 +20,11 @@ var validModes = map[string]bool{"default": true, "plan": true, "ask": true}
 
 // ConfigInput is a configuration the caller has already checked and resolved: Connectors are names-only snapshots.
 type ConfigInput struct {
-	Expert     string
-	Skills     []string
+	Expert string
+	Skills []string
+	// Model is the task-level model override; empty keeps the expert's model (an expert without one runs the
+	// deployment's default, resolved in the worker).
+	Model      string
 	Connectors []map[string]any
 	Mode       string
 	// Team is set when Expert was a team (15 M8, T8.6): Expert is then the leader's expert and Team says who the
@@ -98,6 +101,8 @@ type ConfigView struct {
 	Skills       []string `json:"skills"`
 	ConnectorIDs []string `json:"connector_ids"`
 	Mode         string   `json:"mode"`
+	// Model is the task-level override; empty means the expert's model, then the deployment's default.
+	Model string `json:"model"`
 	// Team is set while the task's expert is a team. Its members carry the member experts' names.
 	Team *ConfigTeam `json:"team,omitempty"`
 	// TeamRef is the selected team expert's own ref ("team_x@3"); send it back as team_ref to keep the team.
@@ -121,7 +126,8 @@ func (c ConfigInput) normalized() (ConfigInput, error) {
 
 // workflowConfig is the TaskConfig of the workflow input, at the given version.
 func (c ConfigInput) workflowConfig(version int) map[string]any {
-	out := map[string]any{"config_version": version, "mode": c.Mode, "skills": nil, "connectors": nil, "expert": nil, "team": c.Team.workflowTeam()}
+	// Model goes out even when empty: that is how an update clears a model a task had chosen before.
+	out := map[string]any{"config_version": version, "mode": c.Mode, "model": c.Model, "skills": nil, "connectors": nil, "expert": nil, "team": c.Team.workflowTeam()}
 	if c.Expert != "" {
 		out["expert"] = c.Expert
 	}
@@ -135,7 +141,7 @@ func (c ConfigInput) workflowConfig(version int) map[string]any {
 }
 
 func (c ConfigInput) view(version int) ConfigView {
-	view := ConfigView{Version: version, Skills: c.Skills, Mode: c.Mode, Team: c.Team}
+	view := ConfigView{Version: version, Skills: c.Skills, Mode: c.Mode, Model: c.Model, Team: c.Team}
 	if c.Team != nil {
 		view.TeamRef = c.Team.Ref
 	}
@@ -247,6 +253,7 @@ func (s *Service) applyLocalConfig(id string, base int, payload map[string]any) 
 	}
 	in := ConfigInput{Mode: fmt.Sprint(payload["mode"])}
 	in.Expert, _ = payload["expert"].(string)
+	in.Model, _ = payload["model"].(string)
 	in.Skills, _ = payload["skills"].([]string)
 	in.Connectors, _ = payload["connectors"].([]map[string]any)
 	in.Team = teamFromWorkflow(payload["team"])
@@ -262,6 +269,7 @@ func configFromWorkflow(raw map[string]any) ConfigView {
 	if mode, ok := raw["mode"].(string); ok && mode != "" {
 		view.Mode = mode
 	}
+	view.Model, _ = raw["model"].(string)
 	if expert, ok := raw["expert"].(string); ok && expert != "" {
 		view.Expert = &expert
 	}
