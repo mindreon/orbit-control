@@ -35,6 +35,12 @@ var teamRolePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 
 var expertModelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$`)
 
+// ValidModelName says whether s has the shape of a model name — the same rule an expert's model and a task's model
+// override follow; the model catalog filters its configured list with it.
+func ValidModelName(s string) bool {
+	return expertModelPattern.MatchString(s)
+}
+
 type ExpertInput struct {
 	Name         string
 	Instructions string

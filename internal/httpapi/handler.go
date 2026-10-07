@@ -262,6 +262,8 @@ func Handlers() (public, internal http.Handler, closeStore func(), err error) {
 		AllowedOrigins: cfg.AllowedOrigins,
 		TaskMembers:    cfg.TaskMembers,
 		TaskMemberID:   cfg.TaskMemberID,
+		Models:         cfg.Models,
+		DefaultModel:   cfg.DefaultModel,
 	})
 	internalHandler := InternalHandlerWithForwarder(runtime, newEphemeralForwarder(Options{
 		TaskMembers:        cfg.TaskMembers,
@@ -299,6 +301,10 @@ type Options struct {
 	TaskMemberID       string
 	TaskMemberResolver func() []string
 	TaskMemberRefresh  time.Duration
+	// Models is the deployment's model catalog (ORBIT_MODELS) and DefaultModel its default (ORBIT_MODEL_NAME);
+	// GET /v1/models serves them to the task's model picker.
+	Models       []string
+	DefaultModel string
 }
 
 // HandlerWith serves runtime with the local dev principal.
@@ -309,6 +315,8 @@ func HandlerWith(runtime *app.App) http.Handler {
 		AllowedOrigins: cfg.AllowedOrigins,
 		TaskMembers:    cfg.TaskMembers,
 		TaskMemberID:   cfg.TaskMemberID,
+		Models:         cfg.Models,
+		DefaultModel:   cfg.DefaultModel,
 	})
 }
 
@@ -501,6 +509,9 @@ func HandlerWithOptions(runtime *app.App, opts Options) http.Handler {
 		writeIcon(w, r, p, func(ctx context.Context, tenantID string) (string, []byte, error) {
 			return runtime.AgentIcon(ctx, tenantID, handle, "")
 		})
+	}))
+	engine.GET("/v1/models", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		writeModels(w, opts.Models, opts.DefaultModel)
 	}))
 	engine.GET("/v1/skill-categories", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		items, err := runtime.ListSkillCategories(r.Context(), p.TenantID)

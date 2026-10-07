@@ -54,6 +54,12 @@ type Config struct {
 	TemporalNamespace string
 	TemporalTaskQueue string
 
+	// Models is the deployment's model catalog (ORBIT_MODELS, comma-separated): what the model picker offers a task.
+	// DefaultModel is the deployment default (ORBIT_MODEL_NAME, the same var the worker runs with when a task and its
+	// expert name none).
+	Models       []string
+	DefaultModel string
+
 	// CatalogDir is where an optional skills_text.json.gz sidecar lives
 	// (ORBIT_CATALOG_DIR). Without it the skill catalog runs without file text.
 	CatalogDir string
@@ -124,6 +130,9 @@ func Load() Config {
 		TemporalAddress:   strings.TrimSpace(v.GetString("TEMPORAL_ADDRESS")),
 		TemporalNamespace: strings.TrimSpace(v.GetString("TEMPORAL_NAMESPACE")),
 		TemporalTaskQueue: strings.TrimSpace(v.GetString("TEMPORAL_TASK_QUEUE")),
+
+		Models:       SplitCSV(v.GetString("ORBIT_MODELS")),
+		DefaultModel: strings.TrimSpace(v.GetString("ORBIT_MODEL_NAME")),
 
 		CatalogDir: strings.TrimSpace(v.GetString("ORBIT_CATALOG_DIR")),
 		SkillsDir:  strings.TrimSpace(v.GetString("ORBIT_SKILLS_DIR")),
