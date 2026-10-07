@@ -200,6 +200,7 @@ func (s *Service) appendEventRaw(ctx context.Context, event Event) error {
 		var manifest ArtifactManifest
 		if json.Unmarshal(event.Payload, &manifest) == nil && manifest.ManifestID != "" {
 			manifest.TaskID = event.TaskID
+			manifest.LiftOmitted()
 			if manifest.CreatedAt.IsZero() {
 				manifest.CreatedAt = event.Occurred
 			}

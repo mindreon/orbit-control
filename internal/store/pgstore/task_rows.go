@@ -154,7 +154,9 @@ func (r manifestRow) manifest() (taskruntime.ArtifactManifest, error) {
 	item := taskruntime.ArtifactManifest{
 		ManifestID: r.ManifestID, TaskID: r.TaskID, AttemptID: r.AttemptID, Hash: r.ManifestHash, CreatedAt: r.CreatedAt,
 	}
-	return item, json.Unmarshal(r.Entries, &item.Entries)
+	err := json.Unmarshal(r.Entries, &item.Entries)
+	item.LiftOmitted()
+	return item, err
 }
 
 func (r profileRow) profile() (taskruntime.Profile, error) {

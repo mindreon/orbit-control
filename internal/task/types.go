@@ -90,8 +90,37 @@ type ArtifactManifest struct {
 	TaskID     string           `json:"task_id"`
 	AttemptID  string           `json:"attempt_id,omitempty"`
 	Entries    []map[string]any `json:"entries"`
-	Hash       string           `json:"manifest_hash,omitempty"`
-	CreatedAt  time.Time        `json:"created_at"`
+	// Omitted says how many files the attempt left in its workspace that the entries do not list, and why; absent when none.
+	Omitted   *ManifestOmitted `json:"omitted,omitempty"`
+	Hash      string           `json:"manifest_hash,omitempty"`
+	CreatedAt time.Time        `json:"created_at"`
+}
+
+// ManifestOmitted is what the worker could not list in a manifest: Count files and Bytes bytes, by the limit that kept each out
+// (Reasons: file_cap, size_cap, total_cap).
+type ManifestOmitted struct {
+	Count   int            `json:"count"`
+	Bytes   int64          `json:"bytes"`
+	Reasons map[string]int `json:"reasons,omitempty"`
+}
+
+// LiftOmitted moves the worker's omission record out of the entries. The worker stores it as one entry without a name,
+// `{"omitted": {...}}`, so it travels with the manifest through events and storage as they are.
+func (m *ArtifactManifest) LiftOmitted() {
+	kept := make([]map[string]any, 0, len(m.Entries))
+	for _, entry := range m.Entries {
+		raw, marked := entry["omitted"]
+		if _, named := entry["name"]; named || !marked {
+			kept = append(kept, entry)
+			continue
+		}
+		body, err := json.Marshal(raw)
+		var omitted ManifestOmitted
+		if err == nil && json.Unmarshal(body, &omitted) == nil && omitted.Count > 0 {
+			m.Omitted = &omitted
+		}
+	}
+	m.Entries = kept
 }
 
 type ArtifactSigner interface {

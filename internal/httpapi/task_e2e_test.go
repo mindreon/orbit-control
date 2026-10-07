@@ -65,12 +65,30 @@ func TestTaskProfilesAndManifestProjection(t *testing.T) {
 	}
 	// A v3 manifest event is projected into the task service and becomes
 	// available through the tenant scoped artifact endpoint.
-	manifest := `{"manifest_id":"man_01ARZ3NDEKTSV4RRFFQ69G5FAV","entries":[{"name":"report.md"}]}`
+	manifest := `{"manifest_id":"man_01ARZ3NDEKTSV4RRFFQ69G5FAV","entries":[{"name":"report.md"},{"omitted":{"count":3,"bytes":42,"reasons":{"file_cap":3}}}]}`
 	runtime.Tasks.AppendEvent(taskruntime.Event{EventID: "evt_01ARZ3NDEKTSV4RRFFQ69G5FAW", TaskID: task.ID, Type: "artifact.manifest_created", Source: "workflow", Durable: true, Payload: []byte(manifest)})
 	artifacts := httptest.NewRecorder()
 	h.ServeHTTP(artifacts, internalReq(http.MethodGet, "/v1/tasks/"+task.ID+"/artifacts", ""))
 	if artifacts.Code != http.StatusOK || !strings.Contains(artifacts.Body.String(), "man_01ARZ3NDEKTSV4RRFFQ69G5FAV") {
 		t.Fatalf("artifact list = %d: %s", artifacts.Code, artifacts.Body.String())
+	}
+	// The worker's omission record is not an entry: it is the manifest's `omitted`.
+	var listing struct {
+		Items []struct {
+			Entries []map[string]any `json:"entries"`
+			Omitted *struct {
+				Count   int            `json:"count"`
+				Bytes   int64          `json:"bytes"`
+				Reasons map[string]int `json:"reasons"`
+			} `json:"omitted"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(artifacts.Body.Bytes(), &listing); err != nil || len(listing.Items) != 1 {
+		t.Fatalf("artifact list = %s (%v)", artifacts.Body.String(), err)
+	}
+	item := listing.Items[0]
+	if len(item.Entries) != 1 || item.Omitted == nil || item.Omitted.Count != 3 || item.Omitted.Bytes != 42 || item.Omitted.Reasons["file_cap"] != 3 {
+		t.Fatalf("manifest = %+v", item)
 	}
 }
 
