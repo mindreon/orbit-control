@@ -25,6 +25,8 @@ type TaskConfigRequest struct {
 	Skills       []string
 	ConnectorIDs []string
 	Mode         string
+	// Permissions is how much the agent may do without asking. Nil (absent or null) takes the user's default preset.
+	Permissions *taskruntime.Permissions
 }
 
 const maxTaskConfigRefs = 20
@@ -45,6 +47,11 @@ func (a *App) ResolveTaskConfig(ctx context.Context, p taskruntime.Principal, in
 	if in.Model != "" && !expertModelPattern.MatchString(in.Model) {
 		return out, invalidField("MODEL_INVALID", "model", "model is not a model name")
 	}
+	permissions, err := a.ResolvePermissions(ctx, p, in.Permissions)
+	if err != nil {
+		return out, err
+	}
+	out.Permissions = permissions
 	selected := in.Expert
 	if in.TeamRef != "" {
 		selected = in.TeamRef
@@ -102,6 +109,20 @@ func (a *App) ResolveTaskConfig(ctx context.Context, p taskruntime.Principal, in
 		}
 	}
 	return out, nil
+}
+
+// ResolveTaskConfigUpdate resolves a replacement configuration for an existing task. A request without permissions keeps
+// the task's current ones, so a client that only changes the model never changes how much the agent may do; only an
+// explicit value (including {preset:"custom"}, which takes the user's custom rules) is resolved from the user's settings.
+func (a *App) ResolveTaskConfigUpdate(ctx context.Context, p taskruntime.Principal, taskID string, in TaskConfigRequest) (taskruntime.ConfigInput, error) {
+	if in.Permissions == nil {
+		current, err := a.Tasks.TaskConfig(ctx, p, taskID)
+		if err != nil {
+			return taskruntime.ConfigInput{}, err
+		}
+		in.Permissions = current.Permissions
+	}
+	return a.ResolveTaskConfig(ctx, p, in)
 }
 
 // checkExpert returns the profile a task names as its expert; the zero Profile for none or the built-in default.

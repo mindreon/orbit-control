@@ -251,6 +251,26 @@ func registerTaskRoutes(router gin.IRoutes, runtime *app.App, authed func(princi
 		}
 		writeJSON(w, http.StatusOK, policy)
 	}))
+	router.GET("/v1/settings", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		settings, err := runtime.UserSettings(r.Context(), toPrincipal(p))
+		if err != nil {
+			writeTaskErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, settings)
+	}))
+	router.PUT("/v1/settings", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
+		var body app.UserSettingsRequest
+		if !bindJSON(w, r, &body) {
+			return
+		}
+		settings, err := runtime.SaveUserSettings(r.Context(), toPrincipal(p), body)
+		if err != nil {
+			writeTaskErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, settings)
+	}))
 	router.GET("/v1/sops", authed(func(w http.ResponseWriter, r *http.Request, p app.Principal) {
 		items, err := runtime.Tasks.ListSOPs(r.Context(), toPrincipal(p))
 		if err != nil {
@@ -299,15 +319,18 @@ func registerTaskRoutes(router gin.IRoutes, runtime *app.App, authed func(princi
 			return
 		}
 		input := taskruntime.CreateInput{Title: body.Title, Goal: body.Goal, Mode: body.Mode, Profile: body.Profile, SOP: body.SOP, Budgets: body.Budgets, Policy: body.Policy}
-		if body.Config != nil {
-			// Resolved before the task exists, so a refusal leaves nothing behind.
-			resolved, err := runtime.ResolveTaskConfig(r.Context(), toPrincipal(p), body.Config.request())
-			if err != nil {
-				writeTaskErr(w, err)
-				return
-			}
-			input.Config = &resolved
+		// Resolved before the task exists, so a refusal leaves nothing behind. A task without a config still gets the
+		// user's default permissions, so it is resolved like an empty one.
+		config := body.Config
+		if config == nil {
+			config = &taskConfigBody{}
 		}
+		resolved, err := runtime.ResolveTaskConfig(r.Context(), toPrincipal(p), config.request())
+		if err != nil {
+			writeTaskErr(w, err)
+			return
+		}
+		input.Config = &resolved
 		t, err := runtime.Tasks.Create(r.Context(), toPrincipal(p), input)
 		if err != nil {
 			writeTaskErr(w, err)
@@ -351,7 +374,7 @@ func registerTaskRoutes(router gin.IRoutes, runtime *app.App, authed func(princi
 			writeErr(w, http.StatusBadRequest, "BAD_REQUEST", "base_config_version is required: the version you read")
 			return
 		}
-		resolved, err := runtime.ResolveTaskConfig(r.Context(), toPrincipal(p), body.taskConfigBody.request())
+		resolved, err := runtime.ResolveTaskConfigUpdate(r.Context(), toPrincipal(p), r.PathValue("taskId"), body.taskConfigBody.request())
 		if err != nil {
 			writeTaskErr(w, err)
 			return
@@ -685,10 +708,13 @@ type taskConfigBody struct {
 	Skills       []string `json:"skills"`
 	ConnectorIDs []string `json:"connector_ids"`
 	Mode         string   `json:"mode"`
+	// Permissions absent or null takes the user's default preset on create and keeps the task's current ones on update;
+	// "custom" without rules takes the user's custom rules.
+	Permissions *taskruntime.Permissions `json:"permissions"`
 }
 
 func (b taskConfigBody) request() app.TaskConfigRequest {
-	req := app.TaskConfigRequest{Expert: b.Expert, TeamRef: b.TeamRef, Skills: b.Skills, ConnectorIDs: b.ConnectorIDs, Mode: b.Mode}
+	req := app.TaskConfigRequest{Expert: b.Expert, TeamRef: b.TeamRef, Skills: b.Skills, ConnectorIDs: b.ConnectorIDs, Mode: b.Mode, Permissions: b.Permissions}
 	if b.Model != nil {
 		req.Model = *b.Model
 	}

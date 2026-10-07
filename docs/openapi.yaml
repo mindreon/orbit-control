@@ -1020,6 +1020,38 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Policy'
+  /v1/settings:
+    get:
+      tags:
+      - settings
+      operationId: getUserSettings
+      responses:
+        '200':
+          description: The caller's settings; the defaults for a user who never saved any
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserSettings'
+    put:
+      tags:
+      - settings
+      operationId: setUserSettings
+      description: A full replace. A field that is left out takes its default.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserSettings'
+      responses:
+        '200':
+          description: The settings now saved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserSettings'
+        '400':
+          description: default_preset or custom.write_scope is not one of the allowed values
   /v1/sops:
     get:
       tags:
@@ -1978,6 +2010,55 @@ components:
         created_at:
           type: string
           format: date-time
+    PermissionSpec:
+      type: object
+      required:
+      - preset
+      description: |
+        How much the task's agent may do without asking. On a request, `permissions` absent or null takes the caller's
+        default preset (GET /v1/settings) on create and keeps the task's current permissions on update;
+        `{"preset":"custom"}` takes the caller's custom rules, and a field stated beside it wins. Any other preset is stored alone. A GET always returns the resolved spec. A change applies from the
+        task's next attempt.
+      properties:
+        preset:
+          type: string
+          enum: [default, request, auto, full, custom]
+        write_scope:
+          type: string
+          enum: [none, workspace]
+        auto_edits:
+          type: boolean
+        auto_commands:
+          type: boolean
+        auto_builtin:
+          type: boolean
+    UserSettings:
+      type: object
+      properties:
+        permissions:
+          type: object
+          properties:
+            default_preset:
+              type: string
+              enum: [default, request, auto, full, custom]
+              default: default
+            custom:
+              type: object
+              description: The rules of the custom preset
+              properties:
+                write_scope:
+                  type: string
+                  enum: [none, workspace]
+                  default: workspace
+                auto_edits:
+                  type: boolean
+                  default: true
+                auto_commands:
+                  type: boolean
+                  default: false
+                auto_builtin:
+                  type: boolean
+                  default: false
     TaskConfigInput:
       type: object
       description: |
@@ -2018,6 +2099,10 @@ components:
           - ask
           default: default
           description: ask runs read-only
+        permissions:
+          allOf:
+          - $ref: '#/components/schemas/PermissionSpec'
+          nullable: true
     TaskConfigView:
       type: object
       required:
@@ -2049,6 +2134,8 @@ components:
           allOf:
           - $ref: '#/components/schemas/Team'
           description: Set while the task's expert was chosen as a team; expert is then the leader's expert
+        permissions:
+          $ref: '#/components/schemas/PermissionSpec'
     CreateTaskRequest:
       type: object
       required:

@@ -27,6 +27,9 @@ type ConfigInput struct {
 	Model      string
 	Connectors []map[string]any
 	Mode       string
+	// Permissions is how much the agent may do without asking, resolved (no "custom" without its rules). Nil leaves
+	// it out of the workflow config, which the worker reads as the default preset.
+	Permissions *Permissions
 	// Team is set when Expert was a team (15 M8, T8.6): Expert is then the leader's expert and Team says who the
 	// members are. Nil for a single expert, which is also how a change from a team back to one clears it.
 	Team *ConfigTeam
@@ -107,6 +110,9 @@ type ConfigView struct {
 	Team *ConfigTeam `json:"team,omitempty"`
 	// TeamRef is the selected team expert's own ref ("team_x@3"); send it back as team_ref to keep the team.
 	TeamRef string `json:"team_ref,omitempty"`
+	// Permissions is how much the agent may do without asking; a task that has none runs the default preset. A
+	// "custom" spec carries its rules.
+	Permissions *Permissions `json:"permissions"`
 }
 
 type ConfigUpdateResult struct {
@@ -137,11 +143,14 @@ func (c ConfigInput) workflowConfig(version int) map[string]any {
 	if c.Connectors != nil {
 		out["connectors"] = c.Connectors
 	}
+	if c.Permissions != nil {
+		out["permissions"] = c.Permissions.workflowValue()
+	}
 	return out
 }
 
 func (c ConfigInput) view(version int) ConfigView {
-	view := ConfigView{Version: version, Skills: c.Skills, Mode: c.Mode, Model: c.Model, Team: c.Team}
+	view := ConfigView{Version: version, Skills: c.Skills, Mode: c.Mode, Model: c.Model, Team: c.Team, Permissions: c.Permissions.orDefault()}
 	if c.Team != nil {
 		view.TeamRef = c.Team.Ref
 	}
@@ -257,12 +266,13 @@ func (s *Service) applyLocalConfig(id string, base int, payload map[string]any) 
 	in.Skills, _ = payload["skills"].([]string)
 	in.Connectors, _ = payload["connectors"].([]map[string]any)
 	in.Team = teamFromWorkflow(payload["team"])
+	in.Permissions = permissionsFromWorkflow(payload["permissions"])
 	s.configs[id] = localConfig{version: current + 1, input: in}
 	return nil
 }
 
 func configFromWorkflow(raw map[string]any) ConfigView {
-	view := ConfigView{Version: 1, Mode: "default"}
+	view := ConfigView{Version: 1, Mode: "default", Permissions: permissionsFromWorkflow(raw["permissions"]).orDefault()}
 	if version, ok := raw["config_version"].(float64); ok {
 		view.Version = int(version)
 	}

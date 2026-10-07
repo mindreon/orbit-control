@@ -41,6 +41,8 @@ var tenantParamAllowlist = map[string]bool{
 	"pgstore.RegisterSOP":     true,
 	"pgstore.GetTenantPolicy": true,
 	"pgstore.SetTenantPolicy": true,
+	"pgstore.GetUserSettings": true,
+	"pgstore.SetUserSettings": true,
 	"pgstore.ListSOPs":        true,
 	"pgstore.GetProfile":      true,
 	"pgstore.ListManifests":   true,
@@ -49,7 +51,7 @@ var tenantParamAllowlist = map[string]bool{
 	"pgstore.DeleteTask":      true,
 }
 
-var reTenantTableSQL = regexp.MustCompile(`(?i)\b(FROM|INTO|UPDATE|JOIN)\s+(public\.)?(agent_profiles|tasks|plan_versions|task_nodes|stage_attempts|task_approvals|task_messages|task_events|idempotency_ledger|checkpoints|artifact_manifests|workspace_leases|sop_definitions|tenant_policy|personas|mcp_connectors)\b`)
+var reTenantTableSQL = regexp.MustCompile(`(?i)\b(FROM|INTO|UPDATE|JOIN)\s+(public\.)?(agent_profiles|tasks|plan_versions|task_nodes|stage_attempts|task_approvals|task_messages|task_events|idempotency_ledger|checkpoints|artifact_manifests|workspace_leases|sop_definitions|tenant_policy|user_settings|personas|mcp_connectors)\b`)
 
 type methodFinding struct {
 	Method string `json:"method"`
