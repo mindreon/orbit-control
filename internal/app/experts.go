@@ -316,24 +316,33 @@ func (a *App) writeExpert(ctx context.Context, p taskruntime.Principal, expertID
 
 // GetExpert reads the latest version. A profile that is not an expert is not found here.
 func (a *App) GetExpert(ctx context.Context, p taskruntime.Principal, expertID string) (Expert, error) {
-	experts, err := a.latestExperts(ctx, p)
+	latest, err := a.latestProfiles(ctx, p)
 	if err != nil {
 		return Expert{}, err
 	}
-	for _, expert := range experts {
-		if expert.ID == expertID {
-			return expert, nil
-		}
+	profile, ok := latest[expertID]
+	if !ok {
+		return Expert{}, store.ErrNotFound
 	}
-	return Expert{}, store.ErrNotFound
+	return a.expertWithDescription(ctx, p, profile), nil
 }
 
 // ListExperts is the latest version of each expert, newest id last.
 func (a *App) ListExperts(ctx context.Context, p taskruntime.Principal) ([]Expert, error) {
-	return a.latestExperts(ctx, p)
+	latest, err := a.latestProfiles(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	experts := make([]Expert, 0, len(latest))
+	for _, profile := range latest {
+		experts = append(experts, a.expertWithDescription(ctx, p, profile))
+	}
+	sortExperts(experts)
+	return experts, nil
 }
 
-func (a *App) latestExperts(ctx context.Context, p taskruntime.Principal) ([]Expert, error) {
+// latestProfiles is the newest version of each expert and team, by profile id.
+func (a *App) latestProfiles(ctx context.Context, p taskruntime.Principal) (map[string]taskruntime.Profile, error) {
 	profiles, err := a.Tasks.ListProfiles(ctx, p)
 	if err != nil {
 		return nil, err
@@ -347,12 +356,28 @@ func (a *App) latestExperts(ctx context.Context, p taskruntime.Principal) ([]Exp
 			latest[profile.ProfileID] = profile
 		}
 	}
-	experts := make([]Expert, 0, len(latest))
-	for _, profile := range latest {
-		experts = append(experts, expertFrom(profile))
+	return latest, nil
+}
+
+// expertWithDescription is expertFrom for a stored version, with the description a version written before specs held it
+// keeps only in its agent.json. Nothing is written back: the stored version stays as it was.
+func (a *App) expertWithDescription(ctx context.Context, p taskruntime.Principal, profile taskruntime.Profile) Expert {
+	expert := expertFrom(profile)
+	if expert.Kind == expertKind && strings.TrimSpace(expert.Description) == "" {
+		expert.Description = a.bundleDescriptionOf(ctx, p, profile.Ref)
 	}
-	sortExperts(experts)
-	return experts, nil
+	return expert
+}
+
+// bundleDescriptionOf is the agent.json description of one stored profile version; none when it has no files, no
+// description or cannot be read. ProfileFiles has no batch form, so this is one read per call: callers ask only for
+// versions whose spec has no description.
+func (a *App) bundleDescriptionOf(ctx context.Context, p taskruntime.Principal, ref string) string {
+	files, err := a.Tasks.ProfileFiles(ctx, p, ref)
+	if err != nil {
+		return ""
+	}
+	return bundleDescription(bundleFromProfileFiles(files))
 }
 
 // connectorSnapshots resolves the tenant's own connectors to what the worker connects with: names and launch

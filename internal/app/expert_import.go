@@ -220,13 +220,14 @@ func (a *App) ImportPersonas(ctx context.Context, p taskruntime.Principal) (impo
 	if err != nil {
 		return 0, 0, err
 	}
-	existing, err := a.latestExperts(ctx, p)
+	existing, err := a.latestProfiles(ctx, p)
 	if err != nil {
 		return 0, 0, err
 	}
 	done := map[string]bool{}
-	for _, expert := range existing {
-		done[expert.Source] = true
+	for _, profile := range existing {
+		source, _ := profile.Spec["source"].(string)
+		done[source] = true
 	}
 	connectors, err := a.Repo.ListMcpConnectors(ctx, p.TenantID)
 	if err != nil {

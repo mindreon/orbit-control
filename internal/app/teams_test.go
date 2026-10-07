@@ -469,3 +469,65 @@ func TestAMemberWithoutDescriptionTakesTheExpertsOwn(t *testing.T) {
 		t.Errorf("legacy version: %+v %v", resolved.Team, err)
 	}
 }
+
+// An expert version written before specs held the description keeps it only in agent.json; the read APIs return it from
+// there without writing anything back, and a team (which has none) stays empty.
+func TestALegacyExpertReadsItsAgentJSONDescription(t *testing.T) {
+	ctx := context.Background()
+	a := teamApp()
+	p := teamPrincipal("t-a")
+	agent := `{"schema":"orbit.agent/v1","name":"Old","description":"React 前端"}`
+	old, err := a.Tasks.RegisterProfile(ctx, p, taskruntime.Profile{ProfileID: "expert_old", Version: 1,
+		Spec:  map[string]any{"kind": expertKind, "name": "Old", "instructions": "i"},
+		Files: []taskruntime.ProfileFile{{Path: fileAgent, Content: agent}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bare := singleExpert(t, a, p, "Bare")
+	team, err := a.CreateExpert(ctx, p, teamOf("lead", TeamMemberInput{Role: "lead", Expert: old.Ref}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := a.GetExpert(ctx, p, "expert_old")
+	if err != nil || got.Description != "React 前端" {
+		t.Errorf("get: %+v %v", got, err)
+	}
+	list, err := a.ListExperts(ctx, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptions := map[string]string{}
+	for _, expert := range list {
+		descriptions[expert.ID] = expert.Description
+	}
+	if len(list) != 3 || descriptions["expert_old"] != "React 前端" || descriptions[bare.ID] != "" || descriptions[team.ID] != "" {
+		t.Errorf("list: %v", descriptions)
+	}
+
+	// The stored version is untouched.
+	stored, err := a.Tasks.GetProfile(ctx, p, old.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, has := stored.Spec["description"]; has {
+		t.Errorf("version 1 spec was written to: %v", stored.Spec)
+	}
+	files, _ := a.Tasks.ProfileFiles(ctx, p, old.Ref)
+	if len(files) != 1 || files[0].Content != agent {
+		t.Errorf("version 1 files were written to: %+v", files)
+	}
+
+	// Saving the editor's form unchanged writes one new version that carries the description in spec and agent.json.
+	saved, err := a.UpdateExpert(ctx, p, got.ID, ExpertInput{Name: got.Name, Description: got.Description, Instructions: got.Instructions})
+	if err != nil || saved.Version != 2 || saved.Description != "React 前端" {
+		t.Fatalf("save: %+v %v", saved, err)
+	}
+	if v2, _ := a.Tasks.GetProfile(ctx, p, saved.Ref); v2.Spec["description"] != "React 前端" {
+		t.Errorf("version 2 spec: %v", v2.Spec)
+	}
+	v2files, _ := a.Tasks.ProfileFiles(ctx, p, saved.Ref)
+	if bundleDescription(bundleFromProfileFiles(v2files)) != "React 前端" {
+		t.Errorf("version 2 agent.json: %+v", v2files)
+	}
+}

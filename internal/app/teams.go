@@ -79,9 +79,7 @@ func (a *App) memberDescription(ctx context.Context, p taskruntime.Principal, me
 		description = strings.TrimSpace(description)
 	}
 	if description == "" {
-		if files, err := a.Tasks.ProfileFiles(ctx, p, member.Expert); err == nil {
-			description = bundleDescription(bundleFromProfileFiles(files))
-		}
+		description = a.bundleDescriptionOf(ctx, p, member.Expert)
 	}
 	if description == "" {
 		description = strings.TrimSpace(member.Name)
