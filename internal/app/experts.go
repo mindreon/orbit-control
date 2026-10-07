@@ -44,6 +44,9 @@ func ValidModelName(s string) bool {
 type ExpertInput struct {
 	Name         string
 	Instructions string
+	// Description is what the expert is for, in a sentence: the leader of a team reads it to choose whom to give work to. It is
+	// agent.json's description. Empty keeps the one of the version before (a market import sets its own).
+	Description string
 	// Soul is SOUL.md: persona, tone and values, put before the instructions in the system prompt (ADR-0013).
 	Soul         string
 	Model        string
@@ -88,6 +91,7 @@ type Expert struct {
 	Ref          string   `json:"ref"`
 	Version      int      `json:"version"`
 	Name         string   `json:"name"`
+	Description  string   `json:"description"`
 	Instructions string   `json:"instructions"`
 	Soul         string   `json:"soul"`
 	Model        string   `json:"model"`
@@ -105,6 +109,7 @@ type Expert struct {
 
 func (in ExpertInput) validate() (ExpertInput, error) {
 	in.Name = strings.TrimSpace(in.Name)
+	in.Description = strings.TrimSpace(in.Description)
 	in.Instructions = strings.TrimSpace(in.Instructions)
 	in.Soul = strings.TrimSpace(in.Soul)
 	in.Model = strings.TrimSpace(in.Model)
@@ -126,6 +131,8 @@ func (in ExpertInput) validate() (ExpertInput, error) {
 		return in, invalidField("FIELD_NOT_ALLOWED", "leader", "leader belongs to a team")
 	case len(in.Members) > 0:
 		return in, invalidField("FIELD_NOT_ALLOWED", "members", "members belong to a team")
+	case len([]rune(in.Description)) > maxTeamDescription:
+		return in, invalidField("DESCRIPTION_TOO_LONG", "description", fmt.Sprintf("description is over %d characters", maxTeamDescription))
 	case in.Instructions == "":
 		return in, errAgentsRequired()
 	case len([]rune(in.Instructions)) > maxExpertInstructions:
@@ -157,7 +164,7 @@ func (in ExpertInput) validateTeam() (ExpertInput, error) {
 	notAllowed := []struct {
 		field string
 		set   bool
-	}{{"instructions", in.Instructions != ""}, {"soul", in.Soul != ""}, {"model", in.Model != ""}, {"connector_ids", len(in.ConnectorIDs) > 0}, {"skill_ids", len(in.SkillIDs) > 0}}
+	}{{"description", in.Description != ""}, {"instructions", in.Instructions != ""}, {"soul", in.Soul != ""}, {"model", in.Model != ""}, {"connector_ids", len(in.ConnectorIDs) > 0}, {"skill_ids", len(in.SkillIDs) > 0}}
 	for _, f := range notAllowed {
 		if f.set {
 			return in, invalidField("FIELD_NOT_ALLOWED", f.field, "a team has no "+f.field+" of its own; its members have them")
@@ -260,6 +267,9 @@ func (a *App) writeExpert(ctx context.Context, p taskruntime.Principal, expertID
 			base = bundleFromProfileFiles(prev)
 		}
 	}
+	if in.Description != "" {
+		in.description = in.Description
+	}
 	files := renderBundle(in, base, connectors, skillNames)
 	d, err := deriveBundle(files)
 	if err != nil {
@@ -287,6 +297,9 @@ func (a *App) writeExpert(ctx context.Context, p taskruntime.Principal, expertID
 		"bundle_skills":  nonNil(d.BundleSkills),
 		"bundle_sha":     bundleSHA(files),
 		"mcp_unbound":    nonNilUnbound(d.Unbound),
+	}
+	if description := bundleDescription(files); description != "" {
+		spec["description"] = description
 	}
 	if in.Model != "" {
 		spec["model"] = in.Model
@@ -414,7 +427,7 @@ func expertFrom(profile taskruntime.Profile) Expert {
 		return nonNil(out)
 	}
 	expert := Expert{
-		ID: profile.ProfileID, Kind: text("kind"), Ref: profile.Ref, Version: profile.Version, Name: text("name"),
+		ID: profile.ProfileID, Kind: text("kind"), Ref: profile.Ref, Version: profile.Version, Name: text("name"), Description: text("description"),
 		Instructions: text("instructions"), Soul: text("soul"), McpUnbound: unboundFrom(profile.Spec["mcp_unbound"]), Model: text("model"), ConnectorIDs: list("connector_ids"), SkillIDs: list("skills"), Source: text("source"),
 		CreatedAt: stamp(profile.CreatedAt),
 	}

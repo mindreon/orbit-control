@@ -565,6 +565,15 @@ func checkAgentJSON(content string) error {
 
 // ---- render ----
 
+// bundleDescription is the description in a bundle's agent.json: what the expert is for. A missing or unreadable file has none.
+func bundleDescription(b bundleFiles) string {
+	var agent struct {
+		Description string `json:"description"`
+	}
+	_ = json.Unmarshal([]byte(b[fileAgent]), &agent)
+	return strings.TrimSpace(agent.Description)
+}
+
 // renderBundle turns the form into files. The files of base that the form has no field for (README.md, skill
 // directories, entries of mcp.json that are not bound) are kept as they are; the ones the form does own are replaced.
 func renderBundle(in ExpertInput, base bundleFiles, connectors map[string]store.McpConnectorRecord, skillNames map[string]string) bundleFiles {
@@ -578,11 +587,7 @@ func renderBundle(in ExpertInput, base bundleFiles, connectors map[string]store.
 
 	description := in.description
 	if description == "" {
-		var prev struct {
-			Description string `json:"description"`
-		}
-		_ = json.Unmarshal([]byte(base[fileAgent]), &prev)
-		description = prev.Description
+		description = bundleDescription(base)
 	}
 	agent := map[string]any{"schema": bundleSchema, "name": in.Name}
 	if description != "" {

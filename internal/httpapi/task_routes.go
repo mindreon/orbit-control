@@ -110,6 +110,7 @@ func registerTaskRoutes(router gin.IRoutes, runtime *app.App, authed func(princi
 	}
 	type expertBody struct {
 		Name         string   `json:"name"`
+		Description  string   `json:"description"`
 		Instructions string   `json:"instructions"`
 		Soul         string   `json:"soul"`
 		Model        string   `json:"model"`
@@ -125,7 +126,7 @@ func registerTaskRoutes(router gin.IRoutes, runtime *app.App, authed func(princi
 		} `json:"members"`
 	}
 	expertInput := func(b expertBody) app.ExpertInput {
-		in := app.ExpertInput{Name: b.Name, Instructions: b.Instructions, Soul: b.Soul, Model: b.Model, ConnectorIDs: b.ConnectorIDs, SkillIDs: b.SkillIDs, Kind: b.Kind, Leader: b.Leader}
+		in := app.ExpertInput{Name: b.Name, Description: b.Description, Instructions: b.Instructions, Soul: b.Soul, Model: b.Model, ConnectorIDs: b.ConnectorIDs, SkillIDs: b.SkillIDs, Kind: b.Kind, Leader: b.Leader}
 		for _, member := range b.Members {
 			in.Members = append(in.Members, app.TeamMemberInput{Role: member.Role, Expert: member.Expert, Description: member.Description, Label: member.Label})
 		}

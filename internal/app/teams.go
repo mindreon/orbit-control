@@ -42,21 +42,57 @@ func (a *App) writeTeam(ctx context.Context, p taskruntime.Principal, expertID s
 // name that version carries. An unknown ref and another tenant's alike fail as "unknown", so a caller learns nothing
 // about experts elsewhere. A team is not a member: teams do not nest (07 §1), and a team cannot contain itself.
 func (a *App) teamMemberName(ctx context.Context, p taskruntime.Principal, teamID, ref, field string) (string, error) {
+	profile, err := a.teamMemberProfile(ctx, p, teamID, ref, field)
+	if err != nil {
+		return "", err
+	}
+	name, _ := profile.Spec["name"].(string)
+	return name, nil
+}
+
+// teamMemberProfile is teamMemberName's check, returning the member's profile.
+func (a *App) teamMemberProfile(ctx context.Context, p taskruntime.Principal, teamID, ref, field string) (taskruntime.Profile, error) {
 	if memberID, _, _ := strings.Cut(ref, "@"); memberID == teamID {
-		return "", invalidField("TEAM_SELF_REFERENCE", field, "a team cannot contain itself")
+		return taskruntime.Profile{}, invalidField("TEAM_SELF_REFERENCE", field, "a team cannot contain itself")
 	}
 	profile, err := a.Tasks.GetProfile(ctx, p, ref)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return "", invalidField("TEAM_MEMBER_NOT_FOUND", field, "not a single expert of this tenant")
+			return taskruntime.Profile{}, invalidField("TEAM_MEMBER_NOT_FOUND", field, "not a single expert of this tenant")
 		}
-		return "", err
+		return taskruntime.Profile{}, err
 	}
 	if profile.Spec["kind"] != expertKind {
-		return "", invalidField("TEAM_MEMBER_IS_TEAM", field, "a team member must be a single expert, not a team")
+		return taskruntime.Profile{}, invalidField("TEAM_MEMBER_IS_TEAM", field, "a team member must be a single expert, not a team")
 	}
-	name, _ := profile.Spec["name"].(string)
-	return name, nil
+	return profile, nil
+}
+
+// memberDescription is what the leader reads of a member: the description the team gave it, else the expert's own (the
+// description of the version the member pins, from its spec or, for a version written before specs held it, its
+// agent.json), else its name. It is cut to the length a team description may have. It is not stored in the team, so the
+// team form still shows what its author wrote.
+func (a *App) memberDescription(ctx context.Context, p taskruntime.Principal, member TeamMember, expert taskruntime.Profile) string {
+	description := strings.TrimSpace(member.Description)
+	if description == "" {
+		description, _ = expert.Spec["description"].(string)
+		description = strings.TrimSpace(description)
+	}
+	if description == "" {
+		if files, err := a.Tasks.ProfileFiles(ctx, p, member.Expert); err == nil {
+			description = bundleDescription(bundleFromProfileFiles(files))
+		}
+	}
+	if description == "" {
+		description = strings.TrimSpace(member.Name)
+		if name, _ := expert.Spec["name"].(string); strings.TrimSpace(name) != "" {
+			description = strings.TrimSpace(name)
+		}
+	}
+	if runes := []rune(description); len(runes) > maxTeamDescription {
+		description = string(runes[:maxTeamDescription])
+	}
+	return description
 }
 
 // teamFromSpec reads a team profile's spec back. A spec that is not a well-formed team (profiles can also be registered
@@ -100,10 +136,11 @@ func (a *App) resolveTeam(ctx context.Context, p taskruntime.Principal, profile 
 	}
 	team := &taskruntime.ConfigTeam{Leader: leader, Members: make([]taskruntime.ConfigTeamMember, 0, len(members))}
 	for _, member := range members {
-		if _, err := a.teamMemberName(ctx, p, profile.ProfileID, member.Expert, "expert"); err != nil {
+		expert, err := a.teamMemberProfile(ctx, p, profile.ProfileID, member.Expert, "expert")
+		if err != nil {
 			return nil, err
 		}
-		team.Members = append(team.Members, taskruntime.ConfigTeamMember{Role: member.Role, Expert: member.Expert, Name: member.Name, Description: member.Description, Label: member.Label})
+		team.Members = append(team.Members, taskruntime.ConfigTeamMember{Role: member.Role, Expert: member.Expert, Name: member.Name, Description: a.memberDescription(ctx, p, member, expert), Label: member.Label})
 	}
 	return team, nil
 }

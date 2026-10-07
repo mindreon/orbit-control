@@ -410,3 +410,62 @@ func TestTeamRefAndLabelsRideInTheTaskConfig(t *testing.T) {
 		t.Errorf("view: %+v", view)
 	}
 }
+
+// What the leader reads of a member is the team's own description, else the expert's (agent.json), else its name. Nothing of
+// it is written into the team.
+func TestAMemberWithoutDescriptionTakesTheExpertsOwn(t *testing.T) {
+	ctx := context.Background()
+	a := teamApp()
+	p := teamPrincipal("t-a")
+	backend, err := a.CreateExpert(ctx, p, ExpertInput{Name: "后端开发专家", Description: "FastAPI 后端", Instructions: "do backend"})
+	if err != nil || backend.Description != "FastAPI 后端" {
+		t.Fatalf("a described expert reads back its description: %+v %v", backend, err)
+	}
+	bare := singleExpert(t, a, p, "Bare")
+	// A new version without a description keeps the one before it.
+	kept, err := a.UpdateExpert(ctx, p, backend.ID, ExpertInput{Name: "后端开发专家", Instructions: "do backend v2"})
+	if err != nil || kept.Description != "FastAPI 后端" {
+		t.Fatalf("update without description: %+v %v", kept, err)
+	}
+	if _, err := a.CreateExpert(ctx, p, ExpertInput{Name: "x", Description: strings.Repeat("长", 301), Instructions: "i"}); err == nil {
+		t.Error("a description over 300 characters is refused")
+	}
+
+	team, err := a.CreateExpert(ctx, p, teamOf("lead",
+		TeamMemberInput{Role: "lead", Expert: bare.Ref, Description: "leads"},
+		TeamMemberInput{Role: "member-2", Expert: backend.Ref, Label: "allan"},
+		TeamMemberInput{Role: "member-3", Expert: backend.Ref, Label: "kim", Description: "own words"},
+		TeamMemberInput{Role: "member-4", Expert: bare.Ref}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := a.ResolveTaskConfig(ctx, p, TaskConfigRequest{Expert: team.Ref})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"leads", "FastAPI 后端", "own words", "Bare"}
+	for i, member := range resolved.Team.Members {
+		if member.Description != want[i] {
+			t.Errorf("member %s: %q, want %q", member.Role, member.Description, want[i])
+		}
+	}
+	if got, _ := a.GetExpert(ctx, p, team.ID); got.Members[1].Description != "" {
+		t.Errorf("the team keeps what its author wrote: %+v", got.Members[1])
+	}
+
+	// A version written before specs held the description has it only in agent.json.
+	old, err := a.Tasks.RegisterProfile(ctx, p, taskruntime.Profile{ProfileID: "expert_old", Version: 1,
+		Spec:  map[string]any{"kind": expertKind, "name": "Old", "instructions": "i"},
+		Files: []taskruntime.ProfileFile{{Path: fileAgent, Content: `{"schema":"orbit.agent/v1","name":"Old","description":"React 前端"}`}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	team2, err := a.CreateExpert(ctx, p, teamOf("lead", TeamMemberInput{Role: "lead", Expert: old.Ref}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err = a.ResolveTaskConfig(ctx, p, TaskConfigRequest{Expert: team2.Ref})
+	if err != nil || resolved.Team.Members[0].Description != "React 前端" {
+		t.Errorf("legacy version: %+v %v", resolved.Team, err)
+	}
+}
