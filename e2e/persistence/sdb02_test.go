@@ -13,7 +13,7 @@ import (
 
 // tenantTables are every table under tenant RLS: the task runtime (migration 00013), SOP and policy layers, and the
 // catalog.
-var tenantTables = append(append([]string{}, taskTenantTables...), "sop_definitions", "tenant_policy", "personas", "mcp_connectors")
+var tenantTables = append(append([]string{}, taskTenantTables...), "sop_definitions", "tenant_policy", "user_settings", "personas", "mcp_connectors")
 
 // seedTenant fills every tenant table for tenant as the owner, so an isolation check never passes on an empty table.
 func seedTenant(t *testing.T, owner *pgxpool.Pool, tenant string) {
@@ -25,6 +25,7 @@ func seedTenant(t *testing.T, owner *pgxpool.Pool, tenant string) {
 	for _, q := range []string{
 		`INSERT INTO sop_definitions (tenant_id, sop_id, version, steps) VALUES ($1, 'sop', 1, '[{"id":"s"}]')`,
 		`INSERT INTO tenant_policy (tenant_id, spec) VALUES ($1, '{}')`,
+		`INSERT INTO user_settings (tenant_id, user_id, spec) VALUES ($1, 'u-seed', '{}')`,
 		`INSERT INTO personas (id, tenant_id, name) VALUES ('persona_' || $1, $1, 'p')`,
 		`INSERT INTO mcp_connectors (id, tenant_id, name, command) VALUES ('mcp_' || $1, $1, 'm', 'true')`,
 	} {

@@ -826,6 +826,17 @@ type PermissionRuleSpec struct {
 	ToolName    string  `json:"tool_name"`
 }
 
+// How much the agent of a task may do without asking. Absent (None) on a TaskConfig means preset "default".
+// The three switches and `write_scope` are read only when `preset` is "custom"; any other preset alone decides, and
+// what each one means lives in the worker (`orbit_worker.permissions`). A change takes effect from the next attempt.
+type PermissionSpec struct {
+	AutoBuiltin  *bool   `json:"auto_builtin,omitempty"`
+	AutoCommands *bool   `json:"auto_commands,omitempty"`
+	AutoEdits    *bool   `json:"auto_edits,omitempty"`
+	Preset       string  `json:"preset"`
+	WriteScope   *string `json:"write_scope,omitempty"`
+}
+
 // What was compacted out of the live plan: completed, frozen nodes nothing unfinished depends on. The nodes
 // themselves stay in the projection; this is the summary that keeps the plan's history explainable (04 §7).
 type PlanArchive struct {
@@ -1125,6 +1136,7 @@ type TaskConfig struct {
 	Expert        *string             `json:"expert,omitempty"`
 	Mode          *string             `json:"mode,omitempty"`
 	Model         *string             `json:"model,omitempty"`
+	Permissions   *PermissionSpec     `json:"permissions,omitempty"`
 	Skills        []string            `json:"skills,omitempty"`
 	Team          *Team               `json:"team,omitempty"`
 }
@@ -1146,12 +1158,13 @@ type TaskConfigChangedEvent struct {
 
 // What the task runs with from its next attempt on. Connector ids only: the launch targets stay out of events.
 type TaskConfigChangedPayload struct {
-	ConfigVersion int64    `json:"config_version"`
-	ConnectorIDs  []string `json:"connector_ids,omitempty"`
-	Expert        *string  `json:"expert,omitempty"`
-	Mode          string   `json:"mode"`
-	Model         *string  `json:"model,omitempty"`
-	Skills        []string `json:"skills,omitempty"`
+	ConfigVersion int64           `json:"config_version"`
+	ConnectorIDs  []string        `json:"connector_ids,omitempty"`
+	Expert        *string         `json:"expert,omitempty"`
+	Mode          string          `json:"mode"`
+	Model         *string         `json:"model,omitempty"`
+	Permissions   *PermissionSpec `json:"permissions,omitempty"`
+	Skills        []string        `json:"skills,omitempty"`
 }
 
 // Updates “pause“, “resume“, “stop“, “cancel“, “takeover“ and “handback“.
@@ -1604,6 +1617,7 @@ type UpdateTaskConfigInput struct {
 	Expert            *string             `json:"expert,omitempty"`
 	Mode              *string             `json:"mode,omitempty"`
 	Model             *string             `json:"model,omitempty"`
+	Permissions       *PermissionSpec     `json:"permissions,omitempty"`
 	Skills            []string            `json:"skills,omitempty"`
 	Team              *Team               `json:"team,omitempty"`
 }

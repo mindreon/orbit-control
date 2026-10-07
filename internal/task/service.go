@@ -25,7 +25,8 @@ type Service struct {
 	seenEvents     *lru.Cache[string, struct{}]
 	entityVersion  map[string]map[string]int64
 	profiles       map[string]map[string]Profile
-	configs        map[string]localConfig // dev only: with an orchestrator the workflow owns a task's configuration
+	configs        map[string]localConfig  // dev only: with an orchestrator the workflow owns a task's configuration
+	userSettings   map[string]UserSettings // dev only: without a projection store, keyed by tenant and user
 	manifests      map[string]ArtifactManifest
 	maxEvents      int
 }
@@ -46,7 +47,7 @@ func NewWithProjection(client TaskClient, projection ProjectionStore) *Service {
 		subs: map[string]map[*subscriber]struct{}{}, seenMessage: map[string]map[string]uint64{},
 		ledger: newCommandLedger(projection), nextSeq: map[string]uint64{},
 		seenEvents:    mustCache[string, struct{}](seenEventCacheLimit),
-		entityVersion: map[string]map[string]int64{}, profiles: map[string]map[string]Profile{}, configs: map[string]localConfig{}, manifests: map[string]ArtifactManifest{}, maxEvents: 5000,
+		entityVersion: map[string]map[string]int64{}, profiles: map[string]map[string]Profile{}, configs: map[string]localConfig{}, userSettings: map[string]UserSettings{}, manifests: map[string]ArtifactManifest{}, maxEvents: 5000,
 	}
 }
 
