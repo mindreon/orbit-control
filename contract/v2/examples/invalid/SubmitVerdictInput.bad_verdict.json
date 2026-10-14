@@ -2,5 +2,6 @@
   "caller": "r",
   "task_id": "t",
   "verdict": "abstain",
-  "reason": ""
+  "reason": "",
+  "request_id": "effect-1"
 }

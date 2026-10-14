@@ -1,10 +1,15 @@
 {
   "interaction_id": "ia-0001",
   "kind": "tool_approval",
-  "tool": {
-    "name": "mail.send",
-    "args_preview": "{\"to\": \"legal@example.com\", \"subject\": \"Contract review\"}",
-    "effect_class": "destructive",
-    "risk_reasons": ["external_write requires approval"]
-  }
+  "calls": [
+    {
+      "name": "mail.send",
+      "args_preview": "{\"to\": \"legal@example.com\", \"subject\": \"Contract review\"}",
+      "effect_class": "destructive",
+      "risk_reasons": [
+        "external_write requires approval"
+      ],
+      "call_id": "call-1"
+    }
+  ]
 }

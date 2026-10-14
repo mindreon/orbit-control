@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orbit.mindreon.com/contract/v2/asset_check.json",
+  "description": "Asset validation activity contracts.",
+  "x-exports": [
+    "AssetCheckInput",
+    "AssetCheckFinding",
+    "AssetCheckReport"
+  ],
+  "$defs": {
+    "AssetCheckKind": {
+      "enum": [
+        "structure",
+        "compat",
+        "secrets",
+        "static",
+        "injection",
+        "permission_diff"
+      ],
+      "description": "Validation phase."
+    },
+    "AssetCheckInput": {
+      "type": "object",
+      "description": "Immutable asset version to check.",
+      "additionalProperties": false,
+      "properties": {
+        "v": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Wire protocol version; currently 1.",
+          "const": 1
+        },
+        "tenant_id": {
+          "type": "string",
+          "description": "Owning tenant.",
+          "format": "uuid"
+        },
+        "asset_id": {
+          "type": "string",
+          "description": "Asset identifier.",
+          "format": "uuid"
+        },
+        "asset_version_id": {
+          "type": "string",
+          "description": "Version being checked.",
+          "format": "uuid"
+        },
+        "kind": {
+          "enum": [
+            "agent",
+            "skill",
+            "mcp",
+            "team"
+          ],
+          "description": "Asset kind."
+        },
+        "content_digest": {
+          "type": "string",
+          "description": "Bundle digest = \"sha256:\" + lowercase hex(SHA-256(concatenation of \"<path>\\0<sha256hex>\\n\", sorted by UTF-8 path bytes)). File hashes in this preimage are the 64 hex characters without the sha256: prefix. Paths are unique normalized relative POSIX paths, without NUL, newline, dot or parent components.",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "blob_ref": {
+          "type": "string",
+          "description": "Object storage key, not a URL.",
+          "minLength": 1
+        },
+        "previous_version_id": {
+          "type": "string",
+          "description": "Prior version for permission diff.",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "v",
+        "tenant_id",
+        "asset_id",
+        "asset_version_id",
+        "kind",
+        "content_digest",
+        "blob_ref"
+      ],
+      "x-extra": "ignore"
+    },
+    "AssetCheckFinding": {
+      "type": "object",
+      "description": "A reviewable validation finding.",
+      "additionalProperties": false,
+      "properties": {
+        "check": {
+          "$ref": "#/$defs/AssetCheckKind"
+        },
+        "rule_id": {
+          "type": "string",
+          "description": "Stable checker rule identifier.",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$"
+        },
+        "severity": {
+          "enum": [
+            "block",
+            "review",
+            "info"
+          ],
+          "description": "Required action."
+        },
+        "path": {
+          "type": "string",
+          "description": "Relative file path.",
+          "minLength": 1
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "One-based source line."
+        },
+        "message": {
+          "type": "string",
+          "description": "Finding with sensitive values redacted.",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "check",
+        "rule_id",
+        "severity",
+        "message"
+      ],
+      "x-extra": "ignore"
+    },
+    "AssetCheckReport": {
+      "type": "object",
+      "description": "Result of one checker.",
+      "additionalProperties": false,
+      "properties": {
+        "check": {
+          "$ref": "#/$defs/AssetCheckKind"
+        },
+        "findings": {
+          "type": "array",
+          "description": "Findings, absent means none.",
+          "items": {
+            "$ref": "#/$defs/AssetCheckFinding"
+          },
+          "default": []
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Elapsed checker time in milliseconds."
+        },
+        "checker_version": {
+          "type": "string",
+          "description": "Checker implementation version.",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "check",
+        "duration_ms",
+        "checker_version"
+      ],
+      "x-extra": "ignore"
+    }
+  }
+}

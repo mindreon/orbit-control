@@ -1,0 +1,202 @@
+[
+  {
+    "pattern": "*",
+    "value": "",
+    "match": true
+  },
+  {
+    "pattern": "*",
+    "value": "a/b",
+    "match": false
+  },
+  {
+    "pattern": "a?c",
+    "value": "aéc",
+    "match": true
+  },
+  {
+    "pattern": "a?c",
+    "value": "a/c",
+    "match": false
+  },
+  {
+    "pattern": "a/*",
+    "value": "a/x",
+    "match": true
+  },
+  {
+    "pattern": "a/*",
+    "value": "a/x/y",
+    "match": false
+  },
+  {
+    "pattern": "a/**",
+    "value": "a/x/y",
+    "match": false
+  },
+  {
+    "pattern": "*.json",
+    "value": "agent.json",
+    "match": true
+  },
+  {
+    "pattern": "*.json",
+    "value": "a/agent.json",
+    "match": false
+  },
+  {
+    "pattern": "??",
+    "value": "😀x",
+    "match": true
+  },
+  {
+    "pattern": "[a-z]",
+    "value": "m",
+    "match": true
+  },
+  {
+    "pattern": "[^a-z]",
+    "value": "/",
+    "match": true
+  },
+  {
+    "pattern": "[z-a]",
+    "value": "m",
+    "match": false
+  },
+  {
+    "pattern": "[a-cx-z]",
+    "value": "y",
+    "match": true
+  },
+  {
+    "pattern": "[\\-]",
+    "value": "-",
+    "match": true
+  },
+  {
+    "pattern": "[\\]]",
+    "value": "]",
+    "match": true
+  },
+  {
+    "pattern": "[[]",
+    "value": "[",
+    "match": true
+  },
+  {
+    "pattern": "a\\*",
+    "value": "a*",
+    "match": true
+  },
+  {
+    "pattern": "a\\?",
+    "value": "a?",
+    "match": true
+  },
+  {
+    "pattern": "*",
+    "value": "\n",
+    "match": true
+  },
+  {
+    "pattern": "?",
+    "value": "\n",
+    "match": true
+  },
+  {
+    "pattern": "[!a]",
+    "value": "!",
+    "match": true
+  },
+  {
+    "pattern": "[!a]",
+    "value": "b",
+    "match": false
+  },
+  {
+    "pattern": "a*b*c",
+    "value": "abc",
+    "match": true
+  },
+  {
+    "pattern": "a*b*c",
+    "value": "a/bc",
+    "match": false
+  },
+  {
+    "pattern": "*x",
+    "value": "éx",
+    "match": true
+  },
+  {
+    "pattern": "*?",
+    "value": "é",
+    "match": true
+  },
+  {
+    "pattern": "a/*/b",
+    "value": "a//b",
+    "match": true
+  },
+  {
+    "pattern": "",
+    "value": "",
+    "match": true
+  },
+  {
+    "pattern": "",
+    "value": "a",
+    "match": false
+  },
+  {
+    "pattern": "[",
+    "value": "not-matching",
+    "error": true
+  },
+  {
+    "pattern": "[]",
+    "value": "not-matching",
+    "error": true
+  },
+  {
+    "pattern": "[^]",
+    "value": "not-matching",
+    "error": true
+  },
+  {
+    "pattern": "[a-]",
+    "value": "not-matching",
+    "error": true
+  },
+  {
+    "pattern": "[a",
+    "value": "not-matching",
+    "error": true
+  },
+  {
+    "pattern": "[a-b",
+    "value": "not-matching",
+    "error": true
+  },
+  {
+    "pattern": "[a--b]",
+    "value": "not-matching",
+    "error": true
+  },
+  {
+    "pattern": "a\\",
+    "value": "not-matching",
+    "error": true
+  },
+  {
+    "pattern": "z*[",
+    "value": "not-matching",
+    "error": true
+  },
+  {
+    "pattern": "[\\",
+    "value": "not-matching",
+    "error": true
+  }
+]

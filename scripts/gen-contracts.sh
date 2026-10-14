@@ -12,3 +12,6 @@ out="${1:-$root/internal/contract/contract_gen.go}"
 
 cd "$root"
 go run "$go_jsonschema" -p contract -o "$out" contract/v2/schema/*.json
+
+python3 scripts/contracts-postprocess.py "$out"
+gofmt -w "$out" "$(dirname "$out")"/contract_{secret,registry}_gen.go "$(dirname "$out")/contract_types_gen_test.go"

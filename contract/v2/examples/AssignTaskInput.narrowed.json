@@ -2,5 +2,8 @@
   "caller": "leader",
   "task_id": "task-2",
   "member": "researcher-2",
-  "narrowed_tools": ["read_file"]
+  "narrowed_tools": [
+    "read_file"
+  ],
+  "request_id": "effect-1"
 }

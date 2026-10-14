@@ -2,13 +2,32 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://orbit.mindreon.com/contract/v2/kernel_api.json",
   "description": "Request and response bodies of the control internal API (/internal/v1/*) that the worker calls with the run capability token.",
-  "x-exports": ["GetLockResponse", "ModelCredentials", "PolicySnapshot", "PersistGrantRequest", "SecretGrant"],
+  "x-exports": [
+    "GetLockResponse",
+    "ModelCredentials",
+    "PolicySnapshot",
+    "SecretGrant",
+    "TokenRequest",
+    "TokenResponse",
+    "SecretGrantRequest",
+    "SecretGrantResponse",
+    "CheckpointKeyResponse",
+    "UsageItem",
+    "UsageReport",
+    "UsageReportResponse"
+  ],
   "$defs": {
     "LockFileContent": {
       "description": "How to obtain the content of one locked file: a short-lived download URL, or the text inline when the file is small text. Exactly one of blob_url and text is present.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "ref", "version", "path", "sha256"],
+      "required": [
+        "kind",
+        "ref",
+        "version",
+        "path",
+        "sha256"
+      ],
       "properties": {
         "kind": {
           "$ref": "lock.json#/$defs/AssetKind"
@@ -30,13 +49,14 @@
         },
         "sha256": {
           "type": "string",
-          "pattern": "^[0-9a-f]{64}$",
-          "description": "Hex sha256 of the content; the worker verifies it."
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "SHA-256 file content digest as sha256:<64 lowercase hex>."
         },
         "blob_url": {
           "type": "string",
-          "format": "uri",
-          "description": "Pre-signed object store URL of the content."
+          "description": "Pre-signed object store URL of the content.",
+          "pattern": "^https?://",
+          "x-sensitive": true
         },
         "text": {
           "type": "string",
@@ -46,7 +66,9 @@
       "allOf": [
         {
           "if": {
-            "required": ["blob_url"]
+            "required": [
+              "blob_url"
+            ]
           },
           "then": {
             "properties": {
@@ -57,20 +79,27 @@
         {
           "if": {
             "not": {
-              "required": ["blob_url"]
+              "required": [
+                "blob_url"
+              ]
             }
           },
           "then": {
-            "required": ["text"]
+            "required": [
+              "text"
+            ]
           }
         }
-      ]
+      ],
+      "x-extra": "ignore"
     },
     "GetLockResponse": {
       "description": "A run lock and the means to fetch every file in it.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["lock", "contents"],
+      "required": [
+        "lock"
+      ],
       "properties": {
         "lock": {
           "$ref": "lock.json#/$defs/RunLock"
@@ -80,20 +109,29 @@
           "items": {
             "$ref": "#/$defs/LockFileContent"
           },
-          "description": "One element per file of every entry of the lock."
+          "description": "One element per file of every entry of the lock.",
+          "default": []
         }
-      }
+      },
+      "x-extra": "ignore"
     },
     "ModelCredentials": {
       "description": "Endpoint and short-lived key of an OpenAI-compatible model API, issued per segment from the tenant model profile. It never enters Temporal history.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["base_url", "model", "api_key", "expires_at", "params"],
+      "required": [
+        "base_url",
+        "model",
+        "api_key",
+        "expires_at",
+        "params",
+        "pricing"
+      ],
       "properties": {
         "base_url": {
           "type": "string",
-          "format": "uri",
-          "description": "Base URL of the API."
+          "description": "Base URL of the API.",
+          "pattern": "^https?://"
         },
         "model": {
           "type": "string",
@@ -103,7 +141,8 @@
         "api_key": {
           "type": "string",
           "minLength": 1,
-          "description": "Bearer key for the API."
+          "description": "Bearer key for the API.",
+          "x-sensitive": true
         },
         "expires_at": {
           "type": "string",
@@ -112,23 +151,44 @@
         },
         "params": {
           "type": "object",
-          "description": "Default request parameters of the profile, such as temperature or max_tokens."
+          "description": "Default request parameters of the profile, such as temperature or max_tokens.",
+          "x-extra": "ignore"
+        },
+        "pricing": {
+          "$ref": "#/$defs/ModelPricing"
+        },
+        "context_window": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum context tokens."
         }
-      }
+      },
+      "x-extra": "ignore"
     },
     "ToolDecision": {
       "description": "What the policy says about a call: allow, ask for approval, or deny.",
-      "enum": ["allow", "ask", "deny"]
+      "enum": [
+        "allow",
+        "ask",
+        "deny"
+      ]
     },
     "GrantScope": {
       "description": "How far a grant of allow_always reaches: the session, the user across sessions, or the whole workspace.",
-      "enum": ["session", "user", "workspace"]
+      "enum": [
+        "session",
+        "user",
+        "workspace"
+      ]
     },
     "ToolRule": {
       "description": "A policy rule for a tool.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["tool", "decision"],
+      "required": [
+        "tool",
+        "decision"
+      ],
       "properties": {
         "tool": {
           "type": "string",
@@ -138,18 +198,24 @@
         "pattern": {
           "type": "string",
           "minLength": 1,
-          "description": "Pattern the call arguments must match for the rule to apply; the rule applies to every call when absent."
+          "description": "Glob using Go path.Match semantics: * matches zero or more non-slash characters; ? matches one non-slash Unicode character; [ranges], [^ranges] and backslash escapes follow path.Match. Matches the entire argument string (RFC 8785 JCS for structured arguments). Invalid patterns are errors."
         },
         "decision": {
           "$ref": "#/$defs/ToolDecision"
         }
-      }
+      },
+      "x-extra": "ignore"
     },
     "PermissionGrant": {
       "description": "A standing permission a user gave with allow_always or allow_session.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["tool", "scope"],
+      "required": [
+        "tool",
+        "scope",
+        "expires_at",
+        "interaction_id"
+      ],
       "properties": {
         "tool": {
           "type": "string",
@@ -159,61 +225,58 @@
         "arg_pattern": {
           "type": "string",
           "minLength": 1,
-          "description": "Pattern the call arguments must match; every call of the tool when absent."
+          "description": "Glob using Go path.Match semantics: * matches zero or more non-slash characters; ? matches one non-slash Unicode character; [ranges], [^ranges] and backslash escapes follow path.Match. Matches the entire argument string (RFC 8785 JCS for structured arguments). Invalid patterns are errors."
         },
         "scope": {
           "$ref": "#/$defs/GrantScope"
+        },
+        "expires_at": {
+          "type": "string",
+          "description": "Grant expiration.",
+          "format": "date-time"
+        },
+        "interaction_id": {
+          "type": "string",
+          "description": "Human decision that authorized this grant.",
+          "format": "uuid"
         }
-      }
+      },
+      "x-extra": "ignore"
     },
     "PolicySnapshot": {
       "description": "Tool policy of the run as of the start of a segment: the tenant and workspace rules and the grants that turn ask into allow. A grant never overrides deny.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["tool_rules", "grants"],
+      "required": [],
       "properties": {
         "tool_rules": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/ToolRule"
           },
-          "description": "Rules in precedence order."
+          "description": "Rules in precedence order.",
+          "default": []
         },
         "grants": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/PermissionGrant"
           },
-          "description": "Grants in force for the run's principal."
+          "description": "Grants in force for the run's principal.",
+          "default": []
         }
-      }
-    },
-    "PersistGrantRequest": {
-      "description": "Records an allow_always (or allow_session) decision as a permission grant.",
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["scope", "tool"],
-      "properties": {
-        "scope": {
-          "$ref": "#/$defs/GrantScope"
-        },
-        "tool": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Tool name."
-        },
-        "arg_pattern": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Pattern the call arguments must match; every call of the tool when absent."
-        }
-      }
+      },
+      "x-extra": "ignore"
     },
     "SecretGrant": {
       "description": "A short-lived grant of a secret value, issued for a name the lock declares.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "value", "expires_at"],
+      "required": [
+        "name",
+        "value",
+        "expires_at"
+      ],
       "properties": {
         "name": {
           "type": "string",
@@ -222,14 +285,295 @@
         },
         "value": {
           "type": "string",
-          "description": "The secret value. It must not be logged, put in events or in Temporal payloads."
+          "description": "The secret value. It must not be logged, put in events or in Temporal payloads.",
+          "x-sensitive": true
         },
         "expires_at": {
           "type": "string",
           "format": "date-time",
           "description": "When the grant stops being valid."
         }
-      }
+      },
+      "x-extra": "ignore"
+    },
+    "TokenPurpose": {
+      "enum": [
+        "segment",
+        "sandbox"
+      ],
+      "description": "Scope of the capability."
+    },
+    "TokenRequest": {
+      "type": "object",
+      "description": "POST /internal/v1/tokens authenticated by Authorization: Bearer <ORBIT_WORKER_SERVICE_TOKEN>. Internal listener only, no edge route. Production uses internal listener + mTLS (R1 service credentials, R2 mTLS). Control checks active running run and current uncommitted seq; after segment commit old seq is rejected by run state, without a revocation list. Worker may renew within a segment. Sandbox purpose additionally binds lease_id.",
+      "additionalProperties": false,
+      "properties": {
+        "tenant_id": {
+          "type": "string",
+          "description": "Tenant used for the RLS run lookup.",
+          "format": "uuid"
+        },
+        "run_id": {
+          "type": "string",
+          "description": "Running run.",
+          "format": "uuid"
+        },
+        "member": {
+          "$ref": "team_updates.json#/$defs/MemberName"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Current uncommitted segment."
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Temporal activity attempt."
+        },
+        "purpose": {
+          "$ref": "#/$defs/TokenPurpose"
+        },
+        "lease_id": {
+          "type": "string",
+          "description": "Lease bound to sandbox capability.",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$"
+        }
+      },
+      "required": [
+        "tenant_id",
+        "run_id",
+        "member",
+        "seq",
+        "attempt",
+        "purpose"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "purpose": {
+                "const": "sandbox"
+              }
+            },
+            "required": [
+              "purpose"
+            ]
+          },
+          "then": {
+            "required": [
+              "lease_id"
+            ]
+          }
+        }
+      ],
+      "x-extra": "ignore"
+    },
+    "TokenResponse": {
+      "type": "object",
+      "description": "Five-minute capability binding tenant/run/member/seq/purpose and optional lease; never record in Temporal history.",
+      "additionalProperties": false,
+      "properties": {
+        "token": {
+          "type": "string",
+          "description": "Bearer capability.",
+          "minLength": 1,
+          "x-sensitive": true
+        },
+        "expires_at": {
+          "type": "string",
+          "description": "Token expires five minutes after issue.",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "token",
+        "expires_at"
+      ],
+      "x-extra": "ignore"
+    },
+    "ModelPricing": {
+      "type": "object",
+      "description": "Millicredits per million tokens. Cost per token category = ceil(tokens * price / 1000000); sum category costs using integers.",
+      "additionalProperties": false,
+      "properties": {
+        "input_per_mtok_millicredits": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Price per million input tokens.",
+          "maximum": 9007199254740991
+        },
+        "output_per_mtok_millicredits": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Price per million output tokens.",
+          "maximum": 9007199254740991
+        },
+        "cache_read_per_mtok_millicredits": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Price per million cache_read tokens.",
+          "maximum": 9007199254740991
+        },
+        "cache_write_per_mtok_millicredits": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Price per million cache_write tokens.",
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "input_per_mtok_millicredits",
+        "output_per_mtok_millicredits",
+        "cache_read_per_mtok_millicredits",
+        "cache_write_per_mtok_millicredits"
+      ],
+      "x-extra": "ignore"
+    },
+    "SecretGrantRequest": {
+      "type": "object",
+      "description": "Fetch declared secrets using a segment token. Sandbox credentials require purpose=sandbox and lease_id; R1 does not inject sandbox secrets (D19).",
+      "additionalProperties": false,
+      "properties": {
+        "names": {
+          "type": "array",
+          "description": "Declared secret names.",
+          "items": {
+            "type": "string",
+            "description": "Secret name.",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          },
+          "default": []
+        }
+      },
+      "required": [],
+      "x-extra": "ignore"
+    },
+    "SecretGrantResponse": {
+      "type": "object",
+      "description": "Short-lived secret grants, never store in history.",
+      "additionalProperties": false,
+      "properties": {
+        "grants": {
+          "type": "array",
+          "description": "Granted secrets.",
+          "items": {
+            "$ref": "#/$defs/SecretGrant"
+          },
+          "default": []
+        }
+      },
+      "required": [],
+      "x-extra": "ignore"
+    },
+    "CheckpointKeyResponse": {
+      "type": "object",
+      "description": "Key for encrypted checkpoints; not a Temporal payload.",
+      "additionalProperties": false,
+      "properties": {
+        "key_version": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Key version."
+        },
+        "key": {
+          "type": "string",
+          "description": "Base64 checkpoint key.",
+          "minLength": 1,
+          "x-sensitive": true
+        }
+      },
+      "required": [
+        "key_version",
+        "key"
+      ],
+      "x-extra": "ignore"
+    },
+    "UsageItem": {
+      "type": "object",
+      "description": "One model usage ledger item, idempotently booked by control.",
+      "additionalProperties": false,
+      "properties": {
+        "idempotency_key": {
+          "type": "string",
+          "description": "Stable key across retries.",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$"
+        },
+        "model": {
+          "type": "string",
+          "description": "Model name.",
+          "minLength": 1
+        },
+        "input_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Token count."
+        },
+        "output_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Token count."
+        },
+        "cache_read_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Token count."
+        },
+        "cache_write_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Token count."
+        },
+        "occurred_at": {
+          "type": "string",
+          "description": "Model request completion.",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "idempotency_key",
+        "model",
+        "input_tokens",
+        "output_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "occurred_at"
+      ],
+      "x-extra": "ignore"
+    },
+    "UsageReport": {
+      "type": "object",
+      "description": "Report usage; control prices it using ModelPricing.",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "type": "array",
+          "description": "Model usage observations.",
+          "items": {
+            "$ref": "#/$defs/UsageItem"
+          },
+          "default": []
+        }
+      },
+      "required": [],
+      "x-extra": "ignore"
+    },
+    "UsageReportResponse": {
+      "type": "object",
+      "description": "Authoritative run usage after deduplication.",
+      "additionalProperties": false,
+      "properties": {
+        "run_used_millicredits": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Cumulative booked run cost.",
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "run_used_millicredits"
+      ],
+      "x-extra": "ignore"
     }
   }
 }

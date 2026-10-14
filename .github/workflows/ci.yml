@@ -45,6 +45,9 @@ jobs:
       - run: test -z "$(gofmt -l .)"
       - run: go vet ./...
       - run: go test -race -count=1 ./...
-      - run: bash scripts/check-contracts-gen.sh
+      - name: Contract generation and cross-language fixture freshness
+        run: |
+          bash scripts/check-contracts-gen.sh
+          go test ./internal/contract -run TestGoWireFixtures -count=1
       - run: bash scripts/check-openapi.sh
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...

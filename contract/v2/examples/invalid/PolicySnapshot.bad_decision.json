@@ -14,7 +14,9 @@
     {
       "tool": "mail.send",
       "arg_pattern": "to=*@acme.com",
-      "scope": "user"
+      "scope": "user",
+      "expires_at": "2026-10-15T00:00:00Z",
+      "interaction_id": "01900000-0000-7000-8000-000000000001"
     }
   ]
 }

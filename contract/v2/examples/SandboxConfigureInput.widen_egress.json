@@ -6,16 +6,22 @@
     "sandbox_id": "sbx-8841",
     "expires_at": "2026-10-14T09:21:03Z"
   },
-  "egress": ["*.acme-internal.com", "api.example-ocr.com"],
-  "secret_names": [],
+  "egress": [
+    "*.acme-internal.com",
+    "api.example-ocr.com"
+  ],
   "mounts": [
     {
       "kind": "skills",
-      "lock_id": "lk-01J9X"
+      "lock_id": "lk-01J9X",
+      "entry": 0,
+      "member": "main"
     },
     {
       "kind": "agent",
-      "lock_id": "lk-01J9X"
+      "lock_id": "lk-01J9X",
+      "entry": 0,
+      "member": "main"
     }
   ]
 }

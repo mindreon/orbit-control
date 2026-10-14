@@ -7,22 +7,36 @@
     "SandboxLease",
     "SandboxOpInput",
     "SandboxSnapshotResult",
-    "SandboxConfigureInput"
+    "SandboxConfigureInput",
+    "SandboxSnapshotDeleteInput",
+    "SandboxInspectResult",
+    "SandboxEmptyResult"
   ],
   "$defs": {
     "SandboxProvider": {
-      "description": "Backend of the sandbox: opensandbox in production, docker for development, local for tests only.",
-      "enum": ["opensandbox", "docker", "local"]
+      "description": "Backend of the sandbox: opensandbox for managed sandboxes; local is the R1 development/test provider (WP6 D18).",
+      "enum": [
+        "opensandbox",
+        "local"
+      ]
     },
     "MountKind": {
       "description": "skills: the locked skills, read-only at /skills. agent: the locked agent bundle, read-only at /agent.",
-      "enum": ["skills", "agent"]
+      "enum": [
+        "skills",
+        "agent"
+      ]
     },
     "SandboxMount": {
       "description": "A read-only mount of locked assets.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "lock_id"],
+      "required": [
+        "kind",
+        "lock_id",
+        "entry",
+        "member"
+      ],
       "properties": {
         "kind": {
           "$ref": "#/$defs/MountKind"
@@ -30,15 +44,31 @@
         "lock_id": {
           "type": "string",
           "minLength": 1,
-          "description": "Lock whose files are mounted."
+          "description": "Lock whose files are mounted.",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$"
+        },
+        "entry": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Zero-based RunLock.entries index to mount."
+        },
+        "member": {
+          "$ref": "team_updates.json#/$defs/MemberName"
         }
-      }
+      },
+      "x-extra": "ignore"
     },
     "SandboxAcquireInput": {
       "description": "Create, resume or restore the sandbox of an isolation key and configure it.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["tenant_id", "isolation_key", "profile", "egress", "secret_names", "mounts"],
+      "required": [
+        "tenant_id",
+        "isolation_key",
+        "profile",
+        "ttl_seconds",
+        "metadata"
+      ],
       "properties": {
         "tenant_id": {
           "type": "string",
@@ -60,34 +90,52 @@
           "items": {
             "type": "string"
           },
-          "description": "Allowed outbound domain patterns; everything else is denied."
-        },
-        "secret_names": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Names of the secrets the sandbox gets credential injection for. Values never appear here."
+          "description": "Allowed outbound domain patterns; everything else is denied.",
+          "default": []
         },
         "mounts": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/SandboxMount"
           },
-          "description": "Read-only asset mounts."
+          "description": "Read-only asset mounts.",
+          "default": []
         },
         "member": {
           "type": "string",
           "minLength": 1,
           "description": "Team member that needs an isolated session inside the shared sandbox."
+        },
+        "snapshot_id": {
+          "type": "string",
+          "description": "Snapshot to restore from.",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$"
+        },
+        "sandbox_id": {
+          "type": "string",
+          "description": "Existing sandbox to resume.",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$"
+        },
+        "ttl_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Lease duration in seconds."
+        },
+        "metadata": {
+          "$ref": "#/$defs/SandboxMetadata"
         }
-      }
+      },
+      "x-extra": "ignore"
     },
     "SandboxLease": {
       "description": "A ready sandbox held for a time.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["provider", "sandbox_id", "expires_at"],
+      "required": [
+        "provider",
+        "sandbox_id",
+        "expires_at"
+      ],
       "properties": {
         "provider": {
           "$ref": "#/$defs/SandboxProvider"
@@ -95,25 +143,33 @@
         "sandbox_id": {
           "type": "string",
           "minLength": 1,
-          "description": "Provider identifier of the sandbox."
+          "description": "Provider identifier of the sandbox.",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$"
         },
         "isolated_session_id": {
           "type": "string",
           "minLength": 1,
-          "description": "Isolated session of the requesting team member."
+          "description": "Isolated session of the requesting team member.",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$"
         },
         "expires_at": {
           "type": "string",
           "format": "date-time",
           "description": "When the provider reclaims the sandbox unless it is renewed."
         }
-      }
+      },
+      "x-extra": "ignore"
     },
     "SandboxOpInput": {
       "description": "Input of the lifecycle operations that address an existing sandbox: renew, pause, resume, snapshot, destroy and snapshot delete.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["tenant_id", "provider", "sandbox_id", "isolation_key"],
+      "required": [
+        "tenant_id",
+        "provider",
+        "sandbox_id",
+        "isolation_key"
+      ],
       "properties": {
         "tenant_id": {
           "type": "string",
@@ -126,33 +182,48 @@
         "sandbox_id": {
           "type": "string",
           "minLength": 1,
-          "description": "Provider identifier of the sandbox."
+          "description": "Provider identifier of the sandbox.",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$"
         },
         "isolation_key": {
           "type": "string",
           "minLength": 1,
           "description": "Isolation key the sandbox was acquired with."
+        },
+        "ttl_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Renewal duration in seconds; required by SandboxRenew."
         }
-      }
+      },
+      "x-extra": "ignore"
     },
     "SandboxSnapshotResult": {
       "description": "Result of a snapshot.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["snapshot_id"],
+      "required": [
+        "snapshot_id"
+      ],
       "properties": {
         "snapshot_id": {
           "type": "string",
           "minLength": 1,
-          "description": "Provider identifier of the snapshot."
+          "description": "Provider identifier of the snapshot.",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$"
         }
-      }
+      },
+      "x-extra": "ignore"
     },
     "SandboxConfigureInput": {
       "description": "Reconfigure a running sandbox after a permission change: egress rules, credential bindings and mounts.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["tenant_id", "isolation_key", "lease", "egress", "secret_names", "mounts"],
+      "required": [
+        "tenant_id",
+        "isolation_key",
+        "lease"
+      ],
       "properties": {
         "tenant_id": {
           "type": "string",
@@ -172,23 +243,124 @@
           "items": {
             "type": "string"
           },
-          "description": "Allowed outbound domain patterns; replaces the current rules."
-        },
-        "secret_names": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Names of the secrets to bind; replaces the current bindings."
+          "description": "Allowed outbound domain patterns; replaces the current rules.",
+          "default": []
         },
         "mounts": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/SandboxMount"
           },
-          "description": "Read-only asset mounts; replaces the current mounts."
+          "description": "Read-only asset mounts; replaces the current mounts.",
+          "default": []
         }
-      }
+      },
+      "x-extra": "ignore"
+    },
+    "SandboxMetadata": {
+      "type": "object",
+      "description": "Sandbox lease ownership metadata.",
+      "additionalProperties": false,
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "Owning session.",
+          "format": "uuid"
+        },
+        "workspace_id": {
+          "type": "string",
+          "description": "Owning workspace.",
+          "format": "uuid"
+        },
+        "run_id": {
+          "type": "string",
+          "description": "Run acquiring the lease.",
+          "format": "uuid"
+        },
+        "lease_gen": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Monotonic lease generation."
+        }
+      },
+      "required": [
+        "session_id",
+        "workspace_id",
+        "run_id",
+        "lease_gen"
+      ],
+      "x-extra": "ignore"
+    },
+    "SandboxSnapshotDeleteInput": {
+      "type": "object",
+      "description": "Delete a snapshot independently of sandbox lifetime.",
+      "additionalProperties": false,
+      "properties": {
+        "tenant_id": {
+          "type": "string",
+          "description": "Owning tenant.",
+          "format": "uuid"
+        },
+        "provider": {
+          "$ref": "#/$defs/SandboxProvider"
+        },
+        "snapshot_id": {
+          "type": "string",
+          "description": "Snapshot to delete.",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$"
+        },
+        "isolation_key": {
+          "type": "string",
+          "description": "Isolation key of the snapshot.",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$"
+        }
+      },
+      "required": [
+        "tenant_id",
+        "provider",
+        "snapshot_id",
+        "isolation_key"
+      ],
+      "x-extra": "ignore"
+    },
+    "SandboxInspectResult": {
+      "type": "object",
+      "description": "Inspection result. Missing sandboxes have exists=false.",
+      "additionalProperties": false,
+      "properties": {
+        "exists": {
+          "type": "boolean",
+          "description": "Whether the sandbox exists."
+        },
+        "state": {
+          "enum": [
+            "creating",
+            "ready",
+            "paused",
+            "snapshotted",
+            "destroyed",
+            "failed"
+          ],
+          "description": "Current provider state."
+        },
+        "expires_at": {
+          "type": "string",
+          "description": "Lease expiration when known.",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "exists"
+      ],
+      "x-extra": "ignore"
+    },
+    "SandboxEmptyResult": {
+      "type": "object",
+      "description": "Successful operation with no returned data.",
+      "additionalProperties": false,
+      "properties": {},
+      "required": [],
+      "x-extra": "ignore"
     }
   }
 }

@@ -1,0 +1,6 @@
+{
+  "check": "structure",
+  "rule_id": "example",
+  "severity": "warning",
+  "message": "example"
+}

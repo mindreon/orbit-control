@@ -1,0 +1,6 @@
+{
+  "kind": "tool_approval",
+  "choice": "allow_once",
+  "scope": "user",
+  "arg_pattern": "{\"path\":\"/workspace/*\"}"
+}

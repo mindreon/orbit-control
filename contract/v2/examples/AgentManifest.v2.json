@@ -7,13 +7,23 @@
     "en": "Contract Assistant"
   },
   "description": "Compares contract clauses and flags risks.",
-  "tags": ["legal", "office"],
+  "tags": [
+    "legal",
+    "office"
+  ],
   "model": {
     "profile": "reasoning-default",
-    "fallback": ["fast-default"]
+    "fallback": [
+      "fast-default"
+    ]
   },
   "tools": {
-    "builtin": ["read_file", "write_file", "shell", "web_fetch"]
+    "builtin": [
+      "read_file",
+      "write_file",
+      "shell",
+      "web_fetch"
+    ]
   },
   "rails": [
     {
@@ -28,11 +38,14 @@
   ],
   "limits": {
     "maxIterationsPerRun": 200,
-    "defaultRunBudgetCredits": 50
+    "default_run_budget_millicredits": 50000
   },
   "permissions": {
     "network": {
-      "egress": ["*.acme-internal.com", "api.example-ocr.com"]
+      "egress": [
+        "*.acme-internal.com",
+        "api.example-ocr.com"
+      ]
     },
     "secrets": [
       {
@@ -40,8 +53,15 @@
         "scope": "tenant"
       }
     ],
-    "dataScopes": ["session_files", "workspace_knowledge:read"],
-    "effectClasses": ["read_only", "sandbox_write", "external_write"],
+    "dataScopes": [
+      "session_files",
+      "workspace_knowledge:read"
+    ],
+    "effectClasses": [
+      "read_only",
+      "sandbox_write",
+      "external_write"
+    ],
     "sandbox": {
       "profile": "office-standard"
     }

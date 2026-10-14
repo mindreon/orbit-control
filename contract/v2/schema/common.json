@@ -2,14 +2,23 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://orbit.mindreon.com/contract/v2/common.json",
   "description": "Types shared by several contract files: the side-effect classes, token usage and artifact descriptors.",
-  "x-exports": ["Usage", "Artifact"],
+  "x-exports": [
+    "Usage",
+    "Artifact"
+  ],
   "$defs": {
     "EffectClass": {
       "description": "How a tool call changes the world. It decides the retry semantics of a segment (external_write and privileged run at most once), the default approval policy and the forced segment boundary.",
-      "enum": ["read_only", "sandbox_write", "network_read", "external_write", "privileged"]
+      "enum": [
+        "read_only",
+        "sandbox_write",
+        "network_read",
+        "external_write",
+        "privileged"
+      ]
     },
     "Usage": {
-      "description": "Token and credit consumption of one model over one segment, reported by the worker. The ledger books it idempotently by run, member, segment and attempt.",
+      "description": "Token counts and estimated integer millicredits for one model over one segment. Exact usage is reported through UsageReport with per-request idempotency keys; the control ledger is authoritative.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -18,7 +27,7 @@
         "output_tokens",
         "cache_read_tokens",
         "cache_write_tokens",
-        "credits"
+        "cost_millicredits"
       ],
       "properties": {
         "model": {
@@ -46,18 +55,26 @@
           "minimum": 0,
           "description": "Prompt tokens written to the provider prompt cache."
         },
-        "credits": {
-          "type": "number",
+        "cost_millicredits": {
+          "type": "integer",
           "minimum": 0,
-          "description": "Platform credits these tokens cost."
+          "description": "Integer millicredits (1000 = 1 credit). Platform credits these tokens cost.",
+          "maximum": 9007199254740991
         }
-      }
+      },
+      "x-extra": "ignore"
     },
     "Artifact": {
       "description": "A file produced by a run in the sandbox output directory, content-addressed and stored in the object store.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["path", "digest", "size_bytes", "mime", "object_ref"],
+      "required": [
+        "path",
+        "digest",
+        "size_bytes",
+        "mime",
+        "object_ref"
+      ],
       "properties": {
         "path": {
           "type": "string",
@@ -84,7 +101,8 @@
           "minLength": 1,
           "description": "Object store key of the content, relative to the tenant prefix."
         }
-      }
+      },
+      "x-extra": "ignore"
     }
   }
 }

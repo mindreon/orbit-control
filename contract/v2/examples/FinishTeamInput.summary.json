@@ -1,4 +1,5 @@
 {
   "caller": "leader",
-  "summary": "All tasks completed; the report is in report/summary.md."
+  "summary": "All tasks completed; the report is in report/summary.md.",
+  "request_id": "effect-1"
 }

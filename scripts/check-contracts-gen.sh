@@ -7,8 +7,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 bash "$root/scripts/gen-contracts.sh" "$tmp/contract_gen.go"
-if ! diff -u "$root/internal/contract/contract_gen.go" "$tmp/contract_gen.go"; then
-  echo "internal/contract/contract_gen.go is stale: run scripts/gen-contracts.sh and commit the result" >&2
-  exit 1
-fi
-echo "contract_gen.go is up to date"
+for name in contract_gen.go contract_secret_gen.go contract_registry_gen.go contract_types_gen_test.go; do
+  diff -u "$root/internal/contract/$name" "$tmp/$name"
+done
+echo "contract types, secrets, registry and constructor table are up to date"

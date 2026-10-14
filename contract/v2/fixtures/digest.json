@@ -1,0 +1,159 @@
+{
+  "objects": [
+    {
+      "input": "{}",
+      "canonical": "{}",
+      "digest": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    {
+      "input": "{\"b\":2,\"a\":1}",
+      "canonical": "{\"a\":1,\"b\":2}",
+      "digest": "sha256:43258cff783fe7036d8a43033f830adfc60ec037382473548ac742b888292777"
+    },
+    {
+      "input": "{\"numbers\":[333333333.33333329,1E30,4.50,2e-3,1e-27],\"string\":\"€$\\u000F\\nA'B\\\"\\\\\\\"/\",\"literals\":[null,true,false]}",
+      "canonical": "{\"literals\":[null,true,false],\"numbers\":[333333333.3333333,1e+30,4.5,0.002,1e-27],\"string\":\"€$\\u000f\\nA'B\\\"\\\\\\\"/\"}",
+      "digest": "sha256:6d77565c0fe51d7346bd5debb08f2eebbe9bde01eade30b34e2011f360f91b0e"
+    },
+    {
+      "input": "{\"\\u20ac\":\"Euro\",\"\\r\":\"CR\",\"\\ufb33\":\"Hebrew\",\"1\":\"One\",\"\\ud83d\\ude00\":\"Emoji\",\"\\u0080\":\"Control\",\"\\u00f6\":\"Latin\",\"\\ue000\":\"BMP\"}",
+      "canonical": "{\"\\r\":\"CR\",\"1\":\"One\",\"\":\"Control\",\"ö\":\"Latin\",\"€\":\"Euro\",\"😀\":\"Emoji\",\"\":\"BMP\",\"דּ\":\"Hebrew\"}",
+      "digest": "sha256:5ccaa605aec891adb2c3c879d7376532865edb85d0b674b11476fcdd36058f7f"
+    },
+    {
+      "input": "[\"<>&\",\"\\u2028\",\"\\u2029\",-0]",
+      "canonical": "[\"<>&\",\" \",\" \",0]",
+      "digest": "sha256:26d3f8526bc371b49fe5bbb7bff1b1f6f30fb7e42595bc819c41ccba2f15c401"
+    },
+    {
+      "input": "{\"v\":1,\"entries\":[],\"members\":[{\"name\":\"main\"}]}",
+      "canonical": "{\"entries\":[],\"members\":[{\"name\":\"main\"}],\"v\":1}",
+      "digest": "sha256:a4ba0fa520d71a6e4950bb85509ffe50da5b15e22463455609842ea3a18a6bdd"
+    }
+  ],
+  "numbers": [
+    {
+      "bits": "0000000000000000",
+      "canonical": "0"
+    },
+    {
+      "bits": "8000000000000000",
+      "canonical": "0"
+    },
+    {
+      "bits": "0000000000000001",
+      "canonical": "5e-324"
+    },
+    {
+      "bits": "8000000000000001",
+      "canonical": "-5e-324"
+    },
+    {
+      "bits": "7fefffffffffffff",
+      "canonical": "1.7976931348623157e+308"
+    },
+    {
+      "bits": "ffefffffffffffff",
+      "canonical": "-1.7976931348623157e+308"
+    },
+    {
+      "bits": "4340000000000000",
+      "canonical": "9007199254740992"
+    },
+    {
+      "bits": "c340000000000000",
+      "canonical": "-9007199254740992"
+    },
+    {
+      "bits": "4430000000000000",
+      "canonical": "295147905179352830000"
+    },
+    {
+      "bits": "44b52d02c7e14af5",
+      "canonical": "9.999999999999997e+22"
+    },
+    {
+      "bits": "44b52d02c7e14af6",
+      "canonical": "1e+23"
+    },
+    {
+      "bits": "44b52d02c7e14af7",
+      "canonical": "1.0000000000000001e+23"
+    },
+    {
+      "bits": "444b1ae4d6e2ef4e",
+      "canonical": "999999999999999700000"
+    },
+    {
+      "bits": "444b1ae4d6e2ef4f",
+      "canonical": "999999999999999900000"
+    },
+    {
+      "bits": "444b1ae4d6e2ef50",
+      "canonical": "1e+21"
+    },
+    {
+      "bits": "3eb0c6f7a0b5ed8c",
+      "canonical": "9.999999999999997e-7"
+    },
+    {
+      "bits": "3eb0c6f7a0b5ed8d",
+      "canonical": "0.000001"
+    },
+    {
+      "bits": "41b3de4355555553",
+      "canonical": "333333333.3333332"
+    },
+    {
+      "bits": "41b3de4355555554",
+      "canonical": "333333333.33333325"
+    },
+    {
+      "bits": "41b3de4355555555",
+      "canonical": "333333333.3333333"
+    },
+    {
+      "bits": "41b3de4355555556",
+      "canonical": "333333333.3333334"
+    },
+    {
+      "bits": "41b3de4355555557",
+      "canonical": "333333333.33333343"
+    },
+    {
+      "bits": "becbf647612f3696",
+      "canonical": "-0.0000033333333333333333"
+    },
+    {
+      "bits": "43143ff3c1cb0959",
+      "canonical": "1424953923781206.2"
+    }
+  ],
+  "bundles": [
+    {
+      "files": {},
+      "digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "files": {
+        "agent.json": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "digest": "sha256:c67357dc42a353340b667d3da3e9d69d9a11d8156ac1864a11a36a5c6c700934"
+    },
+    {
+      "files": {
+        "z/file": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "a.txt": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "é.txt": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "digest": "sha256:519dd9d3921875bb98c61a07671e499ef33cba0eb8e319cc1fe47e09a505873a"
+    }
+  ],
+  "invalid": [
+    "{\"a\":1,\"\\u0061\":2}",
+    "\"\\ud800\"",
+    "\"\\udfff\"",
+    "1e999",
+    "{} {}"
+  ]
+}

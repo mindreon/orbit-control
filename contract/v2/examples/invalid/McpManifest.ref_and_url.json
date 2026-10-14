@@ -14,7 +14,10 @@
     },
     "local-db": {
       "command": "npx",
-      "args": ["-y", "@example/db-mcp"],
+      "args": [
+        "-y",
+        "@example/db-mcp"
+      ],
       "env": {
         "DB_URL": "${secret:DB_URL}"
       }

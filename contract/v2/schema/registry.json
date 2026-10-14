@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orbit.mindreon.com/contract/v2/registry.json",
+  "description": "Cross-language Temporal names. Empty output is the explicit SandboxEmptyResult object. Only Go/Python boundaries are registered. Go-only Workflow signals and queries (WP6 D2) are intentionally absent.",
+  "x-exports": [],
+  "x-task-queues": {
+    "ctl": {
+      "language": "go"
+    },
+    "agent.standard": {
+      "language": "python"
+    },
+    "sandbox": {
+      "language": "python"
+    },
+    "asset-check": {
+      "language": "python"
+    }
+  },
+  "x-activities": {
+    "RunAgentSegment": {
+      "input": "SegmentInput",
+      "output": "SegmentResult",
+      "queue": "agent.standard"
+    },
+    "SandboxCreate": {
+      "input": "SandboxAcquireInput",
+      "output": "SandboxLease",
+      "queue": "sandbox"
+    },
+    "SandboxResume": {
+      "input": "SandboxOpInput",
+      "output": "SandboxLease",
+      "queue": "sandbox"
+    },
+    "SandboxInspect": {
+      "input": "SandboxOpInput",
+      "output": "SandboxInspectResult",
+      "queue": "sandbox"
+    },
+    "SandboxConfigure": {
+      "input": "SandboxConfigureInput",
+      "output": "SandboxLease",
+      "queue": "sandbox"
+    },
+    "SandboxRenew": {
+      "input": "SandboxOpInput",
+      "output": "SandboxLease",
+      "queue": "sandbox"
+    },
+    "SandboxPause": {
+      "input": "SandboxOpInput",
+      "output": "SandboxEmptyResult",
+      "queue": "sandbox"
+    },
+    "SandboxSnapshot": {
+      "input": "SandboxOpInput",
+      "output": "SandboxSnapshotResult",
+      "queue": "sandbox"
+    },
+    "SandboxDestroy": {
+      "input": "SandboxOpInput",
+      "output": "SandboxEmptyResult",
+      "queue": "sandbox"
+    },
+    "SandboxSnapshotDelete": {
+      "input": "SandboxSnapshotDeleteInput",
+      "output": "SandboxEmptyResult",
+      "queue": "sandbox"
+    },
+    "AssetCheckStructure": {
+      "input": "AssetCheckInput",
+      "output": "AssetCheckReport",
+      "queue": "asset-check"
+    },
+    "AssetCheckCompat": {
+      "input": "AssetCheckInput",
+      "output": "AssetCheckReport",
+      "queue": "asset-check"
+    },
+    "AssetCheckSecrets": {
+      "input": "AssetCheckInput",
+      "output": "AssetCheckReport",
+      "queue": "asset-check"
+    },
+    "AssetCheckStatic": {
+      "input": "AssetCheckInput",
+      "output": "AssetCheckReport",
+      "queue": "asset-check"
+    },
+    "AssetCheckInjection": {
+      "input": "AssetCheckInput",
+      "output": "AssetCheckReport",
+      "queue": "asset-check"
+    },
+    "AssetCheckPermissionDiff": {
+      "input": "AssetCheckInput",
+      "output": "AssetCheckReport",
+      "queue": "ctl"
+    }
+  },
+  "x-updates": {
+    "CreateTasks": {
+      "input": "CreateTasksInput",
+      "output": "CreateTasksOutput"
+    },
+    "AssignTask": {
+      "input": "AssignTaskInput",
+      "output": "SandboxEmptyResult"
+    },
+    "SendMessage": {
+      "input": "SendMessageInput",
+      "output": "SandboxEmptyResult"
+    },
+    "CompleteTask": {
+      "input": "CompleteTaskInput",
+      "output": "SandboxEmptyResult"
+    },
+    "SubmitVerdict": {
+      "input": "SubmitVerdictInput",
+      "output": "SandboxEmptyResult"
+    },
+    "FinishTeam": {
+      "input": "FinishTeamInput",
+      "output": "SandboxEmptyResult"
+    }
+  },
+  "x-signals": {},
+  "x-queries": {},
+  "x-errors": {
+    "BudgetExhausted": {
+      "retryable": false
+    },
+    "PolicyDenied": {
+      "retryable": false
+    },
+    "InvalidSpec": {
+      "retryable": false
+    },
+    "InvalidSegmentInput": {
+      "retryable": false
+    },
+    "LockVerificationFailed": {
+      "retryable": false
+    },
+    "ContextLengthExceeded": {
+      "retryable": false
+    },
+    "CheckpointConflict": {
+      "retryable": false
+    },
+    "CheckpointUnreadable": {
+      "retryable": false
+    },
+    "Cancelled": {
+      "retryable": false
+    },
+    "SandboxUnavailable": {
+      "retryable": false
+    },
+    "SegmentSuperseded": {
+      "retryable": false
+    },
+    "TransientError": {
+      "retryable": true
+    }
+  }
+}

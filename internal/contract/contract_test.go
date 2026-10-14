@@ -92,7 +92,7 @@ func loadRegistry(t *testing.T) *registry {
 			}
 			add(typeName, name, "#/$defs/"+typeName)
 		}
-		if len(exports) == 0 {
+		if len(exports) == 0 && name != "registry.json" {
 			t.Errorf("%s: the file exports no type; list the types that need examples in x-exports", name)
 		}
 	}
@@ -210,7 +210,7 @@ func TestInvalidExamplesFail(t *testing.T) {
 	r := loadRegistry(t)
 	count := 0
 	for _, ex := range listExamples(t, filepath.Join(examplesDir, "invalid")) {
-		sch, ok := r.schemas[ex.typeName]
+		_, ok := r.schemas[ex.typeName]
 		if !ok {
 			t.Errorf("%s: %s is not a type of the contract", ex.name, ex.typeName)
 			continue
@@ -219,7 +219,7 @@ func TestInvalidExamplesFail(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := validate(sch, raw); err == nil {
+		if err := Validate(ex.typeName, raw); err == nil {
 			t.Errorf("%s should be rejected", ex.name)
 		}
 		count++
@@ -237,7 +237,11 @@ func TestEveryEventTypeHasAnExample(t *testing.T) {
 	have := map[string]bool{}
 	for _, ex := range listExamples(t, examplesDir) {
 		if ex.typeName == "RunEvent" {
-			have[strings.TrimPrefix(ex.name, "RunEvent.")] = true
+			for _, typ := range types {
+				if strings.HasPrefix(ex.name, "RunEvent."+typ.(string)) {
+					have[typ.(string)] = true
+				}
+			}
 		}
 	}
 	for _, typ := range types {
@@ -247,26 +251,6 @@ func TestEveryEventTypeHasAnExample(t *testing.T) {
 	}
 }
 
-// constructors maps every exported type to a fresh value of its Go type.
-var constructors = map[string]func() any{
-	"Usage": func() any { return new(Usage) }, "Artifact": func() any { return new(Artifact) },
-	"InteractionRequest": func() any { return new(InteractionRequest) }, "Decision": func() any { return new(Decision) },
-	"SegmentInput": func() any { return new(SegmentInput) }, "SegmentResult": func() any { return new(SegmentResult) },
-	"RunEvent": func() any { return new(RunEvent) }, "RunLock": func() any { return new(RunLock) },
-	"SandboxAcquireInput": func() any { return new(SandboxAcquireInput) }, "SandboxLease": func() any { return new(SandboxLease) },
-	"SandboxOpInput": func() any { return new(SandboxOpInput) }, "SandboxSnapshotResult": func() any { return new(SandboxSnapshotResult) },
-	"SandboxConfigureInput": func() any { return new(SandboxConfigureInput) },
-	"CreateTasksInput":      func() any { return new(CreateTasksInput) }, "CreateTasksOutput": func() any { return new(CreateTasksOutput) },
-	"AssignTaskInput": func() any { return new(AssignTaskInput) }, "SendMessageInput": func() any { return new(SendMessageInput) },
-	"CompleteTaskInput": func() any { return new(CompleteTaskInput) }, "SubmitVerdictInput": func() any { return new(SubmitVerdictInput) },
-	"FinishTeamInput": func() any { return new(FinishTeamInput) }, "TeamBoard": func() any { return new(TeamBoard) },
-	"GetLockResponse": func() any { return new(GetLockResponse) }, "ModelCredentials": func() any { return new(ModelCredentials) },
-	"PolicySnapshot": func() any { return new(PolicySnapshot) }, "PersistGrantRequest": func() any { return new(PersistGrantRequest) },
-	"SecretGrant":   func() any { return new(SecretGrant) },
-	"AgentManifest": func() any { return new(AgentManifest) }, "SkillsManifest": func() any { return new(SkillsManifest) },
-	"McpManifest": func() any { return new(McpManifest) }, "TeamManifest": func() any { return new(TeamManifest) },
-}
-
 // eventData maps every event type to the Go type of its data.
 var eventData = map[string]func() any{
 	"run.started": func() any { return new(RunStarted) }, "run.status": func() any { return new(RunStatus) },
@@ -274,7 +258,7 @@ var eventData = map[string]func() any{
 	"segment.started": func() any { return new(SegmentStarted) }, "segment.ended": func() any { return new(SegmentEnded) },
 	"message.delta": func() any { return new(MessageDelta) }, "message.final": func() any { return new(MessageFinal) },
 	"reasoning.delta": func() any { return new(ReasoningDelta) }, "tool.call": func() any { return new(ToolCall) },
-	"tool.result": func() any { return new(ToolResult) }, "sandbox.output": func() any { return new(SandboxOutput) },
+	"tool.result": func() any { return new(ToolResult) }, "sandbox.output": func() any { return new(SandboxOutput) }, "sandbox.restored": func() any { return new(SandboxRestored) },
 	"artifact.created": func() any { return new(ArtifactCreated) }, "artifact.updated": func() any { return new(ArtifactUpdated) },
 	"interaction.requested": func() any { return new(InteractionRequested) }, "interaction.resolved": func() any { return new(InteractionResolved) },
 	"team.task.created": func() any { return new(TeamTaskCreated) }, "team.task.updated": func() any { return new(TeamTaskUpdated) },

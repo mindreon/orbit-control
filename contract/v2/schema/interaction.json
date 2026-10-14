@@ -2,17 +2,29 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://orbit.mindreon.com/contract/v2/interaction.json",
   "description": "Human-in-the-loop: a request that parks a run until someone answers, and the answer that resumes it.",
-  "x-exports": ["InteractionRequest", "Decision"],
+  "x-exports": [
+    "InteractionRequest",
+    "Decision"
+  ],
   "$defs": {
     "InteractionKind": {
       "description": "What a run waits for: approval of a tool call, an answer to a question the agent asked, or a person's ruling on an external effect whose outcome is unknown after a crash.",
-      "enum": ["tool_approval", "ask_user", "effect_uncertain"]
+      "enum": [
+        "tool_approval",
+        "ask_user",
+        "effect_uncertain"
+      ]
     },
     "ToolApprovalRequest": {
       "description": "The tool call that needs approval.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "args_preview", "effect_class", "risk_reasons"],
+      "required": [
+        "name",
+        "args_preview",
+        "effect_class",
+        "call_id"
+      ],
       "properties": {
         "name": {
           "type": "string",
@@ -31,15 +43,24 @@
           "items": {
             "type": "string"
           },
-          "description": "Why the policy asks: the matched rules and the shell or path findings, in plain text."
+          "description": "Why the policy asks: the matched rules and the shell or path findings, in plain text.",
+          "default": []
+        },
+        "call_id": {
+          "type": "string",
+          "description": "Identifier of the tool.call requiring approval.",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$"
         }
-      }
+      },
+      "x-extra": "ignore"
     },
     "Question": {
       "description": "A question the agent put to the user.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["text"],
+      "required": [
+        "text"
+      ],
       "properties": {
         "text": {
           "type": "string",
@@ -51,15 +72,21 @@
           "items": {
             "type": "string"
           },
-          "description": "Suggested answers; the user may still answer freely."
+          "description": "Suggested answers; the user may still answer freely.",
+          "default": []
         }
-      }
+      },
+      "x-extra": "ignore"
     },
     "UncertainEffect": {
       "description": "An external write that started and may or may not have happened.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["effect_key", "tool", "args_preview"],
+      "required": [
+        "effect_key",
+        "tool",
+        "args_preview"
+      ],
       "properties": {
         "effect_key": {
           "type": "string",
@@ -75,30 +102,40 @@
           "type": "string",
           "description": "Arguments rendered for a human, truncated and with secrets masked."
         }
-      }
+      },
+      "x-extra": "ignore"
     },
     "InteractionRequest": {
-      "description": "A request for a decision. Exactly the member that matches kind is present: tool for tool_approval, question for ask_user, effect for effect_uncertain.",
+      "description": "A request for a decision. Exactly the member that matches kind is present: tool for tool_approval, question for ask_user, effect for effect_uncertain. A segment emits at most one interaction; parallel tool approvals are merged into calls[].",
       "type": "object",
       "additionalProperties": false,
-      "required": ["interaction_id", "kind"],
+      "required": [
+        "interaction_id",
+        "kind"
+      ],
       "properties": {
         "interaction_id": {
           "type": "string",
           "minLength": 1,
-          "description": "Identifier of the interaction, unique within the run."
+          "description": "Identifier of the interaction, unique within the run.",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$"
         },
         "kind": {
           "$ref": "#/$defs/InteractionKind"
-        },
-        "tool": {
-          "$ref": "#/$defs/ToolApprovalRequest"
         },
         "question": {
           "$ref": "#/$defs/Question"
         },
         "effect": {
           "$ref": "#/$defs/UncertainEffect"
+        },
+        "calls": {
+          "type": "array",
+          "description": "All parallel calls requiring approval in this segment.",
+          "items": {
+            "$ref": "#/$defs/ToolApprovalRequest"
+          },
+          "minItems": 1
         }
       },
       "allOf": [
@@ -109,10 +146,14 @@
                 "const": "tool_approval"
               }
             },
-            "required": ["kind"]
+            "required": [
+              "kind"
+            ]
           },
           "then": {
-            "required": ["tool"],
+            "required": [
+              "calls"
+            ],
             "properties": {
               "question": false,
               "effect": false
@@ -126,13 +167,17 @@
                 "const": "ask_user"
               }
             },
-            "required": ["kind"]
+            "required": [
+              "kind"
+            ]
           },
           "then": {
-            "required": ["question"],
+            "required": [
+              "question"
+            ],
             "properties": {
-              "tool": false,
-              "effect": false
+              "effect": false,
+              "calls": false
             }
           }
         },
@@ -143,27 +188,42 @@
                 "const": "effect_uncertain"
               }
             },
-            "required": ["kind"]
+            "required": [
+              "kind"
+            ]
           },
           "then": {
-            "required": ["effect"],
+            "required": [
+              "effect"
+            ],
             "properties": {
-              "tool": false,
-              "question": false
+              "question": false,
+              "calls": false
             }
           }
         }
-      ]
+      ],
+      "x-extra": "ignore"
     },
     "DecisionChoice": {
       "description": "A fixed answer. tool_approval takes allow_once, allow_session, allow_always or deny; effect_uncertain takes treat_as_done, retry or abandon. allow_session and allow_always are persisted as permission grants.",
-      "enum": ["allow_once", "allow_session", "allow_always", "deny", "treat_as_done", "retry", "abandon"]
+      "enum": [
+        "allow_once",
+        "allow_session",
+        "allow_always",
+        "deny",
+        "treat_as_done",
+        "retry",
+        "abandon"
+      ]
     },
     "Decision": {
       "description": "The answer to an InteractionRequest of the same kind: choice for tool_approval and effect_uncertain, answer for ask_user.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind"],
+      "required": [
+        "kind"
+      ],
       "properties": {
         "kind": {
           "$ref": "#/$defs/InteractionKind"
@@ -179,6 +239,18 @@
           "type": "string",
           "minLength": 1,
           "description": "The user's answer to the question."
+        },
+        "scope": {
+          "enum": [
+            "user",
+            "workspace"
+          ],
+          "description": "Scope requested for allow_always. Control may narrow this according to policy."
+        },
+        "arg_pattern": {
+          "type": "string",
+          "description": "Glob using Go path.Match semantics: * matches zero or more non-slash characters; ? matches one non-slash Unicode character; [ranges], [^ranges] and backslash escapes follow path.Match. Matches the entire argument string (RFC 8785 JCS for structured arguments). Invalid patterns are errors.",
+          "minLength": 1
         }
       },
       "allOf": [
@@ -189,13 +261,22 @@
                 "const": "tool_approval"
               }
             },
-            "required": ["kind"]
+            "required": [
+              "kind"
+            ]
           },
           "then": {
-            "required": ["choice"],
+            "required": [
+              "choice"
+            ],
             "properties": {
               "choice": {
-                "enum": ["allow_once", "allow_session", "allow_always", "deny"]
+                "enum": [
+                  "allow_once",
+                  "allow_session",
+                  "allow_always",
+                  "deny"
+                ]
               },
               "answer": false
             }
@@ -208,10 +289,14 @@
                 "const": "ask_user"
               }
             },
-            "required": ["kind"]
+            "required": [
+              "kind"
+            ]
           },
           "then": {
-            "required": ["answer"],
+            "required": [
+              "answer"
+            ],
             "properties": {
               "choice": false,
               "comment": false
@@ -225,19 +310,46 @@
                 "const": "effect_uncertain"
               }
             },
-            "required": ["kind"]
+            "required": [
+              "kind"
+            ]
           },
           "then": {
-            "required": ["choice"],
+            "required": [
+              "choice"
+            ],
             "properties": {
               "choice": {
-                "enum": ["treat_as_done", "retry", "abandon"]
+                "enum": [
+                  "treat_as_done",
+                  "retry",
+                  "abandon"
+                ]
               },
               "answer": false
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "choice": {
+                "const": "allow_always"
+              }
+            },
+            "required": [
+              "choice"
+            ]
+          },
+          "else": {
+            "properties": {
+              "scope": false,
+              "arg_pattern": false
+            }
+          }
         }
-      ]
+      ],
+      "x-extra": "ignore"
     }
   }
 }

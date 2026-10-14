@@ -11,8 +11,9 @@ import "unicode/utf8"
 
 // Limits the agent asks for. They are capped by tenant policy.
 type AgentLimits struct {
-	// Credit budget of a run when the caller sets none.
-	DefaultRunBudgetCredits *float64 `json:"defaultRunBudgetCredits,omitempty,omitzero" yaml:"defaultRunBudgetCredits,omitempty" mapstructure:"defaultRunBudgetCredits,omitempty"`
+	// Integer millicredits (1000 = 1 credit). Credit budget of a run when the caller
+	// sets none.
+	DefaultRunBudgetMillicredits *int64 `json:"default_run_budget_millicredits,omitempty,omitzero" yaml:"default_run_budget_millicredits,omitempty" mapstructure:"default_run_budget_millicredits,omitempty"`
 
 	// Maximum ReAct iterations across the whole run.
 	MaxIterationsPerRun *int `json:"maxIterationsPerRun,omitempty,omitzero" yaml:"maxIterationsPerRun,omitempty" mapstructure:"maxIterationsPerRun,omitempty"`
@@ -25,8 +26,11 @@ func (j *AgentLimits) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
-	if plain.DefaultRunBudgetCredits != nil && 0 > *plain.DefaultRunBudgetCredits {
-		return fmt.Errorf("field %s: must be >= %v", "defaultRunBudgetCredits", 0)
+	if plain.DefaultRunBudgetMillicredits != nil && 9007199254740991 < *plain.DefaultRunBudgetMillicredits {
+		return fmt.Errorf("field %s: must be <= %v", "default_run_budget_millicredits", 9007199254740991)
+	}
+	if plain.DefaultRunBudgetMillicredits != nil && 0 > *plain.DefaultRunBudgetMillicredits {
+		return fmt.Errorf("field %s: must be >= %v", "default_run_budget_millicredits", 0)
 	}
 	if plain.MaxIterationsPerRun != nil && 1 > *plain.MaxIterationsPerRun {
 		return fmt.Errorf("field %s: must be >= %v", "maxIterationsPerRun", 1)
@@ -136,6 +140,12 @@ func (j *AgentManifest) UnmarshalJSON(value []byte) error {
 	if utf8.RuneCountInString(string(plain.Name)) > 128 {
 		return fmt.Errorf("field %s length: must be <= %d", "name", 128)
 	}
+	if v, ok := raw["rails"]; !ok || v == nil {
+		plain.Rails = []RailSpec{}
+	}
+	if v, ok := raw["tags"]; !ok || v == nil {
+		plain.Tags = []string{}
+	}
 	if plain.Version != nil {
 		if matched, _ := regexp.MatchString(`^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$`, string(*plain.Version)); !matched {
 			return fmt.Errorf("field %s pattern match: must match %s", "Version", `^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$`)
@@ -162,6 +172,30 @@ type AgentPermissions struct {
 
 	// Secrets the agent may be granted.
 	Secrets []SecretDeclaration `json:"secrets,omitempty,omitzero" yaml:"secrets,omitempty" mapstructure:"secrets,omitempty"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AgentPermissions) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	type Plain AgentPermissions
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if v, ok := raw["dataScopes"]; !ok || v == nil {
+		plain.DataScopes = []string{}
+	}
+	if v, ok := raw["effectClasses"]; !ok || v == nil {
+		plain.EffectClasses = []EffectClass{}
+	}
+	if v, ok := raw["secrets"]; !ok || v == nil {
+		plain.Secrets = []SecretDeclaration{}
+	}
+	*j = AgentPermissions(plain)
+	return nil
 }
 
 // A file produced by a run in the sandbox output directory, content-addressed and
@@ -276,6 +310,297 @@ func (j *Artifact) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// A reviewable validation finding.
+type AssetCheckFinding struct {
+	// Check corresponds to the JSON schema field "check".
+	Check AssetCheckKind `json:"check" yaml:"check" mapstructure:"check"`
+
+	// One-based source line.
+	Line *int `json:"line,omitempty,omitzero" yaml:"line,omitempty" mapstructure:"line,omitempty"`
+
+	// Finding with sensitive values redacted.
+	Message string `json:"message" yaml:"message" mapstructure:"message"`
+
+	// Relative file path.
+	Path *string `json:"path,omitempty,omitzero" yaml:"path,omitempty" mapstructure:"path,omitempty"`
+
+	// Stable checker rule identifier.
+	RuleId string `json:"rule_id" yaml:"rule_id" mapstructure:"rule_id"`
+
+	// Required action.
+	Severity AssetCheckFindingSeverity `json:"severity" yaml:"severity" mapstructure:"severity"`
+}
+
+type AssetCheckFindingSeverity string
+
+const AssetCheckFindingSeverityBlock AssetCheckFindingSeverity = "block"
+const AssetCheckFindingSeverityInfo AssetCheckFindingSeverity = "info"
+const AssetCheckFindingSeverityReview AssetCheckFindingSeverity = "review"
+
+var enumValues_AssetCheckFindingSeverity = []interface{}{
+	"block",
+	"review",
+	"info",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AssetCheckFindingSeverity) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_AssetCheckFindingSeverity {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AssetCheckFindingSeverity, v)
+	}
+	*j = AssetCheckFindingSeverity(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AssetCheckFinding) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["check"]; raw != nil && !ok {
+		return fmt.Errorf("field check in AssetCheckFinding: required")
+	}
+	if _, ok := raw["message"]; raw != nil && !ok {
+		return fmt.Errorf("field message in AssetCheckFinding: required")
+	}
+	if _, ok := raw["rule_id"]; raw != nil && !ok {
+		return fmt.Errorf("field rule_id in AssetCheckFinding: required")
+	}
+	if _, ok := raw["severity"]; raw != nil && !ok {
+		return fmt.Errorf("field severity in AssetCheckFinding: required")
+	}
+	type Plain AssetCheckFinding
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if plain.Line != nil && 1 > *plain.Line {
+		return fmt.Errorf("field %s: must be >= %v", "line", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Message)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "message", 1)
+	}
+	if plain.Path != nil && utf8.RuneCountInString(string(*plain.Path)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "path", 1)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.RuleId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "RuleId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
+	}
+	*j = AssetCheckFinding(plain)
+	return nil
+}
+
+// Immutable asset version to check.
+type AssetCheckInput struct {
+	// Asset identifier.
+	AssetId string `json:"asset_id" yaml:"asset_id" mapstructure:"asset_id"`
+
+	// Version being checked.
+	AssetVersionId string `json:"asset_version_id" yaml:"asset_version_id" mapstructure:"asset_version_id"`
+
+	// Object storage key, not a URL.
+	BlobRef string `json:"blob_ref" yaml:"blob_ref" mapstructure:"blob_ref"`
+
+	// Bundle digest = "sha256:" + lowercase hex(SHA-256(concatenation of
+	// "<path>\0<sha256hex>\n", sorted by UTF-8 path bytes)). File hashes in this
+	// preimage are the 64 hex characters without the sha256: prefix. Paths are unique
+	// normalized relative POSIX paths, without NUL, newline, dot or parent
+	// components.
+	ContentDigest string `json:"content_digest" yaml:"content_digest" mapstructure:"content_digest"`
+
+	// Asset kind.
+	Kind AssetCheckInputKind `json:"kind" yaml:"kind" mapstructure:"kind"`
+
+	// Prior version for permission diff.
+	PreviousVersionId *string `json:"previous_version_id,omitempty,omitzero" yaml:"previous_version_id,omitempty" mapstructure:"previous_version_id,omitempty"`
+
+	// Owning tenant.
+	TenantId string `json:"tenant_id" yaml:"tenant_id" mapstructure:"tenant_id"`
+
+	// Wire protocol version; currently 1.
+	V int `json:"v" yaml:"v" mapstructure:"v"`
+}
+
+type AssetCheckInputKind string
+
+const AssetCheckInputKindAgent AssetCheckInputKind = "agent"
+const AssetCheckInputKindMcp AssetCheckInputKind = "mcp"
+const AssetCheckInputKindSkill AssetCheckInputKind = "skill"
+const AssetCheckInputKindTeam AssetCheckInputKind = "team"
+
+var enumValues_AssetCheckInputKind = []interface{}{
+	"agent",
+	"skill",
+	"mcp",
+	"team",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AssetCheckInputKind) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_AssetCheckInputKind {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AssetCheckInputKind, v)
+	}
+	*j = AssetCheckInputKind(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AssetCheckInput) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["asset_id"]; raw != nil && !ok {
+		return fmt.Errorf("field asset_id in AssetCheckInput: required")
+	}
+	if _, ok := raw["asset_version_id"]; raw != nil && !ok {
+		return fmt.Errorf("field asset_version_id in AssetCheckInput: required")
+	}
+	if _, ok := raw["blob_ref"]; raw != nil && !ok {
+		return fmt.Errorf("field blob_ref in AssetCheckInput: required")
+	}
+	if _, ok := raw["content_digest"]; raw != nil && !ok {
+		return fmt.Errorf("field content_digest in AssetCheckInput: required")
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in AssetCheckInput: required")
+	}
+	if _, ok := raw["tenant_id"]; raw != nil && !ok {
+		return fmt.Errorf("field tenant_id in AssetCheckInput: required")
+	}
+	if _, ok := raw["v"]; raw != nil && !ok {
+		return fmt.Errorf("field v in AssetCheckInput: required")
+	}
+	type Plain AssetCheckInput
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(string(plain.BlobRef)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "blob_ref", 1)
+	}
+	if matched, _ := regexp.MatchString(`^sha256:[0-9a-f]{64}$`, string(plain.ContentDigest)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "ContentDigest", `^sha256:[0-9a-f]{64}$`)
+	}
+	if plain.V != 1 {
+		return fmt.Errorf("field %s: must be equal to %v", "v", 1)
+	}
+	if 1 > plain.V {
+		return fmt.Errorf("field %s: must be >= %v", "v", 1)
+	}
+	*j = AssetCheckInput(plain)
+	return nil
+}
+
+type AssetCheckKind string
+
+const AssetCheckKindCompat AssetCheckKind = "compat"
+const AssetCheckKindInjection AssetCheckKind = "injection"
+const AssetCheckKindPermissionDiff AssetCheckKind = "permission_diff"
+const AssetCheckKindSecrets AssetCheckKind = "secrets"
+const AssetCheckKindStatic AssetCheckKind = "static"
+const AssetCheckKindStructure AssetCheckKind = "structure"
+
+var enumValues_AssetCheckKind = []interface{}{
+	"structure",
+	"compat",
+	"secrets",
+	"static",
+	"injection",
+	"permission_diff",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AssetCheckKind) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_AssetCheckKind {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AssetCheckKind, v)
+	}
+	*j = AssetCheckKind(v)
+	return nil
+}
+
+// Result of one checker.
+type AssetCheckReport struct {
+	// Check corresponds to the JSON schema field "check".
+	Check AssetCheckKind `json:"check" yaml:"check" mapstructure:"check"`
+
+	// Checker implementation version.
+	CheckerVersion string `json:"checker_version" yaml:"checker_version" mapstructure:"checker_version"`
+
+	// Elapsed checker time in milliseconds.
+	DurationMs int `json:"duration_ms" yaml:"duration_ms" mapstructure:"duration_ms"`
+
+	// Findings, absent means none.
+	Findings []AssetCheckFinding `json:"findings,omitempty,omitzero" yaml:"findings,omitempty" mapstructure:"findings,omitempty"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AssetCheckReport) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["check"]; raw != nil && !ok {
+		return fmt.Errorf("field check in AssetCheckReport: required")
+	}
+	if _, ok := raw["checker_version"]; raw != nil && !ok {
+		return fmt.Errorf("field checker_version in AssetCheckReport: required")
+	}
+	if _, ok := raw["duration_ms"]; raw != nil && !ok {
+		return fmt.Errorf("field duration_ms in AssetCheckReport: required")
+	}
+	type Plain AssetCheckReport
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(string(plain.CheckerVersion)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "checker_version", 1)
+	}
+	if 0 > plain.DurationMs {
+		return fmt.Errorf("field %s: must be >= %v", "duration_ms", 0)
+	}
+	if v, ok := raw["findings"]; !ok || v == nil {
+		plain.Findings = []AssetCheckFinding{}
+	}
+	*j = AssetCheckReport(plain)
+	return nil
+}
+
 type AssetKind string
 
 const AssetKindAgent AssetKind = "agent"
@@ -323,6 +648,10 @@ type AssignTaskInput struct {
 	// tool set.
 	NarrowedTools []string `json:"narrowed_tools,omitempty,omitzero" yaml:"narrowed_tools,omitempty" mapstructure:"narrowed_tools,omitempty"`
 
+	// Effect key; Temporal Update ID MUST equal request_id for retries to
+	// deduplicate.
+	RequestId string `json:"request_id" yaml:"request_id" mapstructure:"request_id"`
+
 	// Task to assign.
 	TaskId string `json:"task_id" yaml:"task_id" mapstructure:"task_id"`
 }
@@ -339,6 +668,9 @@ func (j *AssignTaskInput) UnmarshalJSON(value []byte) error {
 	if _, ok := raw["member"]; raw != nil && !ok {
 		return fmt.Errorf("field member in AssignTaskInput: required")
 	}
+	if _, ok := raw["request_id"]; raw != nil && !ok {
+		return fmt.Errorf("field request_id in AssignTaskInput: required")
+	}
 	if _, ok := raw["task_id"]; raw != nil && !ok {
 		return fmt.Errorf("field task_id in AssignTaskInput: required")
 	}
@@ -346,6 +678,15 @@ func (j *AssignTaskInput) UnmarshalJSON(value []byte) error {
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if v, ok := raw["narrowed_tools"]; !ok || v == nil {
+		plain.NarrowedTools = []string{}
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.RequestId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "RequestId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.TaskId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "TaskId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
 	}
 	if utf8.RuneCountInString(string(plain.TaskId)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "task_id", 1)
@@ -381,6 +722,42 @@ func (j *BudgetNotice) UnmarshalJSON(value []byte) error {
 		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_BudgetNotice, v)
 	}
 	*j = BudgetNotice(v)
+	return nil
+}
+
+// Key for encrypted checkpoints; not a Temporal payload.
+type CheckpointKeyResponse struct {
+	// Base64 checkpoint key.
+	Key Secret `json:"key" yaml:"key" mapstructure:"key"`
+
+	// Key version.
+	KeyVersion int `json:"key_version" yaml:"key_version" mapstructure:"key_version"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CheckpointKeyResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["key"]; raw != nil && !ok {
+		return fmt.Errorf("field key in CheckpointKeyResponse: required")
+	}
+	if _, ok := raw["key_version"]; raw != nil && !ok {
+		return fmt.Errorf("field key_version in CheckpointKeyResponse: required")
+	}
+	type Plain CheckpointKeyResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(string(plain.Key)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "key", 1)
+	}
+	if 1 > plain.KeyVersion {
+		return fmt.Errorf("field %s: must be >= %v", "key_version", 1)
+	}
+	*j = CheckpointKeyResponse(plain)
 	return nil
 }
 
@@ -420,6 +797,10 @@ type CompleteTaskInput struct {
 	// Caller corresponds to the JSON schema field "caller".
 	Caller MemberName `json:"caller" yaml:"caller" mapstructure:"caller"`
 
+	// Effect key; Temporal Update ID MUST equal request_id for retries to
+	// deduplicate.
+	RequestId string `json:"request_id" yaml:"request_id" mapstructure:"request_id"`
+
 	// The result of the task.
 	ResultText string `json:"result_text" yaml:"result_text" mapstructure:"result_text"`
 
@@ -436,6 +817,9 @@ func (j *CompleteTaskInput) UnmarshalJSON(value []byte) error {
 	if _, ok := raw["caller"]; raw != nil && !ok {
 		return fmt.Errorf("field caller in CompleteTaskInput: required")
 	}
+	if _, ok := raw["request_id"]; raw != nil && !ok {
+		return fmt.Errorf("field request_id in CompleteTaskInput: required")
+	}
 	if _, ok := raw["result_text"]; raw != nil && !ok {
 		return fmt.Errorf("field result_text in CompleteTaskInput: required")
 	}
@@ -447,8 +831,17 @@ func (j *CompleteTaskInput) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
+	if v, ok := raw["artifacts"]; !ok || v == nil {
+		plain.Artifacts = []Artifact{}
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.RequestId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "RequestId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
+	}
 	if utf8.RuneCountInString(string(plain.ResultText)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "result_text", 1)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.TaskId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "TaskId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
 	}
 	if utf8.RuneCountInString(string(plain.TaskId)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "task_id", 1)
@@ -461,6 +854,10 @@ func (j *CompleteTaskInput) UnmarshalJSON(value []byte) error {
 type CreateTasksInput struct {
 	// Caller corresponds to the JSON schema field "caller".
 	Caller MemberName `json:"caller" yaml:"caller" mapstructure:"caller"`
+
+	// Effect key; Temporal Update ID MUST equal request_id for retries to
+	// deduplicate.
+	RequestId string `json:"request_id" yaml:"request_id" mapstructure:"request_id"`
 
 	// Tasks to add, in order.
 	Tasks []NewTask `json:"tasks" yaml:"tasks" mapstructure:"tasks"`
@@ -475,6 +872,9 @@ func (j *CreateTasksInput) UnmarshalJSON(value []byte) error {
 	if _, ok := raw["caller"]; raw != nil && !ok {
 		return fmt.Errorf("field caller in CreateTasksInput: required")
 	}
+	if _, ok := raw["request_id"]; raw != nil && !ok {
+		return fmt.Errorf("field request_id in CreateTasksInput: required")
+	}
 	if _, ok := raw["tasks"]; raw != nil && !ok {
 		return fmt.Errorf("field tasks in CreateTasksInput: required")
 	}
@@ -482,6 +882,9 @@ func (j *CreateTasksInput) UnmarshalJSON(value []byte) error {
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.RequestId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "RequestId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
 	}
 	if plain.Tasks != nil && len(plain.Tasks) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "tasks", 1)
@@ -493,7 +896,7 @@ func (j *CreateTasksInput) UnmarshalJSON(value []byte) error {
 // Result of CreateTasks.
 type CreateTasksOutput struct {
 	// IDs of the created tasks, in the order of the request.
-	TaskIds []string `json:"task_ids" yaml:"task_ids" mapstructure:"task_ids"`
+	TaskIds []string `json:"task_ids,omitempty,omitzero" yaml:"task_ids,omitempty" mapstructure:"task_ids,omitempty"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -502,13 +905,13 @@ func (j *CreateTasksOutput) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
-	if _, ok := raw["task_ids"]; raw != nil && !ok {
-		return fmt.Errorf("field task_ids in CreateTasksOutput: required")
-	}
 	type Plain CreateTasksOutput
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if v, ok := raw["task_ids"]; !ok || v == nil {
+		plain.TaskIds = []string{}
 	}
 	*j = CreateTasksOutput(plain)
 	return nil
@@ -520,6 +923,12 @@ type Decision struct {
 	// The user's answer to the question.
 	Answer *string `json:"answer,omitempty,omitzero" yaml:"answer,omitempty" mapstructure:"answer,omitempty"`
 
+	// Glob using Go path.Match semantics: * matches zero or more non-slash
+	// characters; ? matches one non-slash Unicode character; [ranges], [^ranges] and
+	// backslash escapes follow path.Match. Matches the entire argument string (RFC
+	// 8785 JCS for structured arguments). Invalid patterns are errors.
+	ArgPattern *string `json:"arg_pattern,omitempty,omitzero" yaml:"arg_pattern,omitempty" mapstructure:"arg_pattern,omitempty"`
+
 	// Choice corresponds to the JSON schema field "choice".
 	Choice *DecisionChoice `json:"choice,omitempty,omitzero" yaml:"choice,omitempty" mapstructure:"choice,omitempty"`
 
@@ -528,6 +937,9 @@ type Decision struct {
 
 	// Kind corresponds to the JSON schema field "kind".
 	Kind InteractionKind `json:"kind" yaml:"kind" mapstructure:"kind"`
+
+	// Scope requested for allow_always. Control may narrow this according to policy.
+	Scope *DecisionScope `json:"scope,omitempty,omitzero" yaml:"scope,omitempty" mapstructure:"scope,omitempty"`
 }
 
 type DecisionChoice string
@@ -570,6 +982,36 @@ func (j *DecisionChoice) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+type DecisionScope string
+
+const DecisionScopeUser DecisionScope = "user"
+const DecisionScopeWorkspace DecisionScope = "workspace"
+
+var enumValues_DecisionScope = []interface{}{
+	"user",
+	"workspace",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *DecisionScope) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_DecisionScope {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_DecisionScope, v)
+	}
+	*j = DecisionScope(v)
+	return nil
+}
+
 // UnmarshalJSON implements json.Unmarshaler.
 func (j *Decision) UnmarshalJSON(value []byte) error {
 	var raw map[string]interface{}
@@ -586,6 +1028,9 @@ func (j *Decision) UnmarshalJSON(value []byte) error {
 	}
 	if plain.Answer != nil && utf8.RuneCountInString(string(*plain.Answer)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "answer", 1)
+	}
+	if plain.ArgPattern != nil && utf8.RuneCountInString(string(*plain.ArgPattern)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "arg_pattern", 1)
 	}
 	*j = Decision(plain)
 	return nil
@@ -659,10 +1104,10 @@ func (j *EffectClass) UnmarshalJSON(value []byte) error {
 // tenant, workspace and user policy. Runtime policy can only narrow it further.
 type EffectivePermissions struct {
 	// Data the run may read, for example session_files or workspace_knowledge:read.
-	DataScopes []string `json:"data_scopes" yaml:"data_scopes" mapstructure:"data_scopes"`
+	DataScopes []string `json:"data_scopes,omitempty,omitzero" yaml:"data_scopes,omitempty" mapstructure:"data_scopes,omitempty"`
 
 	// Side-effect classes the run may perform.
-	EffectClasses []EffectClass `json:"effect_classes" yaml:"effect_classes" mapstructure:"effect_classes"`
+	EffectClasses []EffectClass `json:"effect_classes,omitempty,omitzero" yaml:"effect_classes,omitempty" mapstructure:"effect_classes,omitempty"`
 
 	// Network corresponds to the JSON schema field "network".
 	Network NetworkPermissions `json:"network" yaml:"network" mapstructure:"network"`
@@ -671,10 +1116,10 @@ type EffectivePermissions struct {
 	SandboxProfile string `json:"sandbox_profile" yaml:"sandbox_profile" mapstructure:"sandbox_profile"`
 
 	// Secrets the run may be granted.
-	Secrets []SecretRequirement `json:"secrets" yaml:"secrets" mapstructure:"secrets"`
+	Secrets []SecretRequirement `json:"secrets,omitempty,omitzero" yaml:"secrets,omitempty" mapstructure:"secrets,omitempty"`
 
 	// Built-in tools the agent may use.
-	ToolsBuiltin []string `json:"tools_builtin" yaml:"tools_builtin" mapstructure:"tools_builtin"`
+	ToolsBuiltin []string `json:"tools_builtin,omitempty,omitzero" yaml:"tools_builtin,omitempty" mapstructure:"tools_builtin,omitempty"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -683,31 +1128,31 @@ func (j *EffectivePermissions) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
-	if _, ok := raw["data_scopes"]; raw != nil && !ok {
-		return fmt.Errorf("field data_scopes in EffectivePermissions: required")
-	}
-	if _, ok := raw["effect_classes"]; raw != nil && !ok {
-		return fmt.Errorf("field effect_classes in EffectivePermissions: required")
-	}
 	if _, ok := raw["network"]; raw != nil && !ok {
 		return fmt.Errorf("field network in EffectivePermissions: required")
 	}
 	if _, ok := raw["sandbox_profile"]; raw != nil && !ok {
 		return fmt.Errorf("field sandbox_profile in EffectivePermissions: required")
 	}
-	if _, ok := raw["secrets"]; raw != nil && !ok {
-		return fmt.Errorf("field secrets in EffectivePermissions: required")
-	}
-	if _, ok := raw["tools_builtin"]; raw != nil && !ok {
-		return fmt.Errorf("field tools_builtin in EffectivePermissions: required")
-	}
 	type Plain EffectivePermissions
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
+	if v, ok := raw["data_scopes"]; !ok || v == nil {
+		plain.DataScopes = []string{}
+	}
+	if v, ok := raw["effect_classes"]; !ok || v == nil {
+		plain.EffectClasses = []EffectClass{}
+	}
 	if utf8.RuneCountInString(string(plain.SandboxProfile)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "sandbox_profile", 1)
+	}
+	if v, ok := raw["secrets"]; !ok || v == nil {
+		plain.Secrets = []SecretRequirement{}
+	}
+	if v, ok := raw["tools_builtin"]; !ok || v == nil {
+		plain.ToolsBuiltin = []string{}
 	}
 	*j = EffectivePermissions(plain)
 	return nil
@@ -834,6 +1279,7 @@ const EventTypeRunFailed EventType = "run.failed"
 const EventTypeRunStarted EventType = "run.started"
 const EventTypeRunStatus EventType = "run.status"
 const EventTypeSandboxOutput EventType = "sandbox.output"
+const EventTypeSandboxRestored EventType = "sandbox.restored"
 const EventTypeSegmentEnded EventType = "segment.ended"
 const EventTypeSegmentStarted EventType = "segment.started"
 const EventTypeTeamMemberStatus EventType = "team.member.status"
@@ -867,6 +1313,7 @@ var enumValues_EventType = []interface{}{
 	"team.message",
 	"usage.update",
 	"error",
+	"sandbox.restored",
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -921,6 +1368,9 @@ func (j *FinalMessage) UnmarshalJSON(value []byte) error {
 	if plain.ContentRef != nil && utf8.RuneCountInString(string(*plain.ContentRef)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "content_ref", 1)
 	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.MessageId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "MessageId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
+	}
 	if utf8.RuneCountInString(string(plain.MessageId)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "message_id", 1)
 	}
@@ -933,6 +1383,10 @@ func (j *FinalMessage) UnmarshalJSON(value []byte) error {
 type FinishTeamInput struct {
 	// Caller corresponds to the JSON schema field "caller".
 	Caller MemberName `json:"caller" yaml:"caller" mapstructure:"caller"`
+
+	// Effect key; Temporal Update ID MUST equal request_id for retries to
+	// deduplicate.
+	RequestId string `json:"request_id" yaml:"request_id" mapstructure:"request_id"`
 
 	// What the team accomplished.
 	Summary string `json:"summary" yaml:"summary" mapstructure:"summary"`
@@ -947,6 +1401,9 @@ func (j *FinishTeamInput) UnmarshalJSON(value []byte) error {
 	if _, ok := raw["caller"]; raw != nil && !ok {
 		return fmt.Errorf("field caller in FinishTeamInput: required")
 	}
+	if _, ok := raw["request_id"]; raw != nil && !ok {
+		return fmt.Errorf("field request_id in FinishTeamInput: required")
+	}
 	if _, ok := raw["summary"]; raw != nil && !ok {
 		return fmt.Errorf("field summary in FinishTeamInput: required")
 	}
@@ -954,6 +1411,9 @@ func (j *FinishTeamInput) UnmarshalJSON(value []byte) error {
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.RequestId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "RequestId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
 	}
 	if utf8.RuneCountInString(string(plain.Summary)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "summary", 1)
@@ -965,7 +1425,7 @@ func (j *FinishTeamInput) UnmarshalJSON(value []byte) error {
 // A run lock and the means to fetch every file in it.
 type GetLockResponse struct {
 	// One element per file of every entry of the lock.
-	Contents []LockFileContent `json:"contents" yaml:"contents" mapstructure:"contents"`
+	Contents []LockFileContent `json:"contents,omitempty,omitzero" yaml:"contents,omitempty" mapstructure:"contents,omitempty"`
 
 	// Lock corresponds to the JSON schema field "lock".
 	Lock RunLock `json:"lock" yaml:"lock" mapstructure:"lock"`
@@ -977,9 +1437,6 @@ func (j *GetLockResponse) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
-	if _, ok := raw["contents"]; raw != nil && !ok {
-		return fmt.Errorf("field contents in GetLockResponse: required")
-	}
 	if _, ok := raw["lock"]; raw != nil && !ok {
 		return fmt.Errorf("field lock in GetLockResponse: required")
 	}
@@ -987,6 +1444,9 @@ func (j *GetLockResponse) UnmarshalJSON(value []byte) error {
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if v, ok := raw["contents"]; !ok || v == nil {
+		plain.Contents = []LockFileContent{}
 	}
 	*j = GetLockResponse(plain)
 	return nil
@@ -1057,8 +1517,12 @@ func (j *InteractionKind) UnmarshalJSON(value []byte) error {
 }
 
 // A request for a decision. Exactly the member that matches kind is present: tool
-// for tool_approval, question for ask_user, effect for effect_uncertain.
+// for tool_approval, question for ask_user, effect for effect_uncertain. A segment
+// emits at most one interaction; parallel tool approvals are merged into calls[].
 type InteractionRequest struct {
+	// All parallel calls requiring approval in this segment.
+	Calls []ToolApprovalRequest `json:"calls,omitempty,omitzero" yaml:"calls,omitempty" mapstructure:"calls,omitempty"`
+
 	// Effect corresponds to the JSON schema field "effect".
 	Effect *UncertainEffect `json:"effect,omitempty,omitzero" yaml:"effect,omitempty" mapstructure:"effect,omitempty"`
 
@@ -1070,9 +1534,6 @@ type InteractionRequest struct {
 
 	// Question corresponds to the JSON schema field "question".
 	Question *Question `json:"question,omitempty,omitzero" yaml:"question,omitempty" mapstructure:"question,omitempty"`
-
-	// Tool corresponds to the JSON schema field "tool".
-	Tool *ToolApprovalRequest `json:"tool,omitempty,omitzero" yaml:"tool,omitempty" mapstructure:"tool,omitempty"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -1091,6 +1552,12 @@ func (j *InteractionRequest) UnmarshalJSON(value []byte) error {
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if plain.Calls != nil && len(plain.Calls) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "calls", 1)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.InteractionId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "InteractionId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
 	}
 	if utf8.RuneCountInString(string(plain.InteractionId)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "interaction_id", 1)
@@ -1161,6 +1628,9 @@ func (j *InteractionResolved) UnmarshalJSON(value []byte) error {
 	if utf8.RuneCountInString(string(plain.Actor)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "actor", 1)
 	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.InteractionId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "InteractionId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
+	}
 	if utf8.RuneCountInString(string(plain.InteractionId)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "interaction_id", 1)
 	}
@@ -1170,11 +1640,15 @@ func (j *InteractionResolved) UnmarshalJSON(value []byte) error {
 
 // One resolved asset version.
 type LockEntry struct {
-	// Merkle digest over the paths and file digests of the version.
+	// Bundle digest = "sha256:" + lowercase hex(SHA-256(concatenation of
+	// "<path>\0<sha256hex>\n", sorted by UTF-8 path bytes)). File hashes in this
+	// preimage are the 64 hex characters without the sha256: prefix. Paths are unique
+	// normalized relative POSIX paths, without NUL, newline, dot or parent
+	// components.
 	Digest string `json:"digest" yaml:"digest" mapstructure:"digest"`
 
 	// Files of the version, sorted by path.
-	Files []LockFile `json:"files" yaml:"files" mapstructure:"files"`
+	Files []LockFile `json:"files,omitempty,omitzero" yaml:"files,omitempty" mapstructure:"files,omitempty"`
 
 	// Kind corresponds to the JSON schema field "kind".
 	Kind AssetKind `json:"kind" yaml:"kind" mapstructure:"kind"`
@@ -1237,9 +1711,6 @@ func (j *LockEntry) UnmarshalJSON(value []byte) error {
 	if _, ok := raw["digest"]; raw != nil && !ok {
 		return fmt.Errorf("field digest in LockEntry: required")
 	}
-	if _, ok := raw["files"]; raw != nil && !ok {
-		return fmt.Errorf("field files in LockEntry: required")
-	}
 	if _, ok := raw["kind"]; raw != nil && !ok {
 		return fmt.Errorf("field kind in LockEntry: required")
 	}
@@ -1257,6 +1728,9 @@ func (j *LockEntry) UnmarshalJSON(value []byte) error {
 	if matched, _ := regexp.MatchString(`^sha256:[0-9a-f]{64}$`, string(plain.Digest)); !matched {
 		return fmt.Errorf("field %s pattern match: must match %s", "Digest", `^sha256:[0-9a-f]{64}$`)
 	}
+	if v, ok := raw["files"]; !ok || v == nil {
+		plain.Files = []LockFile{}
+	}
 	if utf8.RuneCountInString(string(plain.Ref)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "ref", 1)
 	}
@@ -1272,7 +1746,7 @@ type LockFile struct {
 	// Relative, normalized path inside the bundle.
 	Path string `json:"path" yaml:"path" mapstructure:"path"`
 
-	// Hex sha256 of the content; the blob is stored under this key.
+	// SHA-256 file content digest as sha256:<64 lowercase hex>.
 	Sha256 string `json:"sha256" yaml:"sha256" mapstructure:"sha256"`
 
 	// Size of the content in bytes.
@@ -1284,7 +1758,7 @@ type LockFile struct {
 // present.
 type LockFileContent struct {
 	// Pre-signed object store URL of the content.
-	BlobUrl *string `json:"blob_url,omitempty,omitzero" yaml:"blob_url,omitempty" mapstructure:"blob_url,omitempty"`
+	BlobUrl *Secret `json:"blob_url,omitempty,omitzero" yaml:"blob_url,omitempty" mapstructure:"blob_url,omitempty"`
 
 	// Kind corresponds to the JSON schema field "kind".
 	Kind AssetKind `json:"kind" yaml:"kind" mapstructure:"kind"`
@@ -1295,7 +1769,7 @@ type LockFileContent struct {
 	// Asset reference of the entry the file belongs to.
 	Ref string `json:"ref" yaml:"ref" mapstructure:"ref"`
 
-	// Hex sha256 of the content; the worker verifies it.
+	// SHA-256 file content digest as sha256:<64 lowercase hex>.
 	Sha256 string `json:"sha256" yaml:"sha256" mapstructure:"sha256"`
 
 	// The content itself, for small UTF-8 text files.
@@ -1331,14 +1805,19 @@ func (j *LockFileContent) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
+	if plain.BlobUrl != nil {
+		if matched, _ := regexp.MatchString(`^https?://`, string(*plain.BlobUrl)); !matched {
+			return fmt.Errorf("field %s pattern match: must match %s", "BlobUrl", `^https?://`)
+		}
+	}
 	if utf8.RuneCountInString(string(plain.Path)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "path", 1)
 	}
 	if utf8.RuneCountInString(string(plain.Ref)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "ref", 1)
 	}
-	if matched, _ := regexp.MatchString(`^[0-9a-f]{64}$`, string(plain.Sha256)); !matched {
-		return fmt.Errorf("field %s pattern match: must match %s", "Sha256", `^[0-9a-f]{64}$`)
+	if matched, _ := regexp.MatchString(`^sha256:[0-9a-f]{64}$`, string(plain.Sha256)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Sha256", `^sha256:[0-9a-f]{64}$`)
 	}
 	if utf8.RuneCountInString(string(plain.Version)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "version", 1)
@@ -1370,13 +1849,79 @@ func (j *LockFile) UnmarshalJSON(value []byte) error {
 	if utf8.RuneCountInString(string(plain.Path)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "path", 1)
 	}
-	if matched, _ := regexp.MatchString(`^[0-9a-f]{64}$`, string(plain.Sha256)); !matched {
-		return fmt.Errorf("field %s pattern match: must match %s", "Sha256", `^[0-9a-f]{64}$`)
+	if matched, _ := regexp.MatchString(`^sha256:[0-9a-f]{64}$`, string(plain.Sha256)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Sha256", `^sha256:[0-9a-f]{64}$`)
 	}
 	if 0 > plain.SizeBytes {
 		return fmt.Errorf("field %s: must be >= %v", "size_bytes", 0)
 	}
 	*j = LockFile(plain)
+	return nil
+}
+
+// Resolved member. All entry references are zero-based indexes into this
+// RunLock.entries; agent_entry selects an agent, skills select skills, mcp selects
+// mcp_server entries.
+type LockMember struct {
+	// Zero-based index of the member agent in entries.
+	AgentEntry int `json:"agent_entry" yaml:"agent_entry" mapstructure:"agent_entry"`
+
+	// Description used for task assignment.
+	Description string `json:"description" yaml:"description" mapstructure:"description"`
+
+	// EffectivePermissions corresponds to the JSON schema field
+	// "effective_permissions".
+	EffectivePermissions EffectivePermissions `json:"effective_permissions" yaml:"effective_permissions" mapstructure:"effective_permissions"`
+
+	// MCP entry indexes.
+	Mcp []int `json:"mcp,omitempty,omitzero" yaml:"mcp,omitempty" mapstructure:"mcp,omitempty"`
+
+	// Name corresponds to the JSON schema field "name".
+	Name MemberName `json:"name" yaml:"name" mapstructure:"name"`
+
+	// Role corresponds to the JSON schema field "role".
+	Role TeamRole `json:"role" yaml:"role" mapstructure:"role"`
+
+	// Skill entry indexes.
+	Skills []int `json:"skills,omitempty,omitzero" yaml:"skills,omitempty" mapstructure:"skills,omitempty"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *LockMember) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["agent_entry"]; raw != nil && !ok {
+		return fmt.Errorf("field agent_entry in LockMember: required")
+	}
+	if _, ok := raw["description"]; raw != nil && !ok {
+		return fmt.Errorf("field description in LockMember: required")
+	}
+	if _, ok := raw["effective_permissions"]; raw != nil && !ok {
+		return fmt.Errorf("field effective_permissions in LockMember: required")
+	}
+	if _, ok := raw["name"]; raw != nil && !ok {
+		return fmt.Errorf("field name in LockMember: required")
+	}
+	if _, ok := raw["role"]; raw != nil && !ok {
+		return fmt.Errorf("field role in LockMember: required")
+	}
+	type Plain LockMember
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if 0 > plain.AgentEntry {
+		return fmt.Errorf("field %s: must be >= %v", "agent_entry", 0)
+	}
+	if v, ok := raw["mcp"]; !ok || v == nil {
+		plain.Mcp = []int{}
+	}
+	if v, ok := raw["skills"]; !ok || v == nil {
+		plain.Skills = []int{}
+	}
+	*j = LockMember(plain)
 	return nil
 }
 
@@ -1423,6 +1968,9 @@ func (j *MailboxMessage) UnmarshalJSON(value []byte) error {
 	}
 	if utf8.RuneCountInString(string(plain.From)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "from", 1)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.MessageId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "MessageId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
 	}
 	if utf8.RuneCountInString(string(plain.MessageId)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "message_id", 1)
@@ -1482,6 +2030,9 @@ type McpServer struct {
 	// publisher/name@range.
 	Ref *string `json:"ref,omitempty,omitzero" yaml:"ref,omitempty" mapstructure:"ref,omitempty"`
 
+	// Per-tool side-effect class, keyed by tool name.
+	Tools McpServerTools `json:"tools,omitempty,omitzero" yaml:"tools,omitempty" mapstructure:"tools,omitempty"`
+
 	// Transport corresponds to the JSON schema field "transport".
 	Transport *McpTransport `json:"transport,omitempty,omitzero" yaml:"transport,omitempty" mapstructure:"transport,omitempty"`
 
@@ -1495,12 +2046,22 @@ type McpServerEnv map[string]string
 // Request headers; secret values only as ${secret:NAME}.
 type McpServerHeaders map[string]string
 
+// Per-tool side-effect class, keyed by tool name.
+type McpServerTools map[string]McpTool
+
 // UnmarshalJSON implements json.Unmarshaler.
 func (j *McpServer) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
 	type Plain McpServer
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if v, ok := raw["args"]; !ok || v == nil {
+		plain.Args = []string{}
 	}
 	if plain.Command != nil && utf8.RuneCountInString(string(*plain.Command)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "command", 1)
@@ -1508,7 +2069,36 @@ func (j *McpServer) UnmarshalJSON(value []byte) error {
 	if plain.Ref != nil && utf8.RuneCountInString(string(*plain.Ref)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "ref", 1)
 	}
+	if plain.Url != nil {
+		if matched, _ := regexp.MatchString(`^https?://`, string(*plain.Url)); !matched {
+			return fmt.Errorf("field %s pattern match: must match %s", "Url", `^https?://`)
+		}
+	}
 	*j = McpServer(plain)
+	return nil
+}
+
+// Policy metadata for one MCP tool.
+type McpTool struct {
+	// EffectClass corresponds to the JSON schema field "effectClass".
+	EffectClass EffectClass `json:"effectClass" yaml:"effectClass" mapstructure:"effectClass"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *McpTool) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["effectClass"]; raw != nil && !ok {
+		return fmt.Errorf("field effectClass in McpTool: required")
+	}
+	type Plain McpTool
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = McpTool(plain)
 	return nil
 }
 
@@ -1595,6 +2185,57 @@ func (j *MemberStatus) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// An uploaded file reference; no file bytes in Temporal history.
+type MessageAttachment struct {
+	// Uploaded file identifier.
+	FileId string `json:"file_id" yaml:"file_id" mapstructure:"file_id"`
+
+	// Media type.
+	MediaType string `json:"media_type" yaml:"media_type" mapstructure:"media_type"`
+
+	// Display file name.
+	Name string `json:"name" yaml:"name" mapstructure:"name"`
+
+	// File size in bytes.
+	SizeBytes int `json:"size_bytes" yaml:"size_bytes" mapstructure:"size_bytes"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *MessageAttachment) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["file_id"]; raw != nil && !ok {
+		return fmt.Errorf("field file_id in MessageAttachment: required")
+	}
+	if _, ok := raw["media_type"]; raw != nil && !ok {
+		return fmt.Errorf("field media_type in MessageAttachment: required")
+	}
+	if _, ok := raw["name"]; raw != nil && !ok {
+		return fmt.Errorf("field name in MessageAttachment: required")
+	}
+	if _, ok := raw["size_bytes"]; raw != nil && !ok {
+		return fmt.Errorf("field size_bytes in MessageAttachment: required")
+	}
+	type Plain MessageAttachment
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(string(plain.MediaType)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "media_type", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Name)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "name", 1)
+	}
+	if 0 > plain.SizeBytes {
+		return fmt.Errorf("field %s: must be >= %v", "size_bytes", 0)
+	}
+	*j = MessageAttachment(plain)
+	return nil
+}
+
 // A chunk of assistant output. Not persisted.
 type MessageDelta struct {
 	// Text to append.
@@ -1620,6 +2261,9 @@ func (j *MessageDelta) UnmarshalJSON(value []byte) error {
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.MessageId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "MessageId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
 	}
 	if utf8.RuneCountInString(string(plain.MessageId)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "message_id", 1)
@@ -1658,6 +2302,9 @@ func (j *MessageFinal) UnmarshalJSON(value []byte) error {
 	if plain.ContentRef != nil && utf8.RuneCountInString(string(*plain.ContentRef)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "content_ref", 1)
 	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.MessageId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "MessageId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
+	}
 	if utf8.RuneCountInString(string(plain.MessageId)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "message_id", 1)
 	}
@@ -1669,10 +2316,13 @@ func (j *MessageFinal) UnmarshalJSON(value []byte) error {
 // segment from the tenant model profile. It never enters Temporal history.
 type ModelCredentials struct {
 	// Bearer key for the API.
-	ApiKey string `json:"api_key" yaml:"api_key" mapstructure:"api_key"`
+	ApiKey Secret `json:"api_key" yaml:"api_key" mapstructure:"api_key"`
 
 	// Base URL of the API.
 	BaseUrl string `json:"base_url" yaml:"base_url" mapstructure:"base_url"`
+
+	// Maximum context tokens.
+	ContextWindow *int `json:"context_window,omitempty,omitzero" yaml:"context_window,omitempty" mapstructure:"context_window,omitempty"`
 
 	// When the key stops working.
 	ExpiresAt time.Time `json:"expires_at" yaml:"expires_at" mapstructure:"expires_at"`
@@ -1682,6 +2332,9 @@ type ModelCredentials struct {
 
 	// Default request parameters of the profile, such as temperature or max_tokens.
 	Params ModelCredentialsParams `json:"params" yaml:"params" mapstructure:"params"`
+
+	// Pricing corresponds to the JSON schema field "pricing".
+	Pricing ModelPricing `json:"pricing" yaml:"pricing" mapstructure:"pricing"`
 }
 
 // Default request parameters of the profile, such as temperature or max_tokens.
@@ -1708,6 +2361,9 @@ func (j *ModelCredentials) UnmarshalJSON(value []byte) error {
 	if _, ok := raw["params"]; raw != nil && !ok {
 		return fmt.Errorf("field params in ModelCredentials: required")
 	}
+	if _, ok := raw["pricing"]; raw != nil && !ok {
+		return fmt.Errorf("field pricing in ModelCredentials: required")
+	}
 	type Plain ModelCredentials
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
@@ -1716,10 +2372,83 @@ func (j *ModelCredentials) UnmarshalJSON(value []byte) error {
 	if utf8.RuneCountInString(string(plain.ApiKey)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "api_key", 1)
 	}
+	if matched, _ := regexp.MatchString(`^https?://`, string(plain.BaseUrl)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "BaseUrl", `^https?://`)
+	}
+	if plain.ContextWindow != nil && 1 > *plain.ContextWindow {
+		return fmt.Errorf("field %s: must be >= %v", "context_window", 1)
+	}
 	if utf8.RuneCountInString(string(plain.Model)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "model", 1)
 	}
 	*j = ModelCredentials(plain)
+	return nil
+}
+
+// Millicredits per million tokens. Cost per token category = ceil(tokens * price /
+// 1000000); sum category costs using integers.
+type ModelPricing struct {
+	// Price per million cache_read tokens.
+	CacheReadPerMtokMillicredits int64 `json:"cache_read_per_mtok_millicredits" yaml:"cache_read_per_mtok_millicredits" mapstructure:"cache_read_per_mtok_millicredits"`
+
+	// Price per million cache_write tokens.
+	CacheWritePerMtokMillicredits int64 `json:"cache_write_per_mtok_millicredits" yaml:"cache_write_per_mtok_millicredits" mapstructure:"cache_write_per_mtok_millicredits"`
+
+	// Price per million input tokens.
+	InputPerMtokMillicredits int64 `json:"input_per_mtok_millicredits" yaml:"input_per_mtok_millicredits" mapstructure:"input_per_mtok_millicredits"`
+
+	// Price per million output tokens.
+	OutputPerMtokMillicredits int64 `json:"output_per_mtok_millicredits" yaml:"output_per_mtok_millicredits" mapstructure:"output_per_mtok_millicredits"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ModelPricing) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["cache_read_per_mtok_millicredits"]; raw != nil && !ok {
+		return fmt.Errorf("field cache_read_per_mtok_millicredits in ModelPricing: required")
+	}
+	if _, ok := raw["cache_write_per_mtok_millicredits"]; raw != nil && !ok {
+		return fmt.Errorf("field cache_write_per_mtok_millicredits in ModelPricing: required")
+	}
+	if _, ok := raw["input_per_mtok_millicredits"]; raw != nil && !ok {
+		return fmt.Errorf("field input_per_mtok_millicredits in ModelPricing: required")
+	}
+	if _, ok := raw["output_per_mtok_millicredits"]; raw != nil && !ok {
+		return fmt.Errorf("field output_per_mtok_millicredits in ModelPricing: required")
+	}
+	type Plain ModelPricing
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if 9007199254740991 < plain.CacheReadPerMtokMillicredits {
+		return fmt.Errorf("field %s: must be <= %v", "cache_read_per_mtok_millicredits", 9007199254740991)
+	}
+	if 0 > plain.CacheReadPerMtokMillicredits {
+		return fmt.Errorf("field %s: must be >= %v", "cache_read_per_mtok_millicredits", 0)
+	}
+	if 9007199254740991 < plain.CacheWritePerMtokMillicredits {
+		return fmt.Errorf("field %s: must be <= %v", "cache_write_per_mtok_millicredits", 9007199254740991)
+	}
+	if 0 > plain.CacheWritePerMtokMillicredits {
+		return fmt.Errorf("field %s: must be >= %v", "cache_write_per_mtok_millicredits", 0)
+	}
+	if 9007199254740991 < plain.InputPerMtokMillicredits {
+		return fmt.Errorf("field %s: must be <= %v", "input_per_mtok_millicredits", 9007199254740991)
+	}
+	if 0 > plain.InputPerMtokMillicredits {
+		return fmt.Errorf("field %s: must be >= %v", "input_per_mtok_millicredits", 0)
+	}
+	if 9007199254740991 < plain.OutputPerMtokMillicredits {
+		return fmt.Errorf("field %s: must be <= %v", "output_per_mtok_millicredits", 9007199254740991)
+	}
+	if 0 > plain.OutputPerMtokMillicredits {
+		return fmt.Errorf("field %s: must be >= %v", "output_per_mtok_millicredits", 0)
+	}
+	*j = ModelPricing(plain)
 	return nil
 }
 
@@ -1745,6 +2474,9 @@ func (j *ModelSelection) UnmarshalJSON(value []byte) error {
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if v, ok := raw["fallback"]; !ok || v == nil {
+		plain.Fallback = []string{}
 	}
 	if utf8.RuneCountInString(string(plain.Profile)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "profile", 1)
@@ -1789,10 +2521,28 @@ type NetworkDeclaration struct {
 	Egress []string `json:"egress,omitempty,omitzero" yaml:"egress,omitempty" mapstructure:"egress,omitempty"`
 }
 
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *NetworkDeclaration) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	type Plain NetworkDeclaration
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if v, ok := raw["egress"]; !ok || v == nil {
+		plain.Egress = []string{}
+	}
+	*j = NetworkDeclaration(plain)
+	return nil
+}
+
 // Network rights of the run.
 type NetworkPermissions struct {
 	// Domain patterns the sandbox may reach; everything else is denied.
-	Egress []string `json:"egress" yaml:"egress" mapstructure:"egress"`
+	Egress []string `json:"egress,omitempty,omitzero" yaml:"egress,omitempty" mapstructure:"egress,omitempty"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -1801,13 +2551,13 @@ func (j *NetworkPermissions) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
-	if _, ok := raw["egress"]; raw != nil && !ok {
-		return fmt.Errorf("field egress in NetworkPermissions: required")
-	}
 	type Plain NetworkPermissions
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if v, ok := raw["egress"]; !ok || v == nil {
+		plain.Egress = []string{}
 	}
 	*j = NetworkPermissions(plain)
 	return nil
@@ -1820,10 +2570,16 @@ type NewTask struct {
 
 	// Task IDs of tasks that already exist on the board and must be completed first.
 	// A DAG is built by creating tasks in dependency order.
-	Deps []string `json:"deps" yaml:"deps" mapstructure:"deps"`
+	Deps []string `json:"deps,omitempty,omitzero" yaml:"deps,omitempty" mapstructure:"deps,omitempty"`
 
 	// What to do and what done looks like.
 	Description string `json:"description" yaml:"description" mapstructure:"description"`
+
+	// Tools allowed for this task; only narrows member permissions.
+	NarrowedTools []string `json:"narrowed_tools,omitempty,omitzero" yaml:"narrowed_tools,omitempty" mapstructure:"narrowed_tools,omitempty"`
+
+	// Object reference of a longer task specification.
+	SpecRef *string `json:"spec_ref,omitempty,omitzero" yaml:"spec_ref,omitempty" mapstructure:"spec_ref,omitempty"`
 
 	// Short title.
 	Title string `json:"title" yaml:"title" mapstructure:"title"`
@@ -1834,9 +2590,6 @@ func (j *NewTask) UnmarshalJSON(value []byte) error {
 	var raw map[string]interface{}
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
-	}
-	if _, ok := raw["deps"]; raw != nil && !ok {
-		return fmt.Errorf("field deps in NewTask: required")
 	}
 	if _, ok := raw["description"]; raw != nil && !ok {
 		return fmt.Errorf("field description in NewTask: required")
@@ -1849,8 +2602,17 @@ func (j *NewTask) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
+	if v, ok := raw["deps"]; !ok || v == nil {
+		plain.Deps = []string{}
+	}
 	if utf8.RuneCountInString(string(plain.Description)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "description", 1)
+	}
+	if v, ok := raw["narrowed_tools"]; !ok || v == nil {
+		plain.NarrowedTools = []string{}
+	}
+	if plain.SpecRef != nil && utf8.RuneCountInString(string(*plain.SpecRef)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "spec_ref", 1)
 	}
 	if utf8.RuneCountInString(string(plain.Title)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "title", 1)
@@ -1861,8 +2623,17 @@ func (j *NewTask) UnmarshalJSON(value []byte) error {
 
 // A standing permission a user gave with allow_always or allow_session.
 type PermissionGrant struct {
-	// Pattern the call arguments must match; every call of the tool when absent.
+	// Glob using Go path.Match semantics: * matches zero or more non-slash
+	// characters; ? matches one non-slash Unicode character; [ranges], [^ranges] and
+	// backslash escapes follow path.Match. Matches the entire argument string (RFC
+	// 8785 JCS for structured arguments). Invalid patterns are errors.
 	ArgPattern *string `json:"arg_pattern,omitempty,omitzero" yaml:"arg_pattern,omitempty" mapstructure:"arg_pattern,omitempty"`
+
+	// Grant expiration.
+	ExpiresAt time.Time `json:"expires_at" yaml:"expires_at" mapstructure:"expires_at"`
+
+	// Human decision that authorized this grant.
+	InteractionId string `json:"interaction_id" yaml:"interaction_id" mapstructure:"interaction_id"`
 
 	// Scope corresponds to the JSON schema field "scope".
 	Scope GrantScope `json:"scope" yaml:"scope" mapstructure:"scope"`
@@ -1876,6 +2647,12 @@ func (j *PermissionGrant) UnmarshalJSON(value []byte) error {
 	var raw map[string]interface{}
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
+	}
+	if _, ok := raw["expires_at"]; raw != nil && !ok {
+		return fmt.Errorf("field expires_at in PermissionGrant: required")
+	}
+	if _, ok := raw["interaction_id"]; raw != nil && !ok {
+		return fmt.Errorf("field interaction_id in PermissionGrant: required")
 	}
 	if _, ok := raw["scope"]; raw != nil && !ok {
 		return fmt.Errorf("field scope in PermissionGrant: required")
@@ -1898,53 +2675,14 @@ func (j *PermissionGrant) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// Records an allow_always (or allow_session) decision as a permission grant.
-type PersistGrantRequest struct {
-	// Pattern the call arguments must match; every call of the tool when absent.
-	ArgPattern *string `json:"arg_pattern,omitempty,omitzero" yaml:"arg_pattern,omitempty" mapstructure:"arg_pattern,omitempty"`
-
-	// Scope corresponds to the JSON schema field "scope".
-	Scope GrantScope `json:"scope" yaml:"scope" mapstructure:"scope"`
-
-	// Tool name.
-	Tool string `json:"tool" yaml:"tool" mapstructure:"tool"`
-}
-
-// UnmarshalJSON implements json.Unmarshaler.
-func (j *PersistGrantRequest) UnmarshalJSON(value []byte) error {
-	var raw map[string]interface{}
-	if err := json.Unmarshal(value, &raw); err != nil {
-		return err
-	}
-	if _, ok := raw["scope"]; raw != nil && !ok {
-		return fmt.Errorf("field scope in PersistGrantRequest: required")
-	}
-	if _, ok := raw["tool"]; raw != nil && !ok {
-		return fmt.Errorf("field tool in PersistGrantRequest: required")
-	}
-	type Plain PersistGrantRequest
-	var plain Plain
-	if err := json.Unmarshal(value, &plain); err != nil {
-		return err
-	}
-	if plain.ArgPattern != nil && utf8.RuneCountInString(string(*plain.ArgPattern)) < 1 {
-		return fmt.Errorf("field %s length: must be >= %d", "arg_pattern", 1)
-	}
-	if utf8.RuneCountInString(string(plain.Tool)) < 1 {
-		return fmt.Errorf("field %s length: must be >= %d", "tool", 1)
-	}
-	*j = PersistGrantRequest(plain)
-	return nil
-}
-
 // Tool policy of the run as of the start of a segment: the tenant and workspace
 // rules and the grants that turn ask into allow. A grant never overrides deny.
 type PolicySnapshot struct {
 	// Grants in force for the run's principal.
-	Grants []PermissionGrant `json:"grants" yaml:"grants" mapstructure:"grants"`
+	Grants []PermissionGrant `json:"grants,omitempty,omitzero" yaml:"grants,omitempty" mapstructure:"grants,omitempty"`
 
 	// Rules in precedence order.
-	ToolRules []ToolRule `json:"tool_rules" yaml:"tool_rules" mapstructure:"tool_rules"`
+	ToolRules []ToolRule `json:"tool_rules,omitempty,omitzero" yaml:"tool_rules,omitempty" mapstructure:"tool_rules,omitempty"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -1953,16 +2691,16 @@ func (j *PolicySnapshot) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
-	if _, ok := raw["grants"]; raw != nil && !ok {
-		return fmt.Errorf("field grants in PolicySnapshot: required")
-	}
-	if _, ok := raw["tool_rules"]; raw != nil && !ok {
-		return fmt.Errorf("field tool_rules in PolicySnapshot: required")
-	}
 	type Plain PolicySnapshot
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if v, ok := raw["grants"]; !ok || v == nil {
+		plain.Grants = []PermissionGrant{}
+	}
+	if v, ok := raw["tool_rules"]; !ok || v == nil {
+		plain.ToolRules = []ToolRule{}
 	}
 	*j = PolicySnapshot(plain)
 	return nil
@@ -1990,6 +2728,9 @@ func (j *Question) UnmarshalJSON(value []byte) error {
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if v, ok := raw["options"]; !ok || v == nil {
+		plain.Options = []string{}
 	}
 	if utf8.RuneCountInString(string(plain.Text)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "text", 1)
@@ -2036,6 +2777,9 @@ func (j *RailSpec) UnmarshalJSON(value []byte) error {
 type ReasoningDelta struct {
 	// Text to append.
 	Delta string `json:"delta" yaml:"delta" mapstructure:"delta"`
+
+	// Message from the same model call as this reasoning.
+	MessageId string `json:"message_id" yaml:"message_id" mapstructure:"message_id"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -2047,10 +2791,16 @@ func (j *ReasoningDelta) UnmarshalJSON(value []byte) error {
 	if _, ok := raw["delta"]; raw != nil && !ok {
 		return fmt.Errorf("field delta in ReasoningDelta: required")
 	}
+	if _, ok := raw["message_id"]; raw != nil && !ok {
+		return fmt.Errorf("field message_id in ReasoningDelta: required")
+	}
 	type Plain ReasoningDelta
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.MessageId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "MessageId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
 	}
 	*j = ReasoningDelta(plain)
 	return nil
@@ -2108,8 +2858,47 @@ func (j *ReviewPolicy) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// One reviewer vote.
+type ReviewVote struct {
+	// Explanation of the vote.
+	Comment string `json:"comment" yaml:"comment" mapstructure:"comment"`
+
+	// Reviewer corresponds to the JSON schema field "reviewer".
+	Reviewer MemberName `json:"reviewer" yaml:"reviewer" mapstructure:"reviewer"`
+
+	// Verdict corresponds to the JSON schema field "verdict".
+	Verdict Verdict `json:"verdict" yaml:"verdict" mapstructure:"verdict"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReviewVote) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["comment"]; raw != nil && !ok {
+		return fmt.Errorf("field comment in ReviewVote: required")
+	}
+	if _, ok := raw["reviewer"]; raw != nil && !ok {
+		return fmt.Errorf("field reviewer in ReviewVote: required")
+	}
+	if _, ok := raw["verdict"]; raw != nil && !ok {
+		return fmt.Errorf("field verdict in ReviewVote: required")
+	}
+	type Plain ReviewVote
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ReviewVote(plain)
+	return nil
+}
+
 // A member of the team run.
 type RosterEntry struct {
+	// Member capability description used for assignment.
+	Description string `json:"description" yaml:"description" mapstructure:"description"`
+
 	// Name corresponds to the JSON schema field "name".
 	Name MemberName `json:"name" yaml:"name" mapstructure:"name"`
 
@@ -2125,6 +2914,9 @@ func (j *RosterEntry) UnmarshalJSON(value []byte) error {
 	var raw map[string]interface{}
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
+	}
+	if _, ok := raw["description"]; raw != nil && !ok {
+		return fmt.Errorf("field description in RosterEntry: required")
 	}
 	if _, ok := raw["name"]; raw != nil && !ok {
 		return fmt.Errorf("field name in RosterEntry: required")
@@ -2202,6 +2994,11 @@ func (j *RunCompleted) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
+	if plain.FinalMessageId != nil {
+		if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(*plain.FinalMessageId)); !matched {
+			return fmt.Errorf("field %s pattern match: must match %s", "FinalMessageId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
+		}
+	}
 	if plain.FinalMessageId != nil && utf8.RuneCountInString(string(*plain.FinalMessageId)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "final_message_id", 1)
 	}
@@ -2220,12 +3017,12 @@ type RunEvent struct {
 	// Payload; its structure is the $defs entry that matches type.
 	Data RunEventData `json:"data" yaml:"data" mapstructure:"data"`
 
-	// Event identifier, unique within the run. With the run it is the idempotency key
-	// of the projection.
+	// Event id <run_id>:<member>:<seq>:<attempt>:<n>. n starts at 1 and increases
+	// within each emitter tuple; control uses attempt=0.
 	Id string `json:"id" yaml:"id" mapstructure:"id"`
 
-	// Who produced the event: agent for a single-agent run, the roster name in a team
-	// run.
+	// Emitter member; main for a single-agent run. Control events use attempt=0;
+	// worker attempts start at 1.
 	Member string `json:"member" yaml:"member" mapstructure:"member"`
 
 	// Run the event belongs to.
@@ -2307,8 +3104,8 @@ func (j *RunEvent) UnmarshalJSON(value []byte) error {
 	if 0 > plain.Attempt {
 		return fmt.Errorf("field %s: must be >= %v", "attempt", 0)
 	}
-	if utf8.RuneCountInString(string(plain.Id)) < 1 {
-		return fmt.Errorf("field %s length: must be >= %d", "id", 1)
+	if matched, _ := regexp.MatchString(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}:[A-Za-z0-9][A-Za-z0-9_.-]{0,63}:[0-9]+:[0-9]+:[1-9][0-9]*$`, string(plain.Id)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Id", `^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}:[A-Za-z0-9][A-Za-z0-9_.-]{0,63}:[0-9]+:[0-9]+:[1-9][0-9]*$`)
 	}
 	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`, string(plain.Member)); !matched {
 		return fmt.Errorf("field %s pattern match: must match %s", "Member", `^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
@@ -2364,8 +3161,10 @@ func (j *RunFailed) UnmarshalJSON(value []byte) error {
 // file and the permissions the run may use at most. Control resolves it once at
 // run start; the worker reads it, never re-resolves.
 type RunLock struct {
-	// Digest over the entries and effective permissions; equal digests mean equal
-	// runs.
+	// Object digest = "sha256:" + lowercase hex(SHA-256(RFC 8785 JCS JSON)). RunLock
+	// hashes {v, entry, entries, members, effective_permissions}, omitting its
+	// identity lock_id and the digest itself. Empty optional arrays are omitted as on
+	// the Go wire. Equal resolved content yields equal digests across runs.
 	Digest string `json:"digest" yaml:"digest" mapstructure:"digest"`
 
 	// EffectivePermissions corresponds to the JSON schema field
@@ -2380,6 +3179,12 @@ type RunLock struct {
 
 	// Identifier of the lock.
 	LockId string `json:"lock_id" yaml:"lock_id" mapstructure:"lock_id"`
+
+	// Resolved roster; a single-agent run has exactly one member named main.
+	Members []LockMember `json:"members" yaml:"members" mapstructure:"members"`
+
+	// Wire protocol version; currently 1.
+	V int `json:"v" yaml:"v" mapstructure:"v"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -2403,6 +3208,12 @@ func (j *RunLock) UnmarshalJSON(value []byte) error {
 	if _, ok := raw["lock_id"]; raw != nil && !ok {
 		return fmt.Errorf("field lock_id in RunLock: required")
 	}
+	if _, ok := raw["members"]; raw != nil && !ok {
+		return fmt.Errorf("field members in RunLock: required")
+	}
+	if _, ok := raw["v"]; raw != nil && !ok {
+		return fmt.Errorf("field v in RunLock: required")
+	}
 	type Plain RunLock
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
@@ -2414,8 +3225,20 @@ func (j *RunLock) UnmarshalJSON(value []byte) error {
 	if plain.Entries != nil && len(plain.Entries) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "entries", 1)
 	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.LockId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "LockId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
+	}
 	if utf8.RuneCountInString(string(plain.LockId)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "lock_id", 1)
+	}
+	if plain.Members != nil && len(plain.Members) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "members", 1)
+	}
+	if plain.V != 1 {
+		return fmt.Errorf("field %s: must be equal to %v", "v", 1)
+	}
+	if 1 > plain.V {
+		return fmt.Errorf("field %s: must be >= %v", "v", 1)
 	}
 	*j = RunLock(plain)
 	return nil
@@ -2447,6 +3270,9 @@ func (j *RunStarted) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.LockId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "LockId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
+	}
 	if utf8.RuneCountInString(string(plain.LockId)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "lock_id", 1)
 	}
@@ -2459,6 +3285,7 @@ type RunState string
 const RunStateBudgetExhausted RunState = "budget_exhausted"
 const RunStateCancelled RunState = "cancelled"
 const RunStateFailed RunState = "failed"
+const RunStatePaused RunState = "paused"
 const RunStateQueued RunState = "queued"
 const RunStateRunning RunState = "running"
 const RunStateSucceeded RunState = "succeeded"
@@ -2471,6 +3298,7 @@ var enumValues_RunState = []interface{}{
 	"running",
 	"waiting_input",
 	"waiting_approval",
+	"paused",
 	"succeeded",
 	"failed",
 	"cancelled",
@@ -2528,7 +3356,7 @@ func (j *RunStatus) UnmarshalJSON(value []byte) error {
 // Create, resume or restore the sandbox of an isolation key and configure it.
 type SandboxAcquireInput struct {
 	// Allowed outbound domain patterns; everything else is denied.
-	Egress []string `json:"egress" yaml:"egress" mapstructure:"egress"`
+	Egress []string `json:"egress,omitempty,omitzero" yaml:"egress,omitempty" mapstructure:"egress,omitempty"`
 
 	// Key that scopes sandbox reuse, normally derived from tenant and session.
 	IsolationKey string `json:"isolation_key" yaml:"isolation_key" mapstructure:"isolation_key"`
@@ -2536,18 +3364,26 @@ type SandboxAcquireInput struct {
 	// Team member that needs an isolated session inside the shared sandbox.
 	Member *string `json:"member,omitempty,omitzero" yaml:"member,omitempty" mapstructure:"member,omitempty"`
 
+	// Metadata corresponds to the JSON schema field "metadata".
+	Metadata SandboxMetadata `json:"metadata" yaml:"metadata" mapstructure:"metadata"`
+
 	// Read-only asset mounts.
-	Mounts []SandboxMount `json:"mounts" yaml:"mounts" mapstructure:"mounts"`
+	Mounts []SandboxMount `json:"mounts,omitempty,omitzero" yaml:"mounts,omitempty" mapstructure:"mounts,omitempty"`
 
 	// Sandbox image and resource profile.
 	Profile string `json:"profile" yaml:"profile" mapstructure:"profile"`
 
-	// Names of the secrets the sandbox gets credential injection for. Values never
-	// appear here.
-	SecretNames []string `json:"secret_names" yaml:"secret_names" mapstructure:"secret_names"`
+	// Existing sandbox to resume.
+	SandboxId *string `json:"sandbox_id,omitempty,omitzero" yaml:"sandbox_id,omitempty" mapstructure:"sandbox_id,omitempty"`
+
+	// Snapshot to restore from.
+	SnapshotId *string `json:"snapshot_id,omitempty,omitzero" yaml:"snapshot_id,omitempty" mapstructure:"snapshot_id,omitempty"`
 
 	// Tenant that owns the sandbox.
 	TenantId string `json:"tenant_id" yaml:"tenant_id" mapstructure:"tenant_id"`
+
+	// Lease duration in seconds.
+	TtlSeconds int `json:"ttl_seconds" yaml:"ttl_seconds" mapstructure:"ttl_seconds"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -2556,28 +3392,28 @@ func (j *SandboxAcquireInput) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
-	if _, ok := raw["egress"]; raw != nil && !ok {
-		return fmt.Errorf("field egress in SandboxAcquireInput: required")
-	}
 	if _, ok := raw["isolation_key"]; raw != nil && !ok {
 		return fmt.Errorf("field isolation_key in SandboxAcquireInput: required")
 	}
-	if _, ok := raw["mounts"]; raw != nil && !ok {
-		return fmt.Errorf("field mounts in SandboxAcquireInput: required")
+	if _, ok := raw["metadata"]; raw != nil && !ok {
+		return fmt.Errorf("field metadata in SandboxAcquireInput: required")
 	}
 	if _, ok := raw["profile"]; raw != nil && !ok {
 		return fmt.Errorf("field profile in SandboxAcquireInput: required")
 	}
-	if _, ok := raw["secret_names"]; raw != nil && !ok {
-		return fmt.Errorf("field secret_names in SandboxAcquireInput: required")
-	}
 	if _, ok := raw["tenant_id"]; raw != nil && !ok {
 		return fmt.Errorf("field tenant_id in SandboxAcquireInput: required")
+	}
+	if _, ok := raw["ttl_seconds"]; raw != nil && !ok {
+		return fmt.Errorf("field ttl_seconds in SandboxAcquireInput: required")
 	}
 	type Plain SandboxAcquireInput
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if v, ok := raw["egress"]; !ok || v == nil {
+		plain.Egress = []string{}
 	}
 	if utf8.RuneCountInString(string(plain.IsolationKey)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "isolation_key", 1)
@@ -2585,8 +3421,24 @@ func (j *SandboxAcquireInput) UnmarshalJSON(value []byte) error {
 	if plain.Member != nil && utf8.RuneCountInString(string(*plain.Member)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "member", 1)
 	}
+	if v, ok := raw["mounts"]; !ok || v == nil {
+		plain.Mounts = []SandboxMount{}
+	}
 	if utf8.RuneCountInString(string(plain.Profile)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "profile", 1)
+	}
+	if plain.SandboxId != nil {
+		if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(*plain.SandboxId)); !matched {
+			return fmt.Errorf("field %s pattern match: must match %s", "SandboxId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
+		}
+	}
+	if plain.SnapshotId != nil {
+		if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(*plain.SnapshotId)); !matched {
+			return fmt.Errorf("field %s pattern match: must match %s", "SnapshotId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
+		}
+	}
+	if 1 > plain.TtlSeconds {
+		return fmt.Errorf("field %s: must be >= %v", "ttl_seconds", 1)
 	}
 	*j = SandboxAcquireInput(plain)
 	return nil
@@ -2596,7 +3448,7 @@ func (j *SandboxAcquireInput) UnmarshalJSON(value []byte) error {
 // credential bindings and mounts.
 type SandboxConfigureInput struct {
 	// Allowed outbound domain patterns; replaces the current rules.
-	Egress []string `json:"egress" yaml:"egress" mapstructure:"egress"`
+	Egress []string `json:"egress,omitempty,omitzero" yaml:"egress,omitempty" mapstructure:"egress,omitempty"`
 
 	// Isolation key the sandbox was acquired with.
 	IsolationKey string `json:"isolation_key" yaml:"isolation_key" mapstructure:"isolation_key"`
@@ -2605,10 +3457,7 @@ type SandboxConfigureInput struct {
 	Lease SandboxLease `json:"lease" yaml:"lease" mapstructure:"lease"`
 
 	// Read-only asset mounts; replaces the current mounts.
-	Mounts []SandboxMount `json:"mounts" yaml:"mounts" mapstructure:"mounts"`
-
-	// Names of the secrets to bind; replaces the current bindings.
-	SecretNames []string `json:"secret_names" yaml:"secret_names" mapstructure:"secret_names"`
+	Mounts []SandboxMount `json:"mounts,omitempty,omitzero" yaml:"mounts,omitempty" mapstructure:"mounts,omitempty"`
 
 	// Tenant that owns the sandbox.
 	TenantId string `json:"tenant_id" yaml:"tenant_id" mapstructure:"tenant_id"`
@@ -2620,20 +3469,11 @@ func (j *SandboxConfigureInput) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
-	if _, ok := raw["egress"]; raw != nil && !ok {
-		return fmt.Errorf("field egress in SandboxConfigureInput: required")
-	}
 	if _, ok := raw["isolation_key"]; raw != nil && !ok {
 		return fmt.Errorf("field isolation_key in SandboxConfigureInput: required")
 	}
 	if _, ok := raw["lease"]; raw != nil && !ok {
 		return fmt.Errorf("field lease in SandboxConfigureInput: required")
-	}
-	if _, ok := raw["mounts"]; raw != nil && !ok {
-		return fmt.Errorf("field mounts in SandboxConfigureInput: required")
-	}
-	if _, ok := raw["secret_names"]; raw != nil && !ok {
-		return fmt.Errorf("field secret_names in SandboxConfigureInput: required")
 	}
 	if _, ok := raw["tenant_id"]; raw != nil && !ok {
 		return fmt.Errorf("field tenant_id in SandboxConfigureInput: required")
@@ -2643,8 +3483,14 @@ func (j *SandboxConfigureInput) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
+	if v, ok := raw["egress"]; !ok || v == nil {
+		plain.Egress = []string{}
+	}
 	if utf8.RuneCountInString(string(plain.IsolationKey)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "isolation_key", 1)
+	}
+	if v, ok := raw["mounts"]; !ok || v == nil {
+		plain.Mounts = []SandboxMount{}
 	}
 	*j = SandboxConfigureInput(plain)
 	return nil
@@ -2667,6 +3513,77 @@ func (j *SandboxDeclaration) UnmarshalJSON(value []byte) error {
 		return fmt.Errorf("field %s length: must be >= %d", "profile", 1)
 	}
 	*j = SandboxDeclaration(plain)
+	return nil
+}
+
+// Successful operation with no returned data.
+type SandboxEmptyResult map[string]interface{}
+
+// Inspection result. Missing sandboxes have exists=false.
+type SandboxInspectResult struct {
+	// Whether the sandbox exists.
+	Exists bool `json:"exists" yaml:"exists" mapstructure:"exists"`
+
+	// Lease expiration when known.
+	ExpiresAt *time.Time `json:"expires_at,omitempty,omitzero" yaml:"expires_at,omitempty" mapstructure:"expires_at,omitempty"`
+
+	// Current provider state.
+	State *SandboxInspectResultState `json:"state,omitempty,omitzero" yaml:"state,omitempty" mapstructure:"state,omitempty"`
+}
+
+type SandboxInspectResultState string
+
+const SandboxInspectResultStateCreating SandboxInspectResultState = "creating"
+const SandboxInspectResultStateDestroyed SandboxInspectResultState = "destroyed"
+const SandboxInspectResultStateFailed SandboxInspectResultState = "failed"
+const SandboxInspectResultStatePaused SandboxInspectResultState = "paused"
+const SandboxInspectResultStateReady SandboxInspectResultState = "ready"
+const SandboxInspectResultStateSnapshotted SandboxInspectResultState = "snapshotted"
+
+var enumValues_SandboxInspectResultState = []interface{}{
+	"creating",
+	"ready",
+	"paused",
+	"snapshotted",
+	"destroyed",
+	"failed",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *SandboxInspectResultState) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_SandboxInspectResultState {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_SandboxInspectResultState, v)
+	}
+	*j = SandboxInspectResultState(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *SandboxInspectResult) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["exists"]; raw != nil && !ok {
+		return fmt.Errorf("field exists in SandboxInspectResult: required")
+	}
+	type Plain SandboxInspectResult
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = SandboxInspectResult(plain)
 	return nil
 }
 
@@ -2705,8 +3622,16 @@ func (j *SandboxLease) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
+	if plain.IsolatedSessionId != nil {
+		if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(*plain.IsolatedSessionId)); !matched {
+			return fmt.Errorf("field %s pattern match: must match %s", "IsolatedSessionId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
+		}
+	}
 	if plain.IsolatedSessionId != nil && utf8.RuneCountInString(string(*plain.IsolatedSessionId)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "isolated_session_id", 1)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.SandboxId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "SandboxId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
 	}
 	if utf8.RuneCountInString(string(plain.SandboxId)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "sandbox_id", 1)
@@ -2715,13 +3640,64 @@ func (j *SandboxLease) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// Sandbox lease ownership metadata.
+type SandboxMetadata struct {
+	// Monotonic lease generation.
+	LeaseGen int `json:"lease_gen" yaml:"lease_gen" mapstructure:"lease_gen"`
+
+	// Run acquiring the lease.
+	RunId string `json:"run_id" yaml:"run_id" mapstructure:"run_id"`
+
+	// Owning session.
+	SessionId string `json:"session_id" yaml:"session_id" mapstructure:"session_id"`
+
+	// Owning workspace.
+	WorkspaceId string `json:"workspace_id" yaml:"workspace_id" mapstructure:"workspace_id"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *SandboxMetadata) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["lease_gen"]; raw != nil && !ok {
+		return fmt.Errorf("field lease_gen in SandboxMetadata: required")
+	}
+	if _, ok := raw["run_id"]; raw != nil && !ok {
+		return fmt.Errorf("field run_id in SandboxMetadata: required")
+	}
+	if _, ok := raw["session_id"]; raw != nil && !ok {
+		return fmt.Errorf("field session_id in SandboxMetadata: required")
+	}
+	if _, ok := raw["workspace_id"]; raw != nil && !ok {
+		return fmt.Errorf("field workspace_id in SandboxMetadata: required")
+	}
+	type Plain SandboxMetadata
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if 0 > plain.LeaseGen {
+		return fmt.Errorf("field %s: must be >= %v", "lease_gen", 0)
+	}
+	*j = SandboxMetadata(plain)
+	return nil
+}
+
 // A read-only mount of locked assets.
 type SandboxMount struct {
+	// Zero-based RunLock.entries index to mount.
+	Entry int `json:"entry" yaml:"entry" mapstructure:"entry"`
+
 	// Kind corresponds to the JSON schema field "kind".
 	Kind MountKind `json:"kind" yaml:"kind" mapstructure:"kind"`
 
 	// Lock whose files are mounted.
 	LockId string `json:"lock_id" yaml:"lock_id" mapstructure:"lock_id"`
+
+	// Member corresponds to the JSON schema field "member".
+	Member MemberName `json:"member" yaml:"member" mapstructure:"member"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -2730,16 +3706,28 @@ func (j *SandboxMount) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
+	if _, ok := raw["entry"]; raw != nil && !ok {
+		return fmt.Errorf("field entry in SandboxMount: required")
+	}
 	if _, ok := raw["kind"]; raw != nil && !ok {
 		return fmt.Errorf("field kind in SandboxMount: required")
 	}
 	if _, ok := raw["lock_id"]; raw != nil && !ok {
 		return fmt.Errorf("field lock_id in SandboxMount: required")
 	}
+	if _, ok := raw["member"]; raw != nil && !ok {
+		return fmt.Errorf("field member in SandboxMount: required")
+	}
 	type Plain SandboxMount
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if 0 > plain.Entry {
+		return fmt.Errorf("field %s: must be >= %v", "entry", 0)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.LockId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "LockId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
 	}
 	if utf8.RuneCountInString(string(plain.LockId)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "lock_id", 1)
@@ -2762,6 +3750,9 @@ type SandboxOpInput struct {
 
 	// Tenant that owns the sandbox.
 	TenantId string `json:"tenant_id" yaml:"tenant_id" mapstructure:"tenant_id"`
+
+	// Renewal duration in seconds; required by SandboxRenew.
+	TtlSeconds *int `json:"ttl_seconds,omitempty,omitzero" yaml:"ttl_seconds,omitempty" mapstructure:"ttl_seconds,omitempty"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -2790,8 +3781,14 @@ func (j *SandboxOpInput) UnmarshalJSON(value []byte) error {
 	if utf8.RuneCountInString(string(plain.IsolationKey)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "isolation_key", 1)
 	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.SandboxId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "SandboxId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
+	}
 	if utf8.RuneCountInString(string(plain.SandboxId)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "sandbox_id", 1)
+	}
+	if plain.TtlSeconds != nil && 1 > *plain.TtlSeconds {
+		return fmt.Errorf("field %s: must be >= %v", "ttl_seconds", 1)
 	}
 	*j = SandboxOpInput(plain)
 	return nil
@@ -2859,6 +3856,9 @@ func (j *SandboxOutput) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.CallId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "CallId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
+	}
 	if utf8.RuneCountInString(string(plain.CallId)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "call_id", 1)
 	}
@@ -2868,13 +3868,11 @@ func (j *SandboxOutput) UnmarshalJSON(value []byte) error {
 
 type SandboxProvider string
 
-const SandboxProviderDocker SandboxProvider = "docker"
 const SandboxProviderLocal SandboxProvider = "local"
 const SandboxProviderOpensandbox SandboxProvider = "opensandbox"
 
 var enumValues_SandboxProvider = []interface{}{
 	"opensandbox",
-	"docker",
 	"local",
 }
 
@@ -2898,6 +3896,78 @@ func (j *SandboxProvider) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// Sandbox restoration event.
+type SandboxRestored struct {
+	// Whether restoration used a snapshot.
+	FromSnapshot bool `json:"from_snapshot" yaml:"from_snapshot" mapstructure:"from_snapshot"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *SandboxRestored) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["from_snapshot"]; raw != nil && !ok {
+		return fmt.Errorf("field from_snapshot in SandboxRestored: required")
+	}
+	type Plain SandboxRestored
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = SandboxRestored(plain)
+	return nil
+}
+
+// Delete a snapshot independently of sandbox lifetime.
+type SandboxSnapshotDeleteInput struct {
+	// Isolation key of the snapshot.
+	IsolationKey string `json:"isolation_key" yaml:"isolation_key" mapstructure:"isolation_key"`
+
+	// Provider corresponds to the JSON schema field "provider".
+	Provider SandboxProvider `json:"provider" yaml:"provider" mapstructure:"provider"`
+
+	// Snapshot to delete.
+	SnapshotId string `json:"snapshot_id" yaml:"snapshot_id" mapstructure:"snapshot_id"`
+
+	// Owning tenant.
+	TenantId string `json:"tenant_id" yaml:"tenant_id" mapstructure:"tenant_id"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *SandboxSnapshotDeleteInput) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["isolation_key"]; raw != nil && !ok {
+		return fmt.Errorf("field isolation_key in SandboxSnapshotDeleteInput: required")
+	}
+	if _, ok := raw["provider"]; raw != nil && !ok {
+		return fmt.Errorf("field provider in SandboxSnapshotDeleteInput: required")
+	}
+	if _, ok := raw["snapshot_id"]; raw != nil && !ok {
+		return fmt.Errorf("field snapshot_id in SandboxSnapshotDeleteInput: required")
+	}
+	if _, ok := raw["tenant_id"]; raw != nil && !ok {
+		return fmt.Errorf("field tenant_id in SandboxSnapshotDeleteInput: required")
+	}
+	type Plain SandboxSnapshotDeleteInput
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.IsolationKey)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "IsolationKey", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.SnapshotId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "SnapshotId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
+	}
+	*j = SandboxSnapshotDeleteInput(plain)
+	return nil
+}
+
 // Result of a snapshot.
 type SandboxSnapshotResult struct {
 	// Provider identifier of the snapshot.
@@ -2917,6 +3987,9 @@ func (j *SandboxSnapshotResult) UnmarshalJSON(value []byte) error {
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.SnapshotId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "SnapshotId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
 	}
 	if utf8.RuneCountInString(string(plain.SnapshotId)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "snapshot_id", 1)
@@ -2965,7 +4038,56 @@ type SecretGrant struct {
 	Name string `json:"name" yaml:"name" mapstructure:"name"`
 
 	// The secret value. It must not be logged, put in events or in Temporal payloads.
-	Value string `json:"value" yaml:"value" mapstructure:"value"`
+	Value Secret `json:"value" yaml:"value" mapstructure:"value"`
+}
+
+// Fetch declared secrets using a segment token. Sandbox credentials require
+// purpose=sandbox and lease_id; R1 does not inject sandbox secrets (D19).
+type SecretGrantRequest struct {
+	// Declared secret names.
+	Names []string `json:"names,omitempty,omitzero" yaml:"names,omitempty" mapstructure:"names,omitempty"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *SecretGrantRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	type Plain SecretGrantRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if v, ok := raw["names"]; !ok || v == nil {
+		plain.Names = []string{}
+	}
+	*j = SecretGrantRequest(plain)
+	return nil
+}
+
+// Short-lived secret grants, never store in history.
+type SecretGrantResponse struct {
+	// Granted secrets.
+	Grants []SecretGrant `json:"grants,omitempty,omitzero" yaml:"grants,omitempty" mapstructure:"grants,omitempty"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *SecretGrantResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	type Plain SecretGrantResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if v, ok := raw["grants"]; !ok || v == nil {
+		plain.Grants = []SecretGrant{}
+	}
+	*j = SecretGrantResponse(plain)
+	return nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -3062,8 +4184,8 @@ type SegmentEnded struct {
 	// Status corresponds to the JSON schema field "status".
 	Status SegmentStatus `json:"status" yaml:"status" mapstructure:"status"`
 
-	// Usage corresponds to the JSON schema field "usage".
-	Usage Usage `json:"usage" yaml:"usage" mapstructure:"usage"`
+	// Per-model usage over this segment, one entry for each model used.
+	Usage []Usage `json:"usage,omitempty,omitzero" yaml:"usage,omitempty" mapstructure:"usage,omitempty"`
 
 	// YieldReason corresponds to the JSON schema field "yield_reason".
 	YieldReason *YieldReason `json:"yield_reason,omitempty,omitzero" yaml:"yield_reason,omitempty" mapstructure:"yield_reason,omitempty"`
@@ -3081,9 +4203,6 @@ func (j *SegmentEnded) UnmarshalJSON(value []byte) error {
 	if _, ok := raw["status"]; raw != nil && !ok {
 		return fmt.Errorf("field status in SegmentEnded: required")
 	}
-	if _, ok := raw["usage"]; raw != nil && !ok {
-		return fmt.Errorf("field usage in SegmentEnded: required")
-	}
 	type Plain SegmentEnded
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
@@ -3092,20 +4211,59 @@ func (j *SegmentEnded) UnmarshalJSON(value []byte) error {
 	if 0 > plain.CheckpointVersion {
 		return fmt.Errorf("field %s: must be >= %v", "checkpoint_version", 0)
 	}
+	if v, ok := raw["usage"]; !ok || v == nil {
+		plain.Usage = []Usage{}
+	}
 	*j = SegmentEnded(plain)
 	return nil
 }
 
 // Why the segment failed.
 type SegmentError struct {
-	// Stable machine-readable error code.
-	Code string `json:"code" yaml:"code" mapstructure:"code"`
+	// Stable segment failure category; application error names live in registry.json.
+	Code SegmentErrorCode `json:"code" yaml:"code" mapstructure:"code"`
 
 	// Human-readable message, without secrets.
 	Message string `json:"message" yaml:"message" mapstructure:"message"`
 
 	// Whether a new attempt of the same segment may succeed.
 	Retryable bool `json:"retryable" yaml:"retryable" mapstructure:"retryable"`
+}
+
+type SegmentErrorCode string
+
+const SegmentErrorCodeAgentError SegmentErrorCode = "agent_error"
+const SegmentErrorCodeLoopDetected SegmentErrorCode = "loop_detected"
+const SegmentErrorCodeModelError SegmentErrorCode = "model_error"
+const SegmentErrorCodeSandboxError SegmentErrorCode = "sandbox_error"
+const SegmentErrorCodeToolPolicyError SegmentErrorCode = "tool_policy_error"
+
+var enumValues_SegmentErrorCode = []interface{}{
+	"agent_error",
+	"model_error",
+	"loop_detected",
+	"sandbox_error",
+	"tool_policy_error",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *SegmentErrorCode) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_SegmentErrorCode {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_SegmentErrorCode, v)
+	}
+	*j = SegmentErrorCode(v)
+	return nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -3128,9 +4286,6 @@ func (j *SegmentError) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
-	if utf8.RuneCountInString(string(plain.Code)) < 1 {
-		return fmt.Errorf("field %s length: must be >= %d", "code", 1)
-	}
 	*j = SegmentError(plain)
 	return nil
 }
@@ -3145,10 +4300,6 @@ type SegmentInput struct {
 
 	// BudgetNotice corresponds to the JSON schema field "budget_notice".
 	BudgetNotice BudgetNotice `json:"budget_notice" yaml:"budget_notice" mapstructure:"budget_notice"`
-
-	// Run-scoped bearer token for the control internal API (audience kernel). It
-	// carries no more than the run's rights and expires with the segment.
-	CapabilityToken string `json:"capability_token" yaml:"capability_token" mapstructure:"capability_token"`
 
 	// NATS subject the worker publishes run events to, run.<tenant>.<run>.
 	EventSubject string `json:"event_subject" yaml:"event_subject" mapstructure:"event_subject"`
@@ -3170,9 +4321,12 @@ type SegmentInput struct {
 	// Present only for team members.
 	Mailbox []MailboxMessage `json:"mailbox,omitempty,omitzero" yaml:"mailbox,omitempty" mapstructure:"mailbox,omitempty"`
 
-	// Who executes the segment: the literal agent for a single-agent run, the roster
-	// name for a team member.
+	// Who executes the segment: main for a single-agent run, otherwise the roster
+	// name.
 	Member string `json:"member" yaml:"member" mapstructure:"member"`
+
+	// Principal initiating the run, used for user grants.
+	PrincipalId string `json:"principal_id" yaml:"principal_id" mapstructure:"principal_id"`
 
 	// Run this segment belongs to.
 	RunId string `json:"run_id" yaml:"run_id" mapstructure:"run_id"`
@@ -3189,7 +4343,7 @@ type SegmentInput struct {
 
 	// Course corrections from the user that arrived while the run was active, oldest
 	// first, injected before the model call.
-	Steer []SteerItem `json:"steer" yaml:"steer" mapstructure:"steer"`
+	Steer []SteerItem `json:"steer,omitempty,omitzero" yaml:"steer,omitempty" mapstructure:"steer,omitempty"`
 
 	// Team corresponds to the JSON schema field "team".
 	Team *TeamContext `json:"team,omitempty,omitzero" yaml:"team,omitempty" mapstructure:"team,omitempty"`
@@ -3199,6 +4353,12 @@ type SegmentInput struct {
 
 	// Trace corresponds to the JSON schema field "trace".
 	Trace *SegmentTrace `json:"trace,omitempty,omitzero" yaml:"trace,omitempty" mapstructure:"trace,omitempty"`
+
+	// Wire protocol version; currently 1.
+	V int `json:"v" yaml:"v" mapstructure:"v"`
+
+	// Workspace of the run, used for scoped authorization.
+	WorkspaceId string `json:"workspace_id" yaml:"workspace_id" mapstructure:"workspace_id"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -3212,9 +4372,6 @@ func (j *SegmentInput) UnmarshalJSON(value []byte) error {
 	}
 	if _, ok := raw["budget_notice"]; raw != nil && !ok {
 		return fmt.Errorf("field budget_notice in SegmentInput: required")
-	}
-	if _, ok := raw["capability_token"]; raw != nil && !ok {
-		return fmt.Errorf("field capability_token in SegmentInput: required")
 	}
 	if _, ok := raw["event_subject"]; raw != nil && !ok {
 		return fmt.Errorf("field event_subject in SegmentInput: required")
@@ -3234,6 +4391,9 @@ func (j *SegmentInput) UnmarshalJSON(value []byte) error {
 	if _, ok := raw["member"]; raw != nil && !ok {
 		return fmt.Errorf("field member in SegmentInput: required")
 	}
+	if _, ok := raw["principal_id"]; raw != nil && !ok {
+		return fmt.Errorf("field principal_id in SegmentInput: required")
+	}
 	if _, ok := raw["run_id"]; raw != nil && !ok {
 		return fmt.Errorf("field run_id in SegmentInput: required")
 	}
@@ -3246,11 +4406,14 @@ func (j *SegmentInput) UnmarshalJSON(value []byte) error {
 	if _, ok := raw["session_id"]; raw != nil && !ok {
 		return fmt.Errorf("field session_id in SegmentInput: required")
 	}
-	if _, ok := raw["steer"]; raw != nil && !ok {
-		return fmt.Errorf("field steer in SegmentInput: required")
-	}
 	if _, ok := raw["tenant_id"]; raw != nil && !ok {
 		return fmt.Errorf("field tenant_id in SegmentInput: required")
+	}
+	if _, ok := raw["v"]; raw != nil && !ok {
+		return fmt.Errorf("field v in SegmentInput: required")
+	}
+	if _, ok := raw["workspace_id"]; raw != nil && !ok {
+		return fmt.Errorf("field workspace_id in SegmentInput: required")
 	}
 	type Plain SegmentInput
 	var plain Plain
@@ -3260,20 +4423,29 @@ func (j *SegmentInput) UnmarshalJSON(value []byte) error {
 	if utf8.RuneCountInString(string(plain.AgentSessionKey)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "agent_session_key", 1)
 	}
-	if utf8.RuneCountInString(string(plain.CapabilityToken)) < 1 {
-		return fmt.Errorf("field %s length: must be >= %d", "capability_token", 1)
-	}
 	if utf8.RuneCountInString(string(plain.EventSubject)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "event_subject", 1)
 	}
 	if 0 > plain.ExpectedCheckpointVersion {
 		return fmt.Errorf("field %s: must be >= %v", "expected_checkpoint_version", 0)
 	}
+	if v, ok := raw["mailbox"]; !ok || v == nil {
+		plain.Mailbox = []MailboxMessage{}
+	}
 	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`, string(plain.Member)); !matched {
 		return fmt.Errorf("field %s pattern match: must match %s", "Member", `^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
 	}
 	if 1 > plain.Seq {
 		return fmt.Errorf("field %s: must be >= %v", "seq", 1)
+	}
+	if v, ok := raw["steer"]; !ok || v == nil {
+		plain.Steer = []SteerItem{}
+	}
+	if plain.V != 1 {
+		return fmt.Errorf("field %s: must be equal to %v", "v", 1)
+	}
+	if 1 > plain.V {
+		return fmt.Errorf("field %s: must be >= %v", "v", 1)
 	}
 	*j = SegmentInput(plain)
 	return nil
@@ -3288,11 +4460,13 @@ type SegmentLimits struct {
 	// timeout.
 	MaxWallSeconds int `json:"max_wall_seconds" yaml:"max_wall_seconds" mapstructure:"max_wall_seconds"`
 
-	// Credits left in the run budget at the start of the segment.
-	RemainingRunCredits float64 `json:"remaining_run_credits" yaml:"remaining_run_credits" mapstructure:"remaining_run_credits"`
+	// Integer millicredits (1000 = 1 credit). Credits left in the run budget at the
+	// start of the segment.
+	RemainingRunMillicredits int64 `json:"remaining_run_millicredits" yaml:"remaining_run_millicredits" mapstructure:"remaining_run_millicredits"`
 
-	// Credits this segment may spend before it yields with budget_soft.
-	SegmentBudgetCredits float64 `json:"segment_budget_credits" yaml:"segment_budget_credits" mapstructure:"segment_budget_credits"`
+	// Integer millicredits (1000 = 1 credit). Credits this segment may spend before
+	// it yields with budget_soft.
+	SegmentBudgetMillicredits int64 `json:"segment_budget_millicredits" yaml:"segment_budget_millicredits" mapstructure:"segment_budget_millicredits"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -3307,11 +4481,11 @@ func (j *SegmentLimits) UnmarshalJSON(value []byte) error {
 	if _, ok := raw["max_wall_seconds"]; raw != nil && !ok {
 		return fmt.Errorf("field max_wall_seconds in SegmentLimits: required")
 	}
-	if _, ok := raw["remaining_run_credits"]; raw != nil && !ok {
-		return fmt.Errorf("field remaining_run_credits in SegmentLimits: required")
+	if _, ok := raw["remaining_run_millicredits"]; raw != nil && !ok {
+		return fmt.Errorf("field remaining_run_millicredits in SegmentLimits: required")
 	}
-	if _, ok := raw["segment_budget_credits"]; raw != nil && !ok {
-		return fmt.Errorf("field segment_budget_credits in SegmentLimits: required")
+	if _, ok := raw["segment_budget_millicredits"]; raw != nil && !ok {
+		return fmt.Errorf("field segment_budget_millicredits in SegmentLimits: required")
 	}
 	type Plain SegmentLimits
 	var plain Plain
@@ -3324,11 +4498,17 @@ func (j *SegmentLimits) UnmarshalJSON(value []byte) error {
 	if 1 > plain.MaxWallSeconds {
 		return fmt.Errorf("field %s: must be >= %v", "max_wall_seconds", 1)
 	}
-	if 0 > plain.RemainingRunCredits {
-		return fmt.Errorf("field %s: must be >= %v", "remaining_run_credits", 0)
+	if 9007199254740991 < plain.RemainingRunMillicredits {
+		return fmt.Errorf("field %s: must be <= %v", "remaining_run_millicredits", 9007199254740991)
 	}
-	if 0 > plain.SegmentBudgetCredits {
-		return fmt.Errorf("field %s: must be >= %v", "segment_budget_credits", 0)
+	if 0 > plain.RemainingRunMillicredits {
+		return fmt.Errorf("field %s: must be >= %v", "remaining_run_millicredits", 0)
+	}
+	if 9007199254740991 < plain.SegmentBudgetMillicredits {
+		return fmt.Errorf("field %s: must be <= %v", "segment_budget_millicredits", 9007199254740991)
+	}
+	if 0 > plain.SegmentBudgetMillicredits {
+		return fmt.Errorf("field %s: must be >= %v", "segment_budget_millicredits", 0)
 	}
 	*j = SegmentLimits(plain)
 	return nil
@@ -3363,6 +4543,9 @@ func (j *SegmentLockRef) UnmarshalJSON(value []byte) error {
 	}
 	if matched, _ := regexp.MatchString(`^sha256:[0-9a-f]{64}$`, string(plain.Digest)); !matched {
 		return fmt.Errorf("field %s pattern match: must match %s", "Digest", `^sha256:[0-9a-f]{64}$`)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.Id)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Id", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
 	}
 	if utf8.RuneCountInString(string(plain.Id)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "id", 1)
@@ -3420,7 +4603,10 @@ func (j *SegmentProgress) UnmarshalJSON(value []byte) error {
 type SegmentResult struct {
 	// Files the segment left in the output directory, to be published by the workflow
 	// after the commit.
-	Artifacts []Artifact `json:"artifacts" yaml:"artifacts" mapstructure:"artifacts"`
+	Artifacts []Artifact `json:"artifacts,omitempty,omitzero" yaml:"artifacts,omitempty" mapstructure:"artifacts,omitempty"`
+
+	// Number of output files omitted beyond the 200 artifact limit.
+	ArtifactsOmitted int `json:"artifacts_omitted" yaml:"artifacts_omitted" mapstructure:"artifacts_omitted"`
 
 	// Checkpoint version after the segment committed.
 	CheckpointVersion int `json:"checkpoint_version" yaml:"checkpoint_version" mapstructure:"checkpoint_version"`
@@ -3438,13 +4624,16 @@ type SegmentResult struct {
 	Progress SegmentProgress `json:"progress" yaml:"progress" mapstructure:"progress"`
 
 	// Observations the workflow may act on, such as reliability findings.
-	Signals []SegmentSignal `json:"signals" yaml:"signals" mapstructure:"signals"`
+	Signals []SegmentSignal `json:"signals,omitempty,omitzero" yaml:"signals,omitempty" mapstructure:"signals,omitempty"`
 
 	// Status corresponds to the JSON schema field "status".
 	Status SegmentStatus `json:"status" yaml:"status" mapstructure:"status"`
 
-	// Usage corresponds to the JSON schema field "usage".
-	Usage Usage `json:"usage" yaml:"usage" mapstructure:"usage"`
+	// Per-model usage over this segment, one entry for each model used.
+	Usage []Usage `json:"usage,omitempty,omitzero" yaml:"usage,omitempty" mapstructure:"usage,omitempty"`
+
+	// Wire protocol version; currently 1.
+	V int `json:"v" yaml:"v" mapstructure:"v"`
 
 	// YieldReason corresponds to the JSON schema field "yield_reason".
 	YieldReason *YieldReason `json:"yield_reason,omitempty,omitzero" yaml:"yield_reason,omitempty" mapstructure:"yield_reason,omitempty"`
@@ -3456,8 +4645,8 @@ func (j *SegmentResult) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
-	if _, ok := raw["artifacts"]; raw != nil && !ok {
-		return fmt.Errorf("field artifacts in SegmentResult: required")
+	if _, ok := raw["artifacts_omitted"]; raw != nil && !ok {
+		return fmt.Errorf("field artifacts_omitted in SegmentResult: required")
 	}
 	if _, ok := raw["checkpoint_version"]; raw != nil && !ok {
 		return fmt.Errorf("field checkpoint_version in SegmentResult: required")
@@ -3465,22 +4654,40 @@ func (j *SegmentResult) UnmarshalJSON(value []byte) error {
 	if _, ok := raw["progress"]; raw != nil && !ok {
 		return fmt.Errorf("field progress in SegmentResult: required")
 	}
-	if _, ok := raw["signals"]; raw != nil && !ok {
-		return fmt.Errorf("field signals in SegmentResult: required")
-	}
 	if _, ok := raw["status"]; raw != nil && !ok {
 		return fmt.Errorf("field status in SegmentResult: required")
 	}
-	if _, ok := raw["usage"]; raw != nil && !ok {
-		return fmt.Errorf("field usage in SegmentResult: required")
+	if _, ok := raw["v"]; raw != nil && !ok {
+		return fmt.Errorf("field v in SegmentResult: required")
 	}
 	type Plain SegmentResult
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
+	if v, ok := raw["artifacts"]; !ok || v == nil {
+		plain.Artifacts = []Artifact{}
+	}
+	if len(plain.Artifacts) > 200 {
+		return fmt.Errorf("field %s length: must be <= %d", "artifacts", 200)
+	}
+	if 0 > plain.ArtifactsOmitted {
+		return fmt.Errorf("field %s: must be >= %v", "artifacts_omitted", 0)
+	}
 	if 0 > plain.CheckpointVersion {
 		return fmt.Errorf("field %s: must be >= %v", "checkpoint_version", 0)
+	}
+	if v, ok := raw["signals"]; !ok || v == nil {
+		plain.Signals = []SegmentSignal{}
+	}
+	if v, ok := raw["usage"]; !ok || v == nil {
+		plain.Usage = []Usage{}
+	}
+	if plain.V != 1 {
+		return fmt.Errorf("field %s: must be equal to %v", "v", 1)
+	}
+	if 1 > plain.V {
+		return fmt.Errorf("field %s: must be >= %v", "v", 1)
 	}
 	*j = SegmentResult(plain)
 	return nil
@@ -3491,6 +4698,9 @@ func (j *SegmentResult) UnmarshalJSON(value []byte) error {
 type SegmentSandbox struct {
 	// Isolated session inside a shared sandbox, used for team members.
 	IsolatedSessionId *string `json:"isolated_session_id,omitempty,omitzero" yaml:"isolated_session_id,omitempty" mapstructure:"isolated_session_id,omitempty"`
+
+	// Sandbox isolation key derived from tenant and session.
+	IsolationKey string `json:"isolation_key" yaml:"isolation_key" mapstructure:"isolation_key"`
 
 	// Provider corresponds to the JSON schema field "provider".
 	Provider SandboxProvider `json:"provider" yaml:"provider" mapstructure:"provider"`
@@ -3505,6 +4715,9 @@ func (j *SegmentSandbox) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
+	if _, ok := raw["isolation_key"]; raw != nil && !ok {
+		return fmt.Errorf("field isolation_key in SegmentSandbox: required")
+	}
 	if _, ok := raw["provider"]; raw != nil && !ok {
 		return fmt.Errorf("field provider in SegmentSandbox: required")
 	}
@@ -3516,8 +4729,19 @@ func (j *SegmentSandbox) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
+	if plain.IsolatedSessionId != nil {
+		if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(*plain.IsolatedSessionId)); !matched {
+			return fmt.Errorf("field %s pattern match: must match %s", "IsolatedSessionId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
+		}
+	}
 	if plain.IsolatedSessionId != nil && utf8.RuneCountInString(string(*plain.IsolatedSessionId)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "isolated_session_id", 1)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.IsolationKey)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "IsolationKey", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.SandboxId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "SandboxId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
 	}
 	if utf8.RuneCountInString(string(plain.SandboxId)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "sandbox_id", 1)
@@ -3657,6 +4881,9 @@ func (j *SegmentTrace) UnmarshalJSON(value []byte) error {
 // The trigger of the segment. user_message needs content_ref or text;
 // interactive_input needs interaction_id and decision.
 type SegmentTurn struct {
+	// Files attached to user_message.
+	Attachments []MessageAttachment `json:"attachments,omitempty,omitzero" yaml:"attachments,omitempty" mapstructure:"attachments,omitempty"`
+
 	// Object store reference of the message content when it is too large to inline.
 	ContentRef *string `json:"content_ref,omitempty,omitzero" yaml:"content_ref,omitempty" mapstructure:"content_ref,omitempty"`
 
@@ -3675,6 +4902,7 @@ type SegmentTurn struct {
 
 type SegmentTurnKind string
 
+const SegmentTurnKindCompact SegmentTurnKind = "compact"
 const SegmentTurnKindContinue SegmentTurnKind = "continue"
 const SegmentTurnKindFollowUp SegmentTurnKind = "follow_up"
 const SegmentTurnKindInteractiveInput SegmentTurnKind = "interactive_input"
@@ -3685,6 +4913,7 @@ var enumValues_SegmentTurnKind = []interface{}{
 	"interactive_input",
 	"follow_up",
 	"continue",
+	"compact",
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -3721,8 +4950,16 @@ func (j *SegmentTurn) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
+	if v, ok := raw["attachments"]; !ok || v == nil {
+		plain.Attachments = []MessageAttachment{}
+	}
 	if plain.ContentRef != nil && utf8.RuneCountInString(string(*plain.ContentRef)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "content_ref", 1)
+	}
+	if plain.InteractionId != nil {
+		if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(*plain.InteractionId)); !matched {
+			return fmt.Errorf("field %s pattern match: must match %s", "InteractionId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
+		}
 	}
 	if plain.InteractionId != nil && utf8.RuneCountInString(string(*plain.InteractionId)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "interaction_id", 1)
@@ -3735,6 +4972,10 @@ func (j *SegmentTurn) UnmarshalJSON(value []byte) error {
 type SendMessageInput struct {
 	// Caller corresponds to the JSON schema field "caller".
 	Caller MemberName `json:"caller" yaml:"caller" mapstructure:"caller"`
+
+	// Effect key; Temporal Update ID MUST equal request_id for retries to
+	// deduplicate.
+	RequestId string `json:"request_id" yaml:"request_id" mapstructure:"request_id"`
 
 	// Message text.
 	Text string `json:"text" yaml:"text" mapstructure:"text"`
@@ -3752,6 +4993,9 @@ func (j *SendMessageInput) UnmarshalJSON(value []byte) error {
 	if _, ok := raw["caller"]; raw != nil && !ok {
 		return fmt.Errorf("field caller in SendMessageInput: required")
 	}
+	if _, ok := raw["request_id"]; raw != nil && !ok {
+		return fmt.Errorf("field request_id in SendMessageInput: required")
+	}
 	if _, ok := raw["text"]; raw != nil && !ok {
 		return fmt.Errorf("field text in SendMessageInput: required")
 	}
@@ -3762,6 +5006,9 @@ func (j *SendMessageInput) UnmarshalJSON(value []byte) error {
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.RequestId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "RequestId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
 	}
 	if utf8.RuneCountInString(string(plain.Text)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "text", 1)
@@ -3792,6 +5039,9 @@ func (j *SharedSkill) UnmarshalJSON(value []byte) error {
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_./:-]{0,255}$`, string(plain.Id)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Id", `^[A-Za-z0-9][A-Za-z0-9_./:-]{0,255}$`)
 	}
 	if utf8.RuneCountInString(string(plain.Id)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "id", 1)
@@ -3867,6 +5117,11 @@ func (j *SkillEntry) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
+	if plain.Id != nil {
+		if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_./:-]{0,255}$`, string(*plain.Id)); !matched {
+			return fmt.Errorf("field %s pattern match: must match %s", "Id", `^[A-Za-z0-9][A-Za-z0-9_./:-]{0,255}$`)
+		}
+	}
 	if plain.Id != nil && utf8.RuneCountInString(string(*plain.Id)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "id", 1)
 	}
@@ -3915,7 +5170,7 @@ func (j *SkillSource) UnmarshalJSON(value []byte) error {
 // after the listed ones.
 type SkillsManifest struct {
 	// Skills in load order.
-	Skills []SkillEntry `json:"skills" yaml:"skills" mapstructure:"skills"`
+	Skills []SkillEntry `json:"skills,omitempty,omitzero" yaml:"skills,omitempty" mapstructure:"skills,omitempty"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -3924,13 +5179,13 @@ func (j *SkillsManifest) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
-	if _, ok := raw["skills"]; raw != nil && !ok {
-		return fmt.Errorf("field skills in SkillsManifest: required")
-	}
 	type Plain SkillsManifest
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if v, ok := raw["skills"]; !ok || v == nil {
+		plain.Skills = []SkillEntry{}
 	}
 	*j = SkillsManifest(plain)
 	return nil
@@ -3967,6 +5222,10 @@ type SubmitVerdictInput struct {
 	// Why; shown to the assignee when the verdict is reject.
 	Reason string `json:"reason" yaml:"reason" mapstructure:"reason"`
 
+	// Effect key; Temporal Update ID MUST equal request_id for retries to
+	// deduplicate.
+	RequestId string `json:"request_id" yaml:"request_id" mapstructure:"request_id"`
+
 	// Task under review.
 	TaskId string `json:"task_id" yaml:"task_id" mapstructure:"task_id"`
 
@@ -3986,6 +5245,9 @@ func (j *SubmitVerdictInput) UnmarshalJSON(value []byte) error {
 	if _, ok := raw["reason"]; raw != nil && !ok {
 		return fmt.Errorf("field reason in SubmitVerdictInput: required")
 	}
+	if _, ok := raw["request_id"]; raw != nil && !ok {
+		return fmt.Errorf("field request_id in SubmitVerdictInput: required")
+	}
 	if _, ok := raw["task_id"]; raw != nil && !ok {
 		return fmt.Errorf("field task_id in SubmitVerdictInput: required")
 	}
@@ -3997,6 +5259,12 @@ func (j *SubmitVerdictInput) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.RequestId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "RequestId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.TaskId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "TaskId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
+	}
 	if utf8.RuneCountInString(string(plain.TaskId)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "task_id", 1)
 	}
@@ -4004,16 +5272,13 @@ func (j *SubmitVerdictInput) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// State of the review of a task result.
+// A reject from any reviewer vetoes the result.
 type TaskReview struct {
-	// Reason given with the verdict.
-	Reason *string `json:"reason,omitempty,omitzero" yaml:"reason,omitempty" mapstructure:"reason,omitempty"`
+	// Assigned reviewers.
+	Reviewers []MemberName `json:"reviewers,omitempty,omitzero" yaml:"reviewers,omitempty" mapstructure:"reviewers,omitempty"`
 
-	// Reviewer corresponds to the JSON schema field "reviewer".
-	Reviewer MemberName `json:"reviewer" yaml:"reviewer" mapstructure:"reviewer"`
-
-	// Verdict corresponds to the JSON schema field "verdict".
-	Verdict *Verdict `json:"verdict,omitempty,omitzero" yaml:"verdict,omitempty" mapstructure:"verdict,omitempty"`
+	// Submitted votes; any reject vetoes.
+	Votes []ReviewVote `json:"votes,omitempty,omitzero" yaml:"votes,omitempty" mapstructure:"votes,omitempty"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -4022,13 +5287,16 @@ func (j *TaskReview) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
-	if _, ok := raw["reviewer"]; raw != nil && !ok {
-		return fmt.Errorf("field reviewer in TaskReview: required")
-	}
 	type Plain TaskReview
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if v, ok := raw["reviewers"]; !ok || v == nil {
+		plain.Reviewers = []MemberName{}
+	}
+	if v, ok := raw["votes"]; !ok || v == nil {
+		plain.Votes = []ReviewVote{}
 	}
 	*j = TaskReview(plain)
 	return nil
@@ -4076,10 +5344,10 @@ func (j *TaskStatus) UnmarshalJSON(value []byte) error {
 // UI.
 type TeamBoard struct {
 	// Members of the team run.
-	Roster []RosterEntry `json:"roster" yaml:"roster" mapstructure:"roster"`
+	Roster []RosterEntry `json:"roster,omitempty,omitzero" yaml:"roster,omitempty" mapstructure:"roster,omitempty"`
 
 	// Tasks on the board, in creation order.
-	Tasks []TeamTask `json:"tasks" yaml:"tasks" mapstructure:"tasks"`
+	Tasks []TeamTask `json:"tasks,omitempty,omitzero" yaml:"tasks,omitempty" mapstructure:"tasks,omitempty"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -4088,16 +5356,16 @@ func (j *TeamBoard) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
-	if _, ok := raw["roster"]; raw != nil && !ok {
-		return fmt.Errorf("field roster in TeamBoard: required")
-	}
-	if _, ok := raw["tasks"]; raw != nil && !ok {
-		return fmt.Errorf("field tasks in TeamBoard: required")
-	}
 	type Plain TeamBoard
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if v, ok := raw["roster"]; !ok || v == nil {
+		plain.Roster = []RosterEntry{}
+	}
+	if v, ok := raw["tasks"]; !ok || v == nil {
+		plain.Tasks = []TeamTask{}
 	}
 	*j = TeamBoard(plain)
 	return nil
@@ -4131,6 +5399,9 @@ func (j *TeamContext) UnmarshalJSON(value []byte) error {
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.TeamWorkflowId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "TeamWorkflowId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
 	}
 	if utf8.RuneCountInString(string(plain.TeamWorkflowId)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "team_workflow_id", 1)
@@ -4205,6 +5476,9 @@ func (j *TeamManifest) UnmarshalJSON(value []byte) error {
 	if plain.Roles != nil && len(plain.Roles) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "roles", 1)
 	}
+	if v, ok := raw["sharedSkills"]; !ok || v == nil {
+		plain.SharedSkills = []SharedSkill{}
+	}
 	if plain.Version != nil {
 		if matched, _ := regexp.MatchString(`^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$`, string(*plain.Version)); !matched {
 			return fmt.Errorf("field %s pattern match: must match %s", "Version", `^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$`)
@@ -4242,6 +5516,11 @@ func (j *TeamMemberStatus) UnmarshalJSON(value []byte) error {
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if plain.TaskId != nil {
+		if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(*plain.TaskId)); !matched {
+			return fmt.Errorf("field %s pattern match: must match %s", "TaskId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
+		}
 	}
 	if plain.TaskId != nil && utf8.RuneCountInString(string(*plain.TaskId)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "task_id", 1)
@@ -4290,6 +5569,9 @@ func (j *TeamMessage) UnmarshalJSON(value []byte) error {
 	}
 	if plain.ContentRef != nil && utf8.RuneCountInString(string(*plain.ContentRef)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "content_ref", 1)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.MessageId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "MessageId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
 	}
 	if utf8.RuneCountInString(string(plain.MessageId)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "message_id", 1)
@@ -4383,6 +5665,9 @@ func (j *TeamRole) UnmarshalJSON(value []byte) error {
 
 // A task on the board.
 type TeamTask struct {
+	// Files produced by the member.
+	Artifacts []Artifact `json:"artifacts,omitempty,omitzero" yaml:"artifacts,omitempty" mapstructure:"artifacts,omitempty"`
+
 	// Assignee corresponds to the JSON schema field "assignee".
 	Assignee *MemberName `json:"assignee,omitempty,omitzero" yaml:"assignee,omitempty" mapstructure:"assignee,omitempty"`
 
@@ -4390,10 +5675,22 @@ type TeamTask struct {
 	Attempts int `json:"attempts" yaml:"attempts" mapstructure:"attempts"`
 
 	// Task IDs this task waits for.
-	Deps []string `json:"deps" yaml:"deps" mapstructure:"deps"`
+	Deps []string `json:"deps,omitempty,omitzero" yaml:"deps,omitempty" mapstructure:"deps,omitempty"`
+
+	// Task requirements and acceptance criteria.
+	Description string `json:"description" yaml:"description" mapstructure:"description"`
+
+	// Tools allowed for this task; only narrows member permissions.
+	NarrowedTools []string `json:"narrowed_tools,omitempty,omitzero" yaml:"narrowed_tools,omitempty" mapstructure:"narrowed_tools,omitempty"`
+
+	// Member result for leader synthesis.
+	ResultText *string `json:"result_text,omitempty,omitzero" yaml:"result_text,omitempty" mapstructure:"result_text,omitempty"`
 
 	// Review corresponds to the JSON schema field "review".
 	Review *TaskReview `json:"review,omitempty,omitzero" yaml:"review,omitempty" mapstructure:"review,omitempty"`
+
+	// Object reference of a longer task specification.
+	SpecRef *string `json:"spec_ref,omitempty,omitzero" yaml:"spec_ref,omitempty" mapstructure:"spec_ref,omitempty"`
 
 	// Status corresponds to the JSON schema field "status".
 	Status TaskStatus `json:"status" yaml:"status" mapstructure:"status"`
@@ -4412,7 +5709,7 @@ type TeamTaskBrief struct {
 
 	// Tools the leader restricted the task to; empty means the member's full tool
 	// set. It can only narrow, never widen.
-	NarrowedTools []string `json:"narrowed_tools" yaml:"narrowed_tools" mapstructure:"narrowed_tools"`
+	NarrowedTools []string `json:"narrowed_tools,omitempty,omitzero" yaml:"narrowed_tools,omitempty" mapstructure:"narrowed_tools,omitempty"`
 
 	// Object store reference of a longer specification.
 	SpecRef *string `json:"spec_ref,omitempty,omitzero" yaml:"spec_ref,omitempty" mapstructure:"spec_ref,omitempty"`
@@ -4433,9 +5730,6 @@ func (j *TeamTaskBrief) UnmarshalJSON(value []byte) error {
 	if _, ok := raw["description"]; raw != nil && !ok {
 		return fmt.Errorf("field description in TeamTaskBrief: required")
 	}
-	if _, ok := raw["narrowed_tools"]; raw != nil && !ok {
-		return fmt.Errorf("field narrowed_tools in TeamTaskBrief: required")
-	}
 	if _, ok := raw["task_id"]; raw != nil && !ok {
 		return fmt.Errorf("field task_id in TeamTaskBrief: required")
 	}
@@ -4447,8 +5741,14 @@ func (j *TeamTaskBrief) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
+	if v, ok := raw["narrowed_tools"]; !ok || v == nil {
+		plain.NarrowedTools = []string{}
+	}
 	if plain.SpecRef != nil && utf8.RuneCountInString(string(*plain.SpecRef)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "spec_ref", 1)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.TaskId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "TaskId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
 	}
 	if utf8.RuneCountInString(string(plain.TaskId)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "task_id", 1)
@@ -4517,8 +5817,8 @@ func (j *TeamTask) UnmarshalJSON(value []byte) error {
 	if _, ok := raw["attempts"]; raw != nil && !ok {
 		return fmt.Errorf("field attempts in TeamTask: required")
 	}
-	if _, ok := raw["deps"]; raw != nil && !ok {
-		return fmt.Errorf("field deps in TeamTask: required")
+	if _, ok := raw["description"]; raw != nil && !ok {
+		return fmt.Errorf("field description in TeamTask: required")
 	}
 	if _, ok := raw["status"]; raw != nil && !ok {
 		return fmt.Errorf("field status in TeamTask: required")
@@ -4534,8 +5834,23 @@ func (j *TeamTask) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
+	if v, ok := raw["artifacts"]; !ok || v == nil {
+		plain.Artifacts = []Artifact{}
+	}
 	if 0 > plain.Attempts {
 		return fmt.Errorf("field %s: must be >= %v", "attempts", 0)
+	}
+	if v, ok := raw["deps"]; !ok || v == nil {
+		plain.Deps = []string{}
+	}
+	if v, ok := raw["narrowed_tools"]; !ok || v == nil {
+		plain.NarrowedTools = []string{}
+	}
+	if plain.SpecRef != nil && utf8.RuneCountInString(string(*plain.SpecRef)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "spec_ref", 1)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.TaskId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "TaskId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
 	}
 	if utf8.RuneCountInString(string(plain.TaskId)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "task_id", 1)
@@ -4547,10 +5862,150 @@ func (j *TeamTask) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+type TokenPurpose string
+
+const TokenPurposeSandbox TokenPurpose = "sandbox"
+const TokenPurposeSegment TokenPurpose = "segment"
+
+var enumValues_TokenPurpose = []interface{}{
+	"segment",
+	"sandbox",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *TokenPurpose) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_TokenPurpose {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_TokenPurpose, v)
+	}
+	*j = TokenPurpose(v)
+	return nil
+}
+
+// POST /internal/v1/tokens authenticated by Authorization: Bearer
+// <ORBIT_WORKER_SERVICE_TOKEN>. Internal listener only, no edge route. Production
+// uses internal listener + mTLS (R1 service credentials, R2 mTLS). Control checks
+// active running run and current uncommitted seq; after segment commit old seq is
+// rejected by run state, without a revocation list. Worker may renew within a
+// segment. Sandbox purpose additionally binds lease_id.
+type TokenRequest struct {
+	// Temporal activity attempt.
+	Attempt int `json:"attempt" yaml:"attempt" mapstructure:"attempt"`
+
+	// Lease bound to sandbox capability.
+	LeaseId *string `json:"lease_id,omitempty,omitzero" yaml:"lease_id,omitempty" mapstructure:"lease_id,omitempty"`
+
+	// Member corresponds to the JSON schema field "member".
+	Member MemberName `json:"member" yaml:"member" mapstructure:"member"`
+
+	// Purpose corresponds to the JSON schema field "purpose".
+	Purpose TokenPurpose `json:"purpose" yaml:"purpose" mapstructure:"purpose"`
+
+	// Running run.
+	RunId string `json:"run_id" yaml:"run_id" mapstructure:"run_id"`
+
+	// Current uncommitted segment.
+	Seq int `json:"seq" yaml:"seq" mapstructure:"seq"`
+
+	// Tenant used for the RLS run lookup.
+	TenantId string `json:"tenant_id" yaml:"tenant_id" mapstructure:"tenant_id"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *TokenRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["attempt"]; raw != nil && !ok {
+		return fmt.Errorf("field attempt in TokenRequest: required")
+	}
+	if _, ok := raw["member"]; raw != nil && !ok {
+		return fmt.Errorf("field member in TokenRequest: required")
+	}
+	if _, ok := raw["purpose"]; raw != nil && !ok {
+		return fmt.Errorf("field purpose in TokenRequest: required")
+	}
+	if _, ok := raw["run_id"]; raw != nil && !ok {
+		return fmt.Errorf("field run_id in TokenRequest: required")
+	}
+	if _, ok := raw["seq"]; raw != nil && !ok {
+		return fmt.Errorf("field seq in TokenRequest: required")
+	}
+	if _, ok := raw["tenant_id"]; raw != nil && !ok {
+		return fmt.Errorf("field tenant_id in TokenRequest: required")
+	}
+	type Plain TokenRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if 1 > plain.Attempt {
+		return fmt.Errorf("field %s: must be >= %v", "attempt", 1)
+	}
+	if plain.LeaseId != nil {
+		if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(*plain.LeaseId)); !matched {
+			return fmt.Errorf("field %s pattern match: must match %s", "LeaseId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
+		}
+	}
+	if 1 > plain.Seq {
+		return fmt.Errorf("field %s: must be >= %v", "seq", 1)
+	}
+	*j = TokenRequest(plain)
+	return nil
+}
+
+// Five-minute capability binding tenant/run/member/seq/purpose and optional lease;
+// never record in Temporal history.
+type TokenResponse struct {
+	// Token expires five minutes after issue.
+	ExpiresAt time.Time `json:"expires_at" yaml:"expires_at" mapstructure:"expires_at"`
+
+	// Bearer capability.
+	Token Secret `json:"token" yaml:"token" mapstructure:"token"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *TokenResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["expires_at"]; raw != nil && !ok {
+		return fmt.Errorf("field expires_at in TokenResponse: required")
+	}
+	if _, ok := raw["token"]; raw != nil && !ok {
+		return fmt.Errorf("field token in TokenResponse: required")
+	}
+	type Plain TokenResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(string(plain.Token)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "token", 1)
+	}
+	*j = TokenResponse(plain)
+	return nil
+}
+
 // The tool call that needs approval.
 type ToolApprovalRequest struct {
 	// Arguments rendered for a human, truncated and with secrets masked.
 	ArgsPreview string `json:"args_preview" yaml:"args_preview" mapstructure:"args_preview"`
+
+	// Identifier of the tool.call requiring approval.
+	CallId string `json:"call_id" yaml:"call_id" mapstructure:"call_id"`
 
 	// EffectClass corresponds to the JSON schema field "effect_class".
 	EffectClass EffectClass `json:"effect_class" yaml:"effect_class" mapstructure:"effect_class"`
@@ -4560,7 +6015,7 @@ type ToolApprovalRequest struct {
 
 	// Why the policy asks: the matched rules and the shell or path findings, in plain
 	// text.
-	RiskReasons []string `json:"risk_reasons" yaml:"risk_reasons" mapstructure:"risk_reasons"`
+	RiskReasons []string `json:"risk_reasons,omitempty,omitzero" yaml:"risk_reasons,omitempty" mapstructure:"risk_reasons,omitempty"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -4572,22 +6027,28 @@ func (j *ToolApprovalRequest) UnmarshalJSON(value []byte) error {
 	if _, ok := raw["args_preview"]; raw != nil && !ok {
 		return fmt.Errorf("field args_preview in ToolApprovalRequest: required")
 	}
+	if _, ok := raw["call_id"]; raw != nil && !ok {
+		return fmt.Errorf("field call_id in ToolApprovalRequest: required")
+	}
 	if _, ok := raw["effect_class"]; raw != nil && !ok {
 		return fmt.Errorf("field effect_class in ToolApprovalRequest: required")
 	}
 	if _, ok := raw["name"]; raw != nil && !ok {
 		return fmt.Errorf("field name in ToolApprovalRequest: required")
 	}
-	if _, ok := raw["risk_reasons"]; raw != nil && !ok {
-		return fmt.Errorf("field risk_reasons in ToolApprovalRequest: required")
-	}
 	type Plain ToolApprovalRequest
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.CallId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "CallId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
+	}
 	if utf8.RuneCountInString(string(plain.Name)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "name", 1)
+	}
+	if v, ok := raw["risk_reasons"]; !ok || v == nil {
+		plain.RiskReasons = []string{}
 	}
 	*j = ToolApprovalRequest(plain)
 	return nil
@@ -4630,6 +6091,9 @@ func (j *ToolCall) UnmarshalJSON(value []byte) error {
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.CallId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "CallId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
 	}
 	if utf8.RuneCountInString(string(plain.CallId)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "call_id", 1)
@@ -4708,6 +6172,9 @@ func (j *ToolResult) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.CallId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "CallId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
+	}
 	if utf8.RuneCountInString(string(plain.CallId)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "call_id", 1)
 	}
@@ -4723,8 +6190,10 @@ type ToolRule struct {
 	// Decision corresponds to the JSON schema field "decision".
 	Decision ToolDecision `json:"decision" yaml:"decision" mapstructure:"decision"`
 
-	// Pattern the call arguments must match for the rule to apply; the rule applies
-	// to every call when absent.
+	// Glob using Go path.Match semantics: * matches zero or more non-slash
+	// characters; ? matches one non-slash Unicode character; [ranges], [^ranges] and
+	// backslash escapes follow path.Match. Matches the entire argument string (RFC
+	// 8785 JCS for structured arguments). Invalid patterns are errors.
 	Pattern *string `json:"pattern,omitempty,omitzero" yaml:"pattern,omitempty" mapstructure:"pattern,omitempty"`
 
 	// Tool name.
@@ -4762,6 +6231,24 @@ func (j *ToolRule) UnmarshalJSON(value []byte) error {
 type ToolsSpec struct {
 	// Built-in tools to enable, from the platform allow-list.
 	Builtin []string `json:"builtin,omitempty,omitzero" yaml:"builtin,omitempty" mapstructure:"builtin,omitempty"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ToolsSpec) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	type Plain ToolsSpec
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if v, ok := raw["builtin"]; !ok || v == nil {
+		plain.Builtin = []string{}
+	}
+	*j = ToolsSpec(plain)
+	return nil
 }
 
 // An external write that started and may or may not have happened.
@@ -4807,8 +6294,9 @@ func (j *UncertainEffect) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// Token and credit consumption of one model over one segment, reported by the
-// worker. The ledger books it idempotently by run, member, segment and attempt.
+// Token counts and estimated integer millicredits for one model over one segment.
+// Exact usage is reported through UsageReport with per-request idempotency keys;
+// the control ledger is authoritative.
 type Usage struct {
 	// Prompt tokens served from the provider prompt cache.
 	CacheReadTokens int `json:"cache_read_tokens" yaml:"cache_read_tokens" mapstructure:"cache_read_tokens"`
@@ -4816,8 +6304,8 @@ type Usage struct {
 	// Prompt tokens written to the provider prompt cache.
 	CacheWriteTokens int `json:"cache_write_tokens" yaml:"cache_write_tokens" mapstructure:"cache_write_tokens"`
 
-	// Platform credits these tokens cost.
-	Credits float64 `json:"credits" yaml:"credits" mapstructure:"credits"`
+	// Integer millicredits (1000 = 1 credit). Platform credits these tokens cost.
+	CostMillicredits int64 `json:"cost_millicredits" yaml:"cost_millicredits" mapstructure:"cost_millicredits"`
 
 	// Prompt tokens billed at the normal input rate.
 	InputTokens int `json:"input_tokens" yaml:"input_tokens" mapstructure:"input_tokens"`
@@ -4830,10 +6318,142 @@ type Usage struct {
 	OutputTokens int `json:"output_tokens" yaml:"output_tokens" mapstructure:"output_tokens"`
 }
 
+// One model usage ledger item, idempotently booked by control.
+type UsageItem struct {
+	// Token count.
+	CacheReadTokens int `json:"cache_read_tokens" yaml:"cache_read_tokens" mapstructure:"cache_read_tokens"`
+
+	// Token count.
+	CacheWriteTokens int `json:"cache_write_tokens" yaml:"cache_write_tokens" mapstructure:"cache_write_tokens"`
+
+	// Stable key across retries.
+	IdempotencyKey string `json:"idempotency_key" yaml:"idempotency_key" mapstructure:"idempotency_key"`
+
+	// Token count.
+	InputTokens int `json:"input_tokens" yaml:"input_tokens" mapstructure:"input_tokens"`
+
+	// Model name.
+	Model string `json:"model" yaml:"model" mapstructure:"model"`
+
+	// Model request completion.
+	OccurredAt time.Time `json:"occurred_at" yaml:"occurred_at" mapstructure:"occurred_at"`
+
+	// Token count.
+	OutputTokens int `json:"output_tokens" yaml:"output_tokens" mapstructure:"output_tokens"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *UsageItem) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["cache_read_tokens"]; raw != nil && !ok {
+		return fmt.Errorf("field cache_read_tokens in UsageItem: required")
+	}
+	if _, ok := raw["cache_write_tokens"]; raw != nil && !ok {
+		return fmt.Errorf("field cache_write_tokens in UsageItem: required")
+	}
+	if _, ok := raw["idempotency_key"]; raw != nil && !ok {
+		return fmt.Errorf("field idempotency_key in UsageItem: required")
+	}
+	if _, ok := raw["input_tokens"]; raw != nil && !ok {
+		return fmt.Errorf("field input_tokens in UsageItem: required")
+	}
+	if _, ok := raw["model"]; raw != nil && !ok {
+		return fmt.Errorf("field model in UsageItem: required")
+	}
+	if _, ok := raw["occurred_at"]; raw != nil && !ok {
+		return fmt.Errorf("field occurred_at in UsageItem: required")
+	}
+	if _, ok := raw["output_tokens"]; raw != nil && !ok {
+		return fmt.Errorf("field output_tokens in UsageItem: required")
+	}
+	type Plain UsageItem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if 0 > plain.CacheReadTokens {
+		return fmt.Errorf("field %s: must be >= %v", "cache_read_tokens", 0)
+	}
+	if 0 > plain.CacheWriteTokens {
+		return fmt.Errorf("field %s: must be >= %v", "cache_write_tokens", 0)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.IdempotencyKey)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "IdempotencyKey", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
+	}
+	if 0 > plain.InputTokens {
+		return fmt.Errorf("field %s: must be >= %v", "input_tokens", 0)
+	}
+	if utf8.RuneCountInString(string(plain.Model)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "model", 1)
+	}
+	if 0 > plain.OutputTokens {
+		return fmt.Errorf("field %s: must be >= %v", "output_tokens", 0)
+	}
+	*j = UsageItem(plain)
+	return nil
+}
+
+// Report usage; control prices it using ModelPricing.
+type UsageReport struct {
+	// Model usage observations.
+	Items []UsageItem `json:"items,omitempty,omitzero" yaml:"items,omitempty" mapstructure:"items,omitempty"`
+}
+
+// Authoritative run usage after deduplication.
+type UsageReportResponse struct {
+	// Cumulative booked run cost.
+	RunUsedMillicredits int64 `json:"run_used_millicredits" yaml:"run_used_millicredits" mapstructure:"run_used_millicredits"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *UsageReportResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["run_used_millicredits"]; raw != nil && !ok {
+		return fmt.Errorf("field run_used_millicredits in UsageReportResponse: required")
+	}
+	type Plain UsageReportResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if 9007199254740991 < plain.RunUsedMillicredits {
+		return fmt.Errorf("field %s: must be <= %v", "run_used_millicredits", 9007199254740991)
+	}
+	if 0 > plain.RunUsedMillicredits {
+		return fmt.Errorf("field %s: must be >= %v", "run_used_millicredits", 0)
+	}
+	*j = UsageReportResponse(plain)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *UsageReport) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	type Plain UsageReport
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if v, ok := raw["items"]; !ok || v == nil {
+		plain.Items = []UsageItem{}
+	}
+	*j = UsageReport(plain)
+	return nil
+}
+
 // Cumulative consumption of the run so far. Only the final value is persisted.
 type UsageUpdate struct {
-	// Credits the run budget allows.
-	BudgetCredits *float64 `json:"budget_credits,omitempty,omitzero" yaml:"budget_credits,omitempty" mapstructure:"budget_credits,omitempty"`
+	// Integer millicredits (1000 = 1 credit). Credits the run budget allows.
+	BudgetMillicredits *int64 `json:"budget_millicredits,omitempty,omitzero" yaml:"budget_millicredits,omitempty" mapstructure:"budget_millicredits,omitempty"`
 
 	// Prompt tokens served from the cache.
 	CacheReadTokens int `json:"cache_read_tokens" yaml:"cache_read_tokens" mapstructure:"cache_read_tokens"`
@@ -4841,8 +6461,8 @@ type UsageUpdate struct {
 	// Prompt tokens written to the cache.
 	CacheWriteTokens int `json:"cache_write_tokens" yaml:"cache_write_tokens" mapstructure:"cache_write_tokens"`
 
-	// Credits consumed.
-	Credits float64 `json:"credits" yaml:"credits" mapstructure:"credits"`
+	// Integer millicredits (1000 = 1 credit). Credits consumed.
+	CostMillicredits int64 `json:"cost_millicredits" yaml:"cost_millicredits" mapstructure:"cost_millicredits"`
 
 	// Prompt tokens at the normal input rate.
 	InputTokens int `json:"input_tokens" yaml:"input_tokens" mapstructure:"input_tokens"`
@@ -4863,8 +6483,8 @@ func (j *UsageUpdate) UnmarshalJSON(value []byte) error {
 	if _, ok := raw["cache_write_tokens"]; raw != nil && !ok {
 		return fmt.Errorf("field cache_write_tokens in UsageUpdate: required")
 	}
-	if _, ok := raw["credits"]; raw != nil && !ok {
-		return fmt.Errorf("field credits in UsageUpdate: required")
+	if _, ok := raw["cost_millicredits"]; raw != nil && !ok {
+		return fmt.Errorf("field cost_millicredits in UsageUpdate: required")
 	}
 	if _, ok := raw["input_tokens"]; raw != nil && !ok {
 		return fmt.Errorf("field input_tokens in UsageUpdate: required")
@@ -4877,8 +6497,11 @@ func (j *UsageUpdate) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
-	if plain.BudgetCredits != nil && 0 > *plain.BudgetCredits {
-		return fmt.Errorf("field %s: must be >= %v", "budget_credits", 0)
+	if plain.BudgetMillicredits != nil && 9007199254740991 < *plain.BudgetMillicredits {
+		return fmt.Errorf("field %s: must be <= %v", "budget_millicredits", 9007199254740991)
+	}
+	if plain.BudgetMillicredits != nil && 0 > *plain.BudgetMillicredits {
+		return fmt.Errorf("field %s: must be >= %v", "budget_millicredits", 0)
 	}
 	if 0 > plain.CacheReadTokens {
 		return fmt.Errorf("field %s: must be >= %v", "cache_read_tokens", 0)
@@ -4886,8 +6509,11 @@ func (j *UsageUpdate) UnmarshalJSON(value []byte) error {
 	if 0 > plain.CacheWriteTokens {
 		return fmt.Errorf("field %s: must be >= %v", "cache_write_tokens", 0)
 	}
-	if 0 > plain.Credits {
-		return fmt.Errorf("field %s: must be >= %v", "credits", 0)
+	if 9007199254740991 < plain.CostMillicredits {
+		return fmt.Errorf("field %s: must be <= %v", "cost_millicredits", 9007199254740991)
+	}
+	if 0 > plain.CostMillicredits {
+		return fmt.Errorf("field %s: must be >= %v", "cost_millicredits", 0)
 	}
 	if 0 > plain.InputTokens {
 		return fmt.Errorf("field %s: must be >= %v", "input_tokens", 0)
@@ -4911,8 +6537,8 @@ func (j *Usage) UnmarshalJSON(value []byte) error {
 	if _, ok := raw["cache_write_tokens"]; raw != nil && !ok {
 		return fmt.Errorf("field cache_write_tokens in Usage: required")
 	}
-	if _, ok := raw["credits"]; raw != nil && !ok {
-		return fmt.Errorf("field credits in Usage: required")
+	if _, ok := raw["cost_millicredits"]; raw != nil && !ok {
+		return fmt.Errorf("field cost_millicredits in Usage: required")
 	}
 	if _, ok := raw["input_tokens"]; raw != nil && !ok {
 		return fmt.Errorf("field input_tokens in Usage: required")
@@ -4934,8 +6560,11 @@ func (j *Usage) UnmarshalJSON(value []byte) error {
 	if 0 > plain.CacheWriteTokens {
 		return fmt.Errorf("field %s: must be >= %v", "cache_write_tokens", 0)
 	}
-	if 0 > plain.Credits {
-		return fmt.Errorf("field %s: must be >= %v", "credits", 0)
+	if 9007199254740991 < plain.CostMillicredits {
+		return fmt.Errorf("field %s: must be <= %v", "cost_millicredits", 9007199254740991)
+	}
+	if 0 > plain.CostMillicredits {
+		return fmt.Errorf("field %s: must be >= %v", "cost_millicredits", 0)
 	}
 	if 0 > plain.InputTokens {
 		return fmt.Errorf("field %s: must be >= %v", "input_tokens", 0)
@@ -4984,6 +6613,7 @@ type YieldReason string
 
 const YieldReasonBudgetSoft YieldReason = "budget_soft"
 const YieldReasonCancel YieldReason = "cancel"
+const YieldReasonCompacted YieldReason = "compacted"
 const YieldReasonEffectBoundary YieldReason = "effect_boundary"
 const YieldReasonGoalContinue YieldReason = "goal_continue"
 const YieldReasonIterationCap YieldReason = "iteration_cap"
@@ -4998,6 +6628,7 @@ var enumValues_YieldReason = []interface{}{
 	"cancel",
 	"goal_continue",
 	"mailbox",
+	"compacted",
 }
 
 // UnmarshalJSON implements json.Unmarshaler.

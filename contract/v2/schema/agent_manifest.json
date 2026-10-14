@@ -2,16 +2,24 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://orbit.mindreon.com/contract/v2/agent_manifest.json",
   "description": "agent.json of an agent bundle.",
-  "x-exports": ["AgentManifest"],
+  "x-exports": [
+    "AgentManifest"
+  ],
   "$defs": {
     "AgentManifest": {
       "description": "agent.json of an agent bundle. orbit.agent/v1 files (schema, name, description, model as a string) are valid unchanged; every other field is new in orbit.agent/v2 and defaulted by the platform when absent. The file never holds credentials.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema", "name"],
+      "required": [
+        "schema",
+        "name"
+      ],
       "properties": {
         "schema": {
-          "enum": ["orbit.agent/v1", "orbit.agent/v2"],
+          "enum": [
+            "orbit.agent/v1",
+            "orbit.agent/v2"
+          ],
           "description": "Bundle format version."
         },
         "name": {
@@ -31,7 +39,8 @@
           "additionalProperties": {
             "type": "string"
           },
-          "description": "Display name by language tag, for example zh and en."
+          "description": "Display name by language tag, for example zh and en.",
+          "x-extra": "forbid"
         },
         "description": {
           "type": "string",
@@ -42,7 +51,8 @@
           "items": {
             "type": "string"
           },
-          "description": "Free-form labels for search."
+          "description": "Free-form labels for search.",
+          "default": []
         },
         "model": {
           "description": "The model profile to use: a profile name, or a profile with fallbacks tried in order when it is unavailable.",
@@ -63,7 +73,8 @@
           "items": {
             "$ref": "#/$defs/RailSpec"
           },
-          "description": "Agent rails to enable. The platform keeps an allow-list of rail types; others fail validation."
+          "description": "Agent rails to enable. The platform keeps an allow-list of rail types; others fail validation.",
+          "default": []
         },
         "limits": {
           "$ref": "#/$defs/AgentLimits"
@@ -74,13 +85,16 @@
         "compat": {
           "$ref": "#/$defs/Compat"
         }
-      }
+      },
+      "x-extra": "forbid"
     },
     "ModelSelection": {
       "description": "A model profile and its fallbacks.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["profile"],
+      "required": [
+        "profile"
+      ],
       "properties": {
         "profile": {
           "type": "string",
@@ -92,9 +106,11 @@
           "items": {
             "type": "string"
           },
-          "description": "Profiles to try, in order, when the first is unavailable."
+          "description": "Profiles to try, in order, when the first is unavailable.",
+          "default": []
         }
-      }
+      },
+      "x-extra": "forbid"
     },
     "ToolsSpec": {
       "description": "Tools of the agent.",
@@ -106,15 +122,20 @@
           "items": {
             "type": "string"
           },
-          "description": "Built-in tools to enable, from the platform allow-list."
+          "description": "Built-in tools to enable, from the platform allow-list.",
+          "default": []
         }
-      }
+      },
+      "x-extra": "forbid",
+      "required": []
     },
     "RailSpec": {
       "description": "One agent rail.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["type"],
+      "required": [
+        "type"
+      ],
       "properties": {
         "type": {
           "type": "string",
@@ -123,9 +144,11 @@
         },
         "config": {
           "type": "object",
-          "description": "Parameters of the rail; their schema depends on type."
+          "description": "Parameters of the rail; their schema depends on type.",
+          "x-extra": "forbid"
         }
-      }
+      },
+      "x-extra": "forbid"
     },
     "AgentLimits": {
       "description": "Limits the agent asks for. They are capped by tenant policy.",
@@ -137,22 +160,31 @@
           "minimum": 1,
           "description": "Maximum ReAct iterations across the whole run."
         },
-        "defaultRunBudgetCredits": {
-          "type": "number",
+        "default_run_budget_millicredits": {
+          "type": "integer",
           "minimum": 0,
-          "description": "Credit budget of a run when the caller sets none."
+          "description": "Integer millicredits (1000 = 1 credit). Credit budget of a run when the caller sets none.",
+          "maximum": 9007199254740991
         }
-      }
+      },
+      "x-extra": "forbid",
+      "required": []
     },
     "SecretScope": {
       "description": "Who owns the secret the agent asks for.",
-      "enum": ["tenant", "workspace", "user"]
+      "enum": [
+        "tenant",
+        "workspace",
+        "user"
+      ]
     },
     "SecretDeclaration": {
       "description": "A secret the agent needs. Only the name is declared; the value is bound by the installer.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["name"],
+      "required": [
+        "name"
+      ],
       "properties": {
         "name": {
           "type": "string",
@@ -162,7 +194,8 @@
         "scope": {
           "$ref": "#/$defs/SecretScope"
         }
-      }
+      },
+      "x-extra": "forbid"
     },
     "NetworkDeclaration": {
       "description": "Network rights the agent asks for.",
@@ -174,9 +207,12 @@
           "items": {
             "type": "string"
           },
-          "description": "Domain patterns the sandbox may reach; everything else is denied."
+          "description": "Domain patterns the sandbox may reach; everything else is denied.",
+          "default": []
         }
-      }
+      },
+      "x-extra": "forbid",
+      "required": []
     },
     "SandboxDeclaration": {
       "description": "Sandbox the agent asks for.",
@@ -188,7 +224,8 @@
           "minLength": 1,
           "description": "Sandbox image and resource profile."
         }
-      }
+      },
+      "x-extra": "forbid"
     },
     "AgentPermissions": {
       "description": "Permissions the agent declares. They are the upper bound; tenant, workspace and user policy can only narrow them.",
@@ -203,26 +240,31 @@
           "items": {
             "$ref": "#/$defs/SecretDeclaration"
           },
-          "description": "Secrets the agent may be granted."
+          "description": "Secrets the agent may be granted.",
+          "default": []
         },
         "dataScopes": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Data the agent may read, for example session_files or workspace_knowledge:read."
+          "description": "Data the agent may read, for example session_files or workspace_knowledge:read.",
+          "default": []
         },
         "effectClasses": {
           "type": "array",
           "items": {
             "$ref": "common.json#/$defs/EffectClass"
           },
-          "description": "Side-effect classes the agent may perform."
+          "description": "Side-effect classes the agent may perform.",
+          "default": []
         },
         "sandbox": {
           "$ref": "#/$defs/SandboxDeclaration"
         }
-      }
+      },
+      "x-extra": "forbid",
+      "required": []
     },
     "Compat": {
       "description": "Versions of the platform the bundle was written for.",
@@ -239,7 +281,8 @@
           "minLength": 1,
           "description": "Version range of the platform, such as >=1.0."
         }
-      }
+      },
+      "x-extra": "forbid"
     }
   }
 }

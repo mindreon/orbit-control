@@ -3,39 +3,52 @@
     {
       "name": "leader",
       "role": "leader",
-      "status": "idle"
+      "status": "idle",
+      "description": "Member capability."
     },
     {
       "name": "researcher-1",
       "role": "teammate",
-      "status": "working"
+      "status": "working",
+      "description": "Member capability."
     },
     {
       "name": "reviewer",
       "role": "reviewer",
-      "status": "waiting_approval"
+      "status": "waiting_approval",
+      "description": "Member capability."
     }
   ],
   "tasks": [
     {
       "task_id": "task-1",
       "title": "Collect 2025 filings",
-      "deps": [],
       "assignee": "researcher-1",
       "status": "in_review",
       "attempts": -1,
       "review": {
-        "reviewer": "reviewer",
-        "verdict": "reject",
-        "reason": "Q3 is missing."
-      }
+        "reviewers": [
+          "reviewer"
+        ],
+        "votes": [
+          {
+            "reviewer": "reviewer",
+            "verdict": "reject",
+            "comment": "Q3 is missing."
+          }
+        ]
+      },
+      "description": "Task acceptance criteria."
     },
     {
       "task_id": "task-2",
       "title": "Cross-check figures",
-      "deps": ["task-1"],
+      "deps": [
+        "task-1"
+      ],
       "status": "blocked",
-      "attempts": 0
+      "attempts": 0,
+      "description": "Task acceptance criteria."
     }
   ]
 }

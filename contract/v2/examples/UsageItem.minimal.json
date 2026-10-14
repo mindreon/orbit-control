@@ -1,0 +1,9 @@
+{
+  "idempotency_key": "example",
+  "model": "example",
+  "input_tokens": 0,
+  "output_tokens": 0,
+  "cache_read_tokens": 0,
+  "cache_write_tokens": 0,
+  "occurred_at": "2026-10-15T00:00:00Z"
+}

@@ -1,6 +1,6 @@
 {
   "lock_id": "lk-01J9Y",
-  "digest": "sha256:ddafc776fa0281d814f862047447fdd4ce585e3a3e0cd0eee9bbc93471dfd32c",
+  "digest": "sha256:97040118ef5ce81fe54cf6b7d15e5f0546245ff5d46338f27691039eb5aa7390",
   "entry": {
     "kind": "team",
     "ref": "acme/research-squad",
@@ -11,16 +11,16 @@
       "kind": "team",
       "ref": "acme/research-squad",
       "version": "2.0.0",
-      "digest": "sha256:158d4bb53e88ea9b508d7964675179f8dd6eafefc80e2e48c8a08a9be218e17d",
+      "digest": "sha256:c12eaaef399233c372dbb9df5ebdad204857dc0db859c25777c56fdab567211b",
       "files": [
         {
           "path": "team.json",
-          "sha256": "fbda6be3a00b3b5af9d9d04d873bc5b33008865d82d48ba83db168c3a223b6be",
+          "sha256": "sha256:fbda6be3a00b3b5af9d9d04d873bc5b33008865d82d48ba83db168c3a223b6be",
           "size_bytes": 700
         },
         {
           "path": "AGENTS.md",
-          "sha256": "6e71f492755ef7621ca89793b86abd3c5985c17c97701e6deaa2d08e007c530a",
+          "sha256": "sha256:6e71f492755ef7621ca89793b86abd3c5985c17c97701e6deaa2d08e007c530a",
           "size_bytes": 2100
         }
       ]
@@ -29,31 +29,31 @@
       "kind": "agent",
       "ref": "acme/contract-assistant",
       "version": "1.3.0",
-      "digest": "sha256:7901392c4119a6f752f5fa5384a279f8d9bc6a3cdfc827c69f9a3f5c36723f58",
+      "digest": "sha256:089035214c256784cb38d5932dd5a6bad234e55aa81ab5cc8350a70c039d04bc",
       "files": [
         {
           "path": "AGENTS.md",
-          "sha256": "916b61696f71c569bddbf6ed3ba00f1a08268cfcf3f2aec78a7eed6bcf59c1e2",
+          "sha256": "sha256:916b61696f71c569bddbf6ed3ba00f1a08268cfcf3f2aec78a7eed6bcf59c1e2",
           "size_bytes": 1840
         },
         {
           "path": "SOUL.md",
-          "sha256": "6df5bbccddc90d583bccecf25cba4132d428845e3da04a82616ecc5857a78d00",
+          "sha256": "sha256:6df5bbccddc90d583bccecf25cba4132d428845e3da04a82616ecc5857a78d00",
           "size_bytes": 420
         },
         {
           "path": "agent.json",
-          "sha256": "106c63b83d5d3a7890853266631a0400415bf13f387f67ee9939e780724c5a0c",
+          "sha256": "sha256:106c63b83d5d3a7890853266631a0400415bf13f387f67ee9939e780724c5a0c",
           "size_bytes": 610
         },
         {
           "path": "skills.json",
-          "sha256": "aebf27e29b42cc1649d75bfab0d06a9f5ba1c739c7eb3dd5ac10f2bdba1abe37",
+          "sha256": "sha256:aebf27e29b42cc1649d75bfab0d06a9f5ba1c739c7eb3dd5ac10f2bdba1abe37",
           "size_bytes": 220
         },
         {
           "path": "mcp.json",
-          "sha256": "8e9327312fe4d23e418ce22ea861bfb75ebe752e9c2a6f21ba6b8c16a5452d4f",
+          "sha256": "sha256:8e9327312fe4d23e418ce22ea861bfb75ebe752e9c2a6f21ba6b8c16a5452d4f",
           "size_bytes": 180
         }
       ]
@@ -62,16 +62,16 @@
       "kind": "skill",
       "ref": "acme/pdf-extract",
       "version": "2.1.4",
-      "digest": "sha256:1c543428be2febb90a4e9d31bdc319199d209cac136bdf403ffeb22376129ac6",
+      "digest": "sha256:cc456bfc7d58b6b02b888f062783a7114dc6271c695dbee41aa4bddec0bb9160",
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "acf2db71ae662486c22ae9634527b911c67be0223d29ad51a7fcf8aa4aa4f7b6",
+          "sha256": "sha256:acf2db71ae662486c22ae9634527b911c67be0223d29ad51a7fcf8aa4aa4f7b6",
           "size_bytes": 3100
         },
         {
           "path": "scripts/extract.py",
-          "sha256": "c8dbe5bc70c8704b68fce0ed032bec98b84dbe3c7d9a2283f706b4b7af4f611f",
+          "sha256": "sha256:c8dbe5bc70c8704b68fce0ed032bec98b84dbe3c7d9a2283f706b4b7af4f611f",
           "size_bytes": 5200
         }
       ]
@@ -80,11 +80,11 @@
       "kind": "mcp_server",
       "ref": "acme/mail-mcp",
       "version": "1.0.2",
-      "digest": "sha256:af33f2aa28594719d9a247f0df97b9000f665dea8a852f888648f3ae8a96dae5",
+      "digest": "sha256:92488b267ff87fc4fd6c884c08ddba0872abe5f6d285b1a46ad7e89db86d8155",
       "files": [
         {
           "path": "mcp_server.json",
-          "sha256": "c67d0e8c808c85d7d2a3387990b8dace4ad82584c636c7fa8b24f79cfa2b7d80",
+          "sha256": "sha256:c67d0e8c808c85d7d2a3387990b8dace4ad82584c636c7fa8b24f79cfa2b7d80",
           "size_bytes": 400
         }
       ]
@@ -92,16 +92,157 @@
   ],
   "effective_permissions": {
     "network": {
-      "egress": ["*.acme-internal.com", "api.example-ocr.com"]
+      "egress": [
+        "*.acme-internal.com",
+        "api.example-ocr.com"
+      ]
     },
     "secrets": [
       {
         "name": "OCR_API_KEY"
       }
     ],
-    "effect_classes": ["read_only", "sandbox_write", "external_write"],
-    "data_scopes": ["session_files", "workspace_knowledge:read"],
+    "effect_classes": [
+      "read_only",
+      "sandbox_write",
+      "external_write"
+    ],
+    "data_scopes": [
+      "session_files",
+      "workspace_knowledge:read"
+    ],
     "sandbox_profile": "office-standard",
-    "tools_builtin": ["read_file", "write_file", "shell", "web_fetch"]
-  }
+    "tools_builtin": [
+      "read_file",
+      "write_file",
+      "shell",
+      "web_fetch"
+    ]
+  },
+  "v": 1,
+  "members": [
+    {
+      "name": "leader",
+      "role": "leader",
+      "description": "Coordinates research and synthesis.",
+      "agent_entry": 1,
+      "effective_permissions": {
+        "network": {
+          "egress": [
+            "*.acme-internal.com",
+            "api.example-ocr.com"
+          ]
+        },
+        "secrets": [
+          {
+            "name": "OCR_API_KEY"
+          }
+        ],
+        "effect_classes": [
+          "read_only",
+          "sandbox_write",
+          "external_write"
+        ],
+        "data_scopes": [
+          "session_files",
+          "workspace_knowledge:read"
+        ],
+        "sandbox_profile": "office-standard",
+        "tools_builtin": [
+          "read_file",
+          "write_file",
+          "shell",
+          "web_fetch"
+        ]
+      },
+      "skills": [
+        2
+      ],
+      "mcp": [
+        3
+      ]
+    },
+    {
+      "name": "researcher",
+      "role": "teammate",
+      "description": "Researches assigned questions.",
+      "agent_entry": 1,
+      "effective_permissions": {
+        "network": {
+          "egress": [
+            "*.acme-internal.com",
+            "api.example-ocr.com"
+          ]
+        },
+        "secrets": [
+          {
+            "name": "OCR_API_KEY"
+          }
+        ],
+        "effect_classes": [
+          "read_only",
+          "sandbox_write",
+          "external_write"
+        ],
+        "data_scopes": [
+          "session_files",
+          "workspace_knowledge:read"
+        ],
+        "sandbox_profile": "office-standard",
+        "tools_builtin": [
+          "read_file",
+          "write_file",
+          "shell",
+          "web_fetch"
+        ]
+      },
+      "skills": [
+        2
+      ],
+      "mcp": [
+        3
+      ]
+    },
+    {
+      "name": "reviewer",
+      "role": "reviewer",
+      "description": "Reviews member results.",
+      "agent_entry": 1,
+      "effective_permissions": {
+        "network": {
+          "egress": [
+            "*.acme-internal.com",
+            "api.example-ocr.com"
+          ]
+        },
+        "secrets": [
+          {
+            "name": "OCR_API_KEY"
+          }
+        ],
+        "effect_classes": [
+          "read_only",
+          "sandbox_write",
+          "external_write"
+        ],
+        "data_scopes": [
+          "session_files",
+          "workspace_knowledge:read"
+        ],
+        "sandbox_profile": "office-standard",
+        "tools_builtin": [
+          "read_file",
+          "write_file",
+          "shell",
+          "web_fetch"
+        ]
+      },
+      "skills": [
+        2
+      ],
+      "mcp": [
+        3
+      ]
+    }
+  ]
 }

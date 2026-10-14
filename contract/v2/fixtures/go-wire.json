@@ -1,0 +1,3521 @@
+[
+  {
+    "kind": "AgentManifest",
+    "case": "example:AgentManifest.v1",
+    "valid": true,
+    "payload": {
+      "description": "Compares contract clauses.",
+      "model": "default",
+      "name": "Contract assistant",
+      "schema": "orbit.agent/v1"
+    }
+  },
+  {
+    "kind": "AgentManifest",
+    "case": "example:AgentManifest.v2",
+    "valid": true,
+    "payload": {
+      "compat": {
+        "kernel": "openjiuwen\u003e=0.1.19,\u003c0.2",
+        "platform": "\u003e=1.0"
+      },
+      "description": "Compares contract clauses and flags risks.",
+      "displayName": {
+        "en": "Contract Assistant",
+        "zh": "合同助手"
+      },
+      "limits": {
+        "default_run_budget_millicredits": 50000,
+        "maxIterationsPerRun": 200
+      },
+      "model": {
+        "fallback": [
+          "fast-default"
+        ],
+        "profile": "reasoning-default"
+      },
+      "name": "contract-assistant",
+      "permissions": {
+        "dataScopes": [
+          "session_files",
+          "workspace_knowledge:read"
+        ],
+        "effectClasses": [
+          "read_only",
+          "sandbox_write",
+          "external_write"
+        ],
+        "network": {
+          "egress": [
+            "*.acme-internal.com",
+            "api.example-ocr.com"
+          ]
+        },
+        "sandbox": {
+          "profile": "office-standard"
+        },
+        "secrets": [
+          {
+            "name": "OCR_API_KEY",
+            "scope": "tenant"
+          }
+        ]
+      },
+      "rails": [
+        {
+          "type": "context_compression"
+        },
+        {
+          "config": {
+            "max_repeats": 4
+          },
+          "type": "circuit_breaker"
+        }
+      ],
+      "schema": "orbit.agent/v2",
+      "tags": [
+        "legal",
+        "office"
+      ],
+      "tools": {
+        "builtin": [
+          "read_file",
+          "write_file",
+          "shell",
+          "web_fetch"
+        ]
+      },
+      "version": "1.3.0"
+    }
+  },
+  {
+    "kind": "Artifact",
+    "case": "example:Artifact.markdown",
+    "valid": true,
+    "payload": {
+      "digest": "sha256:761b7ad8ad439b2855fcbb611331c646ef0870b0631247bba3f3025cb6df5a53",
+      "mime": "text/markdown",
+      "object_ref": "t/3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f/artifacts/9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d/report/summary.md",
+      "path": "report/summary.md",
+      "size_bytes": 2048
+    }
+  },
+  {
+    "kind": "AssetCheckFinding",
+    "case": "example:AssetCheckFinding.minimal",
+    "valid": true,
+    "payload": {
+      "check": "structure",
+      "message": "example",
+      "rule_id": "example",
+      "severity": "block"
+    }
+  },
+  {
+    "kind": "AssetCheckInput",
+    "case": "example:AssetCheckInput.minimal",
+    "valid": true,
+    "payload": {
+      "asset_id": "01900000-0000-7000-8000-000000000001",
+      "asset_version_id": "01900000-0000-7000-8000-000000000001",
+      "blob_ref": "example",
+      "content_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "kind": "agent",
+      "tenant_id": "01900000-0000-7000-8000-000000000001",
+      "v": 1
+    }
+  },
+  {
+    "kind": "AssetCheckReport",
+    "case": "example:AssetCheckReport.minimal",
+    "valid": true,
+    "payload": {
+      "check": "structure",
+      "checker_version": "example",
+      "duration_ms": 0
+    }
+  },
+  {
+    "kind": "AssignTaskInput",
+    "case": "example:AssignTaskInput.narrowed",
+    "valid": true,
+    "payload": {
+      "caller": "leader",
+      "member": "researcher-2",
+      "narrowed_tools": [
+        "read_file"
+      ],
+      "request_id": "effect-1",
+      "task_id": "task-2"
+    }
+  },
+  {
+    "kind": "CheckpointKeyResponse",
+    "case": "example:CheckpointKeyResponse.minimal",
+    "valid": true,
+    "payload": {
+      "key": "example",
+      "key_version": 1
+    }
+  },
+  {
+    "kind": "CompleteTaskInput",
+    "case": "example:CompleteTaskInput.with_artifact",
+    "valid": true,
+    "payload": {
+      "artifacts": [
+        {
+          "digest": "sha256:761b7ad8ad439b2855fcbb611331c646ef0870b0631247bba3f3025cb6df5a53",
+          "mime": "text/markdown",
+          "object_ref": "t/3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f/artifacts/9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d/report/summary.md",
+          "path": "report/summary.md",
+          "size_bytes": 2048
+        }
+      ],
+      "caller": "researcher-1",
+      "request_id": "effect-1",
+      "result_text": "Found 4 filings; list attached.",
+      "task_id": "task-1"
+    }
+  },
+  {
+    "kind": "CreateTasksInput",
+    "case": "example:CreateTasksInput.two_tasks",
+    "valid": true,
+    "payload": {
+      "caller": "leader",
+      "request_id": "effect-1",
+      "tasks": [
+        {
+          "assignee": "researcher-1",
+          "description": "Download and list every 2025 filing.",
+          "title": "Collect 2025 filings"
+        },
+        {
+          "deps": [
+            "task-1"
+          ],
+          "description": "Compare the figures across filings.",
+          "title": "Cross-check figures"
+        }
+      ]
+    }
+  },
+  {
+    "kind": "CreateTasksOutput",
+    "case": "example:CreateTasksOutput.ids",
+    "valid": true,
+    "payload": {
+      "task_ids": [
+        "task-1",
+        "task-2"
+      ]
+    }
+  },
+  {
+    "kind": "Decision",
+    "case": "example:Decision.allow_always",
+    "valid": true,
+    "payload": {
+      "arg_pattern": "{\"path\":\"/workspace/*\"}",
+      "choice": "allow_always",
+      "kind": "tool_approval",
+      "scope": "user"
+    }
+  },
+  {
+    "kind": "Decision",
+    "case": "example:Decision.ask_user",
+    "valid": true,
+    "payload": {
+      "answer": "contract-a.docx",
+      "kind": "ask_user"
+    }
+  },
+  {
+    "kind": "Decision",
+    "case": "example:Decision.effect_uncertain",
+    "valid": true,
+    "payload": {
+      "choice": "treat_as_done",
+      "kind": "effect_uncertain"
+    }
+  },
+  {
+    "kind": "Decision",
+    "case": "example:Decision.tool_approval",
+    "valid": true,
+    "payload": {
+      "choice": "allow_once",
+      "comment": "ok to send",
+      "kind": "tool_approval"
+    }
+  },
+  {
+    "kind": "FinishTeamInput",
+    "case": "example:FinishTeamInput.summary",
+    "valid": true,
+    "payload": {
+      "caller": "leader",
+      "request_id": "effect-1",
+      "summary": "All tasks completed; the report is in report/summary.md."
+    }
+  },
+  {
+    "kind": "GetLockResponse",
+    "case": "example:GetLockResponse.text_and_blob",
+    "valid": true,
+    "payload": {
+      "contents": [
+        {
+          "kind": "agent",
+          "path": "AGENTS.md",
+          "ref": "acme/contract-assistant",
+          "sha256": "sha256:916b61696f71c569bddbf6ed3ba00f1a08268cfcf3f2aec78a7eed6bcf59c1e2",
+          "text": "You review contracts.\n",
+          "version": "1.3.0"
+        },
+        {
+          "blob_url": "https://objects.orbit.example.com/t/3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f/blobs/c8dbe5bc70c8704b68fce0ed032bec98b84dbe3c7d9a2283f706b4b7af4f611f?sig=abc",
+          "kind": "skill",
+          "path": "scripts/extract.py",
+          "ref": "acme/pdf-extract",
+          "sha256": "sha256:c8dbe5bc70c8704b68fce0ed032bec98b84dbe3c7d9a2283f706b4b7af4f611f",
+          "version": "2.1.4"
+        }
+      ],
+      "lock": {
+        "digest": "sha256:0f1fd61e653bfe1ec62c63e0ed9a9b8771e72b2a57895ab20f3d8822a207491d",
+        "effective_permissions": {
+          "data_scopes": [
+            "session_files",
+            "workspace_knowledge:read"
+          ],
+          "effect_classes": [
+            "read_only",
+            "sandbox_write",
+            "external_write"
+          ],
+          "network": {
+            "egress": [
+              "*.acme-internal.com",
+              "api.example-ocr.com"
+            ]
+          },
+          "sandbox_profile": "office-standard",
+          "secrets": [
+            {
+              "name": "OCR_API_KEY"
+            }
+          ],
+          "tools_builtin": [
+            "read_file",
+            "write_file",
+            "shell",
+            "web_fetch"
+          ]
+        },
+        "entries": [
+          {
+            "digest": "sha256:089035214c256784cb38d5932dd5a6bad234e55aa81ab5cc8350a70c039d04bc",
+            "files": [
+              {
+                "path": "AGENTS.md",
+                "sha256": "sha256:916b61696f71c569bddbf6ed3ba00f1a08268cfcf3f2aec78a7eed6bcf59c1e2",
+                "size_bytes": 1840
+              },
+              {
+                "path": "SOUL.md",
+                "sha256": "sha256:6df5bbccddc90d583bccecf25cba4132d428845e3da04a82616ecc5857a78d00",
+                "size_bytes": 420
+              },
+              {
+                "path": "agent.json",
+                "sha256": "sha256:106c63b83d5d3a7890853266631a0400415bf13f387f67ee9939e780724c5a0c",
+                "size_bytes": 610
+              },
+              {
+                "path": "skills.json",
+                "sha256": "sha256:aebf27e29b42cc1649d75bfab0d06a9f5ba1c739c7eb3dd5ac10f2bdba1abe37",
+                "size_bytes": 220
+              },
+              {
+                "path": "mcp.json",
+                "sha256": "sha256:8e9327312fe4d23e418ce22ea861bfb75ebe752e9c2a6f21ba6b8c16a5452d4f",
+                "size_bytes": 180
+              }
+            ],
+            "kind": "agent",
+            "ref": "acme/contract-assistant",
+            "version": "1.3.0"
+          },
+          {
+            "digest": "sha256:cc456bfc7d58b6b02b888f062783a7114dc6271c695dbee41aa4bddec0bb9160",
+            "files": [
+              {
+                "path": "SKILL.md",
+                "sha256": "sha256:acf2db71ae662486c22ae9634527b911c67be0223d29ad51a7fcf8aa4aa4f7b6",
+                "size_bytes": 3100
+              },
+              {
+                "path": "scripts/extract.py",
+                "sha256": "sha256:c8dbe5bc70c8704b68fce0ed032bec98b84dbe3c7d9a2283f706b4b7af4f611f",
+                "size_bytes": 5200
+              }
+            ],
+            "kind": "skill",
+            "ref": "acme/pdf-extract",
+            "version": "2.1.4"
+          },
+          {
+            "digest": "sha256:92488b267ff87fc4fd6c884c08ddba0872abe5f6d285b1a46ad7e89db86d8155",
+            "files": [
+              {
+                "path": "mcp_server.json",
+                "sha256": "sha256:c67d0e8c808c85d7d2a3387990b8dace4ad82584c636c7fa8b24f79cfa2b7d80",
+                "size_bytes": 400
+              }
+            ],
+            "kind": "mcp_server",
+            "ref": "acme/mail-mcp",
+            "version": "1.0.2"
+          }
+        ],
+        "entry": {
+          "kind": "agent",
+          "ref": "acme/contract-assistant",
+          "version": "1.3.0"
+        },
+        "lock_id": "lk-01J9X",
+        "members": [
+          {
+            "agent_entry": 0,
+            "description": "Single agent.",
+            "effective_permissions": {
+              "data_scopes": [
+                "session_files",
+                "workspace_knowledge:read"
+              ],
+              "effect_classes": [
+                "read_only",
+                "sandbox_write",
+                "external_write"
+              ],
+              "network": {
+                "egress": [
+                  "*.acme-internal.com",
+                  "api.example-ocr.com"
+                ]
+              },
+              "sandbox_profile": "office-standard",
+              "secrets": [
+                {
+                  "name": "OCR_API_KEY"
+                }
+              ],
+              "tools_builtin": [
+                "read_file",
+                "write_file",
+                "shell",
+                "web_fetch"
+              ]
+            },
+            "name": "main",
+            "role": "leader"
+          }
+        ],
+        "v": 1
+      }
+    }
+  },
+  {
+    "kind": "InteractionRequest",
+    "case": "example:InteractionRequest.ask_user",
+    "valid": true,
+    "payload": {
+      "interaction_id": "ia-0002",
+      "kind": "ask_user",
+      "question": {
+        "options": [
+          "contract-a.docx",
+          "contract-b.docx"
+        ],
+        "text": "Which of the two contracts should be the baseline?"
+      }
+    }
+  },
+  {
+    "kind": "InteractionRequest",
+    "case": "example:InteractionRequest.effect_uncertain",
+    "valid": true,
+    "payload": {
+      "effect": {
+        "args_preview": "{\"to\": \"legal@example.com\"}",
+        "effect_key": "dcb576426a17b7df13907007cb02a1f1dfc12fc6c69f603717abca59d03b888e",
+        "tool": "mail.send"
+      },
+      "interaction_id": "ia-0003",
+      "kind": "effect_uncertain"
+    }
+  },
+  {
+    "kind": "InteractionRequest",
+    "case": "example:InteractionRequest.tool_approval",
+    "valid": true,
+    "payload": {
+      "calls": [
+        {
+          "args_preview": "{\"to\": \"legal@example.com\", \"subject\": \"Contract review\"}",
+          "call_id": "call-1",
+          "effect_class": "external_write",
+          "name": "mail.send",
+          "risk_reasons": [
+            "external_write requires approval"
+          ]
+        }
+      ],
+      "interaction_id": "ia-0001",
+      "kind": "tool_approval"
+    }
+  },
+  {
+    "kind": "McpManifest",
+    "case": "example:McpManifest.three_forms",
+    "valid": true,
+    "payload": {
+      "mcpServers": {
+        "github": {
+          "headers": {
+            "Authorization": "Bearer ${secret:GITHUB_TOKEN}"
+          },
+          "transport": "streamable_http",
+          "url": "https://mcp.example.com/github"
+        },
+        "local-db": {
+          "args": [
+            "-y",
+            "@example/db-mcp"
+          ],
+          "command": "npx",
+          "env": {
+            "DB_URL": "${secret:DB_URL}"
+          }
+        },
+        "mail": {
+          "ref": "acme/mail-mcp@^1.0"
+        }
+      }
+    }
+  },
+  {
+    "kind": "McpManifest",
+    "case": "example:McpManifest.tool_effects",
+    "valid": true,
+    "payload": {
+      "mcpServers": {
+        "github": {
+          "headers": {
+            "Authorization": "Bearer ${secret:GITHUB_TOKEN}"
+          },
+          "tools": {
+            "notify_send": {
+              "effectClass": "external_write"
+            }
+          },
+          "transport": "streamable_http",
+          "url": "https://mcp.example.com/github"
+        },
+        "local-db": {
+          "args": [
+            "-y",
+            "@example/db-mcp"
+          ],
+          "command": "npx",
+          "env": {
+            "DB_URL": "${secret:DB_URL}"
+          }
+        },
+        "mail": {
+          "ref": "acme/mail-mcp@^1.0"
+        }
+      }
+    }
+  },
+  {
+    "kind": "ModelCredentials",
+    "case": "example:ModelCredentials.exact_url",
+    "valid": true,
+    "payload": {
+      "api_key": "run-key-example",
+      "base_url": "http://mockllm:8000",
+      "expires_at": "2026-10-14T08:36:03Z",
+      "model": "reasoning-default",
+      "params": {
+        "max_tokens": 8192,
+        "temperature": 0.2
+      },
+      "pricing": {
+        "cache_read_per_mtok_millicredits": 1000,
+        "cache_write_per_mtok_millicredits": 1000,
+        "input_per_mtok_millicredits": 1000,
+        "output_per_mtok_millicredits": 1000
+      }
+    }
+  },
+  {
+    "kind": "ModelCredentials",
+    "case": "example:ModelCredentials.profile",
+    "valid": true,
+    "payload": {
+      "api_key": "run-key-example",
+      "base_url": "https://llm.orbit.example.com/v1",
+      "expires_at": "2026-10-14T08:36:03Z",
+      "model": "reasoning-default",
+      "params": {
+        "max_tokens": 8192,
+        "temperature": 0.2
+      },
+      "pricing": {
+        "cache_read_per_mtok_millicredits": 1000,
+        "cache_write_per_mtok_millicredits": 1000,
+        "input_per_mtok_millicredits": 1000,
+        "output_per_mtok_millicredits": 1000
+      }
+    }
+  },
+  {
+    "kind": "PolicySnapshot",
+    "case": "example:PolicySnapshot.rules_and_grants",
+    "valid": true,
+    "payload": {
+      "grants": [
+        {
+          "arg_pattern": "to=*@acme.com",
+          "expires_at": "2026-10-15T00:00:00Z",
+          "interaction_id": "01900000-0000-7000-8000-000000000001",
+          "scope": "user",
+          "tool": "mail.send"
+        }
+      ],
+      "tool_rules": [
+        {
+          "decision": "deny",
+          "pattern": "rm *",
+          "tool": "shell"
+        },
+        {
+          "decision": "ask",
+          "tool": "mail.send"
+        }
+      ]
+    }
+  },
+  {
+    "kind": "RunEvent",
+    "case": "example:RunEvent.artifact.created",
+    "valid": true,
+    "payload": {
+      "attempt": 1,
+      "data": {
+        "artifact": {
+          "digest": "sha256:761b7ad8ad439b2855fcbb611331c646ef0870b0631247bba3f3025cb6df5a53",
+          "mime": "text/markdown",
+          "object_ref": "t/3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f/artifacts/9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d/report/summary.md",
+          "path": "report/summary.md",
+          "size_bytes": 2048
+        }
+      },
+      "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d:main:3:1:1",
+      "member": "main",
+      "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "segment": 3,
+      "seq": 1842,
+      "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "ts": "2026-10-14T08:21:03.112Z",
+      "type": "artifact.created",
+      "v": 1
+    }
+  },
+  {
+    "kind": "RunEvent",
+    "case": "example:RunEvent.artifact.updated",
+    "valid": true,
+    "payload": {
+      "attempt": 1,
+      "data": {
+        "artifact": {
+          "digest": "sha256:709be74edc575f5b39222c4065db026c2856bdb0d6600d4ca8a8634e805bc5e9",
+          "mime": "text/markdown",
+          "object_ref": "t/3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f/artifacts/9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d/report/summary.md",
+          "path": "report/summary.md",
+          "size_bytes": 2310
+        }
+      },
+      "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d:main:3:1:1",
+      "member": "main",
+      "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "segment": 3,
+      "seq": 1842,
+      "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "ts": "2026-10-14T08:21:03.112Z",
+      "type": "artifact.updated",
+      "v": 1
+    }
+  },
+  {
+    "kind": "RunEvent",
+    "case": "example:RunEvent.error",
+    "valid": true,
+    "payload": {
+      "attempt": 1,
+      "data": {
+        "code": "sandbox_lost",
+        "message": "the sandbox disappeared and was restored from a snapshot",
+        "terminal": false
+      },
+      "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d:main:3:1:1",
+      "member": "main",
+      "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "segment": 3,
+      "seq": 1842,
+      "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "ts": "2026-10-14T08:21:03.112Z",
+      "type": "error",
+      "v": 1
+    }
+  },
+  {
+    "kind": "RunEvent",
+    "case": "example:RunEvent.interaction.requested",
+    "valid": true,
+    "payload": {
+      "attempt": 1,
+      "data": {
+        "expires_at": "2026-10-17T08:21:03Z",
+        "interaction": {
+          "calls": [
+            {
+              "args_preview": "{\"to\": \"legal@example.com\", \"subject\": \"Contract review\"}",
+              "call_id": "call-1",
+              "effect_class": "external_write",
+              "name": "mail.send",
+              "risk_reasons": [
+                "external_write requires approval"
+              ]
+            }
+          ],
+          "interaction_id": "ia-0001",
+          "kind": "tool_approval"
+        }
+      },
+      "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d:main:3:1:1",
+      "member": "main",
+      "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "segment": 3,
+      "seq": 1842,
+      "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "ts": "2026-10-14T08:21:03.112Z",
+      "type": "interaction.requested",
+      "v": 1
+    }
+  },
+  {
+    "kind": "RunEvent",
+    "case": "example:RunEvent.interaction.resolved",
+    "valid": true,
+    "payload": {
+      "attempt": 1,
+      "data": {
+        "actor": "6f1c2d3e-0000-4000-8000-000000000001",
+        "decision": {
+          "choice": "allow_once",
+          "comment": "ok to send",
+          "kind": "tool_approval"
+        },
+        "interaction_id": "ia-0001"
+      },
+      "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d:main:3:1:1",
+      "member": "main",
+      "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "segment": 3,
+      "seq": 1842,
+      "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "ts": "2026-10-14T08:21:03.112Z",
+      "type": "interaction.resolved",
+      "v": 1
+    }
+  },
+  {
+    "kind": "RunEvent",
+    "case": "example:RunEvent.message.delta",
+    "valid": true,
+    "payload": {
+      "attempt": 1,
+      "data": {
+        "delta": "Clause 4.2 caps liability at ",
+        "message_id": "m-0042"
+      },
+      "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d:main:3:1:1",
+      "member": "main",
+      "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "segment": 3,
+      "seq": 1842,
+      "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "ts": "2026-10-14T08:21:03.112Z",
+      "type": "message.delta",
+      "v": 1
+    }
+  },
+  {
+    "kind": "RunEvent",
+    "case": "example:RunEvent.message.final",
+    "valid": true,
+    "payload": {
+      "attempt": 1,
+      "data": {
+        "message_id": "m-0042",
+        "text": "Clause 4.2 caps liability at twice the annual fee."
+      },
+      "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d:main:3:1:1",
+      "member": "main",
+      "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "segment": 3,
+      "seq": 1842,
+      "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "ts": "2026-10-14T08:21:03.112Z",
+      "type": "message.final",
+      "v": 1
+    }
+  },
+  {
+    "kind": "RunEvent",
+    "case": "example:RunEvent.reasoning.delta",
+    "valid": true,
+    "payload": {
+      "attempt": 1,
+      "data": {
+        "delta": "The two contracts differ in the liability section.",
+        "message_id": "message-1"
+      },
+      "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d:main:3:1:1",
+      "member": "main",
+      "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "segment": 3,
+      "seq": 1842,
+      "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "ts": "2026-10-14T08:21:03.112Z",
+      "type": "reasoning.delta",
+      "v": 1
+    }
+  },
+  {
+    "kind": "RunEvent",
+    "case": "example:RunEvent.run.completed",
+    "valid": true,
+    "payload": {
+      "attempt": 0,
+      "data": {
+        "final_message_id": "m-0042",
+        "status": "succeeded"
+      },
+      "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d:main:0:0:1",
+      "member": "main",
+      "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "segment": 0,
+      "seq": 1842,
+      "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "ts": "2026-10-14T08:21:03.112Z",
+      "type": "run.completed",
+      "v": 1
+    }
+  },
+  {
+    "kind": "RunEvent",
+    "case": "example:RunEvent.run.failed",
+    "valid": true,
+    "payload": {
+      "attempt": 0,
+      "data": {
+        "code": "segment_failed",
+        "message": "the model endpoint returned 503 after all retries"
+      },
+      "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d:main:0:0:1",
+      "member": "main",
+      "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "segment": 0,
+      "seq": 1842,
+      "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "ts": "2026-10-14T08:21:03.112Z",
+      "type": "run.failed",
+      "v": 1
+    }
+  },
+  {
+    "kind": "RunEvent",
+    "case": "example:RunEvent.run.started",
+    "valid": true,
+    "payload": {
+      "attempt": 0,
+      "data": {
+        "entry_kind": "agent",
+        "lock_id": "lk-01J9X"
+      },
+      "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d:main:0:0:1",
+      "member": "main",
+      "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "segment": 0,
+      "seq": 1842,
+      "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "ts": "2026-10-14T08:21:03.112Z",
+      "type": "run.started",
+      "v": 1
+    }
+  },
+  {
+    "kind": "RunEvent",
+    "case": "example:RunEvent.run.status",
+    "valid": true,
+    "payload": {
+      "attempt": 0,
+      "data": {
+        "reason": "mail.send needs approval",
+        "status": "waiting_approval"
+      },
+      "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d:main:0:0:1",
+      "member": "main",
+      "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "segment": 0,
+      "seq": 1842,
+      "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "ts": "2026-10-14T08:21:03.112Z",
+      "type": "run.status",
+      "v": 1
+    }
+  },
+  {
+    "kind": "RunEvent",
+    "case": "example:RunEvent.run.status.paused",
+    "valid": true,
+    "payload": {
+      "attempt": 0,
+      "data": {
+        "reason": "mail.send needs approval",
+        "status": "paused"
+      },
+      "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d:main:0:0:1",
+      "member": "main",
+      "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "segment": 0,
+      "seq": 1842,
+      "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "ts": "2026-10-14T08:21:03.112Z",
+      "type": "run.status",
+      "v": 1
+    }
+  },
+  {
+    "kind": "RunEvent",
+    "case": "example:RunEvent.sandbox.output",
+    "valid": true,
+    "payload": {
+      "attempt": 1,
+      "data": {
+        "call_id": "call-8",
+        "stream": "stdout",
+        "text": "extracted 12 pages\n"
+      },
+      "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d:main:3:1:1",
+      "member": "main",
+      "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "segment": 3,
+      "seq": 1842,
+      "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "ts": "2026-10-14T08:21:03.112Z",
+      "type": "sandbox.output",
+      "v": 1
+    }
+  },
+  {
+    "kind": "RunEvent",
+    "case": "example:RunEvent.sandbox.restored",
+    "valid": true,
+    "payload": {
+      "attempt": 1,
+      "data": {
+        "from_snapshot": true
+      },
+      "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d:main:3:1:1",
+      "member": "main",
+      "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "segment": 3,
+      "seq": 1842,
+      "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "ts": "2026-10-14T08:21:03.112Z",
+      "type": "sandbox.restored",
+      "v": 1
+    }
+  },
+  {
+    "kind": "RunEvent",
+    "case": "example:RunEvent.segment.ended",
+    "valid": true,
+    "payload": {
+      "attempt": 1,
+      "data": {
+        "checkpoint_version": 4,
+        "status": "yielded",
+        "usage": [
+          {
+            "cache_read_tokens": 9000,
+            "cache_write_tokens": 0,
+            "cost_millicredits": 1840,
+            "input_tokens": 18234,
+            "model": "reasoning-default",
+            "output_tokens": 2210
+          }
+        ],
+        "yield_reason": "effect_boundary"
+      },
+      "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d:main:3:1:1",
+      "member": "main",
+      "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "segment": 3,
+      "seq": 1842,
+      "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "ts": "2026-10-14T08:21:03.112Z",
+      "type": "segment.ended",
+      "v": 1
+    }
+  },
+  {
+    "kind": "RunEvent",
+    "case": "example:RunEvent.segment.started",
+    "valid": true,
+    "payload": {
+      "attempt": 1,
+      "data": {
+        "expected_checkpoint_version": 3
+      },
+      "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d:main:3:1:1",
+      "member": "main",
+      "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "segment": 3,
+      "seq": 1842,
+      "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "ts": "2026-10-14T08:21:03.112Z",
+      "type": "segment.started",
+      "v": 1
+    }
+  },
+  {
+    "kind": "RunEvent",
+    "case": "example:RunEvent.team.member.status",
+    "valid": true,
+    "payload": {
+      "attempt": 1,
+      "data": {
+        "name": "researcher-1",
+        "status": "working",
+        "task_id": "task-1"
+      },
+      "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d:leader:3:1:1",
+      "member": "leader",
+      "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "segment": 3,
+      "seq": 1842,
+      "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "ts": "2026-10-14T08:21:03.112Z",
+      "type": "team.member.status",
+      "v": 1
+    }
+  },
+  {
+    "kind": "RunEvent",
+    "case": "example:RunEvent.team.message",
+    "valid": true,
+    "payload": {
+      "attempt": 1,
+      "data": {
+        "from": "leader",
+        "message_id": "tm-12",
+        "text": "Use the 2025 filings only.",
+        "to": "researcher-1"
+      },
+      "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d:leader:3:1:1",
+      "member": "leader",
+      "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "segment": 3,
+      "seq": 1842,
+      "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "ts": "2026-10-14T08:21:03.112Z",
+      "type": "team.message",
+      "v": 1
+    }
+  },
+  {
+    "kind": "RunEvent",
+    "case": "example:RunEvent.team.task.created",
+    "valid": true,
+    "payload": {
+      "attempt": 1,
+      "data": {
+        "task": {
+          "attempts": 0,
+          "deps": [
+            "task-1"
+          ],
+          "description": "Task acceptance criteria.",
+          "status": "blocked",
+          "task_id": "task-2",
+          "title": "Cross-check figures"
+        }
+      },
+      "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d:leader:3:1:1",
+      "member": "leader",
+      "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "segment": 3,
+      "seq": 1842,
+      "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "ts": "2026-10-14T08:21:03.112Z",
+      "type": "team.task.created",
+      "v": 1
+    }
+  },
+  {
+    "kind": "RunEvent",
+    "case": "example:RunEvent.team.task.updated",
+    "valid": true,
+    "payload": {
+      "attempt": 1,
+      "data": {
+        "task": {
+          "assignee": "researcher-1",
+          "attempts": 2,
+          "description": "Task acceptance criteria.",
+          "review": {
+            "reviewers": [
+              "reviewer"
+            ],
+            "votes": [
+              {
+                "comment": "Q3 is missing.",
+                "reviewer": "reviewer",
+                "verdict": "reject"
+              }
+            ]
+          },
+          "status": "in_review",
+          "task_id": "task-1",
+          "title": "Collect 2025 filings"
+        }
+      },
+      "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d:leader:3:1:1",
+      "member": "leader",
+      "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "segment": 3,
+      "seq": 1842,
+      "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "ts": "2026-10-14T08:21:03.112Z",
+      "type": "team.task.updated",
+      "v": 1
+    }
+  },
+  {
+    "kind": "RunEvent",
+    "case": "example:RunEvent.tool.call",
+    "valid": true,
+    "payload": {
+      "attempt": 1,
+      "data": {
+        "args_preview": "{\"to\": \"legal@example.com\"}",
+        "call_id": "call-9",
+        "effect_class": "external_write",
+        "tool": "mail.send"
+      },
+      "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d:main:3:1:1",
+      "member": "main",
+      "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "segment": 3,
+      "seq": 1842,
+      "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "ts": "2026-10-14T08:21:03.112Z",
+      "type": "tool.call",
+      "v": 1
+    }
+  },
+  {
+    "kind": "RunEvent",
+    "case": "example:RunEvent.tool.result",
+    "valid": true,
+    "payload": {
+      "attempt": 1,
+      "data": {
+        "call_id": "call-9",
+        "ok": true,
+        "preview": "queued message 4711"
+      },
+      "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d:main:3:1:1",
+      "member": "main",
+      "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "segment": 3,
+      "seq": 1842,
+      "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "ts": "2026-10-14T08:21:03.112Z",
+      "type": "tool.result",
+      "v": 1
+    }
+  },
+  {
+    "kind": "RunEvent",
+    "case": "example:RunEvent.usage.update",
+    "valid": true,
+    "payload": {
+      "attempt": 1,
+      "data": {
+        "budget_millicredits": 50000,
+        "cache_read_tokens": 21000,
+        "cache_write_tokens": 0,
+        "cost_millicredits": 4700,
+        "input_tokens": 52410,
+        "output_tokens": 6120
+      },
+      "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d:main:3:1:1",
+      "member": "main",
+      "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "segment": 3,
+      "seq": 1842,
+      "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "trace": {
+        "span_id": "00f067aa0ba902b7",
+        "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736"
+      },
+      "ts": "2026-10-14T08:21:03.112Z",
+      "type": "usage.update",
+      "v": 1
+    }
+  },
+  {
+    "kind": "RunLock",
+    "case": "example:RunLock.agent",
+    "valid": true,
+    "payload": {
+      "digest": "sha256:aacdec685a9258d5de02a932e06858184e50a8fd0034fb05849bc15207f0f63f",
+      "effective_permissions": {
+        "data_scopes": [
+          "session_files",
+          "workspace_knowledge:read"
+        ],
+        "effect_classes": [
+          "read_only",
+          "sandbox_write",
+          "external_write"
+        ],
+        "network": {
+          "egress": [
+            "*.acme-internal.com",
+            "api.example-ocr.com"
+          ]
+        },
+        "sandbox_profile": "office-standard",
+        "secrets": [
+          {
+            "name": "OCR_API_KEY"
+          }
+        ],
+        "tools_builtin": [
+          "read_file",
+          "write_file",
+          "shell",
+          "web_fetch"
+        ]
+      },
+      "entries": [
+        {
+          "digest": "sha256:089035214c256784cb38d5932dd5a6bad234e55aa81ab5cc8350a70c039d04bc",
+          "files": [
+            {
+              "path": "AGENTS.md",
+              "sha256": "sha256:916b61696f71c569bddbf6ed3ba00f1a08268cfcf3f2aec78a7eed6bcf59c1e2",
+              "size_bytes": 1840
+            },
+            {
+              "path": "SOUL.md",
+              "sha256": "sha256:6df5bbccddc90d583bccecf25cba4132d428845e3da04a82616ecc5857a78d00",
+              "size_bytes": 420
+            },
+            {
+              "path": "agent.json",
+              "sha256": "sha256:106c63b83d5d3a7890853266631a0400415bf13f387f67ee9939e780724c5a0c",
+              "size_bytes": 610
+            },
+            {
+              "path": "skills.json",
+              "sha256": "sha256:aebf27e29b42cc1649d75bfab0d06a9f5ba1c739c7eb3dd5ac10f2bdba1abe37",
+              "size_bytes": 220
+            },
+            {
+              "path": "mcp.json",
+              "sha256": "sha256:8e9327312fe4d23e418ce22ea861bfb75ebe752e9c2a6f21ba6b8c16a5452d4f",
+              "size_bytes": 180
+            }
+          ],
+          "kind": "agent",
+          "ref": "acme/contract-assistant",
+          "version": "1.3.0"
+        },
+        {
+          "digest": "sha256:cc456bfc7d58b6b02b888f062783a7114dc6271c695dbee41aa4bddec0bb9160",
+          "files": [
+            {
+              "path": "SKILL.md",
+              "sha256": "sha256:acf2db71ae662486c22ae9634527b911c67be0223d29ad51a7fcf8aa4aa4f7b6",
+              "size_bytes": 3100
+            },
+            {
+              "path": "scripts/extract.py",
+              "sha256": "sha256:c8dbe5bc70c8704b68fce0ed032bec98b84dbe3c7d9a2283f706b4b7af4f611f",
+              "size_bytes": 5200
+            }
+          ],
+          "kind": "skill",
+          "ref": "acme/pdf-extract",
+          "version": "2.1.4"
+        },
+        {
+          "digest": "sha256:92488b267ff87fc4fd6c884c08ddba0872abe5f6d285b1a46ad7e89db86d8155",
+          "files": [
+            {
+              "path": "mcp_server.json",
+              "sha256": "sha256:c67d0e8c808c85d7d2a3387990b8dace4ad82584c636c7fa8b24f79cfa2b7d80",
+              "size_bytes": 400
+            }
+          ],
+          "kind": "mcp_server",
+          "ref": "acme/mail-mcp",
+          "version": "1.0.2"
+        }
+      ],
+      "entry": {
+        "kind": "agent",
+        "ref": "acme/contract-assistant",
+        "version": "1.3.0"
+      },
+      "lock_id": "lk-01J9X",
+      "members": [
+        {
+          "agent_entry": 0,
+          "description": "Single agent.",
+          "effective_permissions": {
+            "data_scopes": [
+              "session_files",
+              "workspace_knowledge:read"
+            ],
+            "effect_classes": [
+              "read_only",
+              "sandbox_write",
+              "external_write"
+            ],
+            "network": {
+              "egress": [
+                "*.acme-internal.com",
+                "api.example-ocr.com"
+              ]
+            },
+            "sandbox_profile": "office-standard",
+            "secrets": [
+              {
+                "name": "OCR_API_KEY"
+              }
+            ],
+            "tools_builtin": [
+              "read_file",
+              "write_file",
+              "shell",
+              "web_fetch"
+            ]
+          },
+          "mcp": [
+            2
+          ],
+          "name": "main",
+          "role": "leader",
+          "skills": [
+            1
+          ]
+        }
+      ],
+      "v": 1
+    }
+  },
+  {
+    "kind": "RunLock",
+    "case": "example:RunLock.team",
+    "valid": true,
+    "payload": {
+      "digest": "sha256:97040118ef5ce81fe54cf6b7d15e5f0546245ff5d46338f27691039eb5aa7390",
+      "effective_permissions": {
+        "data_scopes": [
+          "session_files",
+          "workspace_knowledge:read"
+        ],
+        "effect_classes": [
+          "read_only",
+          "sandbox_write",
+          "external_write"
+        ],
+        "network": {
+          "egress": [
+            "*.acme-internal.com",
+            "api.example-ocr.com"
+          ]
+        },
+        "sandbox_profile": "office-standard",
+        "secrets": [
+          {
+            "name": "OCR_API_KEY"
+          }
+        ],
+        "tools_builtin": [
+          "read_file",
+          "write_file",
+          "shell",
+          "web_fetch"
+        ]
+      },
+      "entries": [
+        {
+          "digest": "sha256:c12eaaef399233c372dbb9df5ebdad204857dc0db859c25777c56fdab567211b",
+          "files": [
+            {
+              "path": "team.json",
+              "sha256": "sha256:fbda6be3a00b3b5af9d9d04d873bc5b33008865d82d48ba83db168c3a223b6be",
+              "size_bytes": 700
+            },
+            {
+              "path": "AGENTS.md",
+              "sha256": "sha256:6e71f492755ef7621ca89793b86abd3c5985c17c97701e6deaa2d08e007c530a",
+              "size_bytes": 2100
+            }
+          ],
+          "kind": "team",
+          "ref": "acme/research-squad",
+          "version": "2.0.0"
+        },
+        {
+          "digest": "sha256:089035214c256784cb38d5932dd5a6bad234e55aa81ab5cc8350a70c039d04bc",
+          "files": [
+            {
+              "path": "AGENTS.md",
+              "sha256": "sha256:916b61696f71c569bddbf6ed3ba00f1a08268cfcf3f2aec78a7eed6bcf59c1e2",
+              "size_bytes": 1840
+            },
+            {
+              "path": "SOUL.md",
+              "sha256": "sha256:6df5bbccddc90d583bccecf25cba4132d428845e3da04a82616ecc5857a78d00",
+              "size_bytes": 420
+            },
+            {
+              "path": "agent.json",
+              "sha256": "sha256:106c63b83d5d3a7890853266631a0400415bf13f387f67ee9939e780724c5a0c",
+              "size_bytes": 610
+            },
+            {
+              "path": "skills.json",
+              "sha256": "sha256:aebf27e29b42cc1649d75bfab0d06a9f5ba1c739c7eb3dd5ac10f2bdba1abe37",
+              "size_bytes": 220
+            },
+            {
+              "path": "mcp.json",
+              "sha256": "sha256:8e9327312fe4d23e418ce22ea861bfb75ebe752e9c2a6f21ba6b8c16a5452d4f",
+              "size_bytes": 180
+            }
+          ],
+          "kind": "agent",
+          "ref": "acme/contract-assistant",
+          "version": "1.3.0"
+        },
+        {
+          "digest": "sha256:cc456bfc7d58b6b02b888f062783a7114dc6271c695dbee41aa4bddec0bb9160",
+          "files": [
+            {
+              "path": "SKILL.md",
+              "sha256": "sha256:acf2db71ae662486c22ae9634527b911c67be0223d29ad51a7fcf8aa4aa4f7b6",
+              "size_bytes": 3100
+            },
+            {
+              "path": "scripts/extract.py",
+              "sha256": "sha256:c8dbe5bc70c8704b68fce0ed032bec98b84dbe3c7d9a2283f706b4b7af4f611f",
+              "size_bytes": 5200
+            }
+          ],
+          "kind": "skill",
+          "ref": "acme/pdf-extract",
+          "version": "2.1.4"
+        },
+        {
+          "digest": "sha256:92488b267ff87fc4fd6c884c08ddba0872abe5f6d285b1a46ad7e89db86d8155",
+          "files": [
+            {
+              "path": "mcp_server.json",
+              "sha256": "sha256:c67d0e8c808c85d7d2a3387990b8dace4ad82584c636c7fa8b24f79cfa2b7d80",
+              "size_bytes": 400
+            }
+          ],
+          "kind": "mcp_server",
+          "ref": "acme/mail-mcp",
+          "version": "1.0.2"
+        }
+      ],
+      "entry": {
+        "kind": "team",
+        "ref": "acme/research-squad",
+        "version": "2.0.0"
+      },
+      "lock_id": "lk-01J9Y",
+      "members": [
+        {
+          "agent_entry": 1,
+          "description": "Coordinates research and synthesis.",
+          "effective_permissions": {
+            "data_scopes": [
+              "session_files",
+              "workspace_knowledge:read"
+            ],
+            "effect_classes": [
+              "read_only",
+              "sandbox_write",
+              "external_write"
+            ],
+            "network": {
+              "egress": [
+                "*.acme-internal.com",
+                "api.example-ocr.com"
+              ]
+            },
+            "sandbox_profile": "office-standard",
+            "secrets": [
+              {
+                "name": "OCR_API_KEY"
+              }
+            ],
+            "tools_builtin": [
+              "read_file",
+              "write_file",
+              "shell",
+              "web_fetch"
+            ]
+          },
+          "mcp": [
+            3
+          ],
+          "name": "leader",
+          "role": "leader",
+          "skills": [
+            2
+          ]
+        },
+        {
+          "agent_entry": 1,
+          "description": "Researches assigned questions.",
+          "effective_permissions": {
+            "data_scopes": [
+              "session_files",
+              "workspace_knowledge:read"
+            ],
+            "effect_classes": [
+              "read_only",
+              "sandbox_write",
+              "external_write"
+            ],
+            "network": {
+              "egress": [
+                "*.acme-internal.com",
+                "api.example-ocr.com"
+              ]
+            },
+            "sandbox_profile": "office-standard",
+            "secrets": [
+              {
+                "name": "OCR_API_KEY"
+              }
+            ],
+            "tools_builtin": [
+              "read_file",
+              "write_file",
+              "shell",
+              "web_fetch"
+            ]
+          },
+          "mcp": [
+            3
+          ],
+          "name": "researcher",
+          "role": "teammate",
+          "skills": [
+            2
+          ]
+        },
+        {
+          "agent_entry": 1,
+          "description": "Reviews member results.",
+          "effective_permissions": {
+            "data_scopes": [
+              "session_files",
+              "workspace_knowledge:read"
+            ],
+            "effect_classes": [
+              "read_only",
+              "sandbox_write",
+              "external_write"
+            ],
+            "network": {
+              "egress": [
+                "*.acme-internal.com",
+                "api.example-ocr.com"
+              ]
+            },
+            "sandbox_profile": "office-standard",
+            "secrets": [
+              {
+                "name": "OCR_API_KEY"
+              }
+            ],
+            "tools_builtin": [
+              "read_file",
+              "write_file",
+              "shell",
+              "web_fetch"
+            ]
+          },
+          "mcp": [
+            3
+          ],
+          "name": "reviewer",
+          "role": "reviewer",
+          "skills": [
+            2
+          ]
+        }
+      ],
+      "v": 1
+    }
+  },
+  {
+    "kind": "SandboxAcquireInput",
+    "case": "example:SandboxAcquireInput.single_agent",
+    "valid": true,
+    "payload": {
+      "egress": [
+        "*.acme-internal.com"
+      ],
+      "isolation_key": "t-3f2a8c1e-s-7c9e6679",
+      "metadata": {
+        "lease_gen": 0,
+        "run_id": "01900000-0000-7000-8000-000000000001",
+        "session_id": "01900000-0000-7000-8000-000000000001",
+        "workspace_id": "01900000-0000-7000-8000-000000000001"
+      },
+      "mounts": [
+        {
+          "entry": 0,
+          "kind": "skills",
+          "lock_id": "lk-01J9X",
+          "member": "main"
+        },
+        {
+          "entry": 0,
+          "kind": "agent",
+          "lock_id": "lk-01J9X",
+          "member": "main"
+        }
+      ],
+      "profile": "office-standard",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "ttl_seconds": 1800
+    }
+  },
+  {
+    "kind": "SandboxAcquireInput",
+    "case": "example:SandboxAcquireInput.team_member",
+    "valid": true,
+    "payload": {
+      "egress": [
+        "*.acme-internal.com"
+      ],
+      "isolation_key": "t-3f2a8c1e-s-7c9e6679",
+      "member": "researcher-1",
+      "metadata": {
+        "lease_gen": 0,
+        "run_id": "01900000-0000-7000-8000-000000000001",
+        "session_id": "01900000-0000-7000-8000-000000000001",
+        "workspace_id": "01900000-0000-7000-8000-000000000001"
+      },
+      "mounts": [
+        {
+          "entry": 0,
+          "kind": "skills",
+          "lock_id": "lk-01J9X",
+          "member": "main"
+        },
+        {
+          "entry": 0,
+          "kind": "agent",
+          "lock_id": "lk-01J9X",
+          "member": "main"
+        }
+      ],
+      "profile": "office-standard",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "ttl_seconds": 1800
+    }
+  },
+  {
+    "kind": "SandboxConfigureInput",
+    "case": "example:SandboxConfigureInput.widen_egress",
+    "valid": true,
+    "payload": {
+      "egress": [
+        "*.acme-internal.com",
+        "api.example-ocr.com"
+      ],
+      "isolation_key": "t-3f2a8c1e-s-7c9e6679",
+      "lease": {
+        "expires_at": "2026-10-14T09:21:03Z",
+        "provider": "opensandbox",
+        "sandbox_id": "sbx-8841"
+      },
+      "mounts": [
+        {
+          "entry": 0,
+          "kind": "skills",
+          "lock_id": "lk-01J9X",
+          "member": "main"
+        },
+        {
+          "entry": 0,
+          "kind": "agent",
+          "lock_id": "lk-01J9X",
+          "member": "main"
+        }
+      ],
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f"
+    }
+  },
+  {
+    "kind": "SandboxEmptyResult",
+    "case": "example:SandboxEmptyResult.minimal",
+    "valid": true,
+    "payload": {}
+  },
+  {
+    "kind": "SandboxInspectResult",
+    "case": "example:SandboxInspectResult.minimal",
+    "valid": true,
+    "payload": {
+      "exists": false
+    }
+  },
+  {
+    "kind": "SandboxLease",
+    "case": "example:SandboxLease.isolated",
+    "valid": true,
+    "payload": {
+      "expires_at": "2026-10-14T09:21:03Z",
+      "isolated_session_id": "iso-researcher-1",
+      "provider": "opensandbox",
+      "sandbox_id": "sbx-8841"
+    }
+  },
+  {
+    "kind": "SandboxLease",
+    "case": "example:SandboxLease.shared",
+    "valid": true,
+    "payload": {
+      "expires_at": "2026-10-14T09:21:03Z",
+      "provider": "opensandbox",
+      "sandbox_id": "sbx-8841"
+    }
+  },
+  {
+    "kind": "SandboxOpInput",
+    "case": "example:SandboxOpInput.pause",
+    "valid": true,
+    "payload": {
+      "isolation_key": "t-3f2a8c1e-s-7c9e6679",
+      "provider": "opensandbox",
+      "sandbox_id": "sbx-8841",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f"
+    }
+  },
+  {
+    "kind": "SandboxSnapshotDeleteInput",
+    "case": "example:SandboxSnapshotDeleteInput.minimal",
+    "valid": true,
+    "payload": {
+      "isolation_key": "example",
+      "provider": "opensandbox",
+      "snapshot_id": "example",
+      "tenant_id": "01900000-0000-7000-8000-000000000001"
+    }
+  },
+  {
+    "kind": "SandboxSnapshotResult",
+    "case": "example:SandboxSnapshotResult.snapshot",
+    "valid": true,
+    "payload": {
+      "snapshot_id": "snap-3391"
+    }
+  },
+  {
+    "kind": "SecretGrant",
+    "case": "example:SecretGrant.ocr_key",
+    "valid": true,
+    "payload": {
+      "expires_at": "2026-10-14T08:36:03Z",
+      "name": "OCR_API_KEY",
+      "value": "secret-value-example"
+    }
+  },
+  {
+    "kind": "SecretGrantRequest",
+    "case": "example:SecretGrantRequest.minimal",
+    "valid": true,
+    "payload": {}
+  },
+  {
+    "kind": "SecretGrantResponse",
+    "case": "example:SecretGrantResponse.minimal",
+    "valid": true,
+    "payload": {}
+  },
+  {
+    "kind": "SegmentInput",
+    "case": "example:SegmentInput.attachments",
+    "valid": true,
+    "payload": {
+      "agent_session_key": "sess:7c9e6679-7425-40de-944b-e07fc1f90ae7:L7f3c",
+      "budget_notice": "none",
+      "event_subject": "run.3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f.9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "expected_checkpoint_version": 3,
+      "input": {
+        "attachments": [
+          {
+            "file_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+            "media_type": "application/pdf",
+            "name": "brief.pdf",
+            "size_bytes": 2048
+          }
+        ],
+        "kind": "user_message",
+        "text": "Compare clause 4.2 of the two contracts."
+      },
+      "limits": {
+        "max_iterations": 25,
+        "max_wall_seconds": 600,
+        "remaining_run_millicredits": 48200,
+        "segment_budget_millicredits": 12500
+      },
+      "lock": {
+        "digest": "sha256:0c030586945fe504b604ecc2e875c38ede400cd5cd73da9730302162e6b02c6f",
+        "id": "lk-01J9X"
+      },
+      "member": "main",
+      "principal_id": "01900000-0000-7000-8000-000000000001",
+      "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "sandbox": {
+        "isolation_key": "isolation-1",
+        "provider": "opensandbox",
+        "sandbox_id": "sbx-8841"
+      },
+      "seq": 4,
+      "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "steer": [
+        {
+          "text": "Focus on liability caps."
+        }
+      ],
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "trace": {
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+      },
+      "v": 1,
+      "workspace_id": "01900000-0000-7000-8000-000000000001"
+    }
+  },
+  {
+    "kind": "SegmentInput",
+    "case": "example:SegmentInput.compact",
+    "valid": true,
+    "payload": {
+      "agent_session_key": "sess:7c9e6679-7425-40de-944b-e07fc1f90ae7:L7f3c",
+      "budget_notice": "none",
+      "event_subject": "run.3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f.9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "expected_checkpoint_version": 3,
+      "input": {
+        "kind": "compact"
+      },
+      "limits": {
+        "max_iterations": 25,
+        "max_wall_seconds": 600,
+        "remaining_run_millicredits": 48200,
+        "segment_budget_millicredits": 12500
+      },
+      "lock": {
+        "digest": "sha256:0c030586945fe504b604ecc2e875c38ede400cd5cd73da9730302162e6b02c6f",
+        "id": "lk-01J9X"
+      },
+      "member": "main",
+      "principal_id": "01900000-0000-7000-8000-000000000001",
+      "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "sandbox": {
+        "isolation_key": "isolation-1",
+        "provider": "opensandbox",
+        "sandbox_id": "sbx-8841"
+      },
+      "seq": 4,
+      "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "steer": [
+        {
+          "text": "Focus on liability caps."
+        }
+      ],
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "trace": {
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+      },
+      "v": 1,
+      "workspace_id": "01900000-0000-7000-8000-000000000001"
+    }
+  },
+  {
+    "kind": "SegmentInput",
+    "case": "example:SegmentInput.interactive_input",
+    "valid": true,
+    "payload": {
+      "agent_session_key": "sess:7c9e6679-7425-40de-944b-e07fc1f90ae7:L7f3c",
+      "budget_notice": "soft_warning",
+      "event_subject": "run.3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f.9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "expected_checkpoint_version": 4,
+      "input": {
+        "decision": {
+          "choice": "allow_once",
+          "comment": "ok to send",
+          "kind": "tool_approval"
+        },
+        "interaction_id": "ia-0001",
+        "kind": "interactive_input"
+      },
+      "limits": {
+        "max_iterations": 25,
+        "max_wall_seconds": 600,
+        "remaining_run_millicredits": 48200,
+        "segment_budget_millicredits": 12500
+      },
+      "lock": {
+        "digest": "sha256:0c030586945fe504b604ecc2e875c38ede400cd5cd73da9730302162e6b02c6f",
+        "id": "lk-01J9X"
+      },
+      "member": "main",
+      "principal_id": "01900000-0000-7000-8000-000000000001",
+      "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "sandbox": {
+        "isolation_key": "isolation-1",
+        "provider": "opensandbox",
+        "sandbox_id": "sbx-8841"
+      },
+      "seq": 5,
+      "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "trace": {
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+      },
+      "v": 1,
+      "workspace_id": "01900000-0000-7000-8000-000000000001"
+    }
+  },
+  {
+    "kind": "SegmentInput",
+    "case": "example:SegmentInput.team_teammate",
+    "valid": true,
+    "payload": {
+      "agent_session_key": "sess:7c9e6679-7425-40de-944b-e07fc1f90ae7:L7f3c",
+      "budget_notice": "none",
+      "event_subject": "run.3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f.9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "expected_checkpoint_version": 0,
+      "input": {
+        "content_ref": "t/3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f/uploads/up-77",
+        "kind": "follow_up"
+      },
+      "limits": {
+        "max_iterations": 25,
+        "max_wall_seconds": 600,
+        "remaining_run_millicredits": 48200,
+        "segment_budget_millicredits": 12500
+      },
+      "lock": {
+        "digest": "sha256:0c030586945fe504b604ecc2e875c38ede400cd5cd73da9730302162e6b02c6f",
+        "id": "lk-01J9X"
+      },
+      "mailbox": [
+        {
+          "from": "leader",
+          "message_id": "tm-12",
+          "sent_at": "2026-10-14T08:20:41Z",
+          "text": "Use the 2025 filings only."
+        }
+      ],
+      "member": "researcher-1",
+      "principal_id": "01900000-0000-7000-8000-000000000001",
+      "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "sandbox": {
+        "isolated_session_id": "iso-researcher-1",
+        "isolation_key": "isolation-1",
+        "provider": "opensandbox",
+        "sandbox_id": "sbx-8841"
+      },
+      "seq": 1,
+      "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "team": {
+        "role": "teammate",
+        "task": {
+          "description": "Download and list every 2025 filing of the target company.",
+          "narrowed_tools": [
+            "web_fetch",
+            "write_file"
+          ],
+          "spec_ref": "t/3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f/uploads/spec-3",
+          "task_id": "task-3",
+          "title": "Collect 2025 filings"
+        },
+        "team_workflow_id": "team:3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f:9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+      },
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "trace": {
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+      },
+      "v": 1,
+      "workspace_id": "01900000-0000-7000-8000-000000000001"
+    }
+  },
+  {
+    "kind": "SegmentInput",
+    "case": "example:SegmentInput.user_message",
+    "valid": true,
+    "payload": {
+      "agent_session_key": "sess:7c9e6679-7425-40de-944b-e07fc1f90ae7:L7f3c",
+      "budget_notice": "none",
+      "event_subject": "run.3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f.9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "expected_checkpoint_version": 3,
+      "input": {
+        "kind": "user_message",
+        "text": "Compare clause 4.2 of the two contracts."
+      },
+      "limits": {
+        "max_iterations": 25,
+        "max_wall_seconds": 600,
+        "remaining_run_millicredits": 48200,
+        "segment_budget_millicredits": 12500
+      },
+      "lock": {
+        "digest": "sha256:0c030586945fe504b604ecc2e875c38ede400cd5cd73da9730302162e6b02c6f",
+        "id": "lk-01J9X"
+      },
+      "member": "main",
+      "principal_id": "01900000-0000-7000-8000-000000000001",
+      "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "sandbox": {
+        "isolation_key": "isolation-1",
+        "provider": "opensandbox",
+        "sandbox_id": "sbx-8841"
+      },
+      "seq": 4,
+      "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "steer": [
+        {
+          "text": "Focus on liability caps."
+        }
+      ],
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "trace": {
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+      },
+      "v": 1,
+      "workspace_id": "01900000-0000-7000-8000-000000000001"
+    }
+  },
+  {
+    "kind": "SegmentResult",
+    "case": "example:SegmentResult.compacted",
+    "valid": true,
+    "payload": {
+      "artifacts_omitted": 0,
+      "checkpoint_version": 4,
+      "progress": {
+        "iterations": 7,
+        "new_output": true,
+        "tool_calls": 5
+      },
+      "signals": [
+        {
+          "detail": "the same tool call repeated 4 times",
+          "kind": "reliability",
+          "level": "warn"
+        }
+      ],
+      "status": "yielded",
+      "usage": [
+        {
+          "cache_read_tokens": 9000,
+          "cache_write_tokens": 0,
+          "cost_millicredits": 1840,
+          "input_tokens": 18234,
+          "model": "reasoning-default",
+          "output_tokens": 2210
+        }
+      ],
+      "v": 1,
+      "yield_reason": "compacted"
+    }
+  },
+  {
+    "kind": "SegmentResult",
+    "case": "example:SegmentResult.completed",
+    "valid": true,
+    "payload": {
+      "artifacts": [
+        {
+          "digest": "sha256:761b7ad8ad439b2855fcbb611331c646ef0870b0631247bba3f3025cb6df5a53",
+          "mime": "text/markdown",
+          "object_ref": "t/3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f/artifacts/9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d/report/summary.md",
+          "path": "report/summary.md",
+          "size_bytes": 2048
+        }
+      ],
+      "artifacts_omitted": 0,
+      "checkpoint_version": 4,
+      "final": {
+        "content_ref": "t/3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f/artifacts/9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d/final.md",
+        "message_id": "m-0042",
+        "text_preview": "Clause 4.2 differs in the liability cap: ..."
+      },
+      "progress": {
+        "iterations": 7,
+        "new_output": true,
+        "tool_calls": 5
+      },
+      "status": "completed",
+      "usage": [
+        {
+          "cache_read_tokens": 9000,
+          "cache_write_tokens": 0,
+          "cost_millicredits": 1840,
+          "input_tokens": 18234,
+          "model": "reasoning-default",
+          "output_tokens": 2210
+        }
+      ],
+      "v": 1
+    }
+  },
+  {
+    "kind": "SegmentResult",
+    "case": "example:SegmentResult.failed",
+    "valid": true,
+    "payload": {
+      "artifacts_omitted": 0,
+      "checkpoint_version": 4,
+      "error": {
+        "code": "agent_error",
+        "message": "the model endpoint returned 503",
+        "retryable": true
+      },
+      "progress": {
+        "iterations": 7,
+        "new_output": true,
+        "tool_calls": 5
+      },
+      "status": "failed",
+      "usage": [
+        {
+          "cache_read_tokens": 9000,
+          "cache_write_tokens": 0,
+          "cost_millicredits": 1840,
+          "input_tokens": 18234,
+          "model": "reasoning-default",
+          "output_tokens": 2210
+        }
+      ],
+      "v": 1
+    }
+  },
+  {
+    "kind": "SegmentResult",
+    "case": "example:SegmentResult.interrupted",
+    "valid": true,
+    "payload": {
+      "artifacts_omitted": 0,
+      "checkpoint_version": 4,
+      "interaction": {
+        "calls": [
+          {
+            "args_preview": "{\"to\": \"legal@example.com\", \"subject\": \"Contract review\"}",
+            "call_id": "call-1",
+            "effect_class": "external_write",
+            "name": "mail.send",
+            "risk_reasons": [
+              "external_write requires approval"
+            ]
+          }
+        ],
+        "interaction_id": "ia-0001",
+        "kind": "tool_approval"
+      },
+      "progress": {
+        "iterations": 7,
+        "new_output": true,
+        "tool_calls": 5
+      },
+      "status": "interrupted",
+      "usage": [
+        {
+          "cache_read_tokens": 9000,
+          "cache_write_tokens": 0,
+          "cost_millicredits": 1840,
+          "input_tokens": 18234,
+          "model": "reasoning-default",
+          "output_tokens": 2210
+        }
+      ],
+      "v": 1
+    }
+  },
+  {
+    "kind": "SegmentResult",
+    "case": "example:SegmentResult.yielded",
+    "valid": true,
+    "payload": {
+      "artifacts_omitted": 0,
+      "checkpoint_version": 4,
+      "progress": {
+        "iterations": 7,
+        "new_output": true,
+        "tool_calls": 5
+      },
+      "signals": [
+        {
+          "detail": "the same tool call repeated 4 times",
+          "kind": "reliability",
+          "level": "warn"
+        }
+      ],
+      "status": "yielded",
+      "usage": [
+        {
+          "cache_read_tokens": 9000,
+          "cache_write_tokens": 0,
+          "cost_millicredits": 1840,
+          "input_tokens": 18234,
+          "model": "reasoning-default",
+          "output_tokens": 2210
+        }
+      ],
+      "v": 1,
+      "yield_reason": "effect_boundary"
+    }
+  },
+  {
+    "kind": "SendMessageInput",
+    "case": "example:SendMessageInput.to_member",
+    "valid": true,
+    "payload": {
+      "caller": "researcher-1",
+      "request_id": "effect-1",
+      "text": "The 2025 Q3 filing is not public yet.",
+      "to": "leader"
+    }
+  },
+  {
+    "kind": "SkillsManifest",
+    "case": "example:SkillsManifest.mixed",
+    "valid": true,
+    "payload": {
+      "skills": [
+        {
+          "name": "clause-diff",
+          "source": "bundle"
+        },
+        {
+          "id": "acme/pdf-extract",
+          "name": "pdf-extract",
+          "source": "catalog",
+          "version": "^2.1"
+        },
+        {
+          "id": "public/xlsx-writer",
+          "name": "xlsx-writer",
+          "source": "catalog",
+          "version": "1.4.2"
+        }
+      ]
+    }
+  },
+  {
+    "kind": "SubmitVerdictInput",
+    "case": "example:SubmitVerdictInput.reject",
+    "valid": true,
+    "payload": {
+      "caller": "reviewer",
+      "reason": "Q3 is missing.",
+      "request_id": "effect-1",
+      "task_id": "task-1",
+      "verdict": "reject"
+    }
+  },
+  {
+    "kind": "TeamBoard",
+    "case": "example:TeamBoard.in_review",
+    "valid": true,
+    "payload": {
+      "roster": [
+        {
+          "description": "Member capability.",
+          "name": "leader",
+          "role": "leader",
+          "status": "idle"
+        },
+        {
+          "description": "Member capability.",
+          "name": "researcher-1",
+          "role": "teammate",
+          "status": "working"
+        },
+        {
+          "description": "Member capability.",
+          "name": "reviewer",
+          "role": "reviewer",
+          "status": "waiting_approval"
+        }
+      ],
+      "tasks": [
+        {
+          "assignee": "researcher-1",
+          "attempts": 2,
+          "description": "Task acceptance criteria.",
+          "review": {
+            "reviewers": [
+              "reviewer"
+            ],
+            "votes": [
+              {
+                "comment": "Q3 is missing.",
+                "reviewer": "reviewer",
+                "verdict": "reject"
+              }
+            ]
+          },
+          "status": "in_review",
+          "task_id": "task-1",
+          "title": "Collect 2025 filings"
+        },
+        {
+          "attempts": 0,
+          "deps": [
+            "task-1"
+          ],
+          "description": "Task acceptance criteria.",
+          "status": "blocked",
+          "task_id": "task-2",
+          "title": "Cross-check figures"
+        }
+      ]
+    }
+  },
+  {
+    "kind": "TeamManifest",
+    "case": "example:TeamManifest.research_squad",
+    "valid": true,
+    "payload": {
+      "description": "Researches, cross-checks and writes a report.",
+      "dispatch": "scheduled",
+      "maxParallelMembers": 3,
+      "name": "research-squad",
+      "review": {
+        "mode": "veto"
+      },
+      "roles": [
+        {
+          "agent": ".",
+          "name": "leader",
+          "role": "leader"
+        },
+        {
+          "agent": "acme/web-researcher@^1.2",
+          "count": 2,
+          "name": "researcher",
+          "role": "teammate"
+        },
+        {
+          "agent": "./members/reviewer",
+          "name": "reviewer",
+          "role": "reviewer"
+        }
+      ],
+      "schema": "orbit.team/v1",
+      "sharedSkills": [
+        {
+          "id": "public/citation-check",
+          "version": "^1.0"
+        }
+      ],
+      "version": "2.0.0"
+    }
+  },
+  {
+    "kind": "TokenRequest",
+    "case": "example:TokenRequest.minimal",
+    "valid": true,
+    "payload": {
+      "attempt": 1,
+      "member": "example",
+      "purpose": "segment",
+      "run_id": "01900000-0000-7000-8000-000000000001",
+      "seq": 1,
+      "tenant_id": "01900000-0000-7000-8000-000000000001"
+    }
+  },
+  {
+    "kind": "TokenRequest",
+    "case": "example:TokenRequest.sandbox",
+    "valid": true,
+    "payload": {
+      "attempt": 1,
+      "lease_id": "lease-1",
+      "member": "example",
+      "purpose": "sandbox",
+      "run_id": "01900000-0000-7000-8000-000000000001",
+      "seq": 1,
+      "tenant_id": "01900000-0000-7000-8000-000000000001"
+    }
+  },
+  {
+    "kind": "TokenResponse",
+    "case": "example:TokenResponse.minimal",
+    "valid": true,
+    "payload": {
+      "expires_at": "2026-10-15T00:00:00Z",
+      "token": "example"
+    }
+  },
+  {
+    "kind": "Usage",
+    "case": "example:Usage.model_call",
+    "valid": true,
+    "payload": {
+      "cache_read_tokens": 9000,
+      "cache_write_tokens": 0,
+      "cost_millicredits": 1840,
+      "input_tokens": 18234,
+      "model": "reasoning-default",
+      "output_tokens": 2210
+    }
+  },
+  {
+    "kind": "UsageItem",
+    "case": "example:UsageItem.minimal",
+    "valid": true,
+    "payload": {
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "idempotency_key": "example",
+      "input_tokens": 0,
+      "model": "example",
+      "occurred_at": "2026-10-15T00:00:00Z",
+      "output_tokens": 0
+    }
+  },
+  {
+    "kind": "UsageReport",
+    "case": "example:UsageReport.minimal",
+    "valid": true,
+    "payload": {}
+  },
+  {
+    "kind": "UsageReportResponse",
+    "case": "example:UsageReportResponse.minimal",
+    "valid": true,
+    "payload": {
+      "run_used_millicredits": 0
+    }
+  },
+  {
+    "kind": "AgentManifest",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "name": "",
+      "schema": ""
+    }
+  },
+  {
+    "kind": "AgentManifest",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "name": "Contract assistant",
+      "schema": "orbit.agent/v1"
+    }
+  },
+  {
+    "kind": "Artifact",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "digest": "",
+      "mime": "",
+      "object_ref": "",
+      "path": "",
+      "size_bytes": 0
+    }
+  },
+  {
+    "kind": "Artifact",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "digest": "sha256:761b7ad8ad439b2855fcbb611331c646ef0870b0631247bba3f3025cb6df5a53",
+      "mime": "text/markdown",
+      "object_ref": "t/3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f/artifacts/9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d/report/summary.md",
+      "path": "report/summary.md",
+      "size_bytes": 2048
+    }
+  },
+  {
+    "kind": "AssetCheckFinding",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "check": "",
+      "message": "",
+      "rule_id": "",
+      "severity": ""
+    }
+  },
+  {
+    "kind": "AssetCheckFinding",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "check": "structure",
+      "message": "example",
+      "rule_id": "example",
+      "severity": "block"
+    }
+  },
+  {
+    "kind": "AssetCheckInput",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "asset_id": "",
+      "asset_version_id": "",
+      "blob_ref": "",
+      "content_digest": "",
+      "kind": "",
+      "tenant_id": "",
+      "v": 0
+    }
+  },
+  {
+    "kind": "AssetCheckInput",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "asset_id": "01900000-0000-7000-8000-000000000001",
+      "asset_version_id": "01900000-0000-7000-8000-000000000001",
+      "blob_ref": "example",
+      "content_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "kind": "agent",
+      "tenant_id": "01900000-0000-7000-8000-000000000001",
+      "v": 1
+    }
+  },
+  {
+    "kind": "AssetCheckReport",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "check": "",
+      "checker_version": "",
+      "duration_ms": 0
+    }
+  },
+  {
+    "kind": "AssetCheckReport",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "check": "structure",
+      "checker_version": "example",
+      "duration_ms": 0
+    }
+  },
+  {
+    "kind": "AssignTaskInput",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "caller": "",
+      "member": "",
+      "request_id": "",
+      "task_id": ""
+    }
+  },
+  {
+    "kind": "AssignTaskInput",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "caller": "leader",
+      "member": "researcher-2",
+      "request_id": "effect-1",
+      "task_id": "task-2"
+    }
+  },
+  {
+    "kind": "CheckpointKeyResponse",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "key": "",
+      "key_version": 0
+    }
+  },
+  {
+    "kind": "CheckpointKeyResponse",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "key": "example",
+      "key_version": 1
+    }
+  },
+  {
+    "kind": "CompleteTaskInput",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "caller": "",
+      "request_id": "",
+      "result_text": "",
+      "task_id": ""
+    }
+  },
+  {
+    "kind": "CompleteTaskInput",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "caller": "researcher-1",
+      "request_id": "effect-1",
+      "result_text": "Found 4 filings; list attached.",
+      "task_id": "task-1"
+    }
+  },
+  {
+    "kind": "CreateTasksInput",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "caller": "",
+      "request_id": "",
+      "tasks": null
+    }
+  },
+  {
+    "kind": "CreateTasksInput",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "caller": "leader",
+      "request_id": "effect-1",
+      "tasks": [
+        {
+          "description": "Download and list every 2025 filing.",
+          "title": "Collect 2025 filings"
+        }
+      ]
+    }
+  },
+  {
+    "kind": "CreateTasksOutput",
+    "case": "zero",
+    "valid": true,
+    "payload": {}
+  },
+  {
+    "kind": "CreateTasksOutput",
+    "case": "minimal",
+    "valid": true,
+    "payload": {}
+  },
+  {
+    "kind": "Decision",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "kind": ""
+    }
+  },
+  {
+    "kind": "Decision",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "choice": "allow_always",
+      "kind": "tool_approval"
+    }
+  },
+  {
+    "kind": "FinishTeamInput",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "caller": "",
+      "request_id": "",
+      "summary": ""
+    }
+  },
+  {
+    "kind": "FinishTeamInput",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "caller": "leader",
+      "request_id": "effect-1",
+      "summary": "All tasks completed; the report is in report/summary.md."
+    }
+  },
+  {
+    "kind": "GetLockResponse",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "lock": {
+        "digest": "",
+        "effective_permissions": {
+          "network": {},
+          "sandbox_profile": ""
+        },
+        "entries": null,
+        "entry": {
+          "kind": "",
+          "ref": "",
+          "version": ""
+        },
+        "lock_id": "",
+        "members": null,
+        "v": 0
+      }
+    }
+  },
+  {
+    "kind": "GetLockResponse",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "lock": {
+        "digest": "sha256:0f1fd61e653bfe1ec62c63e0ed9a9b8771e72b2a57895ab20f3d8822a207491d",
+        "effective_permissions": {
+          "network": {},
+          "sandbox_profile": "office-standard"
+        },
+        "entries": [
+          {
+            "digest": "sha256:089035214c256784cb38d5932dd5a6bad234e55aa81ab5cc8350a70c039d04bc",
+            "kind": "agent",
+            "ref": "acme/contract-assistant",
+            "version": "1.3.0"
+          }
+        ],
+        "entry": {
+          "kind": "agent",
+          "ref": "acme/contract-assistant",
+          "version": "1.3.0"
+        },
+        "lock_id": "lk-01J9X",
+        "members": [
+          {
+            "agent_entry": 0,
+            "description": "Single agent.",
+            "effective_permissions": {
+              "network": {},
+              "sandbox_profile": "office-standard"
+            },
+            "name": "main",
+            "role": "leader"
+          }
+        ],
+        "v": 1
+      }
+    }
+  },
+  {
+    "kind": "InteractionRequest",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "interaction_id": "",
+      "kind": ""
+    }
+  },
+  {
+    "kind": "InteractionRequest",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "interaction_id": "ia-0002",
+      "kind": "ask_user",
+      "question": {
+        "text": "Which of the two contracts should be the baseline?"
+      }
+    }
+  },
+  {
+    "kind": "McpManifest",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "mcpServers": null
+    }
+  },
+  {
+    "kind": "McpManifest",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "mcpServers": {}
+    }
+  },
+  {
+    "kind": "ModelCredentials",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "api_key": "",
+      "base_url": "",
+      "expires_at": "0001-01-01T00:00:00Z",
+      "model": "",
+      "params": null,
+      "pricing": {
+        "cache_read_per_mtok_millicredits": 0,
+        "cache_write_per_mtok_millicredits": 0,
+        "input_per_mtok_millicredits": 0,
+        "output_per_mtok_millicredits": 0
+      }
+    }
+  },
+  {
+    "kind": "ModelCredentials",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "api_key": "run-key-example",
+      "base_url": "http://mockllm:8000",
+      "expires_at": "2026-10-14T08:36:03Z",
+      "model": "reasoning-default",
+      "params": {},
+      "pricing": {
+        "cache_read_per_mtok_millicredits": 1000,
+        "cache_write_per_mtok_millicredits": 1000,
+        "input_per_mtok_millicredits": 1000,
+        "output_per_mtok_millicredits": 1000
+      }
+    }
+  },
+  {
+    "kind": "PolicySnapshot",
+    "case": "zero",
+    "valid": true,
+    "payload": {}
+  },
+  {
+    "kind": "PolicySnapshot",
+    "case": "minimal",
+    "valid": true,
+    "payload": {}
+  },
+  {
+    "kind": "RunEvent",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "attempt": 0,
+      "data": null,
+      "id": "",
+      "member": "",
+      "run_id": "",
+      "segment": 0,
+      "session_id": "",
+      "tenant_id": "",
+      "ts": "0001-01-01T00:00:00Z",
+      "type": "",
+      "v": 0
+    }
+  },
+  {
+    "kind": "RunEvent",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "attempt": 1,
+      "data": {
+        "artifact": {
+          "digest": "sha256:761b7ad8ad439b2855fcbb611331c646ef0870b0631247bba3f3025cb6df5a53",
+          "mime": "text/markdown",
+          "object_ref": "t/3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f/artifacts/9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d/report/summary.md",
+          "path": "report/summary.md",
+          "size_bytes": 2048
+        }
+      },
+      "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d:main:3:1:1",
+      "member": "main",
+      "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "segment": 3,
+      "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "ts": "2026-10-14T08:21:03.112Z",
+      "type": "artifact.created",
+      "v": 1
+    }
+  },
+  {
+    "kind": "RunLock",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "digest": "",
+      "effective_permissions": {
+        "network": {},
+        "sandbox_profile": ""
+      },
+      "entries": null,
+      "entry": {
+        "kind": "",
+        "ref": "",
+        "version": ""
+      },
+      "lock_id": "",
+      "members": null,
+      "v": 0
+    }
+  },
+  {
+    "kind": "RunLock",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "digest": "sha256:aacdec685a9258d5de02a932e06858184e50a8fd0034fb05849bc15207f0f63f",
+      "effective_permissions": {
+        "network": {},
+        "sandbox_profile": "office-standard"
+      },
+      "entries": [
+        {
+          "digest": "sha256:089035214c256784cb38d5932dd5a6bad234e55aa81ab5cc8350a70c039d04bc",
+          "kind": "agent",
+          "ref": "acme/contract-assistant",
+          "version": "1.3.0"
+        }
+      ],
+      "entry": {
+        "kind": "agent",
+        "ref": "acme/contract-assistant",
+        "version": "1.3.0"
+      },
+      "lock_id": "lk-01J9X",
+      "members": [
+        {
+          "agent_entry": 0,
+          "description": "Single agent.",
+          "effective_permissions": {
+            "network": {},
+            "sandbox_profile": "office-standard"
+          },
+          "name": "main",
+          "role": "leader"
+        }
+      ],
+      "v": 1
+    }
+  },
+  {
+    "kind": "SandboxAcquireInput",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "isolation_key": "",
+      "metadata": {
+        "lease_gen": 0,
+        "run_id": "",
+        "session_id": "",
+        "workspace_id": ""
+      },
+      "profile": "",
+      "tenant_id": "",
+      "ttl_seconds": 0
+    }
+  },
+  {
+    "kind": "SandboxAcquireInput",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "isolation_key": "t-3f2a8c1e-s-7c9e6679",
+      "metadata": {
+        "lease_gen": 0,
+        "run_id": "01900000-0000-7000-8000-000000000001",
+        "session_id": "01900000-0000-7000-8000-000000000001",
+        "workspace_id": "01900000-0000-7000-8000-000000000001"
+      },
+      "profile": "office-standard",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "ttl_seconds": 1800
+    }
+  },
+  {
+    "kind": "SandboxConfigureInput",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "isolation_key": "",
+      "lease": {
+        "expires_at": "0001-01-01T00:00:00Z",
+        "provider": "",
+        "sandbox_id": ""
+      },
+      "tenant_id": ""
+    }
+  },
+  {
+    "kind": "SandboxConfigureInput",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "isolation_key": "t-3f2a8c1e-s-7c9e6679",
+      "lease": {
+        "expires_at": "2026-10-14T09:21:03Z",
+        "provider": "opensandbox",
+        "sandbox_id": "sbx-8841"
+      },
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f"
+    }
+  },
+  {
+    "kind": "SandboxEmptyResult",
+    "case": "zero",
+    "valid": false,
+    "payload": null
+  },
+  {
+    "kind": "SandboxEmptyResult",
+    "case": "minimal",
+    "valid": true,
+    "payload": {}
+  },
+  {
+    "kind": "SandboxInspectResult",
+    "case": "zero",
+    "valid": true,
+    "payload": {
+      "exists": false
+    }
+  },
+  {
+    "kind": "SandboxInspectResult",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "exists": false
+    }
+  },
+  {
+    "kind": "SandboxLease",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "expires_at": "0001-01-01T00:00:00Z",
+      "provider": "",
+      "sandbox_id": ""
+    }
+  },
+  {
+    "kind": "SandboxLease",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "expires_at": "2026-10-14T09:21:03Z",
+      "provider": "opensandbox",
+      "sandbox_id": "sbx-8841"
+    }
+  },
+  {
+    "kind": "SandboxOpInput",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "isolation_key": "",
+      "provider": "",
+      "sandbox_id": "",
+      "tenant_id": ""
+    }
+  },
+  {
+    "kind": "SandboxOpInput",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "isolation_key": "t-3f2a8c1e-s-7c9e6679",
+      "provider": "opensandbox",
+      "sandbox_id": "sbx-8841",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f"
+    }
+  },
+  {
+    "kind": "SandboxSnapshotDeleteInput",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "isolation_key": "",
+      "provider": "",
+      "snapshot_id": "",
+      "tenant_id": ""
+    }
+  },
+  {
+    "kind": "SandboxSnapshotDeleteInput",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "isolation_key": "example",
+      "provider": "opensandbox",
+      "snapshot_id": "example",
+      "tenant_id": "01900000-0000-7000-8000-000000000001"
+    }
+  },
+  {
+    "kind": "SandboxSnapshotResult",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "snapshot_id": ""
+    }
+  },
+  {
+    "kind": "SandboxSnapshotResult",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "snapshot_id": "snap-3391"
+    }
+  },
+  {
+    "kind": "SecretGrant",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "expires_at": "0001-01-01T00:00:00Z",
+      "name": "",
+      "value": ""
+    }
+  },
+  {
+    "kind": "SecretGrant",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "expires_at": "2026-10-14T08:36:03Z",
+      "name": "OCR_API_KEY",
+      "value": "secret-value-example"
+    }
+  },
+  {
+    "kind": "SecretGrantRequest",
+    "case": "zero",
+    "valid": true,
+    "payload": {}
+  },
+  {
+    "kind": "SecretGrantRequest",
+    "case": "minimal",
+    "valid": true,
+    "payload": {}
+  },
+  {
+    "kind": "SecretGrantResponse",
+    "case": "zero",
+    "valid": true,
+    "payload": {}
+  },
+  {
+    "kind": "SecretGrantResponse",
+    "case": "minimal",
+    "valid": true,
+    "payload": {}
+  },
+  {
+    "kind": "SegmentInput",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "agent_session_key": "",
+      "budget_notice": "",
+      "event_subject": "",
+      "expected_checkpoint_version": 0,
+      "input": {
+        "kind": ""
+      },
+      "limits": {
+        "max_iterations": 0,
+        "max_wall_seconds": 0,
+        "remaining_run_millicredits": 0,
+        "segment_budget_millicredits": 0
+      },
+      "lock": {
+        "digest": "",
+        "id": ""
+      },
+      "member": "",
+      "principal_id": "",
+      "run_id": "",
+      "sandbox": {
+        "isolation_key": "",
+        "provider": "",
+        "sandbox_id": ""
+      },
+      "seq": 0,
+      "session_id": "",
+      "tenant_id": "",
+      "v": 0,
+      "workspace_id": ""
+    }
+  },
+  {
+    "kind": "SegmentInput",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "agent_session_key": "sess:7c9e6679-7425-40de-944b-e07fc1f90ae7:L7f3c",
+      "budget_notice": "none",
+      "event_subject": "run.3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f.9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "expected_checkpoint_version": 3,
+      "input": {
+        "kind": "user_message",
+        "text": "Compare clause 4.2 of the two contracts."
+      },
+      "limits": {
+        "max_iterations": 25,
+        "max_wall_seconds": 600,
+        "remaining_run_millicredits": 48200,
+        "segment_budget_millicredits": 12500
+      },
+      "lock": {
+        "digest": "sha256:0c030586945fe504b604ecc2e875c38ede400cd5cd73da9730302162e6b02c6f",
+        "id": "lk-01J9X"
+      },
+      "member": "main",
+      "principal_id": "01900000-0000-7000-8000-000000000001",
+      "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "sandbox": {
+        "isolation_key": "isolation-1",
+        "provider": "opensandbox",
+        "sandbox_id": "sbx-8841"
+      },
+      "seq": 4,
+      "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "v": 1,
+      "workspace_id": "01900000-0000-7000-8000-000000000001"
+    }
+  },
+  {
+    "kind": "SegmentResult",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "artifacts_omitted": 0,
+      "checkpoint_version": 0,
+      "progress": {
+        "iterations": 0,
+        "new_output": false,
+        "tool_calls": 0
+      },
+      "status": "",
+      "v": 0
+    }
+  },
+  {
+    "kind": "SegmentResult",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "artifacts_omitted": 0,
+      "checkpoint_version": 4,
+      "progress": {
+        "iterations": 7,
+        "new_output": true,
+        "tool_calls": 5
+      },
+      "status": "yielded",
+      "v": 1,
+      "yield_reason": "compacted"
+    }
+  },
+  {
+    "kind": "SendMessageInput",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "caller": "",
+      "request_id": "",
+      "text": "",
+      "to": ""
+    }
+  },
+  {
+    "kind": "SendMessageInput",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "caller": "researcher-1",
+      "request_id": "effect-1",
+      "text": "The 2025 Q3 filing is not public yet.",
+      "to": "leader"
+    }
+  },
+  {
+    "kind": "SkillsManifest",
+    "case": "zero",
+    "valid": true,
+    "payload": {}
+  },
+  {
+    "kind": "SkillsManifest",
+    "case": "minimal",
+    "valid": true,
+    "payload": {}
+  },
+  {
+    "kind": "SubmitVerdictInput",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "caller": "",
+      "reason": "",
+      "request_id": "",
+      "task_id": "",
+      "verdict": ""
+    }
+  },
+  {
+    "kind": "SubmitVerdictInput",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "caller": "reviewer",
+      "reason": "Q3 is missing.",
+      "request_id": "effect-1",
+      "task_id": "task-1",
+      "verdict": "reject"
+    }
+  },
+  {
+    "kind": "TeamBoard",
+    "case": "zero",
+    "valid": true,
+    "payload": {}
+  },
+  {
+    "kind": "TeamBoard",
+    "case": "minimal",
+    "valid": true,
+    "payload": {}
+  },
+  {
+    "kind": "TeamManifest",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "dispatch": "",
+      "name": "",
+      "roles": null,
+      "schema": null
+    }
+  },
+  {
+    "kind": "TeamManifest",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "dispatch": "scheduled",
+      "name": "research-squad",
+      "roles": [
+        {
+          "agent": ".",
+          "name": "leader",
+          "role": "leader"
+        }
+      ],
+      "schema": "orbit.team/v1"
+    }
+  },
+  {
+    "kind": "TokenRequest",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "attempt": 0,
+      "member": "",
+      "purpose": "",
+      "run_id": "",
+      "seq": 0,
+      "tenant_id": ""
+    }
+  },
+  {
+    "kind": "TokenRequest",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "attempt": 1,
+      "member": "example",
+      "purpose": "segment",
+      "run_id": "01900000-0000-7000-8000-000000000001",
+      "seq": 1,
+      "tenant_id": "01900000-0000-7000-8000-000000000001"
+    }
+  },
+  {
+    "kind": "TokenResponse",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "expires_at": "0001-01-01T00:00:00Z",
+      "token": ""
+    }
+  },
+  {
+    "kind": "TokenResponse",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "expires_at": "2026-10-15T00:00:00Z",
+      "token": "example"
+    }
+  },
+  {
+    "kind": "Usage",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "cost_millicredits": 0,
+      "input_tokens": 0,
+      "model": "",
+      "output_tokens": 0
+    }
+  },
+  {
+    "kind": "Usage",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "cache_read_tokens": 9000,
+      "cache_write_tokens": 0,
+      "cost_millicredits": 1840,
+      "input_tokens": 18234,
+      "model": "reasoning-default",
+      "output_tokens": 2210
+    }
+  },
+  {
+    "kind": "UsageItem",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "idempotency_key": "",
+      "input_tokens": 0,
+      "model": "",
+      "occurred_at": "0001-01-01T00:00:00Z",
+      "output_tokens": 0
+    }
+  },
+  {
+    "kind": "UsageItem",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "idempotency_key": "example",
+      "input_tokens": 0,
+      "model": "example",
+      "occurred_at": "2026-10-15T00:00:00Z",
+      "output_tokens": 0
+    }
+  },
+  {
+    "kind": "UsageReport",
+    "case": "zero",
+    "valid": true,
+    "payload": {}
+  },
+  {
+    "kind": "UsageReport",
+    "case": "minimal",
+    "valid": true,
+    "payload": {}
+  },
+  {
+    "kind": "UsageReportResponse",
+    "case": "zero",
+    "valid": true,
+    "payload": {
+      "run_used_millicredits": 0
+    }
+  },
+  {
+    "kind": "UsageReportResponse",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "run_used_millicredits": 0
+    }
+  }
+]

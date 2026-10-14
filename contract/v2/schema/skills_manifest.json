@@ -2,32 +2,42 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://orbit.mindreon.com/contract/v2/skills_manifest.json",
   "description": "skills.json of an agent bundle.",
-  "x-exports": ["SkillsManifest"],
+  "x-exports": [
+    "SkillsManifest"
+  ],
   "$defs": {
     "SkillsManifest": {
       "description": "skills.json of an agent bundle: the order of the skills and the references to catalog skills. Skill directories of the bundle that are not listed still load, after the listed ones.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["skills"],
+      "required": [],
       "properties": {
         "skills": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/SkillEntry"
           },
-          "description": "Skills in load order."
+          "description": "Skills in load order.",
+          "default": []
         }
-      }
+      },
+      "x-extra": "forbid"
     },
     "SkillSource": {
       "description": "bundle: the skill is the directory skills/<name>/ of the bundle. catalog: the skill is a skill asset, resolved to an exact version when the run is locked.",
-      "enum": ["bundle", "catalog"]
+      "enum": [
+        "bundle",
+        "catalog"
+      ]
     },
     "SkillEntry": {
       "description": "One skill. A catalog entry needs id; a bundle entry has neither id nor version.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "source"],
+      "required": [
+        "name",
+        "source"
+      ],
       "properties": {
         "name": {
           "type": "string",
@@ -40,7 +50,8 @@
         "id": {
           "type": "string",
           "minLength": 1,
-          "description": "Catalog skill, publisher/name."
+          "description": "Catalog skill, publisher/name.",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_./:-]{0,255}$"
         },
         "version": {
           "type": "string",
@@ -56,10 +67,14 @@
                 "const": "catalog"
               }
             },
-            "required": ["source"]
+            "required": [
+              "source"
+            ]
           },
           "then": {
-            "required": ["id"]
+            "required": [
+              "id"
+            ]
           },
           "else": {
             "properties": {
@@ -68,7 +83,8 @@
             }
           }
         }
-      ]
+      ],
+      "x-extra": "forbid"
     }
   }
 }

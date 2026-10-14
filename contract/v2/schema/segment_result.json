@@ -2,13 +2,21 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://orbit.mindreon.com/contract/v2/segment_result.json",
   "description": "Result of the RunAgentSegment activity.",
-  "x-exports": ["SegmentResult"],
+  "x-exports": [
+    "SegmentResult"
+  ],
   "$defs": {
     "SegmentResult": {
       "description": "Result of the RunAgentSegment activity. It is also what the worker stores in segment_results in the same transaction as the checkpoint, so a retry that finds it returns it unchanged.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["status", "checkpoint_version", "artifacts", "usage", "progress", "signals"],
+      "required": [
+        "status",
+        "checkpoint_version",
+        "progress",
+        "v",
+        "artifacts_omitted"
+      ],
       "properties": {
         "status": {
           "$ref": "#/$defs/SegmentStatus"
@@ -32,10 +40,17 @@
           "items": {
             "$ref": "common.json#/$defs/Artifact"
           },
-          "description": "Files the segment left in the output directory, to be published by the workflow after the commit."
+          "description": "Files the segment left in the output directory, to be published by the workflow after the commit.",
+          "maxItems": 200,
+          "default": []
         },
         "usage": {
-          "$ref": "common.json#/$defs/Usage"
+          "type": "array",
+          "description": "Per-model usage over this segment, one entry for each model used.",
+          "items": {
+            "$ref": "common.json#/$defs/Usage"
+          },
+          "default": []
         },
         "progress": {
           "$ref": "#/$defs/SegmentProgress"
@@ -45,10 +60,22 @@
           "items": {
             "$ref": "#/$defs/SegmentSignal"
           },
-          "description": "Observations the workflow may act on, such as reliability findings."
+          "description": "Observations the workflow may act on, such as reliability findings.",
+          "default": []
         },
         "error": {
           "$ref": "#/$defs/SegmentError"
+        },
+        "v": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Wire protocol version; currently 1.",
+          "const": 1
+        },
+        "artifacts_omitted": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of output files omitted beyond the 200 artifact limit."
         }
       },
       "allOf": [
@@ -59,10 +86,14 @@
                 "const": "yielded"
               }
             },
-            "required": ["status"]
+            "required": [
+              "status"
+            ]
           },
           "then": {
-            "required": ["yield_reason"]
+            "required": [
+              "yield_reason"
+            ]
           },
           "else": {
             "properties": {
@@ -77,10 +108,14 @@
                 "const": "interrupted"
               }
             },
-            "required": ["status"]
+            "required": [
+              "status"
+            ]
           },
           "then": {
-            "required": ["interaction"]
+            "required": [
+              "interaction"
+            ]
           },
           "else": {
             "properties": {
@@ -95,10 +130,14 @@
                 "const": "failed"
               }
             },
-            "required": ["status"]
+            "required": [
+              "status"
+            ]
           },
           "then": {
-            "required": ["error"]
+            "required": [
+              "error"
+            ]
           },
           "else": {
             "properties": {
@@ -106,11 +145,17 @@
             }
           }
         }
-      ]
+      ],
+      "x-extra": "ignore"
     },
     "SegmentStatus": {
       "description": "completed: the agent finished its work. interrupted: it waits for an interaction. yielded: it stopped at a bound and must continue in another segment. failed: it ended with an error.",
-      "enum": ["completed", "interrupted", "yielded", "failed"]
+      "enum": [
+        "completed",
+        "interrupted",
+        "yielded",
+        "failed"
+      ]
     },
     "YieldReason": {
       "description": "Why a yielded segment stopped: iteration_cap, wall_cap, effect_boundary (an external write completed), budget_soft (segment budget reached), cancel (cooperative stop requested), goal_continue (the agent has more to do toward its goal), mailbox (a team message arrived that needs the next segment).",
@@ -121,19 +166,24 @@
         "budget_soft",
         "cancel",
         "goal_continue",
-        "mailbox"
+        "mailbox",
+        "compacted"
       ]
     },
     "FinalMessage": {
       "description": "The assistant message that ended the run turn.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["message_id", "text_preview"],
+      "required": [
+        "message_id",
+        "text_preview"
+      ],
       "properties": {
         "message_id": {
           "type": "string",
           "minLength": 1,
-          "description": "Identifier of the message, stable across retries."
+          "description": "Identifier of the message, stable across retries.",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$"
         },
         "content_ref": {
           "type": "string",
@@ -144,13 +194,18 @@
           "type": "string",
           "description": "Leading part of the content for notifications and previews."
         }
-      }
+      },
+      "x-extra": "ignore"
     },
     "SegmentProgress": {
       "description": "What the segment did; the workflow counts segments without progress to detect a stuck run.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["iterations", "tool_calls", "new_output"],
+      "required": [
+        "iterations",
+        "tool_calls",
+        "new_output"
+      ],
       "properties": {
         "iterations": {
           "type": "integer",
@@ -166,17 +221,26 @@
           "type": "boolean",
           "description": "Whether the segment produced output the user has not seen."
         }
-      }
+      },
+      "x-extra": "ignore"
     },
     "SignalLevel": {
       "description": "Severity of a signal.",
-      "enum": ["info", "warn", "high"]
+      "enum": [
+        "info",
+        "warn",
+        "high"
+      ]
     },
     "SegmentSignal": {
       "description": "One observation about the segment.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "level", "detail"],
+      "required": [
+        "kind",
+        "level",
+        "detail"
+      ],
       "properties": {
         "kind": {
           "type": "string",
@@ -190,18 +254,28 @@
           "type": "string",
           "description": "Human-readable detail, without secrets."
         }
-      }
+      },
+      "x-extra": "ignore"
     },
     "SegmentError": {
       "description": "Why the segment failed.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["code", "message", "retryable"],
+      "required": [
+        "code",
+        "message",
+        "retryable"
+      ],
       "properties": {
         "code": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Stable machine-readable error code."
+          "enum": [
+            "agent_error",
+            "model_error",
+            "loop_detected",
+            "sandbox_error",
+            "tool_policy_error"
+          ],
+          "description": "Stable segment failure category; application error names live in registry.json."
         },
         "message": {
           "type": "string",
@@ -211,7 +285,8 @@
           "type": "boolean",
           "description": "Whether a new attempt of the same segment may succeed."
         }
-      }
+      },
+      "x-extra": "ignore"
     }
   }
 }

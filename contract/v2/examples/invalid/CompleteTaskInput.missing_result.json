@@ -1,4 +1,5 @@
 {
   "caller": "r",
-  "task_id": "t"
+  "task_id": "t",
+  "request_id": "effect-1"
 }

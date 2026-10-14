@@ -1,0 +1,49 @@
+{
+  "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+  "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+  "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+  "member": "main",
+  "seq": 4,
+  "agent_session_key": "sess:7c9e6679-7425-40de-944b-e07fc1f90ae7:L7f3c",
+  "expected_checkpoint_version": 3,
+  "lock": {
+    "id": "lk-01J9X",
+    "digest": "sha256:0c030586945fe504b604ecc2e875c38ede400cd5cd73da9730302162e6b02c6f"
+  },
+  "input": {
+    "kind": "user_message",
+    "text": "Compare clause 4.2 of the two contracts.",
+    "attachments": [
+      {
+        "file_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+        "name": "brief.pdf",
+        "media_type": "application/pdf",
+        "size_bytes": 2048
+      }
+    ]
+  },
+  "steer": [
+    {
+      "text": "Focus on liability caps."
+    }
+  ],
+  "limits": {
+    "max_iterations": 25,
+    "max_wall_seconds": 600,
+    "segment_budget_millicredits": 12500,
+    "remaining_run_millicredits": 48200
+  },
+  "budget_notice": "none",
+  "sandbox": {
+    "provider": "opensandbox",
+    "sandbox_id": "sbx-8841",
+    "isolation_key": "isolation-1"
+  },
+  "event_subject": "run.3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f.9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+  "trace": {
+    "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+  },
+  "v": 1,
+  "workspace_id": "01900000-0000-7000-8000-000000000001",
+  "principal_id": "01900000-0000-7000-8000-000000000001"
+}

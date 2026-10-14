@@ -1,15 +1,16 @@
 {
   "status": "yielded",
   "checkpoint_version": 4,
-  "artifacts": [],
-  "usage": {
-    "model": "reasoning-default",
-    "input_tokens": 18234,
-    "output_tokens": 2210,
-    "cache_read_tokens": 9000,
-    "cache_write_tokens": 0,
-    "credits": 1.84
-  },
+  "usage": [
+    {
+      "model": "reasoning-default",
+      "input_tokens": 18234,
+      "output_tokens": 2210,
+      "cache_read_tokens": 9000,
+      "cache_write_tokens": 0,
+      "cost_millicredits": 1840
+    }
+  ],
   "progress": {
     "iterations": 7,
     "tool_calls": 5,
@@ -22,5 +23,7 @@
       "detail": "the same tool call repeated 4 times"
     }
   ],
-  "yield_reason": "tired"
+  "yield_reason": "tired",
+  "v": 1,
+  "artifacts_omitted": 0
 }

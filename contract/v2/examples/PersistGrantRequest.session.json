@@ -1,5 +1,0 @@
-{
-  "scope": "session",
-  "tool": "shell",
-  "arg_pattern": "ls *"
-}

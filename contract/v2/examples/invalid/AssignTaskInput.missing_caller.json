@@ -1,4 +1,5 @@
 {
   "task_id": "t",
-  "member": "m"
+  "member": "m",
+  "request_id": "effect-1"
 }

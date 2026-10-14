@@ -2,23 +2,34 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://orbit.mindreon.com/contract/v2/lock.json",
   "description": "The run lock: the resolved asset versions a run executes and the permissions it may use.",
-  "x-exports": ["RunLock"],
+  "x-exports": [
+    "RunLock"
+  ],
   "$defs": {
     "RunLock": {
       "description": "The resolved, immutable set of asset versions a run executes: the entry agent or team, every skill and MCP server reachable from it, the content digest of each file and the permissions the run may use at most. Control resolves it once at run start; the worker reads it, never re-resolves.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["lock_id", "digest", "entry", "entries", "effective_permissions"],
+      "required": [
+        "lock_id",
+        "digest",
+        "entry",
+        "entries",
+        "effective_permissions",
+        "v",
+        "members"
+      ],
       "properties": {
         "lock_id": {
           "type": "string",
           "minLength": 1,
-          "description": "Identifier of the lock."
+          "description": "Identifier of the lock.",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$"
         },
         "digest": {
           "type": "string",
           "pattern": "^sha256:[0-9a-f]{64}$",
-          "description": "Digest over the entries and effective permissions; equal digests mean equal runs."
+          "description": "Object digest = \"sha256:\" + lowercase hex(SHA-256(RFC 8785 JCS JSON)). RunLock hashes {v, entry, entries, members, effective_permissions}, omitting its identity lock_id and the digest itself. Empty optional arrays are omitted as on the Go wire. Equal resolved content yields equal digests across runs."
         },
         "entry": {
           "$ref": "#/$defs/LockEntryRef"
@@ -33,18 +44,75 @@
         },
         "effective_permissions": {
           "$ref": "#/$defs/EffectivePermissions"
+        },
+        "v": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Wire protocol version; currently 1.",
+          "const": 1
+        },
+        "members": {
+          "type": "array",
+          "description": "Resolved roster; a single-agent run has exactly one member named main.",
+          "items": {
+            "$ref": "#/$defs/LockMember"
+          },
+          "minItems": 1
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "entry": {
+                "properties": {
+                  "kind": {
+                    "const": "agent"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              }
+            },
+            "required": [
+              "entry"
+            ]
+          },
+          "then": {
+            "properties": {
+              "members": {
+                "maxItems": 1,
+                "items": {
+                  "properties": {
+                    "name": {
+                      "const": "main"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "x-extra": "ignore"
     },
     "EntryKind": {
       "description": "What a run starts from: a single agent or a team.",
-      "enum": ["agent", "team"]
+      "enum": [
+        "agent",
+        "team"
+      ]
     },
     "LockEntryRef": {
       "description": "The asset the run starts from.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "ref", "version"],
+      "required": [
+        "kind",
+        "ref",
+        "version"
+      ],
       "properties": {
         "kind": {
           "$ref": "#/$defs/EntryKind"
@@ -59,17 +127,27 @@
           "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.+-]+)?$",
           "description": "Exact semantic version."
         }
-      }
+      },
+      "x-extra": "ignore"
     },
     "AssetKind": {
       "description": "Kind of a locked asset.",
-      "enum": ["agent", "team", "skill", "mcp_server"]
+      "enum": [
+        "agent",
+        "team",
+        "skill",
+        "mcp_server"
+      ]
     },
     "LockFile": {
       "description": "One file of an asset version.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["path", "sha256", "size_bytes"],
+      "required": [
+        "path",
+        "sha256",
+        "size_bytes"
+      ],
       "properties": {
         "path": {
           "type": "string",
@@ -78,21 +156,27 @@
         },
         "sha256": {
           "type": "string",
-          "pattern": "^[0-9a-f]{64}$",
-          "description": "Hex sha256 of the content; the blob is stored under this key."
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "SHA-256 file content digest as sha256:<64 lowercase hex>."
         },
         "size_bytes": {
           "type": "integer",
           "minimum": 0,
           "description": "Size of the content in bytes."
         }
-      }
+      },
+      "x-extra": "ignore"
     },
     "LockEntry": {
       "description": "One resolved asset version.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "ref", "version", "digest", "files"],
+      "required": [
+        "kind",
+        "ref",
+        "version",
+        "digest"
+      ],
       "properties": {
         "kind": {
           "$ref": "#/$defs/AssetKind"
@@ -110,50 +194,60 @@
         "digest": {
           "type": "string",
           "pattern": "^sha256:[0-9a-f]{64}$",
-          "description": "Merkle digest over the paths and file digests of the version."
+          "description": "Bundle digest = \"sha256:\" + lowercase hex(SHA-256(concatenation of \"<path>\\0<sha256hex>\\n\", sorted by UTF-8 path bytes)). File hashes in this preimage are the 64 hex characters without the sha256: prefix. Paths are unique normalized relative POSIX paths, without NUL, newline, dot or parent components."
         },
         "files": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/LockFile"
           },
-          "description": "Files of the version, sorted by path."
+          "description": "Files of the version, sorted by path.",
+          "default": []
         }
-      }
+      },
+      "x-extra": "ignore"
     },
     "SecretRequirement": {
       "description": "A tenant secret the run may be granted.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["name"],
+      "required": [
+        "name"
+      ],
       "properties": {
         "name": {
           "type": "string",
           "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
           "description": "Secret name, as written in ${secret:NAME}."
         }
-      }
+      },
+      "x-extra": "ignore"
     },
     "NetworkPermissions": {
       "description": "Network rights of the run.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["egress"],
+      "required": [],
       "properties": {
         "egress": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Domain patterns the sandbox may reach; everything else is denied."
+          "description": "Domain patterns the sandbox may reach; everything else is denied.",
+          "default": []
         }
-      }
+      },
+      "x-extra": "ignore"
     },
     "EffectivePermissions": {
       "description": "Upper bound of what the run may do: what the assets declare, intersected with tenant, workspace and user policy. Runtime policy can only narrow it further.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["network", "secrets", "effect_classes", "data_scopes", "sandbox_profile", "tools_builtin"],
+      "required": [
+        "network",
+        "sandbox_profile"
+      ],
       "properties": {
         "network": {
           "$ref": "#/$defs/NetworkPermissions"
@@ -163,21 +257,24 @@
           "items": {
             "$ref": "#/$defs/SecretRequirement"
           },
-          "description": "Secrets the run may be granted."
+          "description": "Secrets the run may be granted.",
+          "default": []
         },
         "effect_classes": {
           "type": "array",
           "items": {
             "$ref": "common.json#/$defs/EffectClass"
           },
-          "description": "Side-effect classes the run may perform."
+          "description": "Side-effect classes the run may perform.",
+          "default": []
         },
         "data_scopes": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Data the run may read, for example session_files or workspace_knowledge:read."
+          "description": "Data the run may read, for example session_files or workspace_knowledge:read.",
+          "default": []
         },
         "sandbox_profile": {
           "type": "string",
@@ -189,9 +286,64 @@
           "items": {
             "type": "string"
           },
-          "description": "Built-in tools the agent may use."
+          "description": "Built-in tools the agent may use.",
+          "default": []
         }
-      }
+      },
+      "x-extra": "ignore"
+    },
+    "LockMember": {
+      "type": "object",
+      "description": "Resolved member. All entry references are zero-based indexes into this RunLock.entries; agent_entry selects an agent, skills select skills, mcp selects mcp_server entries.",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "team_updates.json#/$defs/MemberName"
+        },
+        "role": {
+          "$ref": "team_updates.json#/$defs/TeamRole"
+        },
+        "description": {
+          "type": "string",
+          "description": "Description used for task assignment."
+        },
+        "agent_entry": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Zero-based index of the member agent in entries."
+        },
+        "skills": {
+          "type": "array",
+          "description": "Skill entry indexes.",
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Zero-based entry index."
+          },
+          "default": []
+        },
+        "mcp": {
+          "type": "array",
+          "description": "MCP entry indexes.",
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Zero-based entry index."
+          },
+          "default": []
+        },
+        "effective_permissions": {
+          "$ref": "#/$defs/EffectivePermissions"
+        }
+      },
+      "required": [
+        "name",
+        "role",
+        "description",
+        "agent_entry",
+        "effective_permissions"
+      ],
+      "x-extra": "ignore"
     }
   }
 }
