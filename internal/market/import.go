@@ -119,6 +119,9 @@ var packageName = regexp.MustCompile(`^(?:@[a-z0-9_.-]+/)?[a-z0-9][a-z0-9_.-]*(?
 
 func ConvertMCP(in contract.McpManifest) (contract.McpManifest, error) {
 	out := contract.McpManifest{McpServers: contract.McpManifestMcpServers{}}
+	if len(in.McpServers) != 1 {
+		return out, fmt.Errorf("portable MCP config must contain exactly one server")
+	}
 	for name, server := range in.McpServers {
 		portable := contract.McpServer{}
 		placeholder := func(field, value string) string {
@@ -139,7 +142,7 @@ func ConvertMCP(in contract.McpManifest) (contract.McpManifest, error) {
 			if host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") {
 				return out, fmt.Errorf("nonportable MCP endpoint")
 			}
-			if ip, e := netip.ParseAddr(host); e == nil && (!ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast()) {
+			if ip, e := netip.ParseAddr(host); e == nil && !globalEndpointIP(ip) {
 				return out, fmt.Errorf("nonportable MCP endpoint")
 			}
 			portable.Url = new("https://" + placeholder("ENDPOINT", *server.Url))
@@ -201,10 +204,16 @@ func ConvertMCP(in contract.McpManifest) (contract.McpManifest, error) {
 		}
 		portable.Env = contract.McpServerEnv{}
 		for key, value := range server.Env {
+			if !regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString(key) {
+				return out, fmt.Errorf("invalid MCP environment key")
+			}
 			portable.Env[key] = placeholder("ENV_"+key, value)
 		}
 		portable.Headers = contract.McpServerHeaders{}
 		for key, value := range server.Headers {
+			if !regexp.MustCompile("^[!#$%&\x27*+.^_`|~0-9A-Za-z-]+$").MatchString(key) {
+				return out, fmt.Errorf("invalid MCP header key")
+			}
 			p := placeholder("HEADER_"+key, strings.TrimPrefix(value, "Bearer "))
 			if strings.HasPrefix(value, "Bearer ") {
 				p = "Bearer " + p
@@ -258,7 +267,7 @@ func Import(ctx context.Context, d *db.DB, s *assets.Service, tenant, actor, fil
 			if e != nil {
 				return e
 			}
-			v, e := s.Upload(ctx, a, "0.1.0", archive)
+			v, e := s.Upload(ctx,a,"0.1.0",archive)
 			if e != nil {
 				return e
 			}
@@ -288,7 +297,7 @@ func parseMCPExample(raw []byte) (contract.McpManifest, error) {
 		return out, err
 	}
 	servers, ok := root["mcpServers"].(map[string]any)
-	if !ok || len(servers) == 0 {
+	if !ok || len(servers) != 1 {
 		return out, fmt.Errorf("MCP servers missing")
 	}
 	converted := map[string]any{}
@@ -328,4 +337,19 @@ func parseMCPExample(raw []byte) (contract.McpManifest, error) {
 	}
 	err = json.Unmarshal(normalized, &out)
 	return out, err
+}
+
+// netip.IsGlobalUnicast includes several IANA special-purpose ranges which
+// Python is_global (the portable-config source rule) excludes.
+func globalEndpointIP(ip netip.Addr) bool {
+	ip = ip.Unmap()
+	if !ip.IsGlobalUnicast() || ip.IsPrivate() {
+		return false
+	}
+	for _, cidr := range []string{"0.0.0.0/8", "100.64.0.0/10", "192.0.0.0/24", "192.0.2.0/24", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "240.0.0.0/4", "100::/64", "2001:db8::/32", "2001::/23", "2002::/16", "3fff::/20", "5f00::/16"} {
+		if netip.MustParsePrefix(cidr).Contains(ip) {
+			return false
+		}
+	}
+	return true
 }

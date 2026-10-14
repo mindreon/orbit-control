@@ -97,3 +97,18 @@ func TestMCPRejectsPrivateEndpoints(t *testing.T) {
 		})
 	}
 }
+
+func TestMCPPortableBoundaries(t *testing.T) {
+	for _, server := range []contract.McpServer{
+		{Command: new("npx"), Args: []string{"demo"}, Env: contract.McpServerEnv{"BAD-KEY": "x"}},
+		{Url: new("https://example.test"), Headers: contract.McpServerHeaders{"Bad Header": "x"}},
+		{Url: new("https://100.64.0.1")}, {Url: new("https://192.0.2.1")}, {Url: new("https://[2001:db8::1]")}, {Url: new("https://[::ffff:100.64.0.1]")},
+	} {
+		if _, err := ConvertMCP(contract.McpManifest{McpServers: contract.McpManifestMcpServers{"demo": server}}); err == nil {
+			t.Fatal("nonportable config accepted")
+		}
+	}
+	if _, err := ConvertMCP(contract.McpManifest{McpServers: contract.McpManifestMcpServers{"a": {Url: new("https://example.test")}, "b": {Url: new("https://other.test")}}}); err == nil {
+		t.Fatal("multiple servers accepted")
+	}
+}
