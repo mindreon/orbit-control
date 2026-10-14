@@ -146,7 +146,7 @@ func (a Authorizer) RequireKeyIssuance(ctx context.Context, target string, scope
 		return err
 	}
 	for _, scope := range scopes {
-		if issuer.APIKey && !slices.Contains(issuer.Scopes, scope) || !hasAction(issuerBindings, scope) || !hasAction(recipientBindings, scope) {
+		if issuer.APIKey && !slices.Contains(issuer.Scopes, scope) || !hasAction(issuerBindings, scope, auth.Tenant(ctx)) || !hasAction(recipientBindings, scope, auth.Tenant(ctx)) {
 			return httpx.E(403, "FORBIDDEN", "API key scopes exceed issuer or recipient permissions")
 		}
 	}
@@ -154,9 +154,9 @@ func (a Authorizer) RequireKeyIssuance(ctx context.Context, target string, scope
 	return nil
 }
 
-func hasAction(bindings []Binding, action string) bool {
+func hasAction(bindings []Binding, action, tenant string) bool {
 	for _, b := range bindings {
-		if slices.Contains(Matrix[b.Role], action) {
+		if b.ScopeType == "tenant" && b.ScopeID == tenant && slices.Contains(Matrix[b.Role], action) {
 			return true
 		}
 	}

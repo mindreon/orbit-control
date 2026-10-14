@@ -100,3 +100,19 @@ func TestWorkspaceInheritanceAndDefaultDeny(t *testing.T) {
 		t.Fatal("invalid binding allowed")
 	}
 }
+
+func TestKeyIssuanceOnlyCountsTenantBindings(t *testing.T) {
+	for _, tc := range []struct {
+		b    Binding
+		want bool
+	}{
+		{Binding{"tenant.admin", "tenant", "t"}, true},
+		{Binding{"tenant.admin", "tenant", "other"}, false},
+		{Binding{"ws.admin", "workspace", "w"}, false},
+		{Binding{"asset.owner", "asset", "a"}, false},
+	} {
+		if got := hasAction([]Binding{tc.b}, "asset.update", "t"); got != tc.want {
+			t.Fatalf("%+v: %v", tc.b, got)
+		}
+	}
+}
