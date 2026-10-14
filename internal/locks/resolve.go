@@ -23,9 +23,21 @@ type Entry struct {
 }
 type Scope struct {
 	WorkspaceID string
-	RunID       string
 }
-type Resolver struct{ Assets *assets.Service }
+type Request struct {
+	TenantID, LockID string
+	Entry            Entry
+	Scope            Scope
+}
+type Resolver interface {
+	Resolve(context.Context, Request) (contract.RunLock, error)
+}
+type BundleResolver struct{ Assets *assets.Service }
+
+func NewResolver(s *assets.Service) *BundleResolver { return &BundleResolver{Assets: s} }
+
+var _ Resolver = (*BundleResolver)(nil)
+
 type node struct {
 	asset   assets.Asset
 	version assets.Version
@@ -33,7 +45,7 @@ type node struct {
 	prefix  string
 }
 type resolution struct {
-	r          *Resolver
+	r          *BundleResolver
 	ctx        context.Context
 	scope      Scope
 	lock       contract.RunLock
@@ -46,14 +58,18 @@ type resolution struct {
 	team       *node
 }
 
-func (r *Resolver) Resolve(ctx context.Context, tenant string, entry Entry, scope Scope) (contract.RunLock, error) {
-	if tenant != auth.Tenant(ctx) {
+func (r *BundleResolver) Resolve(ctx context.Context, req Request) (contract.RunLock, error) {
+	tenant, entry, scope := req.TenantID, req.Entry, req.Scope
+	if !ids.Valid(req.LockID) {
+		return contract.RunLock{}, assets.Invalid("Caller must supply a lock UUID")
+	}
+	if tenant == "" || auth.From(ctx).ID == "" || tenant != auth.Tenant(ctx) {
 		return contract.RunLock{}, fmt.Errorf("lock tenant mismatch")
 	}
 	if entry.Kind != "agent" && entry.Kind != "team" {
 		return contract.RunLock{}, assets.Invalid("Entry must be agent or team")
 	}
-	x := &resolution{r: r, ctx: ctx, scope: scope, nodes: map[string]node{}, visiting: map[string]bool{}, lock: contract.RunLock{V: 1, LockId: ids.New()}}
+	x := &resolution{r: r, ctx: ctx, scope: scope, nodes: map[string]node{}, visiting: map[string]bool{}, lock: contract.RunLock{V: 1, LockId: req.LockID}}
 	if err := x.policies(); err != nil {
 		return x.lock, err
 	}
@@ -62,42 +78,55 @@ func (r *Resolver) Resolve(ctx context.Context, tenant string, entry Entry, scop
 		return x.lock, err
 	}
 	x.lock.Entry = contract.LockEntryRef{Kind: entry.Kind, Ref: assets.Ref(root.asset), Version: root.version.Version}
+	if err := x.loadInstalled(); err != nil {
+		return x.lock, err
+	}
+	if err := x.roster(root, entry.Kind); err != nil {
+		return x.lock, err
+	}
+	return x.finish()
+}
+func (x *resolution) loadInstalled() error {
 	// Installed skills form the inherited skill library. References still undergo
 	// the same signature, availability, visibility and constraint checks.
-	rows, err := db.Tx(ctx).Query(ctx, `SELECT a.publisher||'/'||a.name FROM asset_installs i JOIN assets a ON a.id=i.asset_id WHERE i.enabled AND a.kind='skill' AND ((i.scope_type='tenant' AND i.scope_id=$1) OR (i.scope_type='workspace' AND i.scope_id=NULLIF($2,'')::uuid)) ORDER BY a.publisher,a.name`, tenant, scope.WorkspaceID)
+	rows, err := db.Tx(x.ctx).Query(x.ctx, `SELECT a.publisher||'/'||a.name FROM asset_installs i JOIN assets a ON a.id=i.asset_id WHERE i.enabled AND a.kind='skill' AND ((i.scope_type='tenant' AND i.scope_id=$1) OR (i.scope_type='workspace' AND i.scope_id=NULLIF($2,'')::uuid)) ORDER BY a.publisher,a.name`, auth.Tenant(x.ctx), x.scope.WorkspaceID)
 	if err != nil {
-		return x.lock, err
+		return err
 	}
 	refs := []string{}
 	for rows.Next() {
 		var ref string
 		if err = rows.Scan(&ref); err != nil {
 			rows.Close()
-			return x.lock, err
+			return err
 		}
 		refs = append(refs, ref)
 	}
 	err = rows.Err()
 	rows.Close()
 	if err != nil {
-		return x.lock, err
+		return err
 	}
 	for _, ref := range refs {
 		n, e := x.resolve("skill", ref, "*")
 		if e != nil {
-			return x.lock, e
+			return e
 		}
 		x.installed = append(x.installed, n)
 	}
-	if entry.Kind == "agent" {
-		m, e := x.member(root, "main", "agent")
+	return nil
+}
+func (x *resolution) roster(root node, kind contract.EntryKind) error {
+	var err error
+	if kind == "agent" {
+		m, e := x.member(root, "main", "main", "agent")
 		if e != nil {
-			return x.lock, e
+			return e
 		}
 		x.lock.Members = append(x.lock.Members, m)
 	} else {
 		if root.version.Manifest.Team == nil {
-			return x.lock, assets.Invalid("Team manifest missing")
+			return assets.Invalid("Team manifest missing")
 		}
 		x.team = &root
 		for _, skill := range root.version.Manifest.Team.SharedSkills {
@@ -107,7 +136,7 @@ func (r *Resolver) Resolve(ctx context.Context, tenant string, entry Entry, scop
 			}
 			n, e := x.resolve("skill", skill.Id, c)
 			if e != nil {
-				return x.lock, e
+				return e
 			}
 			x.shared = append(x.shared, n)
 		}
@@ -120,28 +149,31 @@ func (r *Resolver) Resolve(ctx context.Context, tenant string, entry Entry, scop
 				n, err = x.resolve("agent", ref, c)
 			}
 			if err != nil {
-				return x.lock, err
+				return err
 			}
 			count := 1
 			if role.Count != nil {
 				count = *role.Count
 			}
 			if count > 100 {
-				return x.lock, assets.Invalid("Team roster too large")
+				return assets.Invalid("Team roster too large")
 			}
 			for i := range count {
 				name := role.Name
 				if count > 1 {
 					name = fmt.Sprintf("%s-%d", name, i+1)
 				}
-				m, e := x.member(n, name, contract.MemberRole(role.Role))
+				m, e := x.member(n, name, role.Name, contract.MemberRole(role.Role))
 				if e != nil {
-					return x.lock, e
+					return e
 				}
 				x.lock.Members = append(x.lock.Members, m)
 			}
 		}
 	}
+	return nil
+}
+func (x *resolution) finish() (contract.RunLock, error) {
 	if len(x.lock.Members) == 0 {
 		return x.lock, assets.Invalid("Empty roster")
 	}
@@ -149,7 +181,7 @@ func (r *Resolver) Resolve(ctx context.Context, tenant string, entry Entry, scop
 	// its own narrower cap. Both have already intersected tenant/workspace policy.
 	x.lock.EffectivePermissions = x.lock.Members[0].EffectivePermissions
 	for _, m := range x.lock.Members[1:] {
-		x.lock.EffectivePermissions = union(x.lock.EffectivePermissions, m.EffectivePermissions)
+		x.lock.EffectivePermissions = assets.UnionPermissions(x.lock.EffectivePermissions, m.EffectivePermissions)
 	}
 	raw, err := json.Marshal(x.lock)
 	if err != nil {
@@ -166,22 +198,9 @@ func (r *Resolver) Resolve(ctx context.Context, tenant string, entry Entry, scop
 	if err = contract.ValidateStrict("RunLock", raw); err != nil {
 		return x.lock, err
 	}
-	if scope.RunID != "" {
-		entries, e := json.Marshal(x.lock.Entries)
-		if e != nil {
-			return x.lock, e
-		}
-		p, e := json.Marshal(x.lock.EffectivePermissions)
-		if e != nil {
-			return x.lock, e
-		}
-		_, err = db.Tx(ctx).Exec(ctx, `INSERT INTO run_locks(id,tenant_id,run_id,digest,entries,effective_permissions,lock) VALUES($1,$2,$3,$4,$5,$6,$7)`, x.lock.LockId, tenant, scope.RunID, x.lock.Digest, entries, p, raw)
-		if err == nil {
-			err = assets.Log(ctx, "run.lock_created", "run_lock", x.lock.LockId, map[string]string{"digest": x.lock.Digest})
-		}
-	}
-	return x.lock, err
+	return x.lock, nil
 }
+
 func (x *resolution) policies() error {
 	rows, err := db.Tx(x.ctx).Query(x.ctx, `SELECT body FROM policies WHERE status='active' AND kind='tool_rules' AND ((scope_type='tenant' AND scope_id=$1) OR (scope_type='workspace' AND scope_id=NULLIF($2,'')::uuid)) ORDER BY scope_type DESC,id`, auth.Tenant(x.ctx), x.scope.WorkspaceID)
 	if err != nil {
@@ -405,99 +424,25 @@ func (x *resolution) fileVisibility(n node, name string) (Visibility, error) {
 	err = json.Unmarshal(data, &v)
 	return v, err
 }
-func (x *resolution) member(n node, name string, role contract.MemberRole) (contract.LockMember, error) {
+func (x *resolution) member(n node, name, roleName string, role contract.MemberRole) (contract.LockMember, error) {
 	m := contract.LockMember{Name: contract.MemberName(name), Role: role, AgentEntry: n.index, EffectivePermissions: n.version.Permissions}
 	if n.version.Manifest.Agent != nil && n.version.Manifest.Agent.Description != nil {
 		m.Description = *n.version.Manifest.Agent.Description
 	}
-	layers := slices.Clone(x.visibility)
-	if x.team != nil {
-		for _, filename := range []string{"skills-visibility.json", "members/" + name + "/skills-visibility.json"} {
-			v, e := x.fileVisibility(*x.team, filename)
-			if e != nil {
-				return m, e
-			}
-			layers = append(layers, v)
-		}
-	}
-	v, err := x.fileVisibility(n, "skills-visibility.json")
+	layers, err := x.memberVisibility(n, roleName)
 	if err != nil {
 		return m, err
 	}
-	layers = append(layers, v)
-	v, err = x.fileVisibility(n, "members/"+name+"/skills-visibility.json")
+	skills, mcp, err := x.memberSkills(n)
 	if err != nil {
 		return m, err
 	}
-	layers = append(layers, v)
-	skills := append(slices.Clone(x.installed), x.shared...)
-	for _, d := range n.version.Manifest.Dependencies {
-		dep, err := x.resolve(d.Kind, d.Ref, d.Constraint)
-		if err != nil {
-			return m, err
-		}
-		if d.Kind == "skill" {
-			skills = append(skills, dep)
-		}
-		if d.Kind == "mcp_server" {
-			m.Mcp = append(m.Mcp, dep.index)
-		}
-	}
-	// Bundle skills are represented as immutable derived entries under the signed
-	// parent file set, including directories absent from skills.json.
-	all, err := x.r.Assets.Files(x.ctx, n.version.ID)
+	m.Mcp = append(m.Mcp, mcp...)
+	closure, mcp, err := x.skillClosure(skills)
 	if err != nil {
 		return m, err
 	}
-	embedded := []string{}
-	for _, f := range all {
-		rel := strings.TrimPrefix(f.Path, n.prefix)
-		if strings.HasPrefix(f.Path, n.prefix) && strings.HasPrefix(rel, "skills/") && strings.HasSuffix(rel, "/SKILL.md") {
-			dir := strings.TrimSuffix(rel, "/SKILL.md")
-			if strings.Count(dir, "/") == 1 {
-				embedded = append(embedded, dir)
-			}
-		}
-	}
-	slices.Sort(embedded)
-	for _, dir := range embedded {
-		child, err := x.embedded(n, n.prefix+dir, "skill")
-		if err != nil {
-			return m, err
-		}
-		skills = append(skills, child)
-	}
-	closure := []node{}
-	seen := map[int]bool{}
-	var visit func(node) error
-	visit = func(n node) error {
-		if seen[n.index] {
-			return nil
-		}
-		seen[n.index] = true
-		kind := x.lock.Entries[n.index].Kind
-		if kind == "skill" {
-			closure = append(closure, n)
-		}
-		if kind == "mcp_server" {
-			m.Mcp = append(m.Mcp, n.index)
-		}
-		for _, d := range n.version.Manifest.Dependencies {
-			child, e := x.resolve(d.Kind, d.Ref, d.Constraint)
-			if e != nil {
-				return e
-			}
-			if e = visit(child); e != nil {
-				return e
-			}
-		}
-		return nil
-	}
-	for _, skill := range skills {
-		if err = visit(skill); err != nil {
-			return m, err
-		}
-	}
+	m.Mcp = append(m.Mcp, mcp...)
 	for _, skill := range closure {
 		ref := x.lock.Entries[skill.index].Ref
 		if Visible(ref, layers...) {
@@ -516,20 +461,98 @@ func (x *resolution) member(n node, name string, role contract.MemberRole) (cont
 	}
 	return m, nil
 }
-func union(a, b contract.EffectivePermissions) contract.EffectivePermissions {
-	unique := func(v []string) []string { slices.Sort(v); return slices.Compact(v) }
-	a.Network.Egress = unique(append(slices.Clone(a.Network.Egress), b.Network.Egress...))
-	a.DataScopes = unique(append(slices.Clone(a.DataScopes), b.DataScopes...))
-	a.ToolsBuiltin = unique(append(slices.Clone(a.ToolsBuiltin), b.ToolsBuiltin...))
-	for _, s := range b.Secrets {
-		if !slices.Contains(a.Secrets, s) {
-			a.Secrets = append(a.Secrets, s)
+
+func (x *resolution) memberVisibility(n node, roleName string) ([]Visibility, error) {
+	layers := slices.Clone(x.visibility)
+	if x.team != nil {
+		for _, filename := range []string{"skills-visibility.json", "members/" + roleName + "/skills-visibility.json"} {
+			v, e := x.fileVisibility(*x.team, filename)
+			if e != nil {
+				return nil, e
+			}
+			layers = append(layers, v)
 		}
 	}
-	for _, e := range b.EffectClasses {
-		if !slices.Contains(a.EffectClasses, e) {
-			a.EffectClasses = append(a.EffectClasses, e)
+	v, err := x.fileVisibility(n, "skills-visibility.json")
+	if err != nil {
+		return nil, err
+	}
+	layers = append(layers, v)
+	return layers, nil
+}
+func (x *resolution) memberSkills(n node) ([]node, []int, error) {
+	var mcp []int
+	skills := append(slices.Clone(x.installed), x.shared...)
+	for _, d := range n.version.Manifest.Dependencies {
+		dep, err := x.resolve(d.Kind, d.Ref, d.Constraint)
+		if err != nil {
+			return nil, nil, err
+		}
+		if d.Kind == "skill" {
+			skills = append(skills, dep)
+		}
+		if d.Kind == "mcp_server" {
+			mcp = append(mcp, dep.index)
 		}
 	}
-	return a
+	// Bundle skills are represented as immutable derived entries under the signed
+	// parent file set, including directories absent from skills.json.
+	all, err := x.r.Assets.Files(x.ctx, n.version.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	embedded := []string{}
+	for _, f := range all {
+		rel := strings.TrimPrefix(f.Path, n.prefix)
+		if strings.HasPrefix(f.Path, n.prefix) && strings.HasPrefix(rel, "skills/") && strings.HasSuffix(rel, "/SKILL.md") {
+			dir := strings.TrimSuffix(rel, "/SKILL.md")
+			if strings.Count(dir, "/") == 1 {
+				embedded = append(embedded, dir)
+			}
+		}
+	}
+	slices.Sort(embedded)
+	for _, dir := range embedded {
+		child, err := x.embedded(n, n.prefix+dir, "skill")
+		if err != nil {
+			return nil, nil, err
+		}
+		skills = append(skills, child)
+	}
+	return skills, mcp, nil
+}
+func (x *resolution) skillClosure(skills []node) ([]node, []int, error) {
+	var mcp []int
+	closure := []node{}
+	seen := map[int]bool{}
+	var visit func(node) error
+	visit = func(n node) error {
+		if seen[n.index] {
+			return nil
+		}
+		seen[n.index] = true
+		kind := x.lock.Entries[n.index].Kind
+		if kind == "skill" {
+			closure = append(closure, n)
+		}
+		if kind == "mcp_server" {
+			mcp = append(mcp, n.index)
+		}
+		for _, d := range n.version.Manifest.Dependencies {
+			child, e := x.resolve(d.Kind, d.Ref, d.Constraint)
+			if e != nil {
+				return e
+			}
+			if e = visit(child); e != nil {
+				return e
+			}
+		}
+		return nil
+	}
+	for _, skill := range skills {
+		if err := visit(skill); err != nil {
+			return nil, nil, err
+		}
+	}
+	return closure, mcp, nil
 }

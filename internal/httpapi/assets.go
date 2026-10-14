@@ -9,6 +9,7 @@ import (
 	"github.com/mindreon/orbit-control/internal/contract"
 	"github.com/mindreon/orbit-control/internal/locks"
 	"github.com/mindreon/orbit-control/internal/platform/httpx"
+	"github.com/mindreon/orbit-control/internal/platform/ids"
 )
 
 func (h *Handler) assetService() (*assets.Service, error) {
@@ -386,8 +387,8 @@ func (h *Handler) previewAssetLock(w http.ResponseWriter, r *http.Request) error
 	if err = httpx.Decode(r, &entry); err != nil {
 		return err
 	}
-	resolver := locks.Resolver{Assets:s}
-	lock, err := resolver.Resolve(r.Context(),auth.Tenant(r.Context()),entry,locks.Scope{WorkspaceID:r.PathValue("w")})
+	resolver := locks.NewResolver(s)
+	lock, err := resolver.Resolve(r.Context(), locks.Request{TenantID: auth.Tenant(r.Context()), LockID: ids.New(), Entry: entry, Scope: locks.Scope{WorkspaceID: r.PathValue("w")}})
 	if err != nil {
 		return err
 	}

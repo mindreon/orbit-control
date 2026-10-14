@@ -3,6 +3,7 @@ package integration
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
 	"encoding/json/v2"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"uuid"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/mindreon/orbit-control/internal/assets"
@@ -280,6 +282,7 @@ func testAssets(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	var temporalWorker worker.Worker
 	var fake worker.Worker
 	var dispatchDone chan struct{}
+	var stopDispatch context.CancelFunc
 	if address := os.Getenv("ORBIT_TEST_TEMPORAL_ADDRESS"); address != "" {
 		namespace := os.Getenv("ORBIT_TEST_TEMPORAL_NAMESPACE")
 		if namespace == "" {
@@ -315,6 +318,7 @@ func testAssets(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		}
 		defer fake.Stop()
 		dispatchCtx, cancel := context.WithCancel(ctx)
+		stopDispatch = cancel
 		dispatchDone = make(chan struct{})
 		go func() { defer close(dispatchDone); _ = assetrelease.Dispatch(dispatchCtx, d, tc, logger) }()
 		defer func() { cancel(); <-dispatchDone }()
@@ -373,6 +377,13 @@ func testAssets(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	}
 	code, out, _ = request("POST", "/v1/workspaces/"+workspace+"/installs", token, tenant, "", map[string]any{"asset_id": asset, "version_constraint": "^1.0", "channel": "stable"})
 	check(code, 202, out)
+	installID := out["id"].(string)
+	code, out, _ = request("POST", "/v1/workspaces/"+workspace+"/members", token, tenant, "", map[string]string{"principal_id": reviewerID, "role": "ws.member"})
+	check(code, 201, out)
+	code, out, _ = request("POST", "/v1/workspaces/"+workspace+"/installs", reviewer, tenant, "", map[string]string{"asset_id": asset})
+	check(code, 403, out)
+	code, out, _ = request("DELETE", "/v1/installs/"+installID, reviewer, tenant, "", nil)
+	check(code, 403, out)
 	preview := func() string {
 		code, out, _ := request("POST", "/v1/workspaces/"+workspace+"/locks:preview", token, tenant, "", map[string]any{"kind": "agent", "ref": publisher + "/j5-agent"})
 		check(code, 200, out)
@@ -400,6 +411,10 @@ func testAssets(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	check(code, 200, out)
 	if out["next_cursor"] == "" {
 		t.Fatal("custom channel pagination missing")
+	}
+	if stopDispatch != nil {
+		stopDispatch()
+		<-dispatchDone
 	}
 	// Simulate Publish's ambiguous-success failure mode. Compensation must not
 	// overwrite the operator's later rollback; it restores only its own state.
@@ -430,7 +445,7 @@ func testAssets(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	}
 	testAssetGraphs(t, d, service, activities, tenant, owner, workspace, publisher)
 	if tc != nil {
-		saveReplay(t, tc, assetrelease.ID(assetrelease.Input{Tenant: tenant, VersionID: second}))
+		saveReplay(t, tc, assetrelease.ID(assetrelease.Input{Tenant: tenant, VersionID: second}), "release")
 	}
 }
 
@@ -455,7 +470,7 @@ func waitAssetState(t *testing.T, request assetRequest, base, id, token, tenant,
 	}
 	t.Fatalf("release did not reach %s", want)
 }
-func saveReplay(t *testing.T, c client.Client, id string) {
+func saveReplay(t *testing.T, c client.Client, id, name string) {
 	t.Helper()
 	iter := c.GetWorkflowHistory(t.Context(), id, "", false, enums.HISTORY_EVENT_FILTER_TYPE_ALL_EVENT)
 	h := &history.History{}
@@ -479,7 +494,7 @@ func saveReplay(t *testing.T, c client.Client, id string) {
 		if e = os.MkdirAll("../internal/workflows/assetrelease/testdata", 0755); e != nil {
 			t.Fatal(e)
 		}
-		if e = os.WriteFile("../internal/workflows/assetrelease/testdata/release.json", raw, 0644); e != nil {
+		if e = os.WriteFile("../internal/workflows/assetrelease/testdata/"+name+".json", raw, 0644); e != nil {
 			t.Fatal(e)
 		}
 	}
@@ -499,7 +514,10 @@ func testAssetGraphs(t *testing.T, d *db.DB, s *assets.Service, activities *asse
 		if e != nil {
 			t.Fatal(e)
 		}
- staged,e:=s.PrepareUpload(auth.Context(ctx,auth.Principal{ID:owner,Kind:"user"},tenant),"1.0.0",raw);if e!=nil{t.Fatal(e)}
+		staged, e := s.PrepareUpload(auth.Context(ctx, auth.Principal{ID: owner, Kind: "user"}, tenant), "1.0.0", raw)
+		if e != nil {
+			t.Fatal(e)
+		}
 		var asset assets.Asset
 		var version assets.Version
 		e = d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
@@ -509,14 +527,14 @@ func testAssetGraphs(t *testing.T, d *db.DB, s *assets.Service, activities *asse
 			if e != nil {
 				return e
 			}
-			version, e = s.Upload(ctx,asset,staged)
+			version, e = s.Upload(ctx, asset, staged)
 			if e != nil {
 				return e
 			}
 			if e = s.Submit(ctx, asset, version.ID, "stable"); e != nil {
 				return e
 			}
-			_, e = tx.Exec(ctx, `UPDATE asset_versions SET release_started=true WHERE id=$1`, version.ID)
+			_, e = tx.Exec(ctx, `UPDATE asset_versions SET release_started=true,release_retryable=false WHERE id=$1`, version.ID)
 			return e
 		})
 		if e != nil {
@@ -547,13 +565,13 @@ func testAssetGraphs(t *testing.T, d *db.DB, s *assets.Service, activities *asse
 	ref := publisher + "/" + skill.Name
 	shared := publisher + "/" + second.Name
 	fixture("agent", "graph-agent", map[string][]byte{"AGENTS.md": []byte("agent"), "skills.json": []byte(`{"skills":[{"name":"graph-skill","source":"catalog","id":"` + ref + `","version":"^1.0"}]}`), "mcp.json": []byte(`{"mcpServers":{"remote":{"ref":"` + publisher + "/" + mcp.Name + `@^1.0"}}}`)})
-	team := fixture("team", "graph-team", map[string][]byte{"AGENTS.md": []byte("lead"), "team.json": []byte(`{"schema":"orbit.team/v1","name":"graph-team","dispatch":"scheduled","roles":[{"name":"lead","role":"leader","agent":"."},{"name":"worker","role":"teammate","agent":"` + publisher + `/graph-agent@^1.0","count":2},{"name":"reviewer","role":"reviewer","agent":"./members/reviewer"}],"sharedSkills":[{"id":"` + shared + `","version":"^1.0"}]}`), "members/reviewer/AGENTS.md": []byte("review"), "members/worker-2/skills-visibility.json": []byte(`{"deny":["` + ref + `"]}`)})
+	team := fixture("team", "graph-team", map[string][]byte{"AGENTS.md": []byte("lead"), "team.json": []byte(`{"schema":"orbit.team/v1","name":"graph-team","dispatch":"scheduled","roles":[{"name":"lead","role":"leader","agent":"."},{"name":"worker","role":"teammate","agent":"` + publisher + `/graph-agent@^1.0","count":2},{"name":"reviewer","role":"reviewer","agent":"./members/reviewer"}],"sharedSkills":[{"id":"` + shared + `","version":"^1.0"}]}`), "members/reviewer/AGENTS.md": []byte("review"), "members/reviewer/skills/local/SKILL.md": []byte("embedded local skill"), "members/worker/skills-visibility.json": []byte(`{"deny":["` + ref + `"]}`)})
 	resolve := func(entry locks.Entry) (contract.RunLock, error) {
 		var lock contract.RunLock
 		e := d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
 			ctx := auth.Context(db.Context(ctx, tx), auth.Principal{ID: owner, Kind: "user"}, tenant)
 			var e error
-			lock, e = (&locks.Resolver{Assets: s}).Resolve(ctx, tenant, entry, locks.Scope{WorkspaceID: workspace})
+			lock, e = locks.NewResolver(s).Resolve(ctx, locks.Request{TenantID: tenant, LockID: ids.New(), Entry: entry, Scope: locks.Scope{WorkspaceID: workspace}})
 			return e
 		})
 		return lock, e
@@ -573,15 +591,44 @@ func testAssetGraphs(t *testing.T, d *db.DB, s *assets.Service, activities *asse
 		if !skills[shared] {
 			t.Fatalf("%s missing shared skill", member.Name)
 		}
-		if member.Name == "worker-1" && !skills[ref] {
-			t.Fatal("catalog skill missing")
-		}
-		if member.Name == "worker-2" && skills[ref] {
+
+		if strings.HasPrefix(string(member.Name), "worker") && skills[ref] {
 			t.Fatal("member deny ignored")
 		}
 		if strings.HasPrefix(string(member.Name), "worker") && len(member.Mcp) != 1 {
 			t.Fatal("MCP not locked")
 		}
+	}
+	embeddedRef := publisher + "/" + team.Name + "/members/reviewer/skills/local"
+	found := false
+	for _, member := range lock.Members {
+		if member.Name == "reviewer" {
+			for _, i := range member.Skills {
+				if lock.Entries[i].Ref == embeddedRef {
+					found = true
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("embedded member skill path was duplicated")
+	}
+	if err := d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
+		ctx := auth.Context(db.Context(ctx, tx), auth.Principal{ID: owner, Kind: "user"}, tenant)
+		for i, entry := range lock.Entries {
+			if entry.Ref == embeddedRef {
+				files, err := locks.NewResolver(s).Files(ctx, lock, i)
+				if err != nil {
+					return err
+				}
+				if len(files) != 1 || files[0].Path != "SKILL.md" || string(files[0].Data) != "embedded local skill" {
+					return fmt.Errorf("invalid embedded file read")
+				}
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 	again, e := resolve(locks.Entry{Kind: "team", Ref: publisher + "/" + team.Name})
 	if e != nil || again.Digest != lock.Digest || again.LockId == lock.LockId {
@@ -594,13 +641,36 @@ func testAssetGraphs(t *testing.T, d *db.DB, s *assets.Service, activities *asse
 		if _, e := tx.Exec(ctx, `INSERT INTO sessions(id,tenant_id,workspace_id,owner_id,title,entry_kind,entry_ref,message_policy,status) VALUES($1,$2,$3,$4,'lock fixture','team',$5,'queue','active')`, session, tenant, workspace, owner, publisher+"/"+team.Name); e != nil {
 			return e
 		}
-		if _, e := tx.Exec(ctx, `INSERT INTO runs(id,tenant_id,session_id,trigger,status,created_by) VALUES($1,$2,$3,'api','queued',$4)`, run, tenant, session, owner); e != nil {
-			return e
-		}
-		resolved, e := (&locks.Resolver{Assets: s}).Resolve(ctx, tenant, locks.Entry{Kind: "team", Ref: publisher + "/" + team.Name}, locks.Scope{WorkspaceID: workspace, RunID: run})
+		lockID := runLockID(run)
+		resolved, e := locks.NewResolver(s).Resolve(ctx, locks.Request{TenantID: tenant, LockID: lockID, Entry: locks.Entry{Kind: "team", Ref: publisher + "/" + team.Name}, Scope: locks.Scope{WorkspaceID: workspace}})
 		if e != nil {
 			return e
 		}
+		if resolved.LockId != lockID {
+			return fmt.Errorf("resolver changed caller lock ID")
+		}
+		var count int
+		if e = tx.QueryRow(ctx, `SELECT count(*) FROM run_locks WHERE id=$1`, lockID).Scan(&count); e != nil || count != 0 {
+			return fmt.Errorf("Resolve persisted before run insert: %v", e)
+		}
+		if _, e := tx.Exec(ctx, `INSERT INTO runs(id,tenant_id,session_id,trigger,status,created_by) VALUES($1,$2,$3,'api','queued',$4)`, run, tenant, session, owner); e != nil {
+			return e
+		}
+		if e = locks.Save(ctx, tx, run, resolved); e != nil {
+			return e
+		}
+		for i, entry := range resolved.Entries {
+			if strings.Contains(entry.Ref, "/members/") {
+				files, e := locks.NewResolver(s).Files(ctx, resolved, i)
+				if e != nil {
+					return e
+				}
+				if len(files) == 0 {
+					return fmt.Errorf("embedded files missing")
+				}
+			}
+		}
+
 		var raw []byte
 		if e = tx.QueryRow(ctx, `SELECT lock FROM run_locks WHERE id=$1 AND tenant_id=$2`, resolved.LockId, tenant).Scan(&raw); e != nil {
 			return e
@@ -639,6 +709,23 @@ func testAssetGraphs(t *testing.T, d *db.DB, s *assets.Service, activities *asse
 			}
 		}
 	}
+	if e = d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `INSERT INTO policies(id,tenant_id,scope_type,scope_id,kind,body,version,status) VALUES($1,$2,'tenant',$2,'tool_rules',$3,2,'active')`, ids.New(), tenant, `{"skills_visibility":{"allow":["`+ref+`"]}}`)
+		return e
+	}); e != nil {
+		t.Fatal(e)
+	}
+	lock, e = resolve(locks.Entry{Kind: "team", Ref: publisher + "/" + team.Name})
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, member := range lock.Members {
+		for _, i := range member.Skills {
+			if lock.Entries[i].Ref != ref {
+				t.Fatal("author expanded administrator allow ceiling")
+			}
+		}
+	}
 	fixture("skill", "cycle-one", map[string][]byte{"SKILL.md": []byte("one"), "skills.json": []byte(`{"skills":[{"name":"two","source":"catalog","id":"` + publisher + `/cycle-two"}]}`)})
 	fixture("skill", "cycle-two", map[string][]byte{"SKILL.md": []byte("two"), "skills.json": []byte(`{"skills":[{"name":"one","source":"catalog","id":"` + publisher + `/cycle-one"}]}`)})
 	fixture("agent", "cycle-agent", map[string][]byte{"AGENTS.md": []byte("agent"), "skills.json": []byte(`{"skills":[{"name":"one","source":"catalog","id":"` + publisher + `/cycle-one"}]}`)})
@@ -648,4 +735,17 @@ func testAssetGraphs(t *testing.T, d *db.DB, s *assets.Service, activities *asse
 	if _, e = resolve(locks.Entry{Kind: "agent", Ref: publisher + "/graph-agent", Version: "^2.0"}); e == nil {
 		t.Fatal("unsatisfied version accepted")
 	}
+}
+
+// WP6 supplies UUIDv5(run_id,"lock"); stdlib uuid currently has no v5 constructor.
+func runLockID(run string) string {
+	namespace := uuid.MustParse(run)
+	h := sha1.New()
+	h.Write(namespace[:])
+	h.Write([]byte("lock"))
+	var id uuid.UUID
+	copy(id[:], h.Sum(nil))
+	id[6] = (id[6] & 0x0f) | 0x50
+	id[8] = (id[8] & 0x3f) | 0x80
+	return id.String()
 }

@@ -1,12 +1,13 @@
 // Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-// Visibility union/deny precedence adapted from jiuwenswarm; see NOTICE.
+// Visibility deny precedence adapted from jiuwenswarm; see NOTICE.
 package locks
 
 import (
 	"context"
-	"github.com/mindreon/orbit-control/internal/contract"
 	"slices"
+
+	"github.com/mindreon/orbit-control/internal/contract"
 )
 
 type Visibility struct {
@@ -15,15 +16,18 @@ type Visibility struct {
 }
 
 func Visible(ref string, layers ...Visibility) bool {
-	var allow, deny []string
 	for _, l := range layers {
-		allow = append(allow, l.Allow...)
-		deny = append(deny, l.Deny...)
+		if slices.Contains(l.Deny, ref) || l.Allow != nil && !slices.Contains(l.Allow, ref) {
+			return false
+		}
 	}
-	return !slices.Contains(deny, ref) && (len(allow) == 0 || slices.Contains(allow, ref))
+	return true
 }
 func Intersect(p, cap contract.EffectivePermissions) contract.EffectivePermissions {
 	filter := func(values, allowed []string) []string {
+		if allowed == nil {
+			return values
+		}
 		out := []string{}
 		for _, v := range values {
 			if slices.Contains(allowed, v) {
@@ -42,7 +46,9 @@ func Intersect(p, cap contract.EffectivePermissions) contract.EffectivePermissio
 			}
 		}
 	}
-	p.Network.Egress = egress
+	if cap.Network.Egress != nil {
+		p.Network.Egress = egress
+	}
 	p.DataScopes = filter(p.DataScopes, cap.DataScopes)
 	p.ToolsBuiltin = filter(p.ToolsBuiltin, cap.ToolsBuiltin)
 	secrets := []contract.SecretRequirement{}
@@ -51,17 +57,21 @@ func Intersect(p, cap contract.EffectivePermissions) contract.EffectivePermissio
 			secrets = append(secrets, s)
 		}
 	}
-	p.Secrets = secrets
+	if cap.Secrets != nil {
+		p.Secrets = secrets
+	}
 	effects := []contract.EffectClass{}
 	for _, e := range p.EffectClasses {
 		if slices.Contains(cap.EffectClasses, e) {
 			effects = append(effects, e)
 		}
 	}
-	p.EffectClasses = effects
+	if cap.EffectClasses != nil {
+		p.EffectClasses = effects
+	}
 	// Profiles are names rather than an ordered resource hierarchy. A mismatching
 	// policy denies this profile; the resolver rejects the resulting empty name.
-	if cap.SandboxProfile != p.SandboxProfile {
+	if cap.SandboxProfile != "" && cap.SandboxProfile != p.SandboxProfile {
 		p.SandboxProfile = ""
 	}
 	return p
