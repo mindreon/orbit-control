@@ -164,3 +164,12 @@ concurrent duplicate writes and concurrent audit chains. OIDC tests use a local
 JWT/JWKS provider with invalid signature/issuer/audience/expiry cases.
 Dependencies and validation tools are version-pinned. No third-party source was
 ported in WP1; market snapshot data is preserved unchanged.
+
+The WP1 check used Go 1.25.14 for compatibility and PostgreSQL tests. Dependency
+vulnerabilities were fixed with `x/text v0.41.0` and `go-jose/v4 v4.1.4`.
+`govulncheck v1.1.4` finds no vulnerabilities on the host Go 1.27.2, but reports
+nine standard-library vulnerabilities on Go 1.25.14 (GO-2026-6617, -6613, -6612,
+-6611, -6610, -6608, -6607, -6605, -6603), with fixes listed in Go 1.26.9.
+The requested Go 1.25 baseline is retained; the CI security gate intentionally
+remains blocking until the baseline is upgraded or a patched 1.25 build exists.
+The container and CI compiler are pinned to 1.25.14 rather than an older patch.
