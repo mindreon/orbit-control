@@ -65,7 +65,12 @@ Apache-2.0 attribution and register NOTICE if porting third-party source.
   differ. Preserve the WP0b preimages.
 - Normal version transitions use assets.Transition. Only the explicit Publish saga
   may restore approved state after an ambiguous commit. Channel rollback is audited.
-- `Resolve` requires an authenticated tenant transaction; an empty Scope.RunID is
-  a preview, a nonempty RunID persists the full RunLock with members and audit.
+- `locks.Resolver` is an interface. `Resolve(ctx, Request)` requires an authenticated
+  tenant transaction and caller-supplied LockID, and never persists. After inserting
+  runs, use `locks.Save(ctx, tx, runID, lock)` in that transaction; embedded files
+  are read by sha256 with `BundleResolver.Files`, not by synthetic entry refs.
+- Author withdrawal returns submitted/checking/in_review to draft. Infrastructure
+  failure records release_error without a business rejection; the dispatcher
+  resumes nonterminal releases and isolates permanent errors until retry-release.
 - Run pinned workflowcheck v0.6.0 and offline history replay. J5 uses a Go fake
   asset-check worker with a real Temporal server/MinIO in an isolated test namespace.

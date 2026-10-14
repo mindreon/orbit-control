@@ -84,6 +84,7 @@ URLs are not logged. Configuration uses environment variables only.
 | `ORBIT_OBJECT_BUCKET` | Provisioned bucket, default `orbit`; startup does not create it |
 | `ORBIT_OBJECT_ACCESS_KEY` / `ORBIT_OBJECT_SECRET_KEY` | Required control storage credentials |
 | `ORBIT_OBJECT_TLS` | `false`; set `true` for HTTPS |
+| `ORBIT_ASSET_UPLOAD_CONCURRENCY` | Maximum concurrent upload pipelines per API process, default `2`, range `1–32` |
 | `ORBIT_ASSET_SIGNING_KEY_FILE` | Independent Ed25519 PKCS8 PEM, `.orbit-data/assets.key`; regular file, mode 0600; generated only in dev |
 | `ORBIT_ASSET_SIGNING_KEY_ID` | Signature key ID, default `1` |
 | `ORBIT_ASSET_PUBLIC_KEYS` | Verification rotation keys, comma-separated `kid:base64` raw public keys |
@@ -286,7 +287,8 @@ Archive limits are 512 files, 20 MiB per binary file, 50 MiB total/input,
 256 KiB per text file, 4 MiB text total, depth 32 and expansion ratio 200.
 Paths are relative POSIX paths; absolute/parent/dot paths, backslashes, links,
 special files, duplicate names, file/directory conflicts and case conflicts are
-rejected, including excluded entries. No archive path is written to disk.
+rejected, including excluded entries. Unicode NFC/NFD name collisions are rejected;
+PAX global metadata headers from `git archive` are ignored within the archive budget. No archive path is written to disk.
 Normalized ZIPs have fixed metadata and sorted entries. Publishing/checksum
 excludes `.git`, `.archive`, `__pycache__`, `.pytest_cache`, `node_modules`, `out`,
 `.venv`, `.pyc`, OS metadata and credential filenames/extensions, plus `.env*`
@@ -294,7 +296,10 @@ except `.env.example`/`.env.template`. Exclusions are returned in the upload aud
 Per-file blobs and the normalized archive are stored at
 `t/<tenant>/blobs/<bare sha256>`; `blob_ref` identifies the archive by its byte
 hash, while `content_digest` is the contract's file-set hash. They intentionally
-have different preimages. Referenced immutable file blobs remain tenant-local.
+have different preimages. Referenced immutable file blobs remain tenant-local. Blob writes finish before
+the metadata/idempotency transaction opens. Failed transactions can leave
+unreferenced content-addressed blobs. Upload concurrency is bounded before body
+reading and held until commit; decoded file bytes are released after staging.
 
 Submission `.../{v}:submit` freezes visibility and queues the release durably.
 The dispatcher starts `asset:{tenant}:{asset_version_id}` only after commit.
@@ -309,20 +314,23 @@ Private and exempt-workspace releases otherwise skip manual approval.
 Workspace settings `assets.review_required` (default true) and `assets.approvals`
 (default 1, range 1–20) configure workspace release review. Tenant tool-rule policy
 body `asset_review.approvals` sets the default approval count. Tenant-visible
-assets always require a human reviewer. Workspace editors may review workspace
+assets always require human review with max(tenant, workspace) approvals.
+Workspace review settings apply directly only to workspace-visible assets; private
+assets ignore them. Workspace editors may review workspace
 assets; tenant reviewers review tenant assets and escalated private releases.
-The owner and submitter cannot review. Each reviewer votes once per submission;
+The owner, submitter and uploader cannot review. Each reviewer votes once per submission;
 any committed rejection wins, including a rejection queued concurrently with the
 last approval. Decisions are persisted with audit before `SubmitReview` Update
 delivery; HTTP returns 202 for delivery, not a completed publication.
 A 48-hour durable timer writes one SLA reminder. `Withdraw` cancels pending work;
-within the design's state graph, withdrawal ends checking as `check_failed` and
-review as `rejected`. Approved versions cannot be withdrawn with this operation.
+the §5.4 author-withdraw action returns `submitted`, `checking` or `in_review`
+to `draft` and appends `asset.version.withdrawn`; the same immutable version may
+be submitted again with a new generation. Approved versions cannot be withdrawn with this operation.
 `NotifyAuthor` uses an idempotent **audit event**, not a separate notification table.
 
 `Sign` uses Ed25519 over JCS of
 `{kind,publisher,name,version,contentDigest,permissionsDigest}`; permissionsDigest
-is the JCS object digest of normalized permissions. Keep old public keys configured
+is the JCS object digest of the stored effective and per-member permissions. Keep old public keys configured
 until all versions signed by them are retired. `Publish` commits version state,
 channel and audit atomically. Its saga handles ambiguous commits by restoring the
 previous channel only if it still points at this release, and restoring the
@@ -337,23 +345,69 @@ it cannot approve or publish a new version. Asset DELETE archives the registrati
 uses a semver range, optional channel and optional pinned version ID; unavailable
 pins/channels fail rather than silently selecting another version.
 
-`locks.Resolver.Resolve(ctx, tenant, entry, scope)` resolves recursively, verifies
+`locks.Resolver` is an interface; `locks.NewResolver(assetService)` implements it
+and resolves recursively, verifies
 signatures/file-set digests and rejects cycles, incompatible constraints and
 unavailable versions. Without a pin/channel, it selects the highest satisfying
 version; later conflicts fail explicitly without solver backtracking.
 `scope.WorkspaceID` selects workspace installations;
-`scope.RunID` persists the full generated RunLock (including members) and audit
-inside the caller's tenant transaction. Leave RunID empty for a preview.
-`POST /v1/workspaces/{w}/locks:preview` always uses that preview mode. The caller
+`Resolve(ctx, locks.Request{TenantID, LockID, Entry, Scope})` only resolves.
+The caller supplies LockID; WP6 uses `uuid5(run_id,"lock")`. After inserting the
+run, call `locks.Save(ctx, tx, runID, lock)` in that same authenticated tenant
+transaction to persist the complete RunLock and audit.
+`POST /v1/workspaces/{w}/locks:preview` supplies a fresh UUID and never saves. The caller
 provides the authenticated principal/tenant and tenant transaction context.
 Embedded agents/skills become derived entries verified by their signed parent's
-file set. A single agent has member `main`; team counts expand to `name-1`, etc.
+file set. Embedded entry refs (such as `acme/team/members/reviewer`) are
+synthetic identities and their paths are relative to the embedded bundle; do not
+look them up by version/ref in asset_files. WP6 can call
+`resolver.Files(ctx, lock, entryIndex)` to read and verify each file by its sha256
+from tenant-local blob storage. Authorize the run/lock before reading its files.
+A single agent has member `main`; team counts expand to `name-1`, etc.
 Team sharedSkills apply to every member. Active tenant/workspace tool-rule policy
 bodies may provide `effective_permissions`, `skills_visibility` and per-principal
 `users[principal_id]` overrides; workspace settings also accept `skills_visibility`.
-Agent/team/member `skills-visibility.json` layers use allow union and deny priority;
-empty allow inherits the installed library. Tenant/workspace/user caps only narrow
+Tenant/workspace administrator allow lists intersect as ceilings; author
+agent/team/member allow lists can only narrow them. Deny always wins. An omitted
+dimension means unrestricted; an explicit empty allow/permission array denies
+that dimension. An omitted sandbox profile does not restrict profiles; a
+configured conflicting profile denies resolution. Team member visibility files
+use `members/<role-name>/skills-visibility.json`, shared by all counted instances;
+embedded members also apply their own bundle-root visibility file. Tenant/workspace/user caps only narrow
 member permissions. RunLock digests use the unchanged WP0b helper.
+
+### Release recovery and administration
+
+Infrastructure failure preserves the current nonterminal business state and
+records a payload-free `release_error` code. The dispatcher isolates delivery
+errors per tenant/version, retries transient errors, and pauses permanent errors
+(`release_retryable=false`) until an operator requests recovery. A nonterminal
+submitted/checking/in_review/approved version without a running Workflow is
+restarted with the same Workflow ID and generation. Approved recovery proceeds
+to Sign/Publish; in-review recovery hydrates committed votes. Generation checks
+fence old submissions. The Publish saga alone may restore published to approved
+after an ambiguous commit. Business rejection remains terminal.
+
+```sh
+go run ./cmd/orbit-admin asset retry-release --tenant UUID --version UUID
+```
+
+Workspace installation/uninstallation requires `workspace.update` and an asset
+visible to that entire workspace; tenant installation requires `policy.manage`
+and tenant visibility. Narrowing visibility atomically revokes and audits grants
+outside the new ceiling. `POST /v1/assets/{a}:restore` restores suspended/archived
+asset metadata to active. Version transitions retain the §5.4 lifecycle guards.
+`orbit_app` cannot delete asset_versions/asset_files or update asset_files.
+
+Team release permissions include the root and every embedded member agent.json,
+with per-member declarations retained in the manifest. Permission-diff checks
+compare every member's tools, data scopes, effects, secrets, network and sandbox
+profile, including newly requested rights already held by another member.
+Signatures cover the stored canonical JCS identity and the complete canonical
+permission payload, preserving unknown future fields without re-marshalling them.
+Versions uploaded before migration 00003 have no stored canonical preimage and
+fail signature verification; upload a new version rather than automatically
+re-signing those historical declarations.
 
 ### Market snapshot import
 
@@ -365,6 +419,8 @@ skills and MCP rows without a convertible config are counted as unsupported;
 no executable content is invented or fetched from third-party URLs. Agents retain
 snapshot files; MCP conversion copies only runtime fields, converts endpoint,
 header/env/argument credentials to `${secret:NAME}`, and normalizes transport names.
+A portable config contains exactly one server, valid env/header keys and a global
+endpoint address; shared/CGNAT and other special-use IP ranges are rejected.
 Unsupported local commands/paths are rejected. Existing imports are skipped by
 stable source-derived name. Import commits each row independently.
 
@@ -394,7 +450,7 @@ ORBIT_REQUIRE_PG_TESTS=1 ORBIT_TEST_DATABASE_URL='postgres://...' go test ./...
 J5 starts a Go fake asset-check worker in the isolated test namespace (registered
 if absent), exercises upload/check/review/publish/install/preview/rollback and
 replays the resulting real history. `ORBIT_UPDATE_REPLAY=1` refreshes the checked-in
-fixture. Testsuite covers branch behavior and virtual-time SLA; SDK testsuite has
+fixtures (approval, rejection, multiple reviewers, withdrawal and compensation). Testsuite covers branch behavior and virtual-time SLA; SDK testsuite has
 no history export, so the replay fixture comes from the real-server Go harness.
-`go test ./...` replays this fixture offline. `workflowcheck v0.6.0` supports the
+`go test ./...` replays all checked-in fixtures offline. `workflowcheck v0.6.0` supports the
 pinned Go toolchain; v0.3.0's old x/tools cannot compile on Go 1.27.

@@ -882,6 +882,25 @@ paths:
               schema: { $ref: "#/components/schemas/Accepted" }
         default:
           $ref: "#/components/responses/Error"
+  /v1/assets/{a}:restore:
+    post:
+      operationId: restoreAsset
+      summary: Restore an asset
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - name: a
+          in: path
+          required: true
+          schema: {type: string}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        '202':
+          description: Successful operation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Accepted" }
+        default:
+          $ref: "#/components/responses/Error"
   /v1/assets/{a}/grants:
     get:
       operationId: listAssetGrants
@@ -1208,12 +1227,32 @@ components:
         id: {type: string, format: uuid}
         asset_id: {type: string, format: uuid}
         version: {type: string}
-        manifest: {type: object}
+        manifest:
+          type: object
+          properties:
+            agent: {$ref: '../contract/v2/schema/agent_manifest.json#/$defs/AgentManifest'}
+            team: {$ref: '../contract/v2/schema/team_manifest.json#/$defs/TeamManifest'}
+            skills: {$ref: '../contract/v2/schema/skills_manifest.json#/$defs/SkillsManifest'}
+            mcp: {$ref: '../contract/v2/schema/mcp_manifest.json#/$defs/McpManifest'}
+            member_permissions:
+              type: object
+              additionalProperties: {$ref: '../contract/v2/schema/lock.json#/$defs/EffectivePermissions'}
+            dependencies:
+              type: array
+              items:
+                type: object
+                required: [kind, ref, constraint]
+                properties:
+                  kind: {$ref: '../contract/v2/schema/lock.json#/$defs/AssetKind'}
+                  ref: {type: string}
+                  constraint: {type: string}
         content_digest: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
         blob_ref: {type: string}
-        permissions: {type: object}
+        permissions: {$ref: '../contract/v2/schema/lock.json#/$defs/EffectivePermissions'}
         state: {type: string, enum: [draft, submitted, checking, check_failed, in_review, changes_requested, approved, published, deprecated, suspended, yanked, rejected]}
         signature: {type: string}
+        uploaded_by: {type: string, format: uuid}
+        release_error: {type: string}
         created_at: {type: string, format: date-time}
     Accepted:
       type: object
@@ -1308,7 +1347,13 @@ components:
       properties:
         items:
           type: array
-          items: {type: object}
+          items:
+            type: object
+            required: [id, report, status]
+            properties:
+              id: {type: string, format: uuid}
+              report: {$ref: '../contract/v2/schema/asset_check.json#/$defs/AssetCheckReport'}
+              status: {type: string, enum: [pass, warn, fail]}
         next_cursor: {type: string}
     ChannelPage:
       type: object
