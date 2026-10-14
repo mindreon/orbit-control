@@ -10,6 +10,7 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"fmt"
+	"golang.org/x/text/unicode/norm"
 	"io"
 	"maps"
 	"path"
@@ -24,7 +25,7 @@ const MaxArchive = 50 << 20
 
 type Limits struct{ Files, FileBytes, TotalBytes, TextBytes, TextTotal, Depth, Ratio int }
 
-var DefaultLimits = Limits{512, 20 << 20, 50 << 20, 256 << 10, 4 << 20, 32, 200}
+var DefaultLimits = Limits{Files: 512, FileBytes: 20 << 20, TotalBytes: 50 << 20, TextBytes: 256 << 10, TextTotal: 4 << 20, Depth: 32, Ratio: 200}
 
 type File struct {
 	Path, Digest string
@@ -60,7 +61,15 @@ func excluded(name string) bool {
 		}
 	}
 	base := path.Base(name)
-	return slices.Contains([]string{"id_rsa", "id_ed25519", "credentials.json", "token.json", "tokens.json", ".DS_Store"}, base) || strings.HasSuffix(base, ".pyc") || strings.HasSuffix(base, ".key") || strings.HasSuffix(base, ".p12") || strings.HasSuffix(base, ".pfx") || strings.HasPrefix(base, ".env") && base != ".env.example" && base != ".env.template"
+	if slices.Contains([]string{"id_rsa", "id_ed25519", "credentials.json", "token.json", "tokens.json", ".DS_Store"}, base) {
+		return true
+	}
+	for _, ext := range []string{".pyc", ".key", ".p12", ".pfx"} {
+		if strings.HasSuffix(base, ext) {
+			return true
+		}
+	}
+	return strings.HasPrefix(base, ".env") && base != ".env.example" && base != ".env.template"
 }
 
 // Parse never writes archive paths to the filesystem. Limits include excluded files.
@@ -78,9 +87,9 @@ func Parse(raw []byte, limits Limits) (Bundle, error) {
 		if err != nil {
 			return err
 		}
-		key := strings.ToLower(name)
+		key := strings.ToLower(norm.NFC.String(name))
 		if seen[key] {
-			return fmt.Errorf("duplicate or case-conflicting archive path")
+			return fmt.Errorf("duplicate, Unicode-normalization or case-conflicting archive path")
 		}
 		seen[key] = true
 		if strings.Count(name, "/")+1 > limits.Depth {
@@ -179,6 +188,9 @@ func Parse(raw []byte, limits Limits) (Bundle, error) {
 			entries++
 			if entries > limits.Files*limits.Depth {
 				return b, fmt.Errorf("archive entry limit exceeded")
+			}
+			if h.Typeflag == tar.TypeXGlobalHeader {
+				continue
 			}
 			if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeDir {
 				return b, fmt.Errorf("archive links and special files forbidden")

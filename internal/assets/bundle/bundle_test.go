@@ -151,3 +151,35 @@ func TestTarTrailingExpansionIsBounded(t *testing.T) {
 		t.Fatal("accepted gzip bomb hidden after tar terminator")
 	}
 }
+
+func TestUnicodeNormalizationCollision(t *testing.T) {
+	for _, names := range [][]string{{"caf\u00e9.txt", "cafe\u0301.txt"}, {"caf\u00e9/a", "cafe\u0301"}} {
+		if _, err := Parse(archive(t, names, []byte("x"), 0644), DefaultLimits); err == nil {
+			t.Fatal("Unicode normalization collision accepted")
+		}
+	}
+}
+func TestPAXGlobalHeader(t *testing.T) {
+	var out bytes.Buffer
+	gz := gzip.NewWriter(&out)
+	tw := tar.NewWriter(gz)
+	if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeXGlobalHeader, PAXRecords: map[string]string{"comment": "git archive"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.WriteHeader(&tar.Header{Name: "AGENTS.md", Mode: 0644, Size: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	b, err := Parse(out.Bytes(), DefaultLimits)
+	if err != nil || len(b.Files) != 1 {
+		t.Fatal("git archive rejected", b, err)
+	}
+}
