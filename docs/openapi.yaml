@@ -483,6 +483,626 @@ paths:
                 $ref: '#/components/schemas/AuditEntryPage'
         default:
           $ref: '#/components/responses/Error'
+  /v1/assets:
+    get:
+      operationId: listAssets
+      summary: List visible assets
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - name: kind
+          in: query
+          schema: {type: string}
+        - name: visibility
+          in: query
+          schema: {type: string}
+        - name: q
+          in: query
+          schema: {type: string}
+        - name: workspace_id
+          in: query
+          schema: {type: string}
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AssetPage" }
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createAsset
+      summary: Register an asset
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AssetInput" }
+      responses:
+        '201':
+          description: Successful operation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Asset" }
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/assets/{a}:
+    get:
+      operationId: getAsset
+      summary: Read an asset
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - name: a
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Asset" }
+        default:
+          $ref: "#/components/responses/Error"
+    patch:
+      operationId: patchAsset
+      summary: Change asset visibility
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - name: a
+          in: path
+          required: true
+          schema: {type: string}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AssetPatch" }
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Asset" }
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: archiveAsset
+      summary: Archive an asset
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - name: a
+          in: path
+          required: true
+          schema: {type: string}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        '204':
+          description: Successful operation
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/assets/{a}/versions:
+    post:
+      operationId: uploadAssetVersion
+      summary: Upload a ZIP or tar.gz immutable version
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - name: a
+          in: path
+          required: true
+          schema: {type: string}
+        - name: version
+          in: query
+          required: true
+          schema: {type: string}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: {type: string, format: binary}
+          multipart/form-data:
+            schema:
+              type: object
+              required: [archive]
+              additionalProperties: false
+              properties:
+                archive: {type: string, format: binary}
+      responses:
+        '201':
+          description: Successful operation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AssetVersion" }
+        default:
+          $ref: "#/components/responses/Error"
+    get:
+      operationId: listAssetVersions
+      summary: List versions
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - name: a
+          in: path
+          required: true
+          schema: {type: string}
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AssetVersionPage" }
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/assets/{a}/versions/{v}:
+    get:
+      operationId: getAssetVersion
+      summary: Read a version
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - name: a
+          in: path
+          required: true
+          schema: {type: string}
+        - name: v
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AssetVersion" }
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/assets/{a}/versions/{v}/files:
+    get:
+      operationId: listAssetFiles
+      summary: List files
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - name: a
+          in: path
+          required: true
+          schema: {type: string}
+        - name: v
+          in: path
+          required: true
+          schema: {type: string}
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AssetFilePage" }
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/assets/{a}/versions/{v}/file:
+    get:
+      operationId: getAssetFile
+      summary: Read one file (maximum 20 MiB)
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - name: a
+          in: path
+          required: true
+          schema: {type: string}
+        - name: v
+          in: path
+          required: true
+          schema: {type: string}
+        - name: path
+          in: query
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/assets/{a}/versions/{v}:submit:
+    post:
+      operationId: submitAssetVersion
+      summary: Submit the immutable version for release
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - name: a
+          in: path
+          required: true
+          schema: {type: string}
+        - name: v
+          in: path
+          required: true
+          schema: {type: string}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SubmitAssetInput" }
+      responses:
+        '202':
+          description: Successful operation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Accepted" }
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/assets/{a}/versions/{v}:withdraw:
+    post:
+      operationId: withdrawAssetVersion
+      summary: Withdraw a pending release
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - name: a
+          in: path
+          required: true
+          schema: {type: string}
+        - name: v
+          in: path
+          required: true
+          schema: {type: string}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        '202':
+          description: Successful operation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Accepted" }
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/assets/{a}/versions/{v}:transition:
+    post:
+      operationId: transitionAssetVersion
+      summary: Deprecate, suspend, yank or restore a version
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - name: a
+          in: path
+          required: true
+          schema: {type: string}
+        - name: v
+          in: path
+          required: true
+          schema: {type: string}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TransitionInput" }
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AssetVersion" }
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/assets/{a}/versions/{v}/checks:
+    get:
+      operationId: listAssetChecks
+      summary: List checker reports
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - name: a
+          in: path
+          required: true
+          schema: {type: string}
+        - name: v
+          in: path
+          required: true
+          schema: {type: string}
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CheckPage" }
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/assets/{a}/channels:
+    get:
+      operationId: listAssetChannels
+      summary: List release channels
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - name: a
+          in: path
+          required: true
+          schema: {type: string}
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChannelPage" }
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/assets/{a}/channels/{c}:
+    post:
+      operationId: setAssetChannel
+      summary: Set or roll back a channel
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - name: a
+          in: path
+          required: true
+          schema: {type: string}
+        - name: c
+          in: path
+          required: true
+          schema: {type: string}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChannelInput" }
+      responses:
+        '202':
+          description: Successful operation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Accepted" }
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/assets/{a}:suspend:
+    post:
+      operationId: suspendAsset
+      summary: Suspend an asset
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - name: a
+          in: path
+          required: true
+          schema: {type: string}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        '202':
+          description: Successful operation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Accepted" }
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/assets/{a}/grants:
+    get:
+      operationId: listAssetGrants
+      summary: List sharing grants
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - name: a
+          in: path
+          required: true
+          schema: {type: string}
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GrantPage" }
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: grantAsset
+      summary: Share within the visibility boundary
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - name: a
+          in: path
+          required: true
+          schema: {type: string}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GrantInput" }
+      responses:
+        '202':
+          description: Successful operation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Accepted" }
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: revokeAssetGrant
+      summary: Revoke a sharing grant
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - name: a
+          in: path
+          required: true
+          schema: {type: string}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GrantInput" }
+      responses:
+        '204':
+          description: Successful operation
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/reviews:
+    get:
+      operationId: listAssetReviews
+      summary: List versions awaiting review
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AssetVersionPage" }
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/reviews/{v}:decide:
+    post:
+      operationId: decideAssetReview
+      summary: Submit an independent reviewer decision
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - name: v
+          in: path
+          required: true
+          schema: {type: string}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReviewInput" }
+      responses:
+        '202':
+          description: Successful operation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Accepted" }
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/workspaces/{w}/installs:
+    post:
+      operationId: installWorkspaceAsset
+      summary: Install an asset in a workspace
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - name: w
+          in: path
+          required: true
+          schema: {type: string}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/InstallInput" }
+      responses:
+        '202':
+          description: Successful operation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Accepted" }
+        default:
+          $ref: "#/components/responses/Error"
+    get:
+      operationId: listWorkspaceInstalls
+      summary: List workspace installations
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - name: w
+          in: path
+          required: true
+          schema: {type: string}
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InstallPage" }
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/installs:
+    post:
+      operationId: installTenantAsset
+      summary: Install an asset for the tenant
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/InstallInput" }
+      responses:
+        '202':
+          description: Successful operation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Accepted" }
+        default:
+          $ref: "#/components/responses/Error"
+    get:
+      operationId: listTenantInstalls
+      summary: List tenant installations
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InstallPage" }
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/installs/{i}:
+    delete:
+      operationId: uninstallAsset
+      summary: Remove an installation
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - name: i
+          in: path
+          required: true
+          schema: {type: string}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        '204':
+          description: Successful operation
+        default:
+          $ref: "#/components/responses/Error"
+  /v1/workspaces/{w}/locks:preview:
+    post:
+      operationId: previewAssetLock
+      summary: Resolve and verify a run lock without persisting
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - name: w
+          in: path
+          required: true
+          schema: {type: string}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LockPreviewInput" }
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RunLock" }
+        default:
+          $ref: "#/components/responses/Error"
 components:
   securitySchemes:
     bearerAuth:
@@ -552,6 +1172,168 @@ components:
           schema:
             $ref: '#/components/schemas/Workspace'
   schemas:
+
+    AssetInput:
+      type: object
+      additionalProperties: false
+      required: [kind, name, visibility]
+      properties:
+        kind: {type: string, enum: [agent, skill, mcp_server, team]}
+        name: {type: string, pattern: '^[a-z0-9][a-z0-9-]{2,63}$'}
+        visibility: {type: string, enum: [private, workspace, tenant]}
+        workspace_id: {type: string, format: uuid}
+    AssetPatch:
+      type: object
+      additionalProperties: false
+      required: [visibility]
+      properties:
+        visibility: {type: string, enum: [private, workspace, tenant]}
+    Asset:
+      type: object
+      required: [id, publisher, kind, name, visibility, owner_id, status, created_at]
+      properties:
+        id: {type: string, format: uuid}
+        publisher: {type: string}
+        kind: {type: string, enum: [agent, skill, mcp_server, team]}
+        name: {type: string}
+        visibility: {type: string, enum: [private, workspace, tenant]}
+        workspace_id: {type: string, format: uuid}
+        owner_id: {type: string, format: uuid}
+        status: {type: string, enum: [active, suspended, archived]}
+        created_at: {type: string, format: date-time}
+    AssetVersion:
+      type: object
+      required: [id, asset_id, version, manifest, content_digest, permissions, state, created_at]
+      properties:
+        id: {type: string, format: uuid}
+        asset_id: {type: string, format: uuid}
+        version: {type: string}
+        manifest: {type: object}
+        content_digest: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+        blob_ref: {type: string}
+        permissions: {type: object}
+        state: {type: string, enum: [draft, submitted, checking, check_failed, in_review, changes_requested, approved, published, deprecated, suspended, yanked, rejected]}
+        signature: {type: string}
+        created_at: {type: string, format: date-time}
+    Accepted:
+      type: object
+      properties:
+        id: {type: string}
+        status: {type: string}
+    SubmitAssetInput:
+      type: object
+      additionalProperties: false
+      properties:
+        channel: {type: string, default: stable}
+    TransitionInput:
+      type: object
+      additionalProperties: false
+      required: [state]
+      properties:
+        state: {type: string, enum: [draft, deprecated, suspended, yanked, published]}
+    ChannelInput:
+      type: object
+      additionalProperties: false
+      required: [version_id]
+      properties:
+        version_id: {type: string, format: uuid}
+    GrantInput:
+      type: object
+      additionalProperties: false
+      required: [grantee_type, grantee_id, permission]
+      properties:
+        grantee_type: {type: string, enum: [user, service, group, workspace, tenant]}
+        grantee_id: {type: string, format: uuid}
+        permission: {type: string, enum: [use, maintain]}
+    ReviewInput:
+      type: object
+      additionalProperties: false
+      required: [decision]
+      properties:
+        decision: {type: string, enum: [approve, reject, request_changes]}
+        comment: {type: string, maxLength: 4000}
+    InstallInput:
+      type: object
+      additionalProperties: false
+      required: [asset_id]
+      properties:
+        asset_id: {type: string, format: uuid}
+        version_constraint: {type: string, default: '*'}
+        channel: {type: string}
+        pinned_version_id: {type: string, format: uuid}
+    LockPreviewInput:
+      type: object
+      additionalProperties: false
+      required: [kind, ref]
+      properties:
+        kind: {type: string, enum: [agent, team]}
+        ref: {type: string}
+        version: {type: string}
+    RunLock:
+      $ref: '../contract/v2/schema/lock.json#/$defs/RunLock'
+    AssetFile:
+      type: object
+      required: [path, sha256, size_bytes]
+      properties:
+        path: {type: string}
+        sha256: {type: string}
+        size_bytes: {type: integer, minimum: 0}
+    AssetPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Asset" }
+        next_cursor: {type: string}
+    AssetVersionPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/AssetVersion" }
+        next_cursor: {type: string}
+    AssetFilePage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/AssetFile" }
+        next_cursor: {type: string}
+    CheckPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: {type: object}
+        next_cursor: {type: string}
+    ChannelPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: {type: object}
+        next_cursor: {type: string}
+    GrantPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: {type: object}
+        next_cursor: {type: string}
+    InstallPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: {type: object}
+        next_cursor: {type: string}
     APIKey:
         additionalProperties: false
         properties:

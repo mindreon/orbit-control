@@ -26,6 +26,12 @@ func (a Authorizer) RequireAsset(ctx context.Context, action string, r Asset) er
 	if err != nil {
 		return err
 	}
+	workspaces := []string{}
+	for _, binding := range bindings {
+		if binding.ScopeType == "workspace" && slices.Contains(Matrix[binding.Role], "workspace.read") {
+			workspaces = append(workspaces, binding.ScopeID)
+		}
+	}
 	var member, granted, maintain bool
 	err = db.Tx(ctx).QueryRow(ctx, `SELECT
  EXISTS(SELECT 1 FROM workspace_members WHERE workspace_id=NULLIF($1,'')::uuid AND principal_id=$2),
@@ -35,18 +41,19 @@ func (a Authorizer) RequireAsset(ctx context.Context, action string, r Asset) er
  (grantee_type IN ('user','service') AND grantee_id=$2)
  OR (grantee_type='group' AND grantee_id IN (SELECT group_id FROM group_members WHERE principal_id=$2))
  OR (grantee_type='tenant' AND grantee_id=$4)
- OR (grantee_type='workspace' AND grantee_id IN (SELECT workspace_id FROM workspace_members WHERE principal_id=$2)))`, r.WorkspaceID, p.ID, r.ID, tenant).Scan(&member, &granted, &maintain)
+ OR (grantee_type='workspace' AND (grantee_id IN (SELECT workspace_id FROM workspace_members WHERE principal_id=$2) OR grantee_id=ANY($5::uuid[]) OR $6)))`, r.WorkspaceID, p.ID, r.ID, tenant, workspaces, Allows(bindings, "workspace.read", Resource{}, tenant)).Scan(&member, &granted, &maintain)
 	if err != nil {
 		return err
 	}
 	resource := Resource{Type: "asset", ID: r.ID, WorkspaceID: r.WorkspaceID}
+	workspaceAccess := member || r.WorkspaceID != "" && Allows(bindings, "workspace.read", Resource{Type: "workspace", ID: r.WorkspaceID}, tenant)
 	explicit := Allows(bindings, "asset.read", Resource{Type: "asset", ID: r.ID}, "")
 	reviewer := r.Reviewing && Allows(bindings, "asset.review", resource, tenant)
-	visible := p.ID == r.OwnerID || explicit || granted || r.Visibility == "tenant" || r.Visibility == "workspace" && member || reviewer
+	visible := p.ID == r.OwnerID || explicit || granted || r.Visibility == "tenant" || r.Visibility == "workspace" && workspaceAccess || reviewer
 	if !visible {
 		return httpx.E(404, "NOT_FOUND", "Asset not found")
 	}
-	if r.Visibility == "workspace" && !member && p.ID != r.OwnerID && !reviewer && !Allows(bindings, "workspace.read", Resource{Type: "workspace", ID: r.WorkspaceID}, tenant) {
+	if r.Visibility == "workspace" && !workspaceAccess && p.ID != r.OwnerID && !reviewer {
 		return httpx.E(404, "NOT_FOUND", "Asset not found")
 	}
 	if action == "asset.read" {

@@ -44,11 +44,11 @@ func TestPostgresSuite(t *testing.T) {
 	}
 	ctx := t.Context()
 	owner := roleURL(t, raw, "orbit_owner")
-	for _, command := range []string{"up", "down", "up", "up"} {
+	for step, command := range []string{"up", "down", "down", "up", "up"} {
 		if e := migrations.Run(ctx, owner, command); e != nil {
 			t.Fatalf("migrate %s: %v", command, e)
 		}
-		if command == "down" {
+		if command == "down" && step == 2 {
 			conn, err := pgx.Connect(ctx, raw)
 			if err != nil {
 				t.Fatal(err)
@@ -82,6 +82,7 @@ func TestPostgresSuite(t *testing.T) {
 	t.Run("WorkerPrivileges", func(t *testing.T) { testWorker(t, admin) })
 	t.Run("HTTPAndAudit", func(t *testing.T) { testHTTP(t, app, admin) })
 	t.Run("JITProvisioning", func(t *testing.T) { testJITProvisioning(t, app, admin) })
+	t.Run("Assets", func(t *testing.T) { testAssets(t, app, admin) })
 	t.Run("UsageAndEvents", func(t *testing.T) { testUsageAndEvents(t, app, admin) })
 }
 func roleURL(t *testing.T, raw, role string) string {

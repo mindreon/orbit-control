@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/mindreon/orbit-control/internal/assets"
 	"github.com/mindreon/orbit-control/internal/audit"
 	"github.com/mindreon/orbit-control/internal/auth"
 	"github.com/mindreon/orbit-control/internal/platform/config"
@@ -25,6 +26,7 @@ import (
 )
 
 type Handler struct {
+	Assets *assets.Service
 	DB     *db.DB
 	Auth   *auth.Service
 	Authz  policy.Authorizer
@@ -39,6 +41,35 @@ type route struct {
 }
 
 var routes = []route{
+	{"GET /v1/assets", false, func(h *Handler) endpoint { return h.listAssets }},
+	{"POST /v1/assets", false, func(h *Handler) endpoint { return h.createAsset }},
+	{"GET /v1/assets/{a}", false, func(h *Handler) endpoint { return h.getAsset }},
+	{"PATCH /v1/assets/{a}", false, func(h *Handler) endpoint { return h.patchAsset }},
+	{"DELETE /v1/assets/{a}", false, func(h *Handler) endpoint { return h.archiveAsset }},
+	{"POST /v1/assets/{a}/versions", false, func(h *Handler) endpoint { return h.uploadAssetVersion }},
+	{"GET /v1/assets/{a}/versions", false, func(h *Handler) endpoint { return h.listAssetVersions }},
+	{"GET /v1/assets/{a}/versions/{v}", false, func(h *Handler) endpoint { return h.getAssetVersion }},
+	{"GET /v1/assets/{a}/versions/{v}/files", false, func(h *Handler) endpoint { return h.listAssetFiles }},
+	{"GET /v1/assets/{a}/versions/{v}/file", false, func(h *Handler) endpoint { return h.getAssetFile }},
+	{"POST /v1/assets/{a}/versions/{v}:submit", false, func(h *Handler) endpoint { return h.submitAssetVersion }},
+	{"POST /v1/assets/{a}/versions/{v}:withdraw", false, func(h *Handler) endpoint { return h.withdrawAssetVersion }},
+	{"POST /v1/assets/{a}/versions/{v}:transition", false, func(h *Handler) endpoint { return h.transitionAssetVersion }},
+	{"GET /v1/assets/{a}/versions/{v}/checks", false, func(h *Handler) endpoint { return h.listAssetChecks }},
+	{"GET /v1/assets/{a}/channels", false, func(h *Handler) endpoint { return h.listAssetChannels }},
+	{"POST /v1/assets/{a}/channels/{c}", false, func(h *Handler) endpoint { return h.setAssetChannel }},
+	{"POST /v1/assets/{a}:suspend", false, func(h *Handler) endpoint { return h.suspendAsset }},
+	{"GET /v1/assets/{a}/grants", false, func(h *Handler) endpoint { return h.listAssetGrants }},
+	{"POST /v1/assets/{a}/grants", false, func(h *Handler) endpoint { return h.grantAsset }},
+	{"DELETE /v1/assets/{a}/grants", false, func(h *Handler) endpoint { return h.revokeAssetGrant }},
+	{"GET /v1/reviews", false, func(h *Handler) endpoint { return h.listAssetReviews }},
+	{"POST /v1/reviews/{v}:decide", false, func(h *Handler) endpoint { return h.decideAssetReview }},
+	{"POST /v1/workspaces/{w}/installs", false, func(h *Handler) endpoint { return h.installWorkspaceAsset }},
+	{"GET /v1/workspaces/{w}/installs", false, func(h *Handler) endpoint { return h.listWorkspaceInstalls }},
+	{"POST /v1/installs", false, func(h *Handler) endpoint { return h.installTenantAsset }},
+	{"GET /v1/installs", false, func(h *Handler) endpoint { return h.listTenantInstalls }},
+	{"DELETE /v1/installs/{i}", false, func(h *Handler) endpoint { return h.uninstallAsset }},
+	{"POST /v1/workspaces/{w}/locks:preview", false, func(h *Handler) endpoint { return h.previewAssetLock }},
+
 	{"GET /health", true, func(h *Handler) endpoint { return h.health }},
 	{"GET /ready", true, func(h *Handler) endpoint { return h.ready }},
 	{"GET /v1/auth/config", true, func(h *Handler) endpoint { return h.authConfig }},
@@ -77,16 +108,54 @@ func Routes() []string {
 func (h *Handler) Router() http.Handler {
 	h.Auth.OnCreate = h.provisionIdentity
 	mux := http.NewServeMux()
+	registered := map[string]bool{}
 	for _, route := range routes {
-		fn := route.Handle(h)
-		// ServeMux wildcards occupy an entire segment; acceptance validates the suffix.
-		pattern := strings.Replace(route.Pattern, "{token}:accept", "{token}", 1)
+		pattern := route.Pattern
+		if i := strings.LastIndex(pattern, "}:"); i >= 0 {
+			pattern = pattern[:i+1]
+		}
+		if registered[pattern] {
+			continue
+		}
+		registered[pattern] = true
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+			selected := route
+			var fn endpoint
+			if pattern != route.Pattern {
+				for _, candidate := range routes {
+					i := strings.LastIndex(candidate.Pattern, "}:")
+					if i < 0 || candidate.Pattern[:i+1] != pattern {
+						continue
+					}
+					suffix := candidate.Pattern[i+1:]
+					if !strings.HasSuffix(r.URL.Path, suffix) {
+						continue
+					}
+					start := strings.LastIndex(candidate.Pattern[:i], "{")
+					param := candidate.Pattern[start+1 : i]
+					value, ok := strings.CutSuffix(r.PathValue(param), suffix)
+					if !ok || value == "" {
+						continue
+					}
+					if param != "token" {
+						r.SetPathValue(param, value)
+					}
+					selected = candidate
+					fn = candidate.Handle(h)
+					break
+				}
+			} else {
+				fn = selected.Handle(h)
+			}
+			if fn == nil {
+				httpx.WriteError(w, httpx.E(404, "NOT_FOUND", "Route not found"))
+				return
+			}
 			ip, _, _ := net.SplitHostPort(r.RemoteAddr)
 			r = r.WithContext(audit.Context(r.Context(), ip, r.UserAgent()))
 			rec := httpx.NewRecorder()
 			var e error
-			if route.Public {
+			if selected.Public {
 				e = fn(rec, r)
 			} else {
 				e = h.protected(rec, r, fn)

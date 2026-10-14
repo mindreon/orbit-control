@@ -3,19 +3,23 @@
 The Go 1.27 control plane is Orbit's sole public HTTP API. WP1 supplies identity,
 tenants, workspaces, RBAC and append-only auditing. It uses `net/http`, pgx v5,
 handwritten SQL and goose migrations. Agent execution belongs to orbit-runtime;
-Workflow, kernel, assets and streaming implementations arrive in later packages.
+WP5 adds asset storage, releases and run-lock resolution; kernel and streaming
+implementations arrive in later packages.
 No v1 data compatibility or in-memory database fallback is provided.
 
 ```
-cmd/orbit-control/       api process (only the api role is implemented)
+cmd/orbit-control/       api | worker | all (API and ctl worker)
 cmd/orbit-admin/         migrations, provisioning and audit verification
 internal/platform/      config, logging, pgx transactions, UUIDv7, HTTP middleware
 internal/auth/          OIDC/JWKS, dev Ed25519, API keys, run capabilities
 internal/tenancy/       tenants, memberships, groups and workspaces
 internal/policy/        centralized Authorizer and explicit built-in role matrix
+internal/assets/        immutable versions, bounded bundles, Ed25519 signatures
+internal/locks/         signed dependency resolution and per-member run locks
+internal/workflows/assetrelease/  ctl release Workflow, Activities and dispatcher
 internal/audit/         RFC 8785 JCS / SHA-256 tenant hash chains
 internal/httpapi/       standard-library routes; OpenAPI correspondence test
-internal/market/snapshots/  preserved ModelScope data; importer belongs to WP5
+internal/market/snapshots/  preserved ModelScope data; gzip NDJSON import sources
 contract/v2/schema/     WP0 JSON Schema source of truth
 internal/contract/      generated WP0 types, never hand-edit
 migrations/            embedded goose SQL: R1 schema, grants, RLS, partitions
@@ -39,6 +43,8 @@ export ORBIT_HTTP_ADDR=127.0.0.1:55442
 export ORBIT_PUBLIC_ORIGIN=http://127.0.0.1:55442
 # Generate once and persist securely for all replicas and subsequent restarts.
 export ORBIT_SECRETS_KEK="$(openssl rand -base64 32)"
+# Set ORBIT_OBJECT_* to the provisioned MinIO bucket/control credentials.
+# See .env.example; worker and all also need ORBIT_TEMPORAL_*.
 go run ./cmd/orbit-control api
 curl -fsS http://127.0.0.1:55442/ready
 ```
@@ -74,6 +80,19 @@ URLs are not logged. Configuration uses environment variables only.
 | `ORBIT_ALLOW_DEV_AUTH_ON_NETWORK` | `1` permits a non-loopback dev listener; default denied |
 | `ORBIT_LOG_FORMAT` | `json` or `text`, default `json` |
 | `ORBIT_CORS_ORIGINS` | Comma-separated exact cross-origin allowlist; unlisted origins get no ACAO, and unsafe methods return 403 |
+| `ORBIT_OBJECT_ENDPOINT` | Required S3/MinIO host:port (without URL scheme) |
+| `ORBIT_OBJECT_BUCKET` | Provisioned bucket, default `orbit`; startup does not create it |
+| `ORBIT_OBJECT_ACCESS_KEY` / `ORBIT_OBJECT_SECRET_KEY` | Required control storage credentials |
+| `ORBIT_OBJECT_TLS` | `false`; set `true` for HTTPS |
+| `ORBIT_ASSET_SIGNING_KEY_FILE` | Independent Ed25519 PKCS8 PEM, `.orbit-data/assets.key`; regular file, mode 0600; generated only in dev |
+| `ORBIT_ASSET_SIGNING_KEY_ID` | Signature key ID, default `1` |
+| `ORBIT_ASSET_PUBLIC_KEYS` | Verification rotation keys, comma-separated `kid:base64` raw public keys |
+| `ORBIT_TEMPORAL_ADDRESS` | Worker/all Temporal host:port, default `127.0.0.1:7233`; dev stack `127.0.0.1:57233` |
+| `ORBIT_TEMPORAL_NAMESPACE` | Default `default`; dev stack `orbit-dev` |
+| `ORBIT_TEMPORAL_TLS` | `false`; enables TLS with server certificate verification |
+| `ORBIT_TEMPORAL_TLS_CA_FILE` | Optional private CA PEM; otherwise system roots |
+| `ORBIT_TEMPORAL_TLS_CERT_FILE` / `ORBIT_TEMPORAL_TLS_KEY_FILE` | Optional paired client certificate/key for mTLS |
+| `ORBIT_TEMPORAL_TLS_SERVER_NAME` | Optional certificate server-name override |
 | `ORBIT_TEST_DATABASE_URL` | Superuser URL to a **disposable** test database |
 | `ORBIT_REQUIRE_PG_TESTS` | `1` makes missing PG configuration fail instead of skip |
 
@@ -243,3 +262,139 @@ the original schemas. Both return only JSON paths and rule names on invalid inpu
 hashing; `BundleDigest` checks each entry’s sorted file digests. Sandbox renewal
 uses `SandboxRenewInput` with required positive `ttl_seconds`; operations with no
 output use the shared `EmptyResult`, whose Go zero value encodes as `{}`.
+
+## Assets (WP5-control)
+
+`orbit-control worker` registers `AssetReleaseWorkflow` and asset Activities on
+`ctl`. `all` runs the API and that worker in one process. These Go ctl Activities
+use **orbit_app**, since their writes include asset tables and audit. The
+separate Python execution worker remains restricted to the three WP1 tables.
+Worker-only startup requires database, object storage, asset signing and Temporal
+configuration, without OIDC client or HTTP listener configuration.
+
+Register `agent`, `skill`, `mcp_server` or `team` at `POST /v1/assets`. Visibility
+is `private`, `workspace` or `tenant`. Upload a ZIP/tar.gz binary (or a single
+multipart `archive` file) to
+`POST /v1/assets/{a}/versions?version=1.2.3` with `Idempotency-Key`. Contents are
+immutable from creation; retrying the same HTTP request returns the saved
+response. Use a new version for changed content. File browsing uses
+`.../{v}/files` and `.../{v}/file?path=AGENTS.md`; files are downloaded as attachments
+with a detected media type and a 20 MiB read limit. Lists use opaque cursors;
+file/channel/grant cursors encode their stable composite key rather than a UUID.
+
+Archive limits are 512 files, 20 MiB per binary file, 50 MiB total/input,
+256 KiB per text file, 4 MiB text total, depth 32 and expansion ratio 200.
+Paths are relative POSIX paths; absolute/parent/dot paths, backslashes, links,
+special files, duplicate names, file/directory conflicts and case conflicts are
+rejected, including excluded entries. No archive path is written to disk.
+Normalized ZIPs have fixed metadata and sorted entries. Publishing/checksum
+excludes `.git`, `.archive`, `__pycache__`, `.pytest_cache`, `node_modules`, `out`,
+`.venv`, `.pyc`, OS metadata and credential filenames/extensions, plus `.env*`
+except `.env.example`/`.env.template`. Exclusions are returned in the upload audit.
+Per-file blobs and the normalized archive are stored at
+`t/<tenant>/blobs/<bare sha256>`; `blob_ref` identifies the archive by its byte
+hash, while `content_digest` is the contract's file-set hash. They intentionally
+have different preimages. Referenced immutable file blobs remain tenant-local.
+
+Submission `.../{v}:submit` freezes visibility and queues the release durably.
+The dispatcher starts `asset:{tenant}:{asset_version_id}` only after commit.
+Five runtime checks use the generated `AssetCheck*` names on `asset-check`;
+`AssetCheckPermissionDiff` runs on `ctl`. Control validates manifest schemas and
+extracts dependencies/declared permissions; runtime owns semantic bundle checks.
+No sandbox trial, evaluation, LLM semantic review, public market or evolution is
+implemented. All six reports must succeed before approval. Permission expansion
+forces review, including a first release requesting network/secrets/effects.
+Private and exempt-workspace releases otherwise skip manual approval.
+
+Workspace settings `assets.review_required` (default true) and `assets.approvals`
+(default 1, range 1–20) configure workspace release review. Tenant tool-rule policy
+body `asset_review.approvals` sets the default approval count. Tenant-visible
+assets always require a human reviewer. Workspace editors may review workspace
+assets; tenant reviewers review tenant assets and escalated private releases.
+The owner and submitter cannot review. Each reviewer votes once per submission;
+any committed rejection wins, including a rejection queued concurrently with the
+last approval. Decisions are persisted with audit before `SubmitReview` Update
+delivery; HTTP returns 202 for delivery, not a completed publication.
+A 48-hour durable timer writes one SLA reminder. `Withdraw` cancels pending work;
+within the design's state graph, withdrawal ends checking as `check_failed` and
+review as `rejected`. Approved versions cannot be withdrawn with this operation.
+`NotifyAuthor` uses an idempotent **audit event**, not a separate notification table.
+
+`Sign` uses Ed25519 over JCS of
+`{kind,publisher,name,version,contentDigest,permissionsDigest}`; permissionsDigest
+is the JCS object digest of normalized permissions. Keep old public keys configured
+until all versions signed by them are retired. `Publish` commits version state,
+channel and audit atomically. Its saga handles ambiguous commits by restoring the
+previous channel only if it still points at this release, and restoring the
+approved state/latest-version projection. This restoration is an explicit saga
+operation; normal state changes always use the lifecycle transition table.
+
+`POST /v1/assets/{a}/channels/{c}` sets/rolls back stable, beta or a custom channel.
+Only signed published/deprecated targets are accepted. `:transition` exposes
+only draft reset, deprecation, suspension, yank and reviewer-authorized restore;
+it cannot approve or publish a new version. Asset DELETE archives the registration.
+`asset_grants` cannot cross tenant/workspace visibility boundaries. Installation
+uses a semver range, optional channel and optional pinned version ID; unavailable
+pins/channels fail rather than silently selecting another version.
+
+`locks.Resolver.Resolve(ctx, tenant, entry, scope)` resolves recursively, verifies
+signatures/file-set digests and rejects cycles, incompatible constraints and
+unavailable versions. Without a pin/channel, it selects the highest satisfying
+version; later conflicts fail explicitly without solver backtracking.
+`scope.WorkspaceID` selects workspace installations;
+`scope.RunID` persists the full generated RunLock (including members) and audit
+inside the caller's tenant transaction. Leave RunID empty for a preview.
+`POST /v1/workspaces/{w}/locks:preview` always uses that preview mode. The caller
+provides the authenticated principal/tenant and tenant transaction context.
+Embedded agents/skills become derived entries verified by their signed parent's
+file set. A single agent has member `main`; team counts expand to `name-1`, etc.
+Team sharedSkills apply to every member. Active tenant/workspace tool-rule policy
+bodies may provide `effective_permissions`, `skills_visibility` and per-principal
+`users[principal_id]` overrides; workspace settings also accept `skills_visibility`.
+Agent/team/member `skills-visibility.json` layers use allow union and deny priority;
+empty allow inherits the installed library. Tenant/workspace/user caps only narrow
+member permissions. RunLock digests use the unchanged WP0b helper.
+
+### Market snapshot import
+
+The preserved snapshots are **gzip NDJSON**, not JSON arrays: agents has 654 rows
+with files/prompts, MCP has 12,544 README catalog rows, and skills has 83,159
+metadata-only rows. Import supports agents with embedded instructions/files and
+MCP rows with an explicit portable JSON configuration in their README. Metadata-only
+skills and MCP rows without a convertible config are counted as unsupported;
+no executable content is invented or fetched from third-party URLs. Agents retain
+snapshot files; MCP conversion copies only runtime fields, converts endpoint,
+header/env/argument credentials to `${secret:NAME}`, and normalizes transport names.
+Unsupported local commands/paths are rejected. Existing imports are skipped by
+stable source-derived name. Import commits each row independently.
+
+```sh
+go run ./cmd/orbit-admin market import --tenant UUID --snapshot internal/market/snapshots/agents.json.gz
+# Optional --actor UUID; default is an active direct human tenant owner.
+```
+
+Imported rows pass through draft creation and normal submission, then remain
+pending until the normal checks and human review publish them. Admin import uses
+explicit tenant filters even with owner credentials. It never signs or approves.
+Apache-2.0 adaptations are registered in NOTICE.
+
+### Asset validation
+
+```sh
+go run go.temporal.io/sdk/contrib/tools/workflowcheck@v0.6.0 ./internal/workflows/...
+# Complete PG suite, including assets/RLS/channel audit (disposable database only):
+ORBIT_REQUIRE_PG_TESTS=1 ORBIT_TEST_DATABASE_URL='postgres://...' go test ./...
+# Add these to that command for J5 against a real Temporal dev server and MinIO:
+# ORBIT_REQUIRE_ASSET_E2E=1 ORBIT_TEST_TEMPORAL_ADDRESS=127.0.0.1:57233
+# ORBIT_TEST_TEMPORAL_NAMESPACE=orbit-control-wp5-test
+# ORBIT_TEST_OBJECT_ENDPOINT=127.0.0.1:59100 ORBIT_TEST_OBJECT_BUCKET=...
+# ORBIT_TEST_OBJECT_ACCESS_KEY=... ORBIT_TEST_OBJECT_SECRET_KEY=...
+```
+
+J5 starts a Go fake asset-check worker in the isolated test namespace (registered
+if absent), exercises upload/check/review/publish/install/preview/rollback and
+replays the resulting real history. `ORBIT_UPDATE_REPLAY=1` refreshes the checked-in
+fixture. Testsuite covers branch behavior and virtual-time SLA; SDK testsuite has
+no history export, so the replay fixture comes from the real-server Go harness.
+`go test ./...` replays this fixture offline. `workflowcheck v0.6.0` supports the
+pinned Go toolchain; v0.3.0's old x/tools cannot compile on Go 1.27.

@@ -164,7 +164,11 @@ func Middleware(logger *slog.Logger, publicOrigin string, origins []string, next
 				}
 			}
 		}
-		r.Body = http.MaxBytesReader(rec, r.Body, 1<<20)
+		bodyLimit := int64(1 << 20)
+		if r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/v1/assets/") && strings.HasSuffix(r.URL.Path, "/versions") {
+			bodyLimit = 50 << 20
+		}
+		r.Body = http.MaxBytesReader(rec, r.Body, bodyLimit)
 		next.ServeHTTP(rec, r)
 	})
 }
