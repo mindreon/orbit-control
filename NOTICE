@@ -1,0 +1,14 @@
+Orbit control
+Copyright Mindreon contributors.
+
+This product contains Go adaptations of publishing exclusion rules, deterministic
+packaging, bounded archive extraction, MCP credential placeholder conversion and
+skills visibility composition from jiuwenswarm:
+https://gitcode.com/openJiuwen/jiuwenswarm
+Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+Licensed under the Apache License, Version 2.0.
+Sources: jiuwenswarm/server/runtime/marketplace/asset_package_builder.py,
+asset_mcp_publish_converter.py, ../skill/archive_store.py,
+../skill/skill_manager.py:7995-8140, docs/zh/AgentTeam.md:215-231.
+Adaptations live in internal/assets/bundle, internal/market and internal/locks.
+The digest preimage follows Orbit contract v2 rather than upstream's checksum.

@@ -1,0 +1,465 @@
+package assets
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/json/v2"
+	"fmt"
+	"mime"
+	"net/http"
+	"path"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/Masterminds/semver/v3"
+	"github.com/jackc/pgx/v5"
+	"github.com/mindreon/orbit-control/internal/assets/bundle"
+	"github.com/mindreon/orbit-control/internal/audit"
+	"github.com/mindreon/orbit-control/internal/auth"
+	"github.com/mindreon/orbit-control/internal/contract"
+	"github.com/mindreon/orbit-control/internal/platform/db"
+	"github.com/mindreon/orbit-control/internal/platform/httpx"
+	"github.com/mindreon/orbit-control/internal/platform/ids"
+	"github.com/mindreon/orbit-control/internal/platform/objstore"
+	"github.com/mindreon/orbit-control/internal/policy"
+	"github.com/mindreon/orbit-control/internal/tenancy"
+)
+
+type Service struct {
+	Store  objstore.Store
+	Signer *Signer
+	Authz  policy.Authorizer
+}
+type Asset struct {
+	ID          string             `json:"id"`
+	Publisher   string             `json:"publisher"`
+	Kind        contract.AssetKind `json:"kind"`
+	Name        string             `json:"name"`
+	Visibility  string             `json:"visibility"`
+	WorkspaceID string             `json:"workspace_id,omitempty"`
+	OwnerID     string             `json:"owner_id"`
+	Status      string             `json:"status"`
+	CreatedAt   time.Time          `json:"created_at"`
+}
+type Version struct {
+	ID          string                        `json:"id"`
+	AssetID     string                        `json:"asset_id"`
+	Version     string                        `json:"version"`
+	Manifest    Manifest                      `json:"manifest"`
+	Digest      string                        `json:"content_digest"`
+	BlobRef     string                        `json:"blob_ref"`
+	Permissions contract.EffectivePermissions `json:"permissions"`
+	State       string                        `json:"state"`
+	Signature   string                        `json:"signature,omitempty"`
+	CreatedAt   time.Time                     `json:"created_at"`
+}
+
+var Slug = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{2,63}$`)
+var Channel = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
+
+func Invalid(message string) error { return httpx.E(422, "INVALID_INPUT", message) }
+func Log(ctx context.Context, action, typ, id string, detail any) error {
+	return audit.Append(ctx, db.Tx(ctx), auth.From(ctx), auth.Tenant(ctx), action, typ, id, detail)
+}
+func scanAsset(row pgx.Row) (Asset, error) {
+	var a Asset
+	err := row.Scan(&a.ID, &a.Publisher, &a.Kind, &a.Name, &a.Visibility, &a.WorkspaceID, &a.OwnerID, &a.Status, &a.CreatedAt)
+	return a, err
+}
+
+const assetColumns = `id::text,publisher,kind,name,visibility,COALESCE(workspace_id::text,''),owner_id::text,status,created_at`
+
+func (s *Service) Get(ctx context.Context, id, action string) (Asset, error) {
+	if !ids.Valid(id) {
+		return Asset{}, httpx.E(404, "NOT_FOUND", "Asset not found")
+	}
+	a, err := scanAsset(db.Tx(ctx).QueryRow(ctx, `SELECT `+assetColumns+` FROM assets WHERE tenant_id=$1 AND id=$2`, auth.Tenant(ctx), id))
+	if err != nil {
+		return a, err
+	}
+	var reviewing bool
+	err = db.Tx(ctx).QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM asset_versions WHERE asset_id=$1 AND state='in_review')`, id).Scan(&reviewing)
+	if err != nil {
+		return a, err
+	}
+	return a, s.Authz.RequireAsset(ctx, action, policy.Asset{ID: a.ID, WorkspaceID: a.WorkspaceID, OwnerID: a.OwnerID, Visibility: a.Visibility, Reviewing: reviewing})
+}
+func (s *Service) Create(ctx context.Context, kind contract.AssetKind, name, visibility, workspace string) (Asset, error) {
+	if kind != "agent" && kind != "skill" && kind != "team" && kind != "mcp_server" || !Slug.MatchString(name) {
+		return Asset{}, Invalid("Invalid asset kind or name")
+	}
+	if visibility != "private" && visibility != "workspace" && visibility != "tenant" || visibility == "workspace" && workspace == "" {
+		return Asset{}, Invalid("Invalid asset visibility or workspace")
+	}
+	resource := policy.Resource{Type: "tenant", ID: auth.Tenant(ctx)}
+	if workspace != "" {
+		if !ids.Valid(workspace) {
+			return Asset{}, Invalid("Invalid workspace")
+		}
+		resource = policy.Resource{Type: "workspace", ID: workspace}
+	}
+	if err := s.Authz.Require(ctx, "asset.create", resource); err != nil {
+		return Asset{}, err
+	}
+	var publisher string
+	if err := db.Tx(ctx).QueryRow(ctx, `SELECT slug FROM tenants WHERE id=$1`, auth.Tenant(ctx)).Scan(&publisher); err != nil {
+		return Asset{}, err
+	}
+	id := ids.New()
+	p := auth.From(ctx)
+	_, err := db.Tx(ctx).Exec(ctx, `INSERT INTO assets(id,tenant_id,publisher,kind,name,visibility,workspace_id,owner_id,status) VALUES($1,$2,$3,$4,$5,$6,NULLIF($7,'')::uuid,$8,'active')`, id, auth.Tenant(ctx), publisher, kind, name, visibility, workspace, p.ID)
+	if err != nil {
+		return Asset{}, err
+	}
+	if err = tenancy.Bind(ctx, db.Tx(ctx), p, auth.Tenant(ctx), p.Kind, p.ID, "asset.owner", "asset", id); err != nil {
+		return Asset{}, err
+	}
+	if err = Log(ctx, "asset.created", "asset", id, map[string]any{"kind": kind, "visibility": visibility}); err != nil {
+		return Asset{}, err
+	}
+	return s.Get(ctx, id, "asset.read")
+}
+func (s *Service) Version(ctx context.Context, asset, id string) (Version, error) {
+	var v Version
+	if !ids.Valid(id) {
+		return v, httpx.E(404, "NOT_FOUND", "Version not found")
+	}
+	var m, p []byte
+	err := db.Tx(ctx).QueryRow(ctx, `SELECT id::text,asset_id::text,version,manifest,content_digest,blob_index_ref,permissions,state,COALESCE(signature,''),created_at FROM asset_versions WHERE tenant_id=$1 AND asset_id=$2 AND id=$3`, auth.Tenant(ctx), asset, id).Scan(&v.ID, &v.AssetID, &v.Version, &m, &v.Digest, &v.BlobRef, &p, &v.State, &v.Signature, &v.CreatedAt)
+	if err != nil {
+		return v, err
+	}
+	if err = json.Unmarshal(m, &v.Manifest); err != nil {
+		return v, err
+	}
+	err = json.Unmarshal(p, &v.Permissions)
+	return v, err
+}
+func (s *Service) Upload(ctx context.Context, a Asset, version string, raw []byte) (Version, error) {
+	if _, err := semver.StrictNewVersion(version); err != nil {
+		return Version{}, Invalid("version must be an exact semantic version")
+	}
+	b, err := bundle.Parse(raw, bundle.DefaultLimits)
+	if err != nil {
+		return Version{}, Invalid(err.Error())
+	}
+	m, p, err := ParseManifest(b.Files)
+	if err != nil {
+		return Version{}, Invalid(err.Error())
+	}
+	if m.Agent != nil && m.Agent.Version != nil && *m.Agent.Version != version || m.Team != nil && m.Team.Version != nil && *m.Team.Version != version {
+		return Version{}, Invalid("Manifest version differs from upload version")
+	}
+	for _, d := range m.Dependencies {
+		if _, err := semver.NewConstraint(d.Constraint); err != nil {
+			return Version{}, Invalid("Invalid dependency version constraint")
+		}
+	}
+	if s.Store == nil {
+		return Version{}, httpx.E(503, "STORAGE_UNAVAILABLE", "Asset storage is unavailable")
+	}
+	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(b.Archive))
+	ref, err := s.Store.Put(ctx, auth.Tenant(ctx), digest, b.Archive)
+	if err != nil {
+		return Version{}, err
+	}
+	mb, err := json.Marshal(m)
+	if err != nil {
+		return Version{}, err
+	}
+	pb, err := json.Marshal(p)
+	if err != nil {
+		return Version{}, err
+	}
+	id := ids.New()
+	_, err = db.Tx(ctx).Exec(ctx, `INSERT INTO asset_versions(id,tenant_id,asset_id,version,manifest,content_digest,blob_index_ref,permissions,compat,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'{}','draft')`, id, auth.Tenant(ctx), a.ID, version, mb, b.Digest, ref, pb)
+	if err != nil {
+		return Version{}, err
+	}
+	for _, f := range b.Files {
+		ref, err = s.Store.Put(ctx, auth.Tenant(ctx), f.Digest, f.Data)
+		if err != nil {
+			return Version{}, err
+		}
+		_, err = db.Tx(ctx).Exec(ctx, `INSERT INTO asset_files(tenant_id,version_id,path,sha256,size_bytes,is_text,blob_ref) VALUES($1,$2,$3,$4,$5,$6,$7)`, auth.Tenant(ctx), id, f.Path, f.Digest, len(f.Data), f.Text, ref)
+		if err != nil {
+			return Version{}, err
+		}
+	}
+	// Dependencies with the same reference but incompatible constraints are retained
+	// in manifest; SQL projection is only an index, not the resolver's authority.
+	for _, d := range m.Dependencies {
+		_, err = db.Tx(ctx).Exec(ctx, `INSERT INTO asset_dependencies(tenant_id,version_id,dep_kind,dep_ref,"constraint") VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`, auth.Tenant(ctx), id, d.Kind, d.Ref, d.Constraint)
+		if err != nil {
+			return Version{}, err
+		}
+	}
+	if err = Log(ctx, "asset.version_uploaded", "asset_version", id, map[string]any{"content_digest": b.Digest, "excluded": b.Excluded}); err != nil {
+		return Version{}, err
+	}
+	return s.Version(ctx, a.ID, id)
+}
+func SetState(ctx context.Context, id, to string) error {
+	var from string
+	if err := db.Tx(ctx).QueryRow(ctx, `SELECT state FROM asset_versions WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, auth.Tenant(ctx), id).Scan(&from); err != nil {
+		return err
+	}
+	if err := Transition(from, to); err != nil {
+		return err
+	}
+	if _, err := db.Tx(ctx).Exec(ctx, `UPDATE asset_versions SET state=$2 WHERE id=$1`, id, to); err != nil {
+		return err
+	}
+	return Log(ctx, "asset.version_state", "asset_version", id, map[string]string{"from": from, "to": to})
+}
+func (s *Service) Submit(ctx context.Context, a Asset, id, channel string) error {
+	var visibility string
+	if err := db.Tx(ctx).QueryRow(ctx, `SELECT visibility FROM assets WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, auth.Tenant(ctx), a.ID).Scan(&visibility); err != nil {
+		return err
+	}
+	if visibility != a.Visibility {
+		return httpx.E(409, "ASSET_CHANGED", "Asset visibility changed; retry submission")
+	}
+	if channel == "" {
+		channel = "stable"
+	}
+	if !Channel.MatchString(channel) {
+		return Invalid("Invalid channel")
+	}
+	if _, err := s.Version(ctx, a.ID, id); err != nil {
+		return err
+	}
+	if err := SetState(ctx, id, "submitted"); err != nil {
+		return err
+	}
+	review := true
+	required := 1
+	rows, err := db.Tx(ctx).Query(ctx, `SELECT body FROM policies WHERE tenant_id=$1 AND status='active' AND kind='tool_rules' AND scope_type='tenant' AND scope_id=$1 ORDER BY version,id`, auth.Tenant(ctx))
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var raw []byte
+		if err = rows.Scan(&raw); err != nil {
+			rows.Close()
+			return err
+		}
+		var policy struct {
+			Review struct {
+				Approvals int `json:"approvals"`
+			} `json:"asset_review"`
+		}
+		if err = json.Unmarshal(raw, &policy); err != nil {
+			rows.Close()
+			return err
+		}
+		if policy.Review.Approvals != 0 {
+			required = policy.Review.Approvals
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	// Workspace policies are edited through workspace settings, not request input.
+	if a.WorkspaceID != "" {
+		var raw []byte
+		if err := db.Tx(ctx).QueryRow(ctx, `SELECT settings FROM workspaces WHERE id=$1`, a.WorkspaceID).Scan(&raw); err != nil {
+			return err
+		}
+		var settings struct {
+			Assets struct {
+				ReviewRequired *bool `json:"review_required"`
+				Approvals      int   `json:"approvals"`
+			} `json:"assets"`
+		}
+		if err := json.Unmarshal(raw, &settings); err != nil {
+			return err
+		}
+		if settings.Assets.ReviewRequired != nil {
+			review = *settings.Assets.ReviewRequired
+		}
+		if settings.Assets.Approvals != 0 {
+			required = settings.Assets.Approvals
+		}
+	}
+	if required < 1 || required > 20 {
+		return Invalid("Asset approvals policy must be between 1 and 20")
+	}
+	_, err = db.Tx(ctx).Exec(ctx, `UPDATE asset_versions SET submitted_by=$2,release_channel=$3,release_started=false,withdraw_requested=false,withdraw_delivered=false,review_required=$4,workspace_review=$5,release_generation=release_generation+1,previous_version_id=(SELECT id FROM asset_versions WHERE asset_id=$6 AND state IN ('published','deprecated') ORDER BY published_at DESC,id DESC LIMIT 1),previous_channel_id=(SELECT version_id FROM asset_channels WHERE asset_id=$6 AND channel=$3) WHERE id=$1`, id, auth.From(ctx).ID, channel, required, review, a.ID)
+	return err
+}
+func (s *Service) SetChannel(ctx context.Context, a Asset, channel, id string) error {
+	if !Channel.MatchString(channel) {
+		return Invalid("Invalid channel")
+	}
+	v, err := s.Version(ctx, a.ID, id)
+	if err != nil {
+		return err
+	}
+	if !Usable(v.State) || a.Status != "active" {
+		return Invalid("Channel target is unavailable")
+	}
+	if err = s.Signer.Verify(a, v); err != nil {
+		return Invalid("Channel target signature is invalid")
+	}
+	var previous *string
+	err = db.Tx(ctx).QueryRow(ctx, `SELECT version_id::text FROM asset_channels WHERE asset_id=$1 AND channel=$2 FOR UPDATE`, a.ID, channel).Scan(&previous)
+	if err != nil && err != pgx.ErrNoRows {
+		return err
+	}
+	_, err = db.Tx(ctx).Exec(ctx, `INSERT INTO asset_channels(tenant_id,asset_id,channel,version_id,updated_by) VALUES($1,$2,$3,$4,$5) ON CONFLICT(tenant_id,asset_id,channel) DO UPDATE SET version_id=EXCLUDED.version_id,updated_by=EXCLUDED.updated_by,updated_at=now()`, auth.Tenant(ctx), a.ID, channel, id, auth.From(ctx).ID)
+	if err != nil {
+		return err
+	}
+	return Log(ctx, "asset.channel_changed", "asset", a.ID, map[string]any{"channel": channel, "previous_version_id": previous, "version_id": id})
+}
+func (s *Service) Files(ctx context.Context, id string) ([]contract.LockFile, error) {
+	rows, err := db.Tx(ctx).Query(ctx, `SELECT path,sha256,size_bytes FROM asset_files WHERE tenant_id=$1 AND version_id=$2 ORDER BY path`, auth.Tenant(ctx), id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []contract.LockFile{}
+	for rows.Next() {
+		var f contract.LockFile
+		if err = rows.Scan(&f.Path, &f.Sha256, &f.SizeBytes); err != nil {
+			return nil, err
+		}
+		result = append(result, f)
+	}
+	return result, rows.Err()
+}
+func (s *Service) File(ctx context.Context, id, name string) ([]byte, string, error) {
+	if _, err := bundle.SafePath(name); err != nil {
+		return nil, "", Invalid("Invalid file path")
+	}
+	var digest string
+	var size int64
+	if err := db.Tx(ctx).QueryRow(ctx, `SELECT sha256,size_bytes FROM asset_files WHERE version_id=$1 AND path=$2`, id, name).Scan(&digest, &size); err != nil {
+		return nil, "", err
+	}
+	if size > 20<<20 {
+		return nil, "", httpx.E(413, "FILE_TOO_LARGE", "File exceeds browsing size limit")
+	}
+	data, err := s.Store.Get(ctx, auth.Tenant(ctx), digest, 20<<20)
+	if err != nil {
+		return nil, "", err
+	}
+	typ := mime.TypeByExtension(path.Ext(name))
+	if typ == "" {
+		typ = http.DetectContentType(data)
+	}
+	return data, typ, nil
+}
+func (s *Service) Install(ctx context.Context, a Asset, scope, scopeID, constraint, channel, pinned string) (string, error) {
+	if scope != "workspace" && scope != "tenant" || !ids.Valid(scopeID) || scope == "tenant" && scopeID != auth.Tenant(ctx) {
+		return "", Invalid("Invalid install scope")
+	}
+	action := "asset.use"
+	if scope == "tenant" {
+		action = "policy.manage"
+	}
+	if err := s.Authz.Require(ctx, action, policy.Resource{Type: scope, ID: scopeID}); err != nil {
+		return "", err
+	}
+	if a.Status != "active" {
+		return "", Invalid("Asset is unavailable")
+	}
+	if constraint == "" {
+		constraint = "*"
+	}
+	if _, err := semver.NewConstraint(constraint); err != nil {
+		return "", Invalid("Invalid semantic version constraint")
+	}
+	if channel != "" && !Channel.MatchString(channel) {
+		return "", Invalid("Invalid channel")
+	}
+	if pinned != "" && !ids.Valid(pinned) {
+		return "", Invalid("Invalid pinned version")
+	}
+	if _, err := s.SelectVersion(ctx, a, []string{constraint}, pinned, channel); err != nil {
+		return "", err
+	}
+	id := ids.New()
+	err := db.Tx(ctx).QueryRow(ctx, `INSERT INTO asset_installs(id,tenant_id,scope_type,scope_id,asset_id,"constraint",channel,pinned_version_id,enabled) VALUES($1,$2,$3,$4,$5,$6,NULLIF($7,''),NULLIF($8,'')::uuid,true) ON CONFLICT(tenant_id,scope_type,scope_id,asset_id) DO UPDATE SET "constraint"=EXCLUDED."constraint",channel=EXCLUDED.channel,pinned_version_id=EXCLUDED.pinned_version_id,enabled=true RETURNING id::text`, id, auth.Tenant(ctx), scope, scopeID, a.ID, constraint, channel, pinned).Scan(&id)
+	if err != nil {
+		return "", err
+	}
+	return id, Log(ctx, "asset.installed", "asset_install", id, map[string]any{"asset_id": a.ID, "scope_type": scope, "scope_id": scopeID})
+}
+func ArchiveDigest(ref string) string { return "sha256:" + path.Base(ref) }
+func Ref(a Asset) string              { return a.Publisher + "/" + a.Name }
+func IsLocal(ref string) bool         { return ref == "." || strings.HasPrefix(ref, "./") }
+
+// SelectVersion is shared by installation validation and recursive lock
+// resolution. A pin or channel is authoritative; an unavailable pointer never
+// silently falls back to a different version.
+func (s *Service) SelectVersion(ctx context.Context, a Asset, ranges []string, pinned, channel string) (Version, error) {
+	if a.Status != "active" {
+		return Version{}, Invalid("Asset is unavailable")
+	}
+	constraints := []*semver.Constraints{}
+	for _, text := range ranges {
+		if text == "" {
+			text = "*"
+		}
+		c, err := semver.NewConstraint(text)
+		if err != nil {
+			return Version{}, Invalid("Invalid semantic version constraint")
+		}
+		constraints = append(constraints, c)
+	}
+	if pinned == "" && channel != "" {
+		if err := db.Tx(ctx).QueryRow(ctx, `SELECT version_id::text FROM asset_channels WHERE asset_id=$1 AND channel=$2`, a.ID, channel).Scan(&pinned); err != nil {
+			return Version{}, err
+		}
+	}
+	rows, err := db.Tx(ctx).Query(ctx, `SELECT id::text,version FROM asset_versions WHERE asset_id=$1 AND state IN ('published','deprecated') AND ($2='' OR id=NULLIF($2,'')::uuid)`, a.ID, pinned)
+	if err != nil {
+		return Version{}, err
+	}
+	bestID := ""
+	var best *semver.Version
+	for rows.Next() {
+		var id, text string
+		if err = rows.Scan(&id, &text); err != nil {
+			rows.Close()
+			return Version{}, err
+		}
+		v, e := semver.StrictNewVersion(text)
+		if e != nil {
+			rows.Close()
+			return Version{}, e
+		}
+		match := true
+		for _, c := range constraints {
+			match = match && c.Check(v)
+		}
+		if match && (best == nil || v.GreaterThan(best)) {
+			best = v
+			bestID = id
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return Version{}, err
+	}
+	if bestID == "" {
+		return Version{}, Invalid("No available version satisfies asset constraints")
+	}
+	v, err := s.Version(ctx, a.ID, bestID)
+	if err != nil {
+		return v, err
+	}
+	if !Usable(v.State) {
+		return v, Invalid("Asset version became unavailable")
+	}
+	if err = s.Signer.Verify(a, v); err != nil {
+		return v, Invalid("Asset signature verification failed")
+	}
+	return v, nil
+}
