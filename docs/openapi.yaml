@@ -1,3097 +1,3206 @@
-openapi: 3.0.3
-info:
-  title: Orbit Control API
-  version: 0.3.0
-  description: |
-    Orbit control API: the task center (TaskWorkflow), agent profiles, SOPs and policy, artifacts,
-    and the tenant catalog (assistants, connectors, skills, MCP market). Tasks are stored in Postgres
-    (`ORBIT_CONTROL_DB_URL`); control drives TaskWorkflow through Temporal (`TEMPORAL_ADDRESS`). The
-    event stream of a task is SSE with a durable per-task `seq` and ephemeral live frames without one.
-
-    The agent loop runs on orbit-worker (AgentScope). This API never exposes Temporal or worker URLs.
-
-    `Unauthorized` (401) and `Forbidden` (403) are reserved shapes for the auth layer.
-  license:
-    name: MIT
-    url: https://opensource.org/licenses/MIT
-servers:
-- url: http://127.0.0.1:8080
-  description: Local control
-security: []
-tags:
-- name: health
-  description: Liveness
-- name: tasks
-  description: TaskWorkflow orchestration
-- name: profiles
-  description: Immutable versioned agent profiles
-- name: experts
-  description: Custom experts and team experts, each version one immutable profile (15 M8)
-- name: policy
-  description: Tenant policy layer (tighten-only)
-- name: sops
-  description: Versioned SOP definitions
-- name: personas
-  description: Agent personas. Stored in Postgres when ORBIT_CONTROL_DB_URL is set.
-- name: mcp-connectors
-  description: MCP connector launchers. Environment references are names only.
-- name: mcp-market
-  description: |
-    Shared ModelScope plaza snapshot stored in this service. Listing reads
-    the local copy. Process start loads the shipped snapshot. This API does
-    not call modelscope.cn, does not store launch commands or hosted URLs,
-    and does not connect to a server.
-- name: skills
-  description: |
-    Shared SkillHub catalog stored in this service. Listing reads the local
-    copy. A background sync refreshes it. Skill packages are not downloaded
-    and this API does not install them.
-paths:
-  /health:
-    get:
-      tags:
-      - health
-      operationId: getHealth
-      summary: Health check
-      description: 'Returns 200 `{status: ok}` without touching the database.'
-      x-unimplemented: false
-      responses:
-        '200':
-          description: Process is up
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: false
-                required:
-                - status
-                properties:
-                  status:
-                    type: string
-                    example: ok
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-  /v1/personas:
-    get:
-      tags:
-      - personas
-      operationId: listPersonas
-      summary: List personas
-      x-unimplemented: false
-      responses:
-        '200':
-          description: Personas for the caller's tenant, newest first
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/PersonaList'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-    post:
-      tags:
-      - personas
-      operationId: createPersona
-      summary: Create a persona
-      description: |
-        Stored for the caller's tenant. The worker renders instructions into
-        an agent preset at openSession. This API never accepts secret plaintext.
-      x-unimplemented: false
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/CreatePersonaRequest'
-      responses:
-        '200':
-          description: Created persona
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Persona'
-        '400':
-          description: Missing name, or a connector id that includes a value
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-  /v1/mcp-connectors:
-    get:
-      tags:
-      - mcp-connectors
-      operationId: listMcpConnectors
-      summary: List MCP connectors
-      x-unimplemented: false
-      responses:
-        '200':
-          description: Connectors for the caller's tenant, newest first
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/McpConnectorList'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-    post:
-      tags:
-      - mcp-connectors
-      operationId: createMcpConnector
-      summary: Create an MCP connector
-      description: |
-        Stores how to reach an MCP server. `stdio` keeps a launch command.
-        `streamable_http` keeps a URL. `envRefs` and `headerRefs` are names.
-        Values are rejected. This API does not run the connector.
-      x-unimplemented: false
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/CreateMcpConnectorRequest'
-      responses:
-        '200':
-          description: Created connector
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/McpConnector'
-        '400':
-          description: Missing name or launch target, or a name that includes a value
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-  /v1/mcp-market:
-    get:
-      tags:
-      - mcp-market
-      operationId: listMcpMarket
-      summary: List the stored ModelScope MCP plaza
-      description: |
-        Reads the plaza snapshot stored by this service. The handler does not
-        call modelscope.cn. Rows are display metadata only.
-      x-unimplemented: false
-      parameters:
-      - name: keyword
-        in: query
-        schema:
-          type: string
-      - name: category
-        in: query
-        schema:
-          type: string
-      - name: serviceType
-        in: query
-        schema:
-          type: string
-          enum:
-          - hosted
-          - local
-      - name: needsOnline
-        in: query
-        schema:
-          type: string
-          enum:
-          - 'true'
-          - 'false'
-      - name: source
-        in: query
-        schema:
-          type: string
-          enum:
-          - common
-          - nexa
-      - name: page
-        in: query
-        schema:
-          type: integer
-          minimum: 1
-      - name: pageSize
-        in: query
-        schema:
-          type: integer
-          minimum: 1
-          maximum: 48
-      responses:
-        '200':
-          description: One page of the stored plaza. items is empty until startup stores the snapshot.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/McpMarketList'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-  /v1/mcp-market/{id}:
-    get:
-      tags:
-      - mcp-market
-      operationId: getMcpMarket
-      summary: Read one stored MCP server
-      description: |
-        Reads one plaza server and its readme and tool list from this service.
-        The handler does not call modelscope.cn. Hosted connection URLs and
-        discussion threads are not stored.
-      x-unimplemented: false
-      parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
-      responses:
-        '200':
-          description: The stored server. readme and tools may be empty.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/McpMarketDetail'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          description: No stored server has this id
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-  /v1/mcp-market/{id}/icon:
-    get:
-      tags:
-      - mcp-market
-      operationId: getMcpMarketIcon
-      summary: Read one stored server's card icon
-      description: |
-        Returns the icon bytes the icon sidecar stored for this server. 404
-        when the server has no icon or the sidecar did not ship it.
-      x-unimplemented: false
-      parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
-      responses:
-        '200':
-          description: The icon bytes, with its image content type.
-          content:
-            image/png:
-              schema:
-                type: string
-                format: binary
-        '404':
-          description: No stored icon for this server
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-  /v1/mcp-market-categories:
-    get:
-      tags:
-      - mcp-market
-      operationId: listMcpMarketCategories
-      summary: List stored plaza categories
-      description: |
-        Reads category labels stored with the plaza snapshot. Counts follow
-        the needsOnline filter. Does not call modelscope.cn.
-      x-unimplemented: false
-      parameters:
-      - name: needsOnline
-        in: query
-        schema:
-          type: string
-          enum:
-          - 'true'
-          - 'false'
-      responses:
-        '200':
-          description: Category labels that have at least one stored server
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/McpMarketCategoryList'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-  /v1/skills:
-    get:
-      tags:
-      - skills
-      operationId: listSkills
-      summary: List the stored ModelScope skills snapshot
-      description: |
-        Reads the skills snapshot stored by this service. The handler does not
-        call modelscope.cn. The snapshot ships with the binary; when
-        ORBIT_CATALOG_DIR provides skills_text.json.gz, file text is filled too.
-        This operation does not install a skill.
-      x-unimplemented: false
-      parameters:
-      - name: sortBy
-        in: query
-        schema:
-          type: string
-          enum:
-          - downloads
-          - likes
-          - updated_at
-      - name: category
-        in: query
-        schema:
-          type: string
-      - name: source
-        in: query
-        schema:
-          type: string
-          enum:
-          - common
-          - nexa
-      - name: keyword
-        in: query
-        schema:
-          type: string
-      - name: page
-        in: query
-        schema:
-          type: integer
-          minimum: 1
-      - name: pageSize
-        in: query
-        schema:
-          type: integer
-          minimum: 1
-          maximum: 48
-      responses:
-        '200':
-          description: One page of the stored catalog. items is empty until startup stores the snapshot.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SkillList'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-  /v1/skills/{handle}/{slug}:
-    get:
-      tags:
-      - skills
-      operationId: getSkill
-      summary: Read one stored skill
-      description: |
-        Reads one row of the stored snapshot. The handler does not call
-        modelscope.cn, and it does not download or install the skill package.
-      x-unimplemented: false
-      parameters:
-      - name: handle
-        in: path
-        required: true
-        schema:
-          type: string
-      - name: slug
-        in: path
-        required: true
-        schema:
-          type: string
-      responses:
-        '200':
-          description: The stored skill. The description is the saved summary, not a package file.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Skill'
-        '404':
-          description: No stored row matches this handle and slug
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-  /v1/skills/{slug}:
-    get:
-      tags:
-      - skills
-      operationId: getSkillBySlug
-      summary: Read one stored skill by slug alone
-      description: |
-        The ModelScope snapshot always carries a handle, so this route answers
-        404. Kept for older links that address a skill without its author.
-      x-unimplemented: false
-      parameters:
-      - name: slug
-        in: path
-        required: true
-        schema:
-          type: string
-      responses:
-        '200':
-          description: The stored skill.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Skill'
-        '404':
-          description: No stored row matches this slug
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-  /v1/skill-files/{handle}/{slug}:
-    get:
-      tags:
-      - skills
-      operationId: listSkillFiles
-      summary: Read the text files stored beside one skill
-      description: |
-        Returns the text files the snapshot stored beside the skill. The text
-        arrives with the skills_text.json.gz sidecar (ORBIT_CATALOG_DIR);
-        without it, or before the text pass has run, items is empty.
-        The files are not installed or executed, and this response is not a zip.
-      x-unimplemented: false
-      parameters:
-      - name: handle
-        in: path
-        required: true
-        schema:
-          type: string
-      - name: slug
-        in: path
-        required: true
-        schema:
-          type: string
-      responses:
-        '200':
-          description: Saved text files. items is empty when the package had none we keep.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SkillTextFileList'
-        '404':
-          description: No stored skill matches this handle and slug
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-  /v1/skill-files/{slug}:
-    get:
-      tags:
-      - skills
-      operationId: listSkillFilesBySlug
-      summary: Read text files addressed by slug alone
-      description: |
-        Same as listSkillFiles. The ModelScope snapshot always carries a
-        handle, so this route answers 404.
-      x-unimplemented: false
-      parameters:
-      - name: slug
-        in: path
-        required: true
-        schema:
-          type: string
-      responses:
-        '200':
-          description: Saved text files.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SkillTextFileList'
-        '404':
-          description: No stored skill matches this slug
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-  /v1/skills/{handle}/{slug}/icon:
-    get:
-      tags:
-      - skills
-      operationId: getSkillIcon
-      summary: Read one skill's card icon
-      description: |
-        Returns the icon bytes the icon sidecar stored for this skill. 404
-        when the skill has no icon or the sidecar did not ship it.
-      x-unimplemented: false
-      parameters:
-      - name: handle
-        in: path
-        required: true
-        schema:
-          type: string
-      - name: slug
-        in: path
-        required: true
-        schema:
-          type: string
-      responses:
-        '200':
-          description: The icon bytes, with its image content type.
-          content:
-            image/png:
-              schema:
-                type: string
-                format: binary
-        '404':
-          description: No stored icon for this skill
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-  /v1/skill-categories:
-    get:
-      tags:
-      - skills
-      operationId: listSkillCategories
-      summary: List stored skill category labels
-      description: Reads labels stored with the snapshot. Does not call modelscope.cn.
-      x-unimplemented: false
-      responses:
-        '200':
-          description: Category labels, ordered by sortOrder
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SkillCategoryList'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-  /v1/agents:
-    get:
-      tags:
-      - agents
-      operationId: listAgents
-      summary: List the stored ModelScope agents snapshot
-      description: |
-        Reads the agents snapshot stored by this service. The handler does not
-        call modelscope.cn. This operation does not run an agent.
-      x-unimplemented: false
-      parameters:
-      - name: sortBy
-        in: query
-        schema:
-          type: string
-          enum:
-          - downloads
-          - stars
-          - updated_at
-      - name: catalogue
-        in: query
-        schema:
-          type: string
-      - name: keyword
-        in: query
-        schema:
-          type: string
-      - name: page
-        in: query
-        schema:
-          type: integer
-          minimum: 1
-      - name: pageSize
-        in: query
-        schema:
-          type: integer
-          minimum: 1
-          maximum: 48
-      responses:
-        '200':
-          description: One page of the stored agents. items is empty until startup stores the snapshot.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AgentList'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-  /v1/agents/{handle}/{slug}:
-    get:
-      tags:
-      - agents
-      operationId: getAgent
-      summary: Read one stored agent
-      description: |
-        Reads one agent row with its files. The handler does not call
-        modelscope.cn, and it does not run the agent.
-      x-unimplemented: false
-      parameters:
-      - name: handle
-        in: path
-        required: true
-        schema:
-          type: string
-      - name: slug
-        in: path
-        required: true
-        schema:
-          type: string
-      responses:
-        '200':
-          description: The stored agent.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Agent'
-        '404':
-          description: No stored agent matches this handle and slug
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-  /v1/agents/{slug}:
-    get:
-      tags:
-      - agents
-      operationId: getAgentBySlug
-      summary: Read one stored agent by slug alone
-      description: |
-        The snapshot always carries a handle, so this route answers 404.
-        Kept for older links that address an agent without its author.
-      x-unimplemented: false
-      parameters:
-      - name: slug
-        in: path
-        required: true
-        schema:
-          type: string
-      responses:
-        '200':
-          description: The stored agent.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Agent'
-        '404':
-          description: No stored agent matches this slug
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-  /v1/agents/{handle}/{slug}/icon:
-    get:
-      tags:
-      - agents
-      operationId: getAgentIcon
-      summary: Read one agent's logo
-      description: |
-        Returns the logo bytes the icon sidecar stored for this agent. 404
-        when the agent has no logo or the sidecar did not ship it.
-      x-unimplemented: false
-      parameters:
-      - name: handle
-        in: path
-        required: true
-        schema:
-          type: string
-      - name: slug
-        in: path
-        required: true
-        schema:
-          type: string
-      responses:
-        '200':
-          description: The logo bytes, with its image content type.
-          content:
-            image/png:
-              schema:
-                type: string
-                format: binary
-        '404':
-          description: No stored logo for this agent
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-  /v1/tasks:
-    get:
-      tags:
-      - tasks
-      operationId: listTasks
-      summary: List task workflows
-      responses:
-        '200':
-          description: Task list
-          content:
-            application/json:
-              schema:
-                type: object
-                required:
-                - items
-                properties:
-                  items:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Task'
-    post:
-      tags:
-      - tasks
-      operationId: createTask
-      summary: Create and start a TaskWorkflow
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/CreateTaskRequest'
-      responses:
-        '201':
-          description: Created task
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Task'
-  /v1/profiles:
-    get:
-      tags:
-      - profiles
-      operationId: listProfiles
-      responses:
-        '200':
-          description: Immutable profile versions
-          content:
-            application/json:
-              schema:
-                type: object
-                required:
-                - items
-                properties:
-                  items:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Profile'
-    post:
-      tags:
-      - profiles
-      operationId: registerProfile
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/RegisterProfileRequest'
-      responses:
-        '201':
-          description: Profile registered
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Profile'
-  /v1/profiles/{profileRef}:
-    get:
-      tags:
-      - profiles
-      operationId: getProfile
-      parameters:
-      - name: profileRef
-        in: path
-        required: true
-        schema:
-          type: string
-      responses:
-        '200':
-          description: Immutable profile version
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Profile'
-  /v1/experts:
-    get:
-      tags:
-      - experts
-      operationId: listExperts
-      responses:
-        '200':
-          description: The latest version of each expert of the tenant
-          content:
-            application/json:
-              schema:
-                type: object
-                required:
-                - items
-                properties:
-                  items:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Expert'
-    post:
-      tags:
-      - experts
-      operationId: createExpert
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ExpertInput'
-      responses:
-        '201':
-          description: Expert created as version 1
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Expert'
-        '400':
-          description: Invalid input, or a connector id that is not the tenant's (the same answer for both)
-  /v1/experts/{expertId}:
-    get:
-      tags:
-      - experts
-      operationId: getExpert
-      parameters:
-      - name: expertId
-        in: path
-        required: true
-        schema:
-          type: string
-      responses:
-        '200':
-          description: The latest version of the expert
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Expert'
-        '404':
-          description: No such expert in this tenant
-    put:
-      tags:
-      - experts
-      operationId: updateExpert
-      description: Replaces the expert's content as a new version. Earlier versions never change.
-      parameters:
-      - name: expertId
-        in: path
-        required: true
-        schema:
-          type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ExpertInput'
-      responses:
-        '200':
-          description: The new latest version
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Expert'
-        '400':
-          description: Invalid input, or a connector id that is not the tenant's
-        '404':
-          description: No such expert in this tenant
-        '409':
-          description: Another update took the next version first; read and retry
-  /v1/experts/{expertId}/files:
-    get:
-      tags:
-      - experts
-      operationId: listExpertFiles
-      parameters:
-      - name: expertId
-        in: path
-        required: true
-        schema:
-          type: string
-      - name: version
-        in: query
-        schema:
-          type: integer
-          minimum: 1
-        description: Defaults to the latest version
-      responses:
-        '200':
-          description: The files of that version of a single expert
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ExpertFiles'
-        '400':
-          description: version is not a positive whole number
-        '404':
-          description: No such expert or version in this tenant, or the expert is a team
-  /v1/experts/{expertId}/files/{path}:
-    get:
-      tags:
-      - experts
-      operationId: getExpertFile
-      parameters:
-      - name: expertId
-        in: path
-        required: true
-        schema:
-          type: string
-      - name: path
-        in: path
-        required: true
-        description: Relative path inside the bundle; may contain slashes
-        schema:
-          type: string
-      - name: version
-        in: query
-        schema:
-          type: integer
-          minimum: 1
-      responses:
-        '200':
-          description: The file's UTF-8 text
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ExpertFile'
-        '404':
-          description: No such file, version or expert in this tenant
-  /v1/policy:
-    get:
-      tags:
-      - policy
-      operationId: getTenantPolicy
-      responses:
-        '200':
-          description: The tenant-wide policy, the outermost layer (05 §6)
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Policy'
-    put:
-      tags:
-      - policy
-      operationId: setTenantPolicy
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/Policy'
-      responses:
-        '200':
-          description: The policy now in force. Tasks and profiles can only tighten it.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Policy'
-  /v1/settings:
-    get:
-      tags:
-      - settings
-      operationId: getUserSettings
-      responses:
-        '200':
-          description: The caller's settings; the defaults for a user who never saved any
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UserSettings'
-    put:
-      tags:
-      - settings
-      operationId: setUserSettings
-      description: A full replace. A field that is left out takes its default.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/UserSettings'
-      responses:
-        '200':
-          description: The settings now saved
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UserSettings'
-        '400':
-          description: default_preset or custom.write_scope is not one of the allowed values
-  /v1/sops:
-    get:
-      tags:
-      - sops
-      operationId: listSOPs
-      responses:
-        '200':
-          description: Immutable SOP versions
-          content:
-            application/json:
-              schema:
-                type: object
-                required:
-                - items
-                properties:
-                  items:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/SOP'
-    post:
-      tags:
-      - sops
-      operationId: registerSOP
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/RegisterSOPRequest'
-      responses:
-        '201':
-          description: SOP registered (the same id, version and steps again is a no-op)
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SOP'
-        '409':
-          description: The version exists with different steps
-  /v1/tasks/{taskId}:
-    parameters:
-    - name: taskId
-      in: path
-      required: true
-      schema:
-        type: string
-    get:
-      tags:
-      - tasks
-      operationId: getTask
-      responses:
-        '200':
-          description: Task projection
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Task'
-  /v1/tasks/{taskId}/messages:
-    post:
-      tags:
-      - tasks
-      operationId: sendTaskMessage
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/SendTaskMessageRequest'
-      responses:
-        '202':
-          description: Update accepted, or the stored response of an earlier request with the same command_id (replay)
-        '422':
-          description: >-
-            UNKNOWN_MENTION (field `mentions[i]`): a mention is not a role of the task's team.
-            MENTIONS_NOT_ALLOWED (field `mentions`): the task has no team. Nothing was sent to the workflow.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: >-
-            IDEMPOTENCY_KEY_REUSED: the command_id was already used with a different request body or for a different
-            command. IN_PROGRESS: another request with the same command_id and body is still being processed (the
-            response has Retry-After: 1); retry with the same command_id. The server does not wait for it. A command
-            whose orchestrator call failed can be retried with the same command_id; the record is kept in
-            idempotency_ledger (scope api_command), so this holds across replicas and restarts.
-  /v1/tasks/{taskId}/control:
-    post:
-      tags:
-      - tasks
-      operationId: controlTask
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/TaskControlRequest'
-      responses:
-        '202':
-          description: Update accepted, or the stored response of an earlier request with the same command_id (replay)
-        '409':
-          description: >-
-            IDEMPOTENCY_KEY_REUSED: the command_id was already used with a different request body or for a different
-            command. IN_PROGRESS: another request with the same command_id and body is still being processed (the
-            response has Retry-After: 1); retry with the same command_id. The server does not wait for it. A command
-            whose orchestrator call failed can be retried with the same command_id; the record is kept in
-            idempotency_ledger (scope api_command), so this holds across replicas and restarts.
-  /v1/tasks/{taskId}/budget:
-    post:
-      tags:
-      - tasks
-      operationId: grantTaskBudget
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/GrantBudgetRequest'
-      responses:
-        '202':
-          description: Update accepted, or the stored response of an earlier request with the same command_id (replay)
-        '409':
-          description: >-
-            IDEMPOTENCY_KEY_REUSED: the command_id was already used with a different request body or for a different
-            command. IN_PROGRESS: another request with the same command_id and body is still being processed (the
-            response has Retry-After: 1); retry with the same command_id. The server does not wait for it. A command
-            whose orchestrator call failed can be retried with the same command_id; the record is kept in
-            idempotency_ledger (scope api_command), so this holds across replicas and restarts.
-  /v1/tasks/{taskId}/profile:
-    post:
-      tags:
-      - tasks
-      operationId: requestTaskProfileSwitch
-      description: >-
-        Switch a node to another profile for its next attempt; the attempt that is running is not interrupted (11 §3). A
-        profile the task is allowed (its expert, a team member) applies at once; any other one waits for a profile_switch
-        approval. The profile must exist in the caller's tenant.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/RequestProfileSwitchRequest'
-      responses:
-        '200':
-          description: >-
-            The update finished within about 3 seconds. The body is `accepted`, `command_id` and the workflow's result
-            (effective_attempt_no, needs_approval, approval_id). A replay with the same command_id returns the same body.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RequestProfileSwitchResponse'
-        '202':
-          description: >-
-            Update accepted but its result was not available in time: the body is `{accepted: true, command_id}`. Also the
-            stored response of an earlier request with the same command_id (replay) that was answered that way.
-        '400':
-          description: node_id, to_profile (a versioned reference) or reason is missing or malformed.
-        '422':
-          description: 'UNKNOWN_PROFILE: to_profile is not a profile of the caller''s tenant. Nothing was sent to the orchestrator.'
-        '409':
-          description: >-
-            IDEMPOTENCY_KEY_REUSED: the command_id was already used with a different request body or for a different
-            command. IN_PROGRESS: another request with the same command_id and body is still being processed (the
-            response has Retry-After: 1); retry with the same command_id. The server does not wait for it. A command
-            whose orchestrator call failed can be retried with the same command_id; the record is kept in
-            idempotency_ledger (scope api_command), so this holds across replicas and restarts.
-  /v1/tasks/{taskId}/nodes/{nodeId}/complete:
-    post:
-      tags:
-      - tasks
-      operationId: completeTaskNode
-      description: >-
-        A person completes a node by hand, without verification (04 §4). Only while the task is paused or taken over (the
-        agents are not working), for a node that is not already complete and has no attempt running. The node is frozen and
-        what depends on it goes on when the agents have the task back.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/CompleteNodeRequest'
-      responses:
-        '200':
-          description: >-
-            The update finished within about 3 seconds. The body is `accepted`, `command_id` and the workflow's result
-            (node_id, status). A replay with the same command_id returns the same body.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/CompleteNodeResponse'
-        '202':
-          description: >-
-            Update accepted but its result was not available in time: the body is `{accepted: true, command_id}`. Also the
-            stored response of an earlier request with the same command_id (replay) that was answered that way.
-        '400':
-          description: The node id is malformed.
-        '404':
-          description: NOT_FOUND, the task or the node is not found.
-        '409':
-          description: >-
-            INVALID_TRANSITION: pause or take over the task first. NODE_RUNNING: an attempt is running on the node.
-            IDEMPOTENCY_KEY_REUSED: the command_id was already used with a different request body or for a different
-            command. IN_PROGRESS: another request with the same command_id and body is still being processed (the
-            response has Retry-After: 1); retry with the same command_id.
-  /v1/tasks/{taskId}/approvals/{approvalId}:
-    post:
-      tags:
-      - tasks
-      operationId: decideTaskApproval
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/DecideTaskApprovalRequest'
-      responses:
-        '202':
-          description: Update accepted, or the stored response of an earlier request with the same command_id (replay)
-        '409':
-          description: >-
-            IDEMPOTENCY_KEY_REUSED: the command_id was already used with a different request body or for a different
-            command. IN_PROGRESS: another request with the same command_id and body is still being processed (the
-            response has Retry-After: 1); retry with the same command_id. The server does not wait for it. A command
-            whose orchestrator call failed can be retried with the same command_id; the record is kept in
-            idempotency_ledger (scope api_command), so this holds across replicas and restarts.
-  /v1/tasks/{taskId}/config:
-    get:
-      tags:
-      - tasks
-      operationId: getTaskConfig
-      description: What the task runs with. Read from the workflow, which owns it.
-      parameters:
-      - name: taskId
-        in: path
-        required: true
-        schema:
-          type: string
-      responses:
-        '200':
-          description: The current configuration
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TaskConfigView'
-        '404':
-          description: No such task for this caller
-    put:
-      tags:
-      - tasks
-      operationId: updateTaskConfig
-      description: |
-        Replaces the configuration. It applies from the task's next attempt; the attempt that is running keeps what it
-        started with. Send the version you read as base_config_version: a newer one in place answers 409
-        CONFIG_VERSION_CONFLICT. Repeating a command_id answers the first result.
-      parameters:
-      - name: taskId
-        in: path
-        required: true
-        schema:
-          type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              allOf:
-              - $ref: '#/components/schemas/TaskConfigInput'
-              - type: object
-                required:
-                - base_config_version
-                properties:
-                  base_config_version:
-                    type: integer
-                    minimum: 1
-                  command_id:
-                    type: string
-      responses:
-        '200':
-          description: Accepted
-          content:
-            application/json:
-              schema:
-                type: object
-                required:
-                - config_version
-                properties:
-                  config_version:
-                    type: integer
-                  effective:
-                    type: string
-                    enum:
-                    - next_attempt
-        '400':
-          description: Invalid input, or an expert, skill or connector this caller cannot use
-        '404':
-          description: No such task for this caller
-        '409':
-          description: CONFIG_VERSION_CONFLICT, or TASK_CLOSED
-  /v1/tasks/{taskId}/plan:
-    post:
-      tags:
-      - tasks
-      operationId: submitPlanChange
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              additionalProperties: true
-      responses:
-        '202':
-          description: Update accepted, or the stored response of an earlier request with the same command_id (replay)
-        '409':
-          description: >-
-            IDEMPOTENCY_KEY_REUSED: the command_id was already used with a different request body or for a different
-            command. IN_PROGRESS: another request with the same command_id and body is still being processed (the
-            response has Retry-After: 1); retry with the same command_id. The server does not wait for it. A command
-            whose orchestrator call failed can be retried with the same command_id; the record is kept in
-            idempotency_ledger (scope api_command), so this holds across replicas and restarts.
-    get:
-      tags:
-      - tasks
-      operationId: getTaskPlan
-      description: >-
-        The plan as the task's workflow reports it (getPlan). A node that a compiled SOP made also carries `sop_step`, and
-        `parent_node_id` when it nests: the workflow's own values win, and what it does not send (the SOP step) is added
-        from what the projection kept of node.status_changed, so "SOP X: step i/n" survives a reload.
-      responses:
-        '200':
-          description: Current plan
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  plan_version:
-                    type: integer
-                  hash:
-                    type: string
-                  nodes:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/PlanNode'
-                  edges:
-                    type: array
-                    items:
-                      type: object
-                      additionalProperties: true
-  /v1/tasks/{taskId}/events:
-    get:
-      tags:
-      - tasks
-      operationId: streamTaskEvents
-      summary: Durable and ephemeral task events
-      parameters:
-      - name: Last-Event-ID
-        in: header
-        required: false
-        schema:
-          type: string
-      responses:
-        '200':
-          description: SSE stream
-          content:
-            text/event-stream:
-              schema:
-                type: string
-  /v1/tasks/{taskId}/artifacts:
-    get:
-      tags:
-      - tasks
-      operationId: listTaskArtifacts
-      parameters:
-      - name: taskId
-        in: path
-        required: true
-        schema:
-          type: string
-      responses:
-        '200':
-          description: Artifact manifests emitted by the task
-          content:
-            application/json:
-              schema:
-                type: object
-                required:
-                - items
-                properties:
-                  items:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/ArtifactManifest'
-  /v1/artifacts/{manifestId}:
-    get:
-      tags:
-      - tasks
-      operationId: getArtifactManifest
-      parameters:
-      - name: manifestId
-        in: path
-        required: true
-        schema:
-          type: string
-      responses:
-        '200':
-          description: Artifact manifest
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ArtifactManifest'
-  /v1/artifacts/{manifestId}/url:
-    get:
-      tags:
-      - tasks
-      operationId: getArtifactDownloadURL
-      parameters:
-      - name: manifestId
-        in: path
-        required: true
-        schema:
-          type: string
-      - name: name
-        in: query
-        required: true
-        schema:
-          type: string
-      responses:
-        '200':
-          description: Short lived tenant scoped presigned artifact URL
-          content:
-            application/json:
-              schema:
-                type: object
-                required:
-                - url
-                properties:
-                  url:
-                    type: string
-                    format: uri
-components:
-  schemas:
-    PlanNode:
-      type: object
-      additionalProperties: true
-      required:
-      - node_id
-      properties:
-        node_id:
-          type: string
-        parent_node_id:
-          type: string
-          description: The node this one nests under (a compiled SOP's steps nest under its sop_stage node). Absent when it nests under none.
-        sop_step:
-          $ref: '#/components/schemas/SopStepInfo'
-    SopStepInfo:
-      type: object
-      description: Which part of a compiled SOP a node is. `index` (1-based) and `total` count the steps ("SOP X - step i/n").
-      required:
-      - sop
-      - role
-      - total
-      properties:
-        sop:
-          type: string
-          description: The SOP reference (name@version).
-        role:
-          type: string
-          enum: [sop, step, approval_before, approval_after]
-        total:
-          type: integer
-        step_id:
-          type: string
-        index:
-          type: integer
-        subject:
-          type: string
-    Task:
-      type: object
-      required:
-      - task_id
-      - tenant_id
-      - workflow_id
-      - title
-      - goal
-      - mode
-      - status
-      - profile
-      - plan_version
-      properties:
-        task_id:
-          type: string
-          pattern: ^task_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
-        tenant_id:
-          type: string
-        workflow_id:
-          type: string
-        title:
-          type: string
-        goal:
-          type: string
-        mode:
-          type: string
-          enum:
-          - single
-          - multi
-          - long
-        status:
-          type: string
-        profile:
-          type: string
-        plan_version:
-          type: integer
-          minimum: 1
-        created_by:
-          type: string
-        created_at:
-          type: string
-          format: date-time
-        updated_at:
-          type: string
-          format: date-time
-        budgets:
-          type: object
-          additionalProperties: true
-        usage:
-          type: object
-          additionalProperties: true
-        pending_approvals:
-          type: array
-          items:
-            type: string
-        policy:
-          $ref: '#/components/schemas/Policy'
-    Profile:
-      type: object
-      required:
-      - profile_id
-      - version
-      - ref
-      - spec
-      - created_at
-      properties:
-        profile_id:
-          type: string
-        version:
-          type: integer
-          minimum: 1
-        ref:
-          type: string
-          pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*@[1-9][0-9]*$
-        spec:
-          type: object
-          additionalProperties: true
-        created_at:
-          type: string
-          format: date-time
-    ExpertInput:
-      type: object
-      required:
-      - name
-      properties:
-        name:
-          type: string
-          minLength: 1
-          maxLength: 100
-        instructions:
-          type: string
-          maxLength: 20000
-          description: |
-            The expert's AGENTS.md, appended to the agent's system prompt. Required on a single expert: blank is refused
-            (AGENTS_MD_REQUIRED). Together with `soul` at most 20000 characters.
-        soul:
-          type: string
-          description: The expert's SOUL.md (persona, tone, values); goes into the system prompt before the instructions
-        model:
-          type: string
-          maxLength: 100
-          description: Another model of the worker's provider; ignored under a mock model
-        connector_ids:
-          type: array
-          maxItems: 20
-          uniqueItems: true
-          items:
-            type: string
-          description: Ids of the tenant's MCP connectors
-        skill_ids:
-          type: array
-          maxItems: 20
-          uniqueItems: true
-          items:
-            type: string
-          description: Catalog skills the expert brings by default (each needs a SKILL.md and readable text)
-        kind:
-          type: string
-          enum:
-          - expert
-          - team
-          default: expert
-          description: |
-            A team (15 M8, T8.6) is a leader and 1 to 8 members, each a single expert; it has no instructions, model,
-            connector_ids or skill_ids of its own, and those are refused. On an update, absent means the expert's
-            current kind; a different kind is refused, since a team never turns into a single expert or back.
-        leader:
-          type: string
-          pattern: ^[a-z][a-z0-9_-]{0,31}$
-          description: A team's leader. Must be the role of one of the members. Refused on a single expert.
-        members:
-          type: array
-          minItems: 1
-          maxItems: 8
-          items:
-            $ref: '#/components/schemas/TeamMemberInput'
-          description: A team's members. Roles are unique. Refused on a single expert.
-    TeamMemberInput:
-      type: object
-      required:
-      - role
-      - expert
-      properties:
-        role:
-          type: string
-          pattern: ^[a-z][a-z0-9_-]{0,31}$
-        expert:
-          type: string
-          pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*@[1-9][0-9]*$
-          description: A version of a single expert of the tenant; a team, an unknown ref or another tenant's expert is refused
-        description:
-          type: string
-          maxLength: 300
-          description: What the leader should give this member
-        label:
-          type: string
-          maxLength: 40
-          description: What a person sees for the role (for example "研究员"); the role stays the id
-    TeamMember:
-      type: object
-      required:
-      - role
-      - expert
-      - name
-      properties:
-        role:
-          type: string
-        expert:
-          type: string
-          description: The member expert's ref, pinned to a version
-        name:
-          type: string
-          description: The member expert's name at that version
-        description:
-          type: string
-        label:
-          type: string
-    Team:
-      type: object
-      description: A leader and members, as a task runs with them (TaskConfig.team)
-      required:
-      - leader
-      - members
-      properties:
-        ref:
-          type: string
-          description: The team expert's own ref ("team_x@3") that the task selected
-        leader:
-          type: string
-        members:
-          type: array
-          items:
-            $ref: '#/components/schemas/TeamMember'
-    McpUnbound:
-      type: object
-      required:
-      - name
-      - reason
-      properties:
-        name:
-          type: string
-        reason:
-          type: string
-    ExpertFileInfo:
-      type: object
-      required:
-      - path
-      - size
-      - sha256
-      properties:
-        path:
-          type: string
-        size:
-          type: integer
-        sha256:
-          type: string
-    ExpertFiles:
-      type: object
-      required:
-      - version
-      - files
-      properties:
-        version:
-          type: integer
-        files:
-          type: array
-          description: The files of the version's bundle (ADR-0013); empty for a version written before bundles
-          items:
-            $ref: '#/components/schemas/ExpertFileInfo'
-    ExpertFile:
-      type: object
-      required:
-      - path
-      - content
-      - sha256
-      properties:
-        path:
-          type: string
-        content:
-          type: string
-        sha256:
-          type: string
-    Expert:
-      type: object
-      required:
-      - expert_id
-      - kind
-      - ref
-      - version
-      - name
-      properties:
-        expert_id:
-          type: string
-        kind:
-          type: string
-          enum:
-          - expert
-          - team
-        leader:
-          type: string
-          description: Team only
-        members:
-          type: array
-          items:
-            $ref: '#/components/schemas/TeamMember'
-          description: Team only
-        ref:
-          type: string
-          description: '"<expert_id>@<version>", what a task names as its profile'
-        version:
-          type: integer
-          minimum: 1
-        name:
-          type: string
-        instructions:
-          type: string
-        soul:
-          type: string
-        mcp_unbound:
-          type: array
-          description: Entries of the expert's mcp.json that no connector of the tenant is bound to; kept, not loaded
-          items:
-            $ref: '#/components/schemas/McpUnbound'
-        model:
-          type: string
-        connector_ids:
-          type: array
-          items:
-            type: string
-        skill_ids:
-          type: array
-          items:
-            type: string
-        created_at:
-          type: string
-          format: date-time
-    RegisterProfileRequest:
-      type: object
-      required:
-      - profile_id
-      - version
-      - spec
-      properties:
-        profile_id:
-          type: string
-          minLength: 1
-        version:
-          type: integer
-          minimum: 1
-        spec:
-          type: object
-          additionalProperties: true
-    Policy:
-      type: object
-      description: What an attempt may do. Tenant, task and profile layers only tighten each other.
-      properties:
-        denied_tools:
-          type: array
-          items:
-            type: string
-            minLength: 1
-        exploration_max_tool_calls:
-          type: integer
-          minimum: 0
-        max_concurrency:
-          type: integer
-          minimum: 1
-          maximum: 64
-          description: How many attempts of a task may run at once (default 4 when absent). The tenant's value and the task's tighten each other (the smaller wins).
-        max_review_rounds:
-          type: integer
-          minimum: 0
-          maximum: 20
-          description: How many times a reviewer may send a node back (default 5 when absent, 0 turns review off). The tenant's value and the task's tighten each other (the smaller wins, so 0 anywhere switches review off).
-    SOP:
-      type: object
-      required:
-      - sop_id
-      - version
-      - ref
-      - steps
-      - created_at
-      properties:
-        sop_id:
-          type: string
-        version:
-          type: integer
-          minimum: 1
-        ref:
-          type: string
-          description: sop_id@version, what a sop_stage node names
-        name:
-          type: string
-          description: Defaults to the sop_id
-        description:
-          type: string
-        steps:
-          type: array
-          minItems: 1
-          items:
-            $ref: '#/components/schemas/SOPStep'
-        created_at:
-          type: string
-          format: date-time
-    RegisterSOPRequest:
-      type: object
-      required:
-      - sop_id
-      - version
-      - steps
-      properties:
-        sop_id:
-          type: string
-          minLength: 1
-        version:
-          type: integer
-          minimum: 1
-        name:
-          type: string
-          maxLength: 200
-          description: Defaults to the sop_id. A version is immutable, so the name is part of what a re-registration must repeat.
-        description:
-          type: string
-          maxLength: 8000
-        steps:
-          type: array
-          minItems: 1
-          maxItems: 50
-          description: A step is an object, or a bare string standing for a step whose subject and description are
-            that text. Definition v2 (names as AgentScope 2.0.9's SOP where the concept matches); a v1 definition is a valid
-            v2 one, linear. A definition that is not a DAG, or that holds a field the runtime's contract does not know, is
-            refused with 400 INVALID_SOP (the reason is the message).
-          items:
-            oneOf:
-            - type: string
-              minLength: 1
-            - $ref: '#/components/schemas/SOPStep'
-    SOPStep:
-      type: object
-      required:
-      - subject
-      properties:
-        id:
-          type: string
-          pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$'
-          description: Names the step in depends_on; defaults to s<position>
-        subject:
-          type: string
-          minLength: 1
-          maxLength: 200
-        description:
-          type: string
-          description: What the step must achieve; defaults to the subject
-        max_attempts:
-          type: integer
-          minimum: 1
-          maximum: 20
-          description: Refusals before the SOP gives up on the step; defaults to 3. It is the step node's retry.max_attempts.
-        executor:
-          type: string
-          description: Profile ref (expert@3) that does the step; the task's expert when absent. A profile ref, not an Agent object.
-        verifier:
-          type: object
-          description: Who judges the step and by what; absent is the default verifier, which still judges it.
-          properties:
-            instructions:
-              type: string
-              description: Extra criteria on top of the step's description
-            expert:
-              type: string
-              description: Profile ref whose instructions the verifier is given
-        depends_on:
-          type: array
-          items:
-            type: string
-          description: Ids of the steps this one waits for. Absent is the step before it; an empty list starts at once. Stored
-            and returned spelled out.
-        output_schema_ref:
-          type: string
-          pattern: '^schema://\S+/[1-9][0-9]*$'
-        required_artifacts:
-          type: array
-          items:
-            type: object
-            required: [name, media_type]
-            properties:
-              name:
-                type: string
-              media_type:
-                type: string
-              min_count:
-                type: integer
-                minimum: 1
-        human_approval:
-          type: string
-          enum: [before, after]
-          description: A person approves before the step starts, or after it finished
-    ArtifactManifest:
-      type: object
-      required:
-      - manifest_id
-      - task_id
-      - entries
-      - created_at
-      properties:
-        manifest_id:
-          type: string
-        task_id:
-          type: string
-        attempt_id:
-          type: string
-        entries:
-          type: array
-          items:
-            type: object
-            additionalProperties: true
-        manifest_hash:
-          type: string
-        created_at:
-          type: string
-          format: date-time
-    PermissionSpec:
-      type: object
-      required:
-      - preset
-      description: |
-        How much the task's agent may do without asking. On a request, `permissions` absent or null takes the caller's
-        default preset (GET /v1/settings) on create and keeps the task's current permissions on update;
-        `{"preset":"custom"}` takes the caller's custom rules, and a field stated beside it wins. Any other preset is stored alone. A GET always returns the resolved spec. A change applies from the
-        task's next attempt.
-      properties:
-        preset:
-          type: string
-          enum: [default, request, auto, full, custom]
-        write_scope:
-          type: string
-          enum: [none, workspace]
-        auto_edits:
-          type: boolean
-        auto_commands:
-          type: boolean
-        auto_builtin:
-          type: boolean
-    UserSettings:
-      type: object
-      properties:
-        permissions:
-          type: object
-          properties:
-            default_preset:
-              type: string
-              enum: [default, request, auto, full, custom]
-              default: default
-            custom:
-              type: object
-              description: The rules of the custom preset
-              properties:
-                write_scope:
-                  type: string
-                  enum: [none, workspace]
-                  default: workspace
-                auto_edits:
-                  type: boolean
-                  default: true
-                auto_commands:
-                  type: boolean
-                  default: false
-                auto_builtin:
-                  type: boolean
-                  default: false
-    TaskConfigInput:
-      type: object
-      description: |
-        What a task runs with. skills and connector_ids are the complete sets to use: null (or absent) keeps the
-        expert's defaults, an empty list removes them.
-      properties:
-        team_ref:
-          type: string
-          pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*@[1-9][0-9]*$
-          description: A team expert version to run the task with. Refused (TEAM_REF_NOT_TEAM) for a single expert, and EXPERT_TEAM_MISMATCH when `expert` names something else than the team or its leader's expert.
-        expert:
-          type: string
-          pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*@[1-9][0-9]*$
-          description: |
-            A profile or expert version. Absent keeps the task's profile. A team expert is resolved: the task gets
-            `team` and runs with the leader's expert as `expert`. Choosing a single expert clears the team.
-            To keep or select a team, send `team_ref` (what GET returns); `expert` may then be left out or be the leader's expert.
-        skills:
-          type: array
-          nullable: true
-          maxItems: 20
-          uniqueItems: true
-          items:
-            type: string
-          description: Catalog skill ids ("handle/slug") that have a SKILL.md and readable text; others are refused
-        connector_ids:
-          type: array
-          nullable: true
-          maxItems: 20
-          uniqueItems: true
-          items:
-            type: string
-        mode:
-          type: string
-          enum:
-          - default
-          - plan
-          - ask
-          default: default
-          description: ask runs read-only
-        permissions:
-          allOf:
-          - $ref: '#/components/schemas/PermissionSpec'
-          nullable: true
-    TaskConfigView:
-      type: object
-      required:
-      - config_version
-      - mode
-      properties:
-        config_version:
-          type: integer
-          minimum: 1
-        expert:
-          type: string
-          nullable: true
-        skills:
-          type: array
-          nullable: true
-          items:
-            type: string
-        connector_ids:
-          type: array
-          nullable: true
-          items:
-            type: string
-        mode:
-          type: string
-        team_ref:
-          type: string
-          description: The selected team expert's own ref; send it back in team_ref to keep the team
-        team:
-          allOf:
-          - $ref: '#/components/schemas/Team'
-          description: Set while the task's expert was chosen as a team; expert is then the leader's expert
-        permissions:
-          $ref: '#/components/schemas/PermissionSpec'
-    CreateTaskRequest:
-      type: object
-      required:
-      - title
-      - goal
-      properties:
-        title:
-          type: string
-          minLength: 1
-        goal:
-          type: string
-          minLength: 1
-        mode:
-          type: string
-          enum:
-          - single
-          - multi
-          - long
-          default: single
-        profile:
-          type: string
-          pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*@[1-9][0-9]*$
-        sop:
-          type: string
-        budgets:
-          type: object
-          additionalProperties: true
-        policy:
-          $ref: '#/components/schemas/Policy'
-        config:
-          $ref: '#/components/schemas/TaskConfigInput'
-          description: 'The task layer of the policy: it can only tighten the tenant layer.'
-    SendTaskMessageRequest:
-      type: object
-      required:
-      - text
-      properties:
-        command_id:
-          type: string
-        client_message_id:
-          type: string
-        text:
-          type: string
-          minLength: 1
-        delivery:
-          type: string
-          enum:
-          - queue
-          - interrupt
-          default: queue
-        mentions:
-          type: array
-          maxItems: 8
-          uniqueItems: true
-          items:
-            type: string
-            pattern: ^@?[a-z][a-z0-9_-]{0,31}$
-          description: |
-            Roles of the task's team the user @-mentioned (a leading @ is dropped; repeats are dropped). Checked against the
-            team in the task's configuration when the message is sent. Part of the request body for idempotency: the same
-            command_id with other mentions is IDEMPOTENCY_KEY_REUSED.
-    TaskControlRequest:
-      type: object
-      required:
-      - action
-      properties:
-        command_id:
-          type: string
-        action:
-          type: string
-          enum:
-          - pause
-          - resume
-          - stop
-          - cancel
-          - takeover
-          - handback
-        reason:
-          type: string
-    DecideTaskApprovalRequest:
-      type: object
-      required:
-      - decision
-      properties:
-        command_id:
-          type: string
-        decision:
-          type: string
-          enum:
-          - approve
-          - reject
-        comment:
-          type: string
-        always:
-          type: boolean
-          description: With approve, also allow what the approval offered (its subject's allow_rule) for the rest of the task.
-    GrantBudgetRequest:
-      type: object
-      required:
-      - delta
-      properties:
-        command_id:
-          type: string
-        delta:
-          type: object
-          additionalProperties: true
-    CompleteNodeRequest:
-      type: object
-      properties:
-        command_id:
-          type: string
-        reason:
-          type: string
-          description: Why the person completed the node; recorded with the node's status change.
-    RequestProfileSwitchRequest:
-      type: object
-      required:
-      - node_id
-      - to_profile
-      - reason
-      properties:
-        command_id:
-          type: string
-        node_id:
-          type: string
-        to_profile:
-          type: string
-          pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*@[1-9][0-9]*$
-        reason:
-          type: string
-          minLength: 1
-    CompleteNodeResponse:
-      type: object
-      required:
-      - accepted
-      - command_id
-      - node_id
-      properties:
-        accepted:
-          type: boolean
-        command_id:
-          type: string
-        node_id:
-          type: string
-        status:
-          type: string
-          enum: [COMPLETED]
-    RequestProfileSwitchResponse:
-      type: object
-      required:
-      - accepted
-      - command_id
-      - effective_attempt_no
-      - needs_approval
-      properties:
-        accepted:
-          type: boolean
-        command_id:
-          type: string
-        effective_attempt_no:
-          type: integer
-          minimum: 1
-          description: The attempt number from which the new profile applies.
-        needs_approval:
-          type: boolean
-          description: True when the profile is not one the task is allowed; the switch waits for a profile_switch approval.
-        approval_id:
-          type: string
-          nullable: true
-    ErrorBody:
-      type: object
-      additionalProperties: false
-      required:
-      - error
-      - code
-      - message
-      properties:
-        error:
-          type: string
-          description: Stable machine-oriented slug
-        code:
-          type: string
-          description: Stable machine-oriented code (Sentinel asserts this)
-        message:
-          type: string
-          description: Human-readable explanation (not a secret)
-        field:
-          type: string
-          description: |
-            Set on validation refusals that have one: the request field at fault, e.g. `members[2].expert`.
-            Expert and task-config refusals use these codes: NAME_INVALID, KIND_INVALID, KIND_IMMUTABLE,
-            FIELD_NOT_ALLOWED, INSTRUCTIONS_TOO_LONG, MODEL_INVALID, CONNECTORS_INVALID, CONNECTOR_NOT_FOUND,
-            SKILLS_INVALID, SKILL_NOT_FOUND, SKILL_UNUSABLE, TEAM_NO_MEMBERS, TEAM_TOO_MANY_MEMBERS,
-            TEAM_DUPLICATE_ROLE, TEAM_LEADER_NOT_MEMBER, ROLE_INVALID, TEAM_MEMBER_REF_INVALID,
-            TEAM_MEMBER_NOT_FOUND, TEAM_MEMBER_IS_TEAM, TEAM_SELF_REFERENCE, DESCRIPTION_TOO_LONG, LABEL_TOO_LONG,
-            TEAM_MALFORMED, MODE_INVALID, EXPERT_REF_INVALID, EXPERT_NOT_FOUND, TEAM_REF_NOT_TEAM, EXPERT_TEAM_MISMATCH.
-            An unknown member (or expert) and another tenant's are answered with the same code, field and reason.
-        reason:
-          type: string
-          description: Same text as `message` on a field refusal
-      example:
-        error: not implemented
-        code: NOT_IMPLEMENTED
-        message: 'this endpoint is not implemented'
-    CreatePersonaRequest:
-      type: object
-      additionalProperties: false
-      required:
-      - name
-      properties:
-        name:
-          type: string
-        instructions:
-          type: string
-          description: Rendered by the worker into a persona prefix. No secrets.
-        mcpConnectorIds:
-          type: array
-          items:
-            type: string
-          description: Ids of MCP connectors already created for this tenant.
-    Persona:
-      type: object
-      additionalProperties: false
-      required:
-      - id
-      - name
-      - instructions
-      - createdAt
-      properties:
-        id:
-          type: string
-        name:
-          type: string
-        instructions:
-          type: string
-        mcpConnectorIds:
-          type: array
-          items:
-            type: string
-        createdAt:
-          type: string
-          format: date-time
-    PersonaList:
-      type: object
-      additionalProperties: false
-      required:
-      - items
-      properties:
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/Persona'
-    McpHeaderRef:
-      type: object
-      additionalProperties: false
-      required:
-      - name
-      - env
-      properties:
-        name:
-          type: string
-          description: HTTP header name. Not a secret value.
-        env:
-          type: string
-          description: Environment variable name on the worker. Not a secret value.
-    CreateMcpConnectorRequest:
-      type: object
-      additionalProperties: false
-      required:
-      - name
-      properties:
-        name:
-          type: string
-        transport:
-          type: string
-          enum:
-          - stdio
-          - streamable_http
-          default: stdio
-          description: stdio starts a local command. streamable_http connects to url.
-        command:
-          type: string
-          description: Executable used to start a stdio MCP server. Required for stdio. Not run by this API.
-        args:
-          type: array
-          items:
-            type: string
-        envRefs:
-          type: array
-          items:
-            type: string
-          description: Environment variable names. Do not send values.
-        url:
-          type: string
-          description: Remote MCP URL. Required for streamable_http. Public hosts must use https.
-        headerRefs:
-          type: array
-          items:
-            $ref: '#/components/schemas/McpHeaderRef'
-        defaultOpen:
-          type: boolean
-          description: When true, the connector is on by default.
-    McpConnector:
-      type: object
-      additionalProperties: false
-      required:
-      - id
-      - name
-      - transport
-      - command
-      - defaultOpen
-      - createdAt
-      properties:
-        id:
-          type: string
-        name:
-          type: string
-        transport:
-          type: string
-          enum:
-          - stdio
-          - streamable_http
-        command:
-          type: string
-        args:
-          type: array
-          items:
-            type: string
-        envRefs:
-          type: array
-          items:
-            type: string
-        url:
-          type: string
-        headerRefs:
-          type: array
-          items:
-            $ref: '#/components/schemas/McpHeaderRef'
-        defaultOpen:
-          type: boolean
-        createdAt:
-          type: string
-          format: date-time
-    McpConnectorList:
-      type: object
-      additionalProperties: false
-      required:
-      - items
-      properties:
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/McpConnector'
-    McpMarketServer:
-      type: object
-      additionalProperties: false
-      required:
-      - id
-      - name
-      - summary
-      - author
-      - category
-      - categoryName
-      - categoryMore
-      - calls
-      - views
-      - stars
-      - verified
-      - hosted
-      - needsOnline
-      properties:
-        id:
-          type: string
-        name:
-          type: string
-        summary:
-          type: string
-        author:
-          type: string
-        category:
-          type: string
-        categoryName:
-          type: string
-        categoryMore:
-          type: integer
-        calls:
-          type: integer
-        views:
-          type: integer
-        stars:
-          type: integer
-        verified:
-          type: boolean
-        hosted:
-          type: boolean
-        needsOnline:
-          type: boolean
-          description: True when the server cannot be used without a network.
-    McpMarketToolParam:
-      type: object
-      additionalProperties: false
-      required:
-      - name
-      - type
-      - required
-      - description
-      properties:
-        name:
-          type: string
-        type:
-          type: string
-        required:
-          type: boolean
-        description:
-          type: string
-    McpMarketTool:
-      type: object
-      additionalProperties: false
-      required:
-      - name
-      - description
-      - params
-      properties:
-        name:
-          type: string
-        description:
-          type: string
-        params:
-          type: array
-          items:
-            $ref: '#/components/schemas/McpMarketToolParam'
-    McpMarketDetail:
-      type: object
-      additionalProperties: false
-      required:
-      - id
-      - name
-      - summary
-      - author
-      - category
-      - categoryName
-      - categoryMore
-      - calls
-      - views
-      - stars
-      - verified
-      - hosted
-      - needsOnline
-      - license
-      - updatedOn
-      - readme
-      - tools
-      properties:
-        id:
-          type: string
-        name:
-          type: string
-        summary:
-          type: string
-        author:
-          type: string
-        category:
-          type: string
-        categoryName:
-          type: string
-        categoryMore:
-          type: integer
-        calls:
-          type: integer
-        views:
-          type: integer
-        stars:
-          type: integer
-        verified:
-          type: boolean
-        hosted:
-          type: boolean
-        needsOnline:
-          type: boolean
-        license:
-          type: string
-        updatedOn:
-          type: string
-          description: Calendar day copied from the plaza, formatted YYYY.MM.DD.
-        readme:
-          type: string
-          description: Display text for the server. URLs are not stored as links.
-        tools:
-          type: array
-          items:
-            $ref: '#/components/schemas/McpMarketTool'
-    McpMarketList:
-      type: object
-      additionalProperties: false
-      required:
-      - items
-      - total
-      - stored
-      - page
-      - pageSize
-      properties:
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/McpMarketServer'
-        total:
-          type: integer
-        stored:
-          type: integer
-          description: Catalog size after the needsOnline filter, before keyword and category.
-        page:
-          type: integer
-        pageSize:
-          type: integer
-    McpMarketCategory:
-      type: object
-      additionalProperties: false
-      required:
-      - key
-      - name
-      - sortOrder
-      - count
-      properties:
-        key:
-          type: string
-        name:
-          type: string
-        sortOrder:
-          type: integer
-        count:
-          type: integer
-    McpMarketCategoryList:
-      type: object
-      additionalProperties: false
-      required:
-      - items
-      properties:
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/McpMarketCategory'
-    Skill:
-      type: object
-      additionalProperties: false
-      required:
-      - id
-      - slug
-      - handle
-      - name
-      - description
-      - descriptionEn
-      - category
-      - categoryName
-      - tags
-      - license
-      - iconUrl
-      - sourceUrl
-      - downloads
-      - visits
-      - likes
-      - updatedAt
-      - source
-      properties:
-        id:
-          type: string
-          description: handle/slug. The handle is an optional @ plus one token.
-        slug:
-          type: string
-        handle:
-          type: string
-        name:
-          type: string
-        description:
-          type: string
-        descriptionEn:
-          type: string
-        category:
-          type: string
-        categoryName:
-          type: string
-        tags:
-          type: array
-          items:
-            type: string
-        license:
-          type: string
-        iconUrl:
-          type: string
-          description: Empty, or an https URL on an allowlisted image host.
-        sourceUrl:
-          type: string
-        downloads:
-          type: integer
-        visits:
-          type: integer
-        likes:
-          type: integer
-        updatedAt:
-          type: string
-          format: date-time
-        source:
-          type: string
-          enum:
-          - common
-          - nexa
-    SkillList:
-      type: object
-      additionalProperties: false
-      required:
-      - items
-      - total
-      - page
-      - pageSize
-      - installedAt
-      properties:
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/Skill'
-        total:
-          type: integer
-        page:
-          type: integer
-        pageSize:
-          type: integer
-        installedAt:
-          type: string
-          description: RFC3339 time of the newest stored row, or empty before the snapshot is stored.
-    SkillCategory:
-      type: object
-      additionalProperties: false
-      required:
-      - key
-      - name
-      - nameEn
-      - sortOrder
-      properties:
-        key:
-          type: string
-        name:
-          type: string
-        nameEn:
-          type: string
-        sortOrder:
-          type: integer
-    SkillCategoryList:
-      type: object
-      additionalProperties: false
-      required:
-      - items
-      properties:
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/SkillCategory'
-    AgentModel:
-      type: object
-      additionalProperties: false
-      required:
-      - name
-      - supplier
-      - protocol
-      properties:
-        name:
-          type: string
-        supplier:
-          type: string
-        protocol:
-          type: string
-    AgentRef:
-      type: object
-      additionalProperties: false
-      required:
-      - name
-      - description
-      properties:
-        name:
-          type: string
-        description:
-          type: string
-    AgentPrompt:
-      type: object
-      additionalProperties: false
-      required:
-      - filename
-      - content
-      properties:
-        filename:
-          type: string
-        content:
-          type: string
-    Agent:
-      type: object
-      additionalProperties: false
-      required:
-      - id
-      - handle
-      - slug
-      - name
-      - description
-      - framework
-      - license
-      - logoUrl
-      - catalogues
-      - models
-      - mcps
-      - skills
-      - systemPrompts
-      - readme
-      - files
-      - stars
-      - downloads
-      - visits
-      - updatedAt
-      - source
-      properties:
-        id:
-          type: string
-          description: handle/slug. The handle is an optional @ plus one token.
-        handle:
-          type: string
-        slug:
-          type: string
-        name:
-          type: string
-        description:
-          type: string
-        framework:
-          type: string
-        license:
-          type: string
-        logoUrl:
-          type: string
-          description: Empty, or an https URL on an allowlisted image host.
-        catalogues:
-          type: array
-          items:
-            type: string
-        models:
-          type: array
-          items:
-            $ref: '#/components/schemas/AgentModel'
-        mcps:
-          type: array
-          items:
-            $ref: '#/components/schemas/AgentRef'
-        skills:
-          type: array
-          items:
-            $ref: '#/components/schemas/AgentRef'
-        systemPrompts:
-          type: array
-          items:
-            $ref: '#/components/schemas/AgentPrompt'
-        readme:
-          type: string
-        files:
-          type: array
-          description: Text files stored with the agent; empty in list responses.
-          items:
-            $ref: '#/components/schemas/SkillTextFile'
-        stars:
-          type: integer
-        downloads:
-          type: integer
-        visits:
-          type: integer
-        updatedAt:
-          type: string
-          format: date-time
-        source:
-          type: string
-          enum:
-          - common
-    AgentList:
-      type: object
-      additionalProperties: false
-      required:
-      - items
-      - total
-      - page
-      - pageSize
-      properties:
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/Agent'
-        total:
-          type: integer
-        page:
-          type: integer
-        pageSize:
-          type: integer
-    SkillTextFile:
-      type: object
-      additionalProperties: false
-      required:
-      - path
-      - body
-      properties:
-        path:
-          type: string
-        body:
-          type: string
-          description: Text kept for display. It is not executed.
-    SkillTextFileList:
-      type: object
-      additionalProperties: false
-      required:
-      - items
-      properties:
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/SkillTextFile'
-        meta:
-          $ref: '#/components/schemas/SkillPageMeta'
-    SkillPageMeta:
-      type: object
-      additionalProperties: false
-      description: |
-        Public page fields copied once. Absent until that copy exists.
-      properties:
-        summary:
-          type: string
-        summaryZh:
-          type: string
-        subCategories:
-          type: array
-          items:
-            type: object
-            additionalProperties: false
-            required:
-            - key
-            - name
-            properties:
-              key:
-                type: string
-              name:
-                type: string
-        safe:
-          type: boolean
-        score:
-          type: number
-          description: AI score on a 0 to 5 scale, from the public evaluation.
-        version:
-          type: string
-        updatedAt:
-          type: integer
-          description: Unix milliseconds.
-        versionCreatedAt:
-          type: integer
-          description: Unix milliseconds.
-        fileIndex:
-          type: array
-          items:
-            type: object
-            additionalProperties: false
-            required:
-            - path
-            - size
-            properties:
-              path:
-                type: string
-              size:
-                type: integer
-        versions:
-          type: array
-          items:
-            type: object
-            additionalProperties: false
-            required:
-            - version
-            properties:
-              version:
-                type: string
-              changelog:
-                type: string
-              createdAt:
-                type: integer
-        evaluation:
-          type: object
-          additionalProperties: false
-          required:
-          - score
-          - dimensions
-          properties:
-            userSummary:
-              type: string
-            createdAt:
-              type: integer
-            score:
-              type: number
-            dimensions:
-              type: array
-              items:
-                type: object
-                additionalProperties: false
-                required:
-                - key
-                - label
-                - labelZh
-                - score
-                properties:
-                  key:
-                    type: string
-                  label:
-                    type: string
-                  labelZh:
-                    type: string
-                  description:
-                    type: string
-                  score:
-                    type: number
-                  summary:
-                    type: string
-                  items:
-                    type: array
-                    items:
-                      type: object
-                      additionalProperties: false
-                      required:
-                      - key
-                      - name
-                      - score
-                      properties:
-                        key:
-                          type: string
-                        name:
-                          type: string
-                        score:
-                          type: number
-                        reason:
-                          type: string
-  responses:
-    Unauthorized:
-      description: |
-        Stub for later Sentinel tests. Missing or invalid credentials.
-        Reserved for the auth layer.
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorBody'
-          example:
-            error: unauthorized
-            code: UNAUTHORIZED
-            message: missing or invalid credentials
-    Forbidden:
-      description: |
-        Stub for later Sentinel tests. Authenticated caller lacks permission.
-        Reserved for the auth layer.
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorBody'
-          example:
-            error: forbidden
-            code: FORBIDDEN
-            message: insufficient permissions
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Orbit v2 Control API",
+    "version": "2.0.0",
+    "description": "WP1 identity, tenancy, workspaces and administration. Bearer OIDC access tokens, dev tokens or API keys. Tenant-scoped calls require X-Orbit-Tenant. Lists sort by UUIDv7 and use opaque cursors."
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:8080"
+    }
+  ],
+  "security": [
+    {
+      "BearerAuth": []
+    },
+    {
+      "APIKeyAuth": []
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "get_health",
+        "summary": "GET /health",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input or idempotency mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/ready": {
+      "get": {
+        "operationId": "get_ready",
+        "summary": "GET /ready",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input or idempotency mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/v1/auth/config": {
+      "get": {
+        "operationId": "get_v1_auth_config",
+        "summary": "GET /v1/auth/config",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthConfig"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input or idempotency mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/v1/auth/dev/token": {
+      "post": {
+        "operationId": "post_v1_auth_dev_token",
+        "summary": "POST /v1/auth/dev/token",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevToken"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input or idempotency mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DevTokenInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/me": {
+      "get": {
+        "operationId": "get_v1_me",
+        "summary": "GET /v1/me",
+        "parameters": [
+          {
+            "name": "X-Orbit-Tenant",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Select current tenant; optional for identity discovery."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input or idempotency mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/tenants": {
+      "get": {
+        "operationId": "get_v1_tenants",
+        "summary": "GET /v1/tenants",
+        "parameters": [
+          {
+            "name": "X-Orbit-Tenant",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Select current tenant; optional for identity discovery."
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input or idempotency mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/workspaces": {
+      "get": {
+        "operationId": "get_v1_workspaces",
+        "summary": "GET /v1/workspaces",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Tenant"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspacePage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input or idempotency mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "post_v1_workspaces",
+        "summary": "POST /v1/workspaces",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Tenant"
+          },
+          {
+            "$ref": "#/components/parameters/Idempotency"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workspace"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input or idempotency mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWorkspace"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/workspaces/{w}": {
+      "get": {
+        "operationId": "get_v1_workspaces__w_",
+        "summary": "GET /v1/workspaces/{w}",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Tenant"
+          },
+          {
+            "name": "w",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workspace"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input or idempotency mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "patch_v1_workspaces__w_",
+        "summary": "PATCH /v1/workspaces/{w}",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Tenant"
+          },
+          {
+            "name": "w",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Idempotency"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workspace"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input or idempotency mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchWorkspace"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/workspaces/{w}/members": {
+      "get": {
+        "operationId": "get_v1_workspaces__w__members",
+        "summary": "GET /v1/workspaces/{w}/members",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Tenant"
+          },
+          {
+            "name": "w",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrincipalPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input or idempotency mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "post_v1_workspaces__w__members",
+        "summary": "POST /v1/workspaces/{w}/members",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Tenant"
+          },
+          {
+            "name": "w",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Idempotency"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceMemberInput"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input or idempotency mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceMemberInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/workspaces/{w}/members/{p}": {
+      "delete": {
+        "operationId": "delete_v1_workspaces__w__members__p_",
+        "summary": "DELETE /v1/workspaces/{w}/members/{p}",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Tenant"
+          },
+          {
+            "name": "w",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "p",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Idempotency"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input or idempotency mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/members": {
+      "get": {
+        "operationId": "get_v1_admin_members",
+        "summary": "GET /v1/admin/members",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Tenant"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input or idempotency mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "post_v1_admin_members",
+        "summary": "POST /v1/admin/members",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Tenant"
+          },
+          {
+            "$ref": "#/components/parameters/Idempotency"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberInput"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input or idempotency mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemberInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/members/{p}": {
+      "patch": {
+        "operationId": "patch_v1_admin_members__p_",
+        "summary": "PATCH /v1/admin/members/{p}",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Tenant"
+          },
+          {
+            "name": "p",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Idempotency"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberPatchResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input or idempotency mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemberPatch"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/api-keys": {
+      "get": {
+        "operationId": "get_v1_admin_api_keys",
+        "summary": "GET /v1/admin/api-keys",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Tenant"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIKeyPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input or idempotency mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "post_v1_admin_api_keys",
+        "summary": "POST /v1/admin/api-keys",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Tenant"
+          },
+          {
+            "$ref": "#/components/parameters/Idempotency"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIKeyCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input or idempotency mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/APIKeyInput"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete_v1_admin_api_keys",
+        "summary": "DELETE /v1/admin/api-keys",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Tenant"
+          },
+          {
+            "$ref": "#/components/parameters/Idempotency"
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input or idempotency mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/audit": {
+      "get": {
+        "operationId": "get_v1_admin_audit",
+        "summary": "GET /v1/admin/audit",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Tenant"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditEntryPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input or idempotency mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "details": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retryable",
+              "details"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "Principal": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "enum": [
+              "user",
+              "service"
+            ]
+          },
+          "email": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "email",
+          "display_name"
+        ]
+      },
+      "Tenant": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "name"
+        ]
+      },
+      "Me": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "principal": {
+            "$ref": "#/components/schemas/Principal"
+          },
+          "tenants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Tenant"
+            }
+          },
+          "current_tenant": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "principal",
+          "tenants",
+          "current_tenant",
+          "roles"
+        ]
+      },
+      "AuthConfig": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "enum": [
+              "dev",
+              "oidc"
+            ]
+          },
+          "issuer": {
+            "type": "string"
+          },
+          "client_id": {
+            "type": "string"
+          },
+          "audience": {
+            "type": "string"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "mode"
+        ]
+      },
+      "DevTokenInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "display_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "email"
+        ]
+      },
+      "DevToken": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "access_token": {
+            "type": "string"
+          },
+          "expires_in": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "access_token",
+          "expires_in"
+        ]
+      },
+      "Health": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "const": "ok"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "Workspace": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "default_agent_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "settings",
+          "default_agent_ref",
+          "created_at"
+        ]
+      },
+      "CreateWorkspace": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "default_agent_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "PatchWorkspace": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "default_agent_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "minProperties": 1
+      },
+      "WorkspaceMemberInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "principal_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "role": {
+            "enum": [
+              "ws.admin",
+              "ws.editor",
+              "ws.member",
+              "ws.viewer"
+            ]
+          }
+        },
+        "required": [
+          "principal_id"
+        ]
+      },
+      "Member": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "principal": {
+            "$ref": "#/components/schemas/Principal"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "invited",
+              "suspended"
+            ]
+          },
+          "source": {
+            "enum": [
+              "scim",
+              "invite",
+              "jit",
+              "direct"
+            ]
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "principal",
+          "status",
+          "source",
+          "roles"
+        ]
+      },
+      "MemberInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "principal_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "role": {
+            "enum": [
+              "tenant.owner",
+              "tenant.admin",
+              "tenant.auditor",
+              "tenant.reviewer",
+              "tenant.member"
+            ]
+          },
+          "status": {
+            "enum": [
+              "active",
+              "invited",
+              "suspended"
+            ]
+          },
+          "source": {
+            "enum": [
+              "direct",
+              "invite",
+              "jit"
+            ]
+          }
+        },
+        "required": [
+          "principal_id"
+        ]
+      },
+      "MemberPatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "role": {
+            "enum": [
+              "tenant.owner",
+              "tenant.admin",
+              "tenant.auditor",
+              "tenant.reviewer",
+              "tenant.member"
+            ]
+          },
+          "status": {
+            "enum": [
+              "active",
+              "invited",
+              "suspended"
+            ]
+          }
+        },
+        "minProperties": 1
+      },
+      "MemberPatchResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "principal_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "principal_id",
+          "role",
+          "status"
+        ]
+      },
+      "APIKey": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "principal_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "principal_id",
+          "name",
+          "prefix",
+          "scopes",
+          "expires_at",
+          "last_used_at"
+        ]
+      },
+      "APIKeyInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "principal_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "name",
+          "scopes",
+          "expires_at"
+        ]
+      },
+      "APIKeyCreated": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "key": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "prefix",
+          "scopes",
+          "expires_at"
+        ]
+      },
+      "AuditEntry": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "actor_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "actor_kind": {
+            "enum": [
+              "user",
+              "service"
+            ]
+          },
+          "action": {
+            "type": "string"
+          },
+          "target_type": {
+            "type": "string"
+          },
+          "target_id": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "prev_hash": {
+            "type": "string"
+          },
+          "hash": {
+            "type": "string"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "actor_id",
+          "actor_kind",
+          "action",
+          "target_type",
+          "target_id",
+          "detail",
+          "prev_hash",
+          "hash",
+          "occurred_at"
+        ]
+      },
+      "TenantPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Tenant"
+            }
+          },
+          "next_cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ]
+      },
+      "WorkspacePage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Workspace"
+            }
+          },
+          "next_cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ]
+      },
+      "PrincipalPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Principal"
+            }
+          },
+          "next_cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ]
+      },
+      "MemberPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Member"
+            }
+          },
+          "next_cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ]
+      },
+      "APIKeyPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/APIKey"
+            }
+          },
+          "next_cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ]
+      },
+      "AuditEntryPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuditEntry"
+            }
+          },
+          "next_cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ]
+      }
+    },
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      },
+      "APIKeyAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "orbit_<prefix>_<random>; X-Orbit-Tenant required; explicit action scopes."
+      }
+    },
+    "parameters": {
+      "Tenant": {
+        "name": "X-Orbit-Tenant",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "Cursor": {
+        "name": "cursor",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "Limit": {
+        "name": "limit",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 50
+        }
+      },
+      "Idempotency": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "schema": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "description": "Tenant writes are replayed for 24 hours. Reuse with changed body, method or path returns 422. Replay responses are encrypted at rest, including API key creation."
+      }
+    }
+  }
+}

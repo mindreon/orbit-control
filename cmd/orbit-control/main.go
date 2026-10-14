@@ -1,87 +1,67 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"log"
-	"log/slog"
-	"net"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
-	"github.com/mindreon/orbit-control/internal/config"
+	"github.com/mindreon/orbit-control/internal/auth"
 	"github.com/mindreon/orbit-control/internal/httpapi"
+	"github.com/mindreon/orbit-control/internal/platform/config"
+	"github.com/mindreon/orbit-control/internal/platform/db"
+	orbitlog "github.com/mindreon/orbit-control/internal/platform/log"
 )
 
-// installLogger routes every log.Printf of the process through slog. ORBIT_LOG_FORMAT=json makes the lines JSON, which a
-// log pipeline can index (tenant, task and the rest of a message stay in `msg`).
-func installLogger() {
-	options := &slog.HandlerOptions{Level: slog.LevelInfo}
-	var handler slog.Handler = slog.NewTextHandler(os.Stderr, options)
-	if config.Load().LogFormat == "json" {
-		handler = slog.NewJSONHandler(os.Stderr, options)
-	}
-	slog.SetDefault(slog.New(handler))
-}
-
 func main() {
-	installLogger()
-	cfg := config.Load()
-	addr := cfg.PublicListenAddr()
-	if err := checkPublicBind(addr); err != nil {
-		log.Fatal(err)
+	if e := run(); e != nil {
+		fmt.Fprintln(os.Stderr, e)
+		os.Exit(1)
 	}
-	internalAddr := cfg.InternalListenAddr()
-	public, internal, closeStore, err := httpapi.Handlers()
-	if err != nil {
-		log.Fatalf("orbit-control: %v", err)
+}
+func run() error {
+	if len(os.Args) != 2 || os.Args[1] != "api" {
+		return fmt.Errorf("usage: orbit-control api")
 	}
-	defer closeStore()
-	go func() {
-		log.Printf("orbit-control internal listener on %s (/internal/*)", internalAddr)
-		if err := server(internalAddr, internal).ListenAndServe(); err != nil {
-			log.Fatal(err)
+	c, e := config.Load()
+	if e != nil {
+		return e
+	}
+	if e = c.ValidateAPI(); e != nil {
+		return e
+	}
+	l := orbitlog.New(os.Stdout, c.LogFormat)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	startup, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	d, e := db.OpenApp(startup, c.DatabaseURL)
+	if e != nil {
+		return e
+	}
+	defer d.Close()
+	a, e := auth.New(startup, d, c, l)
+	if e != nil {
+		return e
+	}
+	defer a.Close()
+	h := &httpapi.Handler{DB: d, Auth: a, Config: c, Logger: l}
+	server := &http.Server{Addr: c.Addr, Handler: h.Router(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+	done := make(chan error, 1)
+	go func() { done <- server.ListenAndServe() }()
+	l.Info("API listening", "address", c.Addr)
+	select {
+	case e = <-done:
+		if e == http.ErrServerClosed {
+			return nil
 		}
-	}()
-	log.Printf("orbit-control listening on %s (tasks; TEMPORAL_ADDRESS enables TaskWorkflow)", addr)
-	if err := server(addr, public).ListenAndServe(); err != nil {
-		log.Fatal(err)
+		return e
+	case <-ctx.Done():
+		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return server.Shutdown(shutdown)
 	}
-}
-
-// server has no overall write timeout because SSE streams are long-lived;
-// the SSE handler sets a deadline on each write instead.
-func server(addr string, h http.Handler) *http.Server {
-	return &http.Server{Addr: addr, Handler: h, ReadHeaderTimeout: 10 * time.Second}
-}
-
-// checkPublicBind is the deploy gate for H1: until user auth (§17) lands,
-// every /v1 path, including SSE replay, is unauthenticated, so the public
-// listener may only bind loopback. ORBIT_ALLOW_UNAUTHENTICATED_BIND=1 lifts it
-// for environments that are not externally reachable (e.g. a local Compose
-// network); production must never set it.
-func checkPublicBind(addr string) error {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return fmt.Errorf("public listen address %q: %w", addr, err)
-	}
-	if isLoopbackHost(host) {
-		return nil
-	}
-	if config.Load().AllowUnauthenticatedBind {
-		log.Printf("WARNING: public listener %s is not loopback and control has no user auth (§17); "+
-			"ORBIT_ALLOW_UNAUTHENTICATED_BIND=1 is only for environments that are not externally reachable", addr)
-		return nil
-	}
-	return fmt.Errorf("refusing to bind the public listener to %s: control has no user auth yet (§17), "+
-		"so it must not be externally reachable; bind loopback (the default), or set "+
-		"ORBIT_ALLOW_UNAUTHENTICATED_BIND=1 only where the address is not reachable from outside", addr)
-}
-
-func isLoopbackHost(host string) bool {
-	if host == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
