@@ -106,7 +106,7 @@
     "members": [
       {
         "name": "main",
-        "role": "leader",
+        "role": "agent",
         "description": "Single agent.",
         "agent_entry": 0,
         "effective_permissions": {

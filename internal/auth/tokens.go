@@ -104,15 +104,15 @@ func (s *Signer) VerifyDev(token string) (DevClaims, error) {
 	return s.verify(token, DevIssuer, "orbit-api")
 }
 
-// CapabilityClaims carries segment identity; callers compare it with current run
+// CapabilityClaims carries segment or sandbox lease identity; callers compare it with current run
 // state after verification. It is deliberately independent of public dev claims.
 type CapabilityClaims struct {
 	jwt.RegisteredClaims
 	Tenant  string `json:"tenant"`
 	Run     string `json:"run"`
-	Member  string `json:"member"`
-	Seq     int    `json:"seq"`
-	Attempt int    `json:"attempt"`
+	Member  string `json:"member,omitempty"`
+	Seq     int    `json:"seq,omitempty"`
+	Attempt int    `json:"attempt,omitempty"`
 	Purpose string `json:"purpose"`
 	LeaseID string `json:"lease_id,omitempty"`
 }
@@ -140,7 +140,7 @@ func NewCapabilitySigner(key ed25519.PrivateKey, kid string, publicKeys map[stri
 	return &CapabilitySigner{key: key, kid: kid, publicKeys: keys}, nil
 }
 func (s *CapabilitySigner) IssueCapability(c CapabilityClaims) (string, error) {
-	if !ids.Valid(c.Tenant) || !ids.Valid(c.Run) || c.Member == "" || c.Seq < 1 || c.Attempt < 1 || (c.Purpose != "segment" && c.Purpose != "sandbox") || (c.Purpose == "sandbox" && c.LeaseID == "") {
+	if !ids.Valid(c.Tenant) || !ids.Valid(c.Run) || c.Seq < 0 || c.Attempt < 0 || (c.Purpose == "segment" && (c.Member == "" || c.Seq < 1 || c.Attempt < 1)) || (c.Purpose != "segment" && c.Purpose != "sandbox") || (c.Purpose == "sandbox" && c.LeaseID == "") {
 		return "", fmt.Errorf("invalid capability identity")
 	}
 	c.RegisteredClaims = registered(CapabilityIssuer, "run:"+c.Run, "kernel", 5*time.Minute)

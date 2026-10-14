@@ -15,6 +15,16 @@ docs = [
 source = out.read_text()
 for doc in docs:
     for name, definition in doc.get("$defs", {}).items():
+        if (
+            definition.get("type") == "object"
+            and definition.get("properties") == {}
+            and definition.get("additionalProperties") is False
+        ):
+            source = re.sub(
+                rf"type {name} map\[string\]interface\{{\}}",
+                f"type {name} struct {{}}",
+                source,
+            )
         for field, schema in definition.get("properties", {}).items():
             if not isinstance(schema, dict):
                 continue

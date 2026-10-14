@@ -175,6 +175,7 @@ func minimalValue(t *testing.T, kind string, root any) any {
 // compare the bytes so a stale/missing cross-language fixture fails CI.
 func TestGoWireFixtures(t *testing.T) {
 	var fixtures []wireFixture
+	registry := loadRegistry(t)
 	examples := listExamples(t, examplesDir)
 	first := map[string]exampleFile{}
 	appendFixture := func(kind, name string, value any) {
@@ -184,7 +185,9 @@ func TestGoWireFixtures(t *testing.T) {
 			t.Fatal(err)
 		}
 		valid := ValidateStrict(kind, raw) == nil
-		if name != "zero" && !valid {
+		definition := registry.docs[registry.where[kind]]["$defs"].(map[string]any)[kind].(map[string]any)
+		required, _ := definition["required"].([]any)
+		if !valid && (name != "zero" || len(required) == 0) {
 			t.Fatalf("%s %s: %v", kind, name, ValidateStrict(kind, raw))
 		}
 		fixtures = append(fixtures, wireFixture{kind, name, valid, raw})

@@ -222,6 +222,11 @@ func TestInvalidExamplesFail(t *testing.T) {
 		if err := ValidateStrict(ex.typeName, raw); err == nil {
 			t.Errorf("%s should be rejected", ex.name)
 		}
+		if ex.name != "SegmentInput.unknown_field" && ex.name != "RunEvent.data_extra_field" {
+			if err := Validate(ex.typeName, raw); err == nil {
+				t.Errorf("%s consumer should reject", ex.name)
+			}
+		}
 		count++
 	}
 	if count == 0 {

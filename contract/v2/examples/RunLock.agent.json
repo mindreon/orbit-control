@@ -1,6 +1,6 @@
 {
   "lock_id": "lk-01J9X",
-  "digest": "sha256:aacdec685a9258d5de02a932e06858184e50a8fd0034fb05849bc15207f0f63f",
+  "digest": "sha256:03582715960064c49284d729659b362721b756b436babfae39b063a56f97274a",
   "entry": {
     "kind": "agent",
     "ref": "acme/contract-assistant",
@@ -105,7 +105,7 @@
   "members": [
     {
       "name": "main",
-      "role": "leader",
+      "role": "agent",
       "description": "Single agent.",
       "agent_entry": 0,
       "effective_permissions": {

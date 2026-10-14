@@ -248,7 +248,7 @@
         "caller",
         "task_id",
         "verdict",
-        "reason",
+        "comment",
         "request_id"
       ],
       "properties": {
@@ -264,7 +264,7 @@
         "verdict": {
           "$ref": "#/$defs/Verdict"
         },
-        "reason": {
+        "comment": {
           "type": "string",
           "description": "Why; shown to the assignee when the verdict is reject."
         },

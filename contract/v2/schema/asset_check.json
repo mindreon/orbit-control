@@ -46,13 +46,7 @@
           "format": "uuid"
         },
         "kind": {
-          "enum": [
-            "agent",
-            "skill",
-            "mcp",
-            "team"
-          ],
-          "description": "Asset kind."
+          "$ref": "lock.json#/$defs/AssetKind"
         },
         "content_digest": {
           "type": "string",

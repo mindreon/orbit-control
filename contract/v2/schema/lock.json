@@ -53,7 +53,7 @@
         },
         "members": {
           "type": "array",
-          "description": "Resolved roster; a single-agent run has exactly one member named main.",
+          "description": "Resolved roster; a single-agent run has exactly one member named main with role agent.",
           "items": {
             "$ref": "#/$defs/LockMember"
           },
@@ -87,6 +87,41 @@
                   "properties": {
                     "name": {
                       "const": "main"
+                    },
+                    "role": {
+                      "const": "agent"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "entry": {
+                "properties": {
+                  "kind": {
+                    "const": "team"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              }
+            },
+            "required": [
+              "entry"
+            ]
+          },
+          "then": {
+            "properties": {
+              "members": {
+                "items": {
+                  "properties": {
+                    "role": {
+                      "$ref": "team_updates.json#/$defs/TeamRole"
                     }
                   }
                 }
@@ -301,7 +336,7 @@
           "$ref": "team_updates.json#/$defs/MemberName"
         },
         "role": {
-          "$ref": "team_updates.json#/$defs/TeamRole"
+          "$ref": "#/$defs/MemberRole"
         },
         "description": {
           "type": "string",
@@ -344,6 +379,15 @@
         "effective_permissions"
       ],
       "x-extra": "ignore"
+    },
+    "MemberRole": {
+      "description": "Resolved run member role: agent for the single-agent main member; leader, teammate or reviewer for team members. Team privileges remain defined by TeamRole.",
+      "enum": [
+        "agent",
+        "leader",
+        "teammate",
+        "reviewer"
+      ]
     }
   }
 }

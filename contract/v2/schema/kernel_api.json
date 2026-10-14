@@ -124,7 +124,6 @@
         "model",
         "api_key",
         "expires_at",
-        "params",
         "pricing"
       ],
       "properties": {
@@ -305,7 +304,7 @@
     },
     "TokenRequest": {
       "type": "object",
-      "description": "POST /internal/v1/tokens authenticated by Authorization: Bearer <ORBIT_WORKER_SERVICE_TOKEN>. Internal listener only, no edge route. Production uses internal listener + mTLS (R1 service credentials, R2 mTLS). Control checks active running run and current uncommitted seq; after segment commit old seq is rejected by run state, without a revocation list. Worker may renew within a segment. Sandbox purpose additionally binds lease_id.",
+      "description": "POST /internal/v1/tokens authenticated by Authorization: Bearer <ORBIT_WORKER_SERVICE_TOKEN>. Internal listener only, no edge route. Production uses internal listener + mTLS (R1 service credentials, R2 mTLS). For purpose=segment, member/seq/attempt are required and control checks the active run and current uncommitted segment; committed segments are rejected without a revocation list. Worker may renew within a segment. For purpose=sandbox, lease_id is required and binds the isolation key; control checks the active lease and run/session ownership, without requiring member/seq/attempt.",
       "additionalProperties": false,
       "properties": {
         "tenant_id": {
@@ -336,19 +335,35 @@
         },
         "lease_id": {
           "type": "string",
-          "description": "Lease bound to sandbox capability.",
+          "description": "Sandbox isolation key bound to the capability.",
           "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$"
         }
       },
       "required": [
         "tenant_id",
         "run_id",
-        "member",
-        "seq",
-        "attempt",
         "purpose"
       ],
       "allOf": [
+        {
+          "if": {
+            "properties": {
+              "purpose": {
+                "const": "segment"
+              }
+            },
+            "required": [
+              "purpose"
+            ]
+          },
+          "then": {
+            "required": [
+              "member",
+              "seq",
+              "attempt"
+            ]
+          }
+        },
         {
           "if": {
             "properties": {
@@ -371,7 +386,7 @@
     },
     "TokenResponse": {
       "type": "object",
-      "description": "Five-minute capability binding tenant/run/member/seq/purpose and optional lease; never record in Temporal history.",
+      "description": "Five-minute capability binding tenant/run/purpose plus member/seq/attempt for segments or lease_id for sandboxes; never record in Temporal history.",
       "additionalProperties": false,
       "properties": {
         "token": {

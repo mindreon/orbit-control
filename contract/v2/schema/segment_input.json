@@ -7,7 +7,7 @@
   ],
   "$defs": {
     "SegmentInput": {
-      "description": "Input of the RunAgentSegment activity: one bounded slice of an agent run, which the worker executes as a single DeepAgent invocation. Kept small (under 8 KiB); anything large is passed by reference.",
+      "description": "Input of the RunAgentSegment activity: one bounded slice of an agent run, which the worker executes as a single DeepAgent invocation. Kept small (under 8 KiB); anything large is passed by reference. capability_token is explicitly forbidden: workers fetch it out of band so secrets never enter Temporal history.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -123,7 +123,12 @@
           "format": "uuid"
         }
       },
-      "x-extra": "ignore"
+      "x-extra": "ignore",
+      "not": {
+        "required": [
+          "capability_token"
+        ]
+      }
     },
     "SegmentLockRef": {
       "description": "The run lock the segment executes: the exact resolved versions of the agent, its skills and MCP servers.",
@@ -149,7 +154,7 @@
       "x-extra": "ignore"
     },
     "SegmentTurnKind": {
-      "description": "What starts the segment: a new user message, the answer to an interaction that parked the run, a follow-up (steer or mailbox delivery), or a plain continuation after a yield.",
+      "description": "What starts the segment: a new user message, the answer to an interaction that parked the run, a follow-up (steer or mailbox delivery), or a plain continuation after a yield. compact: compact the context and commit a new checkpoint.",
       "enum": [
         "user_message",
         "interactive_input",
@@ -400,9 +405,7 @@
           "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$"
         },
         "isolation_key": {
-          "type": "string",
-          "description": "Sandbox isolation key derived from tenant and session.",
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$"
+          "$ref": "common.json#/$defs/IsolationKey"
         }
       },
       "x-extra": "ignore"

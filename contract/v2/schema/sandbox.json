@@ -6,11 +6,11 @@
     "SandboxAcquireInput",
     "SandboxLease",
     "SandboxOpInput",
+    "SandboxRenewInput",
     "SandboxSnapshotResult",
     "SandboxConfigureInput",
     "SandboxSnapshotDeleteInput",
-    "SandboxInspectResult",
-    "SandboxEmptyResult"
+    "SandboxInspectResult"
   ],
   "$defs": {
     "SandboxProvider": {
@@ -76,9 +76,7 @@
           "description": "Tenant that owns the sandbox."
         },
         "isolation_key": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Key that scopes sandbox reuse, normally derived from tenant and session."
+          "$ref": "common.json#/$defs/IsolationKey"
         },
         "profile": {
           "type": "string",
@@ -161,7 +159,7 @@
       "x-extra": "ignore"
     },
     "SandboxOpInput": {
-      "description": "Input of the lifecycle operations that address an existing sandbox: renew, pause, resume, snapshot, destroy and snapshot delete.",
+      "description": "Input of existing-sandbox operations: inspect, pause, resume, snapshot and destroy. Renewal and snapshot deletion use separate inputs.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -186,14 +184,7 @@
           "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$"
         },
         "isolation_key": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Isolation key the sandbox was acquired with."
-        },
-        "ttl_seconds": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "Renewal duration in seconds; required by SandboxRenew."
+          "$ref": "common.json#/$defs/IsolationKey"
         }
       },
       "x-extra": "ignore"
@@ -221,6 +212,7 @@
       "additionalProperties": false,
       "required": [
         "tenant_id",
+        "run_id",
         "isolation_key",
         "lease"
       ],
@@ -231,9 +223,7 @@
           "description": "Tenant that owns the sandbox."
         },
         "isolation_key": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Isolation key the sandbox was acquired with."
+          "$ref": "common.json#/$defs/IsolationKey"
         },
         "lease": {
           "$ref": "#/$defs/SandboxLease"
@@ -253,6 +243,11 @@
           },
           "description": "Read-only asset mounts; replaces the current mounts.",
           "default": []
+        },
+        "run_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Run whose lock is fetched with a purpose=sandbox capability to configure mounts."
         }
       },
       "x-extra": "ignore"
@@ -310,9 +305,7 @@
           "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$"
         },
         "isolation_key": {
-          "type": "string",
-          "description": "Isolation key of the snapshot.",
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$"
+          "$ref": "common.json#/$defs/IsolationKey"
         }
       },
       "required": [
@@ -354,12 +347,41 @@
       ],
       "x-extra": "ignore"
     },
-    "SandboxEmptyResult": {
+    "SandboxRenewInput": {
+      "description": "Renew an existing sandbox lease for the required positive ttl_seconds.",
       "type": "object",
-      "description": "Successful operation with no returned data.",
       "additionalProperties": false,
-      "properties": {},
-      "required": [],
+      "required": [
+        "tenant_id",
+        "provider",
+        "sandbox_id",
+        "isolation_key",
+        "ttl_seconds"
+      ],
+      "properties": {
+        "tenant_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Tenant that owns the sandbox."
+        },
+        "provider": {
+          "$ref": "#/$defs/SandboxProvider"
+        },
+        "sandbox_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Provider identifier of the sandbox.",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$"
+        },
+        "isolation_key": {
+          "$ref": "common.json#/$defs/IsolationKey"
+        },
+        "ttl_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Renewal duration in seconds."
+        }
+      },
       "x-extra": "ignore"
     }
   }

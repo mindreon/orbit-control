@@ -556,7 +556,7 @@
       ]
     },
     "RunState": {
-      "description": "Lifecycle state of a run. queued: accepted, waiting for its turn. running: a segment executes. waiting_input: parked on ask_user. waiting_approval: parked on a tool approval or an uncertain effect. The rest are terminal: succeeded, failed, cancelled, budget_exhausted, timed_out.",
+      "description": "Lifecycle state of a run. queued: accepted, waiting for its turn. running: a segment executes. waiting_input: parked on ask_user. waiting_approval: parked on a tool approval or an uncertain effect. paused: suspended until explicitly resumed. The rest are terminal: succeeded, failed, cancelled, budget_exhausted, timed_out.",
       "enum": [
         "queued",
         "running",

@@ -155,7 +155,7 @@ func TestCapabilityPurposeAndAttempt(t *testing.T) {
 		t.Fatal("lost sandbox binding", err)
 	}
 	for _, change := range []func(*CapabilityClaims){
-		func(c *CapabilityClaims) { c.Attempt = 0 },
+		func(c *CapabilityClaims) { c.Purpose = "segment"; c.Attempt = 0 },
 		func(c *CapabilityClaims) { c.Purpose = "worker" },
 		func(c *CapabilityClaims) { c.LeaseID = "" },
 	} {
@@ -163,6 +163,32 @@ func TestCapabilityPurposeAndAttempt(t *testing.T) {
 		change(&bad)
 		if _, err := signer.IssueCapability(bad); err == nil {
 			t.Fatal("accepted invalid capability")
+		}
+	}
+}
+
+func TestSandboxCapabilityNeedsOnlyLeaseIdentity(t *testing.T) {
+	signer, err := NewCapabilitySigner(testSigner(t).key, "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims := CapabilityClaims{Tenant: ids.New(), Run: ids.New(), Purpose: "sandbox", LeaseID: "lease-1"}
+	token, err := signer.IssueCapability(claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := signer.VerifyCapability(token)
+	if err != nil || got.Tenant != claims.Tenant || got.Run != claims.Run || got.LeaseID != claims.LeaseID || got.Member != "" || got.Seq != 0 || got.Attempt != 0 {
+		t.Fatalf("sandbox binding: %v", err)
+	}
+	for _, change := range []func(*CapabilityClaims){
+		func(c *CapabilityClaims) { c.Purpose = "segment" },
+		func(c *CapabilityClaims) { c.LeaseID = "" },
+	} {
+		invalid := claims
+		change(&invalid)
+		if _, err := signer.IssueCapability(invalid); err == nil {
+			t.Fatal("accepted invalid identity")
 		}
 	}
 }

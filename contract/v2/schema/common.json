@@ -4,7 +4,8 @@
   "description": "Types shared by several contract files: the side-effect classes, token usage and artifact descriptors.",
   "x-exports": [
     "Usage",
-    "Artifact"
+    "Artifact",
+    "EmptyResult"
   ],
   "$defs": {
     "EffectClass": {
@@ -103,6 +104,19 @@
         }
       },
       "x-extra": "ignore"
+    },
+    "EmptyResult": {
+      "type": "object",
+      "description": "Successful Activity or Update with no returned data. Encodes as {} even at its zero value.",
+      "additionalProperties": false,
+      "properties": {},
+      "required": [],
+      "x-extra": "ignore"
+    },
+    "IsolationKey": {
+      "type": "string",
+      "description": "Isolation key shared by a sandbox lease, its snapshots and segment connections.",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$"
     }
   }
 }

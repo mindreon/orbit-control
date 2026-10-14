@@ -252,6 +252,12 @@
     }
   },
   {
+    "kind": "EmptyResult",
+    "case": "example:EmptyResult.empty",
+    "valid": true,
+    "payload": {}
+  },
+  {
     "kind": "FinishTeamInput",
     "case": "example:FinishTeamInput.summary",
     "valid": true,
@@ -285,7 +291,7 @@
         }
       ],
       "lock": {
-        "digest": "sha256:0f1fd61e653bfe1ec62c63e0ed9a9b8771e72b2a57895ab20f3d8822a207491d",
+        "digest": "sha256:c088f8f0dc91d2a80e85c196be4c070157af1a817301e19ef029f360ceae51ff",
         "effective_permissions": {
           "data_scopes": [
             "session_files",
@@ -421,7 +427,7 @@
               ]
             },
             "name": "main",
-            "role": "leader"
+            "role": "agent"
           }
         ],
         "v": 1
@@ -1223,7 +1229,7 @@
     "case": "example:RunLock.agent",
     "valid": true,
     "payload": {
-      "digest": "sha256:aacdec685a9258d5de02a932e06858184e50a8fd0034fb05849bc15207f0f63f",
+      "digest": "sha256:03582715960064c49284d729659b362721b756b436babfae39b063a56f97274a",
       "effective_permissions": {
         "data_scopes": [
           "session_files",
@@ -1362,7 +1368,7 @@
             2
           ],
           "name": "main",
-          "role": "leader",
+          "role": "agent",
           "skills": [
             1
           ]
@@ -1722,14 +1728,9 @@
           "member": "main"
         }
       ],
+      "run_id": "01900000-0000-7000-8000-000000000001",
       "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f"
     }
-  },
-  {
-    "kind": "SandboxEmptyResult",
-    "case": "example:SandboxEmptyResult.minimal",
-    "valid": true,
-    "payload": {}
   },
   {
     "kind": "SandboxInspectResult",
@@ -1769,6 +1770,18 @@
       "provider": "opensandbox",
       "sandbox_id": "sbx-8841",
       "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f"
+    }
+  },
+  {
+    "kind": "SandboxRenewInput",
+    "case": "example:SandboxRenewInput.renew",
+    "valid": true,
+    "payload": {
+      "isolation_key": "t-3f2a8c1e-s-7c9e6679",
+      "provider": "opensandbox",
+      "sandbox_id": "sbx-8841",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "ttl_seconds": 600
     }
   },
   {
@@ -2289,7 +2302,7 @@
     "valid": true,
     "payload": {
       "caller": "reviewer",
-      "reason": "Q3 is missing.",
+      "comment": "Q3 is missing.",
       "request_id": "effect-1",
       "task_id": "task-1",
       "verdict": "reject"
@@ -2412,12 +2425,9 @@
     "case": "example:TokenRequest.sandbox",
     "valid": true,
     "payload": {
-      "attempt": 1,
       "lease_id": "lease-1",
-      "member": "example",
       "purpose": "sandbox",
       "run_id": "01900000-0000-7000-8000-000000000001",
-      "seq": 1,
       "tenant_id": "01900000-0000-7000-8000-000000000001"
     }
   },
@@ -2700,6 +2710,18 @@
     }
   },
   {
+    "kind": "EmptyResult",
+    "case": "zero",
+    "valid": true,
+    "payload": {}
+  },
+  {
+    "kind": "EmptyResult",
+    "case": "minimal",
+    "valid": true,
+    "payload": {}
+  },
+  {
     "kind": "FinishTeamInput",
     "case": "zero",
     "valid": false,
@@ -2748,7 +2770,7 @@
     "valid": true,
     "payload": {
       "lock": {
-        "digest": "sha256:0f1fd61e653bfe1ec62c63e0ed9a9b8771e72b2a57895ab20f3d8822a207491d",
+        "digest": "sha256:c088f8f0dc91d2a80e85c196be4c070157af1a817301e19ef029f360ceae51ff",
         "effective_permissions": {
           "network": {},
           "sandbox_profile": "office-standard"
@@ -2776,7 +2798,7 @@
               "sandbox_profile": "office-standard"
             },
             "name": "main",
-            "role": "leader"
+            "role": "agent"
           }
         ],
         "v": 1
@@ -2829,7 +2851,6 @@
       "base_url": "",
       "expires_at": "0001-01-01T00:00:00Z",
       "model": "",
-      "params": null,
       "pricing": {
         "cache_read_per_mtok_millicredits": 0,
         "cache_write_per_mtok_millicredits": 0,
@@ -2847,7 +2868,6 @@
       "base_url": "http://mockllm:8000",
       "expires_at": "2026-10-14T08:36:03Z",
       "model": "reasoning-default",
-      "params": {},
       "pricing": {
         "cache_read_per_mtok_millicredits": 1000,
         "cache_write_per_mtok_millicredits": 1000,
@@ -2938,7 +2958,7 @@
     "case": "minimal",
     "valid": true,
     "payload": {
-      "digest": "sha256:aacdec685a9258d5de02a932e06858184e50a8fd0034fb05849bc15207f0f63f",
+      "digest": "sha256:03582715960064c49284d729659b362721b756b436babfae39b063a56f97274a",
       "effective_permissions": {
         "network": {},
         "sandbox_profile": "office-standard"
@@ -2966,7 +2986,7 @@
             "sandbox_profile": "office-standard"
           },
           "name": "main",
-          "role": "leader"
+          "role": "agent"
         }
       ],
       "v": 1
@@ -3017,6 +3037,7 @@
         "provider": "",
         "sandbox_id": ""
       },
+      "run_id": "",
       "tenant_id": ""
     }
   },
@@ -3031,20 +3052,9 @@
         "provider": "opensandbox",
         "sandbox_id": "sbx-8841"
       },
+      "run_id": "01900000-0000-7000-8000-000000000001",
       "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f"
     }
-  },
-  {
-    "kind": "SandboxEmptyResult",
-    "case": "zero",
-    "valid": false,
-    "payload": null
-  },
-  {
-    "kind": "SandboxEmptyResult",
-    "case": "minimal",
-    "valid": true,
-    "payload": {}
   },
   {
     "kind": "SandboxInspectResult",
@@ -3102,6 +3112,30 @@
       "provider": "opensandbox",
       "sandbox_id": "sbx-8841",
       "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f"
+    }
+  },
+  {
+    "kind": "SandboxRenewInput",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "isolation_key": "",
+      "provider": "",
+      "sandbox_id": "",
+      "tenant_id": "",
+      "ttl_seconds": 0
+    }
+  },
+  {
+    "kind": "SandboxRenewInput",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "isolation_key": "t-3f2a8c1e-s-7c9e6679",
+      "provider": "opensandbox",
+      "sandbox_id": "sbx-8841",
+      "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "ttl_seconds": 600
     }
   },
   {
@@ -3334,7 +3368,7 @@
     "valid": false,
     "payload": {
       "caller": "",
-      "reason": "",
+      "comment": "",
       "request_id": "",
       "task_id": "",
       "verdict": ""
@@ -3346,7 +3380,7 @@
     "valid": true,
     "payload": {
       "caller": "reviewer",
-      "reason": "Q3 is missing.",
+      "comment": "Q3 is missing.",
       "request_id": "effect-1",
       "task_id": "task-1",
       "verdict": "reject"
@@ -3397,11 +3431,8 @@
     "case": "zero",
     "valid": false,
     "payload": {
-      "attempt": 0,
-      "member": "",
       "purpose": "",
       "run_id": "",
-      "seq": 0,
       "tenant_id": ""
     }
   },

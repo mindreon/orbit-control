@@ -420,8 +420,8 @@ type AssetCheckInput struct {
 	// components.
 	ContentDigest string `json:"content_digest" yaml:"content_digest" mapstructure:"content_digest"`
 
-	// Asset kind.
-	Kind AssetCheckInputKind `json:"kind" yaml:"kind" mapstructure:"kind"`
+	// Kind corresponds to the JSON schema field "kind".
+	Kind AssetKind `json:"kind" yaml:"kind" mapstructure:"kind"`
 
 	// Prior version for permission diff.
 	PreviousVersionId *string `json:"previous_version_id,omitempty,omitzero" yaml:"previous_version_id,omitempty" mapstructure:"previous_version_id,omitempty"`
@@ -431,40 +431,6 @@ type AssetCheckInput struct {
 
 	// Wire protocol version; currently 1.
 	V int `json:"v" yaml:"v" mapstructure:"v"`
-}
-
-type AssetCheckInputKind string
-
-const AssetCheckInputKindAgent AssetCheckInputKind = "agent"
-const AssetCheckInputKindMcp AssetCheckInputKind = "mcp"
-const AssetCheckInputKindSkill AssetCheckInputKind = "skill"
-const AssetCheckInputKindTeam AssetCheckInputKind = "team"
-
-var enumValues_AssetCheckInputKind = []interface{}{
-	"agent",
-	"skill",
-	"mcp",
-	"team",
-}
-
-// UnmarshalJSON implements json.Unmarshaler.
-func (j *AssetCheckInputKind) UnmarshalJSON(value []byte) error {
-	var v string
-	if err := json.Unmarshal(value, &v); err != nil {
-		return err
-	}
-	var ok bool
-	for _, expected := range enumValues_AssetCheckInputKind {
-		if reflect.DeepEqual(v, expected) {
-			ok = true
-			break
-		}
-	}
-	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AssetCheckInputKind, v)
-	}
-	*j = AssetCheckInputKind(v)
-	return nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -1158,6 +1124,10 @@ func (j *EffectivePermissions) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// Successful Activity or Update with no returned data. Encodes as {} even at its
+// zero value.
+type EmptyResult struct{}
+
 type EntryKind string
 
 const EntryKindAgent EntryKind = "agent"
@@ -1638,6 +1608,23 @@ func (j *InteractionResolved) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// Isolation key shared by a sandbox lease, its snapshots and segment connections.
+type IsolationKey string
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *IsolationKey) UnmarshalJSON(value []byte) error {
+	type Plain IsolationKey
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
+	}
+	*j = IsolationKey(plain)
+	return nil
+}
+
 // One resolved asset version.
 type LockEntry struct {
 	// Bundle digest = "sha256:" + lowercase hex(SHA-256(concatenation of
@@ -1880,7 +1867,7 @@ type LockMember struct {
 	Name MemberName `json:"name" yaml:"name" mapstructure:"name"`
 
 	// Role corresponds to the JSON schema field "role".
-	Role TeamRole `json:"role" yaml:"role" mapstructure:"role"`
+	Role MemberRole `json:"role" yaml:"role" mapstructure:"role"`
 
 	// Skill entry indexes.
 	Skills []int `json:"skills,omitempty,omitzero" yaml:"skills,omitempty" mapstructure:"skills,omitempty"`
@@ -2149,6 +2136,40 @@ func (j *MemberName) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+type MemberRole string
+
+const MemberRoleAgent MemberRole = "agent"
+const MemberRoleLeader MemberRole = "leader"
+const MemberRoleReviewer MemberRole = "reviewer"
+const MemberRoleTeammate MemberRole = "teammate"
+
+var enumValues_MemberRole = []interface{}{
+	"agent",
+	"leader",
+	"teammate",
+	"reviewer",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *MemberRole) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_MemberRole {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_MemberRole, v)
+	}
+	*j = MemberRole(v)
+	return nil
+}
+
 type MemberStatus string
 
 const MemberStatusFinished MemberStatus = "finished"
@@ -2331,7 +2352,7 @@ type ModelCredentials struct {
 	Model string `json:"model" yaml:"model" mapstructure:"model"`
 
 	// Default request parameters of the profile, such as temperature or max_tokens.
-	Params ModelCredentialsParams `json:"params" yaml:"params" mapstructure:"params"`
+	Params ModelCredentialsParams `json:"params,omitempty,omitzero" yaml:"params,omitempty" mapstructure:"params,omitempty"`
 
 	// Pricing corresponds to the JSON schema field "pricing".
 	Pricing ModelPricing `json:"pricing" yaml:"pricing" mapstructure:"pricing"`
@@ -2357,9 +2378,6 @@ func (j *ModelCredentials) UnmarshalJSON(value []byte) error {
 	}
 	if _, ok := raw["model"]; raw != nil && !ok {
 		return fmt.Errorf("field model in ModelCredentials: required")
-	}
-	if _, ok := raw["params"]; raw != nil && !ok {
-		return fmt.Errorf("field params in ModelCredentials: required")
 	}
 	if _, ok := raw["pricing"]; raw != nil && !ok {
 		return fmt.Errorf("field pricing in ModelCredentials: required")
@@ -3180,7 +3198,8 @@ type RunLock struct {
 	// Identifier of the lock.
 	LockId string `json:"lock_id" yaml:"lock_id" mapstructure:"lock_id"`
 
-	// Resolved roster; a single-agent run has exactly one member named main.
+	// Resolved roster; a single-agent run has exactly one member named main with role
+	// agent.
 	Members []LockMember `json:"members" yaml:"members" mapstructure:"members"`
 
 	// Wire protocol version; currently 1.
@@ -3358,8 +3377,8 @@ type SandboxAcquireInput struct {
 	// Allowed outbound domain patterns; everything else is denied.
 	Egress []string `json:"egress,omitempty,omitzero" yaml:"egress,omitempty" mapstructure:"egress,omitempty"`
 
-	// Key that scopes sandbox reuse, normally derived from tenant and session.
-	IsolationKey string `json:"isolation_key" yaml:"isolation_key" mapstructure:"isolation_key"`
+	// IsolationKey corresponds to the JSON schema field "isolation_key".
+	IsolationKey IsolationKey `json:"isolation_key" yaml:"isolation_key" mapstructure:"isolation_key"`
 
 	// Team member that needs an isolated session inside the shared sandbox.
 	Member *string `json:"member,omitempty,omitzero" yaml:"member,omitempty" mapstructure:"member,omitempty"`
@@ -3415,9 +3434,6 @@ func (j *SandboxAcquireInput) UnmarshalJSON(value []byte) error {
 	if v, ok := raw["egress"]; !ok || v == nil {
 		plain.Egress = []string{}
 	}
-	if utf8.RuneCountInString(string(plain.IsolationKey)) < 1 {
-		return fmt.Errorf("field %s length: must be >= %d", "isolation_key", 1)
-	}
 	if plain.Member != nil && utf8.RuneCountInString(string(*plain.Member)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "member", 1)
 	}
@@ -3450,14 +3466,18 @@ type SandboxConfigureInput struct {
 	// Allowed outbound domain patterns; replaces the current rules.
 	Egress []string `json:"egress,omitempty,omitzero" yaml:"egress,omitempty" mapstructure:"egress,omitempty"`
 
-	// Isolation key the sandbox was acquired with.
-	IsolationKey string `json:"isolation_key" yaml:"isolation_key" mapstructure:"isolation_key"`
+	// IsolationKey corresponds to the JSON schema field "isolation_key".
+	IsolationKey IsolationKey `json:"isolation_key" yaml:"isolation_key" mapstructure:"isolation_key"`
 
 	// Lease corresponds to the JSON schema field "lease".
 	Lease SandboxLease `json:"lease" yaml:"lease" mapstructure:"lease"`
 
 	// Read-only asset mounts; replaces the current mounts.
 	Mounts []SandboxMount `json:"mounts,omitempty,omitzero" yaml:"mounts,omitempty" mapstructure:"mounts,omitempty"`
+
+	// Run whose lock is fetched with a purpose=sandbox capability to configure
+	// mounts.
+	RunId string `json:"run_id" yaml:"run_id" mapstructure:"run_id"`
 
 	// Tenant that owns the sandbox.
 	TenantId string `json:"tenant_id" yaml:"tenant_id" mapstructure:"tenant_id"`
@@ -3475,6 +3495,9 @@ func (j *SandboxConfigureInput) UnmarshalJSON(value []byte) error {
 	if _, ok := raw["lease"]; raw != nil && !ok {
 		return fmt.Errorf("field lease in SandboxConfigureInput: required")
 	}
+	if _, ok := raw["run_id"]; raw != nil && !ok {
+		return fmt.Errorf("field run_id in SandboxConfigureInput: required")
+	}
 	if _, ok := raw["tenant_id"]; raw != nil && !ok {
 		return fmt.Errorf("field tenant_id in SandboxConfigureInput: required")
 	}
@@ -3485,9 +3508,6 @@ func (j *SandboxConfigureInput) UnmarshalJSON(value []byte) error {
 	}
 	if v, ok := raw["egress"]; !ok || v == nil {
 		plain.Egress = []string{}
-	}
-	if utf8.RuneCountInString(string(plain.IsolationKey)) < 1 {
-		return fmt.Errorf("field %s length: must be >= %d", "isolation_key", 1)
 	}
 	if v, ok := raw["mounts"]; !ok || v == nil {
 		plain.Mounts = []SandboxMount{}
@@ -3515,9 +3535,6 @@ func (j *SandboxDeclaration) UnmarshalJSON(value []byte) error {
 	*j = SandboxDeclaration(plain)
 	return nil
 }
-
-// Successful operation with no returned data.
-type SandboxEmptyResult map[string]interface{}
 
 // Inspection result. Missing sandboxes have exists=false.
 type SandboxInspectResult struct {
@@ -3736,11 +3753,11 @@ func (j *SandboxMount) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// Input of the lifecycle operations that address an existing sandbox: renew,
-// pause, resume, snapshot, destroy and snapshot delete.
+// Input of existing-sandbox operations: inspect, pause, resume, snapshot and
+// destroy. Renewal and snapshot deletion use separate inputs.
 type SandboxOpInput struct {
-	// Isolation key the sandbox was acquired with.
-	IsolationKey string `json:"isolation_key" yaml:"isolation_key" mapstructure:"isolation_key"`
+	// IsolationKey corresponds to the JSON schema field "isolation_key".
+	IsolationKey IsolationKey `json:"isolation_key" yaml:"isolation_key" mapstructure:"isolation_key"`
 
 	// Provider corresponds to the JSON schema field "provider".
 	Provider SandboxProvider `json:"provider" yaml:"provider" mapstructure:"provider"`
@@ -3750,9 +3767,6 @@ type SandboxOpInput struct {
 
 	// Tenant that owns the sandbox.
 	TenantId string `json:"tenant_id" yaml:"tenant_id" mapstructure:"tenant_id"`
-
-	// Renewal duration in seconds; required by SandboxRenew.
-	TtlSeconds *int `json:"ttl_seconds,omitempty,omitzero" yaml:"ttl_seconds,omitempty" mapstructure:"ttl_seconds,omitempty"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -3778,17 +3792,11 @@ func (j *SandboxOpInput) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
-	if utf8.RuneCountInString(string(plain.IsolationKey)) < 1 {
-		return fmt.Errorf("field %s length: must be >= %d", "isolation_key", 1)
-	}
 	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.SandboxId)); !matched {
 		return fmt.Errorf("field %s pattern match: must match %s", "SandboxId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
 	}
 	if utf8.RuneCountInString(string(plain.SandboxId)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "sandbox_id", 1)
-	}
-	if plain.TtlSeconds != nil && 1 > *plain.TtlSeconds {
-		return fmt.Errorf("field %s: must be >= %v", "ttl_seconds", 1)
 	}
 	*j = SandboxOpInput(plain)
 	return nil
@@ -3896,6 +3904,63 @@ func (j *SandboxProvider) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// Renew an existing sandbox lease for the required positive ttl_seconds.
+type SandboxRenewInput struct {
+	// IsolationKey corresponds to the JSON schema field "isolation_key".
+	IsolationKey IsolationKey `json:"isolation_key" yaml:"isolation_key" mapstructure:"isolation_key"`
+
+	// Provider corresponds to the JSON schema field "provider".
+	Provider SandboxProvider `json:"provider" yaml:"provider" mapstructure:"provider"`
+
+	// Provider identifier of the sandbox.
+	SandboxId string `json:"sandbox_id" yaml:"sandbox_id" mapstructure:"sandbox_id"`
+
+	// Tenant that owns the sandbox.
+	TenantId string `json:"tenant_id" yaml:"tenant_id" mapstructure:"tenant_id"`
+
+	// Renewal duration in seconds.
+	TtlSeconds int `json:"ttl_seconds" yaml:"ttl_seconds" mapstructure:"ttl_seconds"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *SandboxRenewInput) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["isolation_key"]; raw != nil && !ok {
+		return fmt.Errorf("field isolation_key in SandboxRenewInput: required")
+	}
+	if _, ok := raw["provider"]; raw != nil && !ok {
+		return fmt.Errorf("field provider in SandboxRenewInput: required")
+	}
+	if _, ok := raw["sandbox_id"]; raw != nil && !ok {
+		return fmt.Errorf("field sandbox_id in SandboxRenewInput: required")
+	}
+	if _, ok := raw["tenant_id"]; raw != nil && !ok {
+		return fmt.Errorf("field tenant_id in SandboxRenewInput: required")
+	}
+	if _, ok := raw["ttl_seconds"]; raw != nil && !ok {
+		return fmt.Errorf("field ttl_seconds in SandboxRenewInput: required")
+	}
+	type Plain SandboxRenewInput
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.SandboxId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "SandboxId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
+	}
+	if utf8.RuneCountInString(string(plain.SandboxId)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "sandbox_id", 1)
+	}
+	if 1 > plain.TtlSeconds {
+		return fmt.Errorf("field %s: must be >= %v", "ttl_seconds", 1)
+	}
+	*j = SandboxRenewInput(plain)
+	return nil
+}
+
 // Sandbox restoration event.
 type SandboxRestored struct {
 	// Whether restoration used a snapshot.
@@ -3922,8 +3987,8 @@ func (j *SandboxRestored) UnmarshalJSON(value []byte) error {
 
 // Delete a snapshot independently of sandbox lifetime.
 type SandboxSnapshotDeleteInput struct {
-	// Isolation key of the snapshot.
-	IsolationKey string `json:"isolation_key" yaml:"isolation_key" mapstructure:"isolation_key"`
+	// IsolationKey corresponds to the JSON schema field "isolation_key".
+	IsolationKey IsolationKey `json:"isolation_key" yaml:"isolation_key" mapstructure:"isolation_key"`
 
 	// Provider corresponds to the JSON schema field "provider".
 	Provider SandboxProvider `json:"provider" yaml:"provider" mapstructure:"provider"`
@@ -3957,9 +4022,6 @@ func (j *SandboxSnapshotDeleteInput) UnmarshalJSON(value []byte) error {
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
-	}
-	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.IsolationKey)); !matched {
-		return fmt.Errorf("field %s pattern match: must match %s", "IsolationKey", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
 	}
 	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.SnapshotId)); !matched {
 		return fmt.Errorf("field %s pattern match: must match %s", "SnapshotId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
@@ -4292,7 +4354,8 @@ func (j *SegmentError) UnmarshalJSON(value []byte) error {
 
 // Input of the RunAgentSegment activity: one bounded slice of an agent run, which
 // the worker executes as a single DeepAgent invocation. Kept small (under 8 KiB);
-// anything large is passed by reference.
+// anything large is passed by reference. capability_token is explicitly forbidden:
+// workers fetch it out of band so secrets never enter Temporal history.
 type SegmentInput struct {
 	// Key of the agent conversation state (checkpoint) this segment continues; one
 	// per (run, member) or per session.
@@ -4699,8 +4762,8 @@ type SegmentSandbox struct {
 	// Isolated session inside a shared sandbox, used for team members.
 	IsolatedSessionId *string `json:"isolated_session_id,omitempty,omitzero" yaml:"isolated_session_id,omitempty" mapstructure:"isolated_session_id,omitempty"`
 
-	// Sandbox isolation key derived from tenant and session.
-	IsolationKey string `json:"isolation_key" yaml:"isolation_key" mapstructure:"isolation_key"`
+	// IsolationKey corresponds to the JSON schema field "isolation_key".
+	IsolationKey IsolationKey `json:"isolation_key" yaml:"isolation_key" mapstructure:"isolation_key"`
 
 	// Provider corresponds to the JSON schema field "provider".
 	Provider SandboxProvider `json:"provider" yaml:"provider" mapstructure:"provider"`
@@ -4736,9 +4799,6 @@ func (j *SegmentSandbox) UnmarshalJSON(value []byte) error {
 	}
 	if plain.IsolatedSessionId != nil && utf8.RuneCountInString(string(*plain.IsolatedSessionId)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "isolated_session_id", 1)
-	}
-	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.IsolationKey)); !matched {
-		return fmt.Errorf("field %s pattern match: must match %s", "IsolationKey", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
 	}
 	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.SandboxId)); !matched {
 		return fmt.Errorf("field %s pattern match: must match %s", "SandboxId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
@@ -5220,7 +5280,7 @@ type SubmitVerdictInput struct {
 	Caller MemberName `json:"caller" yaml:"caller" mapstructure:"caller"`
 
 	// Why; shown to the assignee when the verdict is reject.
-	Reason string `json:"reason" yaml:"reason" mapstructure:"reason"`
+	Comment string `json:"comment" yaml:"comment" mapstructure:"comment"`
 
 	// Effect key; Temporal Update ID MUST equal request_id for retries to
 	// deduplicate.
@@ -5242,8 +5302,8 @@ func (j *SubmitVerdictInput) UnmarshalJSON(value []byte) error {
 	if _, ok := raw["caller"]; raw != nil && !ok {
 		return fmt.Errorf("field caller in SubmitVerdictInput: required")
 	}
-	if _, ok := raw["reason"]; raw != nil && !ok {
-		return fmt.Errorf("field reason in SubmitVerdictInput: required")
+	if _, ok := raw["comment"]; raw != nil && !ok {
+		return fmt.Errorf("field comment in SubmitVerdictInput: required")
 	}
 	if _, ok := raw["request_id"]; raw != nil && !ok {
 		return fmt.Errorf("field request_id in SubmitVerdictInput: required")
@@ -5894,19 +5954,21 @@ func (j *TokenPurpose) UnmarshalJSON(value []byte) error {
 
 // POST /internal/v1/tokens authenticated by Authorization: Bearer
 // <ORBIT_WORKER_SERVICE_TOKEN>. Internal listener only, no edge route. Production
-// uses internal listener + mTLS (R1 service credentials, R2 mTLS). Control checks
-// active running run and current uncommitted seq; after segment commit old seq is
-// rejected by run state, without a revocation list. Worker may renew within a
-// segment. Sandbox purpose additionally binds lease_id.
+// uses internal listener + mTLS (R1 service credentials, R2 mTLS). For
+// purpose=segment, member/seq/attempt are required and control checks the active
+// run and current uncommitted segment; committed segments are rejected without a
+// revocation list. Worker may renew within a segment. For purpose=sandbox,
+// lease_id is required and binds the isolation key; control checks the active
+// lease and run/session ownership, without requiring member/seq/attempt.
 type TokenRequest struct {
 	// Temporal activity attempt.
-	Attempt int `json:"attempt" yaml:"attempt" mapstructure:"attempt"`
+	Attempt *int `json:"attempt,omitempty,omitzero" yaml:"attempt,omitempty" mapstructure:"attempt,omitempty"`
 
-	// Lease bound to sandbox capability.
+	// Sandbox isolation key bound to the capability.
 	LeaseId *string `json:"lease_id,omitempty,omitzero" yaml:"lease_id,omitempty" mapstructure:"lease_id,omitempty"`
 
 	// Member corresponds to the JSON schema field "member".
-	Member MemberName `json:"member" yaml:"member" mapstructure:"member"`
+	Member *MemberName `json:"member,omitempty,omitzero" yaml:"member,omitempty" mapstructure:"member,omitempty"`
 
 	// Purpose corresponds to the JSON schema field "purpose".
 	Purpose TokenPurpose `json:"purpose" yaml:"purpose" mapstructure:"purpose"`
@@ -5915,7 +5977,7 @@ type TokenRequest struct {
 	RunId string `json:"run_id" yaml:"run_id" mapstructure:"run_id"`
 
 	// Current uncommitted segment.
-	Seq int `json:"seq" yaml:"seq" mapstructure:"seq"`
+	Seq *int `json:"seq,omitempty,omitzero" yaml:"seq,omitempty" mapstructure:"seq,omitempty"`
 
 	// Tenant used for the RLS run lookup.
 	TenantId string `json:"tenant_id" yaml:"tenant_id" mapstructure:"tenant_id"`
@@ -5927,20 +5989,11 @@ func (j *TokenRequest) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
-	if _, ok := raw["attempt"]; raw != nil && !ok {
-		return fmt.Errorf("field attempt in TokenRequest: required")
-	}
-	if _, ok := raw["member"]; raw != nil && !ok {
-		return fmt.Errorf("field member in TokenRequest: required")
-	}
 	if _, ok := raw["purpose"]; raw != nil && !ok {
 		return fmt.Errorf("field purpose in TokenRequest: required")
 	}
 	if _, ok := raw["run_id"]; raw != nil && !ok {
 		return fmt.Errorf("field run_id in TokenRequest: required")
-	}
-	if _, ok := raw["seq"]; raw != nil && !ok {
-		return fmt.Errorf("field seq in TokenRequest: required")
 	}
 	if _, ok := raw["tenant_id"]; raw != nil && !ok {
 		return fmt.Errorf("field tenant_id in TokenRequest: required")
@@ -5950,7 +6003,7 @@ func (j *TokenRequest) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
-	if 1 > plain.Attempt {
+	if plain.Attempt != nil && 1 > *plain.Attempt {
 		return fmt.Errorf("field %s: must be >= %v", "attempt", 1)
 	}
 	if plain.LeaseId != nil {
@@ -5958,15 +6011,15 @@ func (j *TokenRequest) UnmarshalJSON(value []byte) error {
 			return fmt.Errorf("field %s pattern match: must match %s", "LeaseId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
 		}
 	}
-	if 1 > plain.Seq {
+	if plain.Seq != nil && 1 > *plain.Seq {
 		return fmt.Errorf("field %s: must be >= %v", "seq", 1)
 	}
 	*j = TokenRequest(plain)
 	return nil
 }
 
-// Five-minute capability binding tenant/run/member/seq/purpose and optional lease;
-// never record in Temporal history.
+// Five-minute capability binding tenant/run/purpose plus member/seq/attempt for
+// segments or lease_id for sandboxes; never record in Temporal history.
 type TokenResponse struct {
 	// Token expires five minutes after issue.
 	ExpiresAt time.Time `json:"expires_at" yaml:"expires_at" mapstructure:"expires_at"`

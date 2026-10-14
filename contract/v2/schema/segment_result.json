@@ -158,7 +158,7 @@
       ]
     },
     "YieldReason": {
-      "description": "Why a yielded segment stopped: iteration_cap, wall_cap, effect_boundary (an external write completed), budget_soft (segment budget reached), cancel (cooperative stop requested), goal_continue (the agent has more to do toward its goal), mailbox (a team message arrived that needs the next segment).",
+      "description": "Why a yielded segment stopped: iteration_cap, wall_cap, effect_boundary (an external write completed), budget_soft (segment budget reached), cancel (cooperative stop requested), goal_continue (the agent has more to do toward its goal), mailbox (a team message arrived that needs the next segment). compacted: context compaction finished; continue from the new checkpoint.",
       "enum": [
         "iteration_cap",
         "wall_cap",
