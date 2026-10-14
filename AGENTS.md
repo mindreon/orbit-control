@@ -1,32 +1,50 @@
-# AGENTS.md — orbit-control
+# AGENTS.md — orbit-control v2
 
-One-pager for humans and coding agents contributing here.
+Read README.md and `../docs/v2/implementation-plan.md` before changes. Orbit
+control is the only public HTTP API. Agent execution belongs to orbit-runtime.
 
-## What this repo is
+## Layout and boundaries
 
-The sole **public HTTP API** for Orbit: the task center (TaskWorkflow), profiles, SOPs, policy, artifacts, and the
-tenant catalog. Read [README.md](./README.md) before adding files.
+- Go 1.25, `net/http` method-aware ServeMux, pgx v5 + handwritten SQL, goose SQL.
+  No gin, gorm, viper, agent runtime or LLM SDK.
+- `cmd/orbit-control api` is the only current service role. Add worker/all only
+  when Workflow implementations exist. `cmd/orbit-admin` handles provisioning,
+  migrations and tenant audit verification.
+- Create only packages used by the current work. See README for the v2 layout,
+  CLI commands and all environment variables.
+- Public paths/error/pagination/security shapes go in `docs/openapi.yaml` first;
+  route table and OpenAPI must match exactly. Contract v2 schemas remain the
+  source of truth; use `scripts/gen-contracts.sh`, never edit generated types.
+- Preserve `internal/market/snapshots/*.json.gz`; WP5 owns loading these data.
 
-The agent loop is **AgentScope on orbit-worker**, not this process. Do not add agent runtimes or LLM SDKs here.
+## Persistence, authorization and auditing
 
-## Rules
+- All tenant operations run through `db.WithTenant`, which sets
+  `app.tenant_id` transaction-locally. Global identities/tenant discovery use
+  `db.Global` explicitly. Never fall back to an in-memory store or AutoMigrate.
+- Migrations execute as orbit_owner; infra creates roles. Tenant tables and
+  partition children must ENABLE + FORCE RLS with USING and WITH CHECK.
+  App/worker must never be owners or BYPASSRLS. Worker may access only the
+  three plan §5 tables. Audit/usage ledger are append-only for app.
+- Centralize decisions in `policy.Authorizer`. API-key scopes intersect RBAC;
+  group bindings inherit; tenant selection always checks active membership.
+- Business mutations, audit appends and encrypted idempotent responses share
+  one transaction. Audit hashes use canonical JSON and tenant advisory locks.
+  Include explicit tenant filters when owner/admin access could bypass RLS.
+- No secret plaintext in logs, fixtures, examples or replay storage. Signing
+  keys are 0600. Dev auth refuses non-loopback unless explicitly opted in.
 
-- Postgres persistence follows contract §18: gorm over pgx behind `store.Repository`, goose migrations, no
-  AutoMigrate. Tenant tables are reached only through `inTenant`, which sets `app.tenant_id` first. No data
-  backward-compatibility shims.
-- Persistence is verified by E2E (`e2e/persistence`, build tag `e2e`) through the HTTP API against real Postgres,
-  producing `artifacts/e2e-persistence-report.json`. An isolated SQL/role/static check needs an entry in
-  `docs/persistence-failure-modes.md` committed before the check.
-- **No tenant secret plaintext** in logs, fixtures, or OpenAPI examples.
-- `go test ./...` must pass without external services (the Postgres E2E suite is behind the `e2e` build tag).
+## Verify and deliver
 
-## Where things go
+`gofmt -l .`, `go vet ./...`, `go test ./...`, contracts and OpenAPI checks must
+pass. PG tests skip without `ORBIT_TEST_DATABASE_URL`, fail when
+`ORBIT_REQUIRE_PG_TESTS=1`, and destructively migrate a disposable database.
+Run them through actual app/worker roles. Run pinned govulncheck, migration CLI
+and `/ready` startup smoke before declaring WP1 complete. No migration/role
+checks against shared production databases.
 
-| Change | Put it here | Not here |
-| --- | --- | --- |
-| Public path or error shape | `docs/openapi.yaml` first | orch / worker repos |
-| HTTP mux | `internal/httpapi` | New frameworks |
-| Process entrypoint | `cmd/orbit-control` | Multiple public binaries |
-| Contract v2 (source of truth) | `contract/v2/schema`, then `scripts/gen-contracts.sh`; copy to orbit-runtime with its `scripts/sync-contracts.sh` | Hand edits to `internal/contract/contract_gen.go` |
-
-`orbit-web` must keep calling **only** this API.
+State assumptions before implementing, keep changes surgical, choose the
+smallest solution, and verify the requested behavior with meaningful failure
+cases. No TODOs, empty future packages or speculative abstractions. Work only
+in this v2 worktree. Make small commits explaining why; do not push. Preserve
+Apache-2.0 attribution and register NOTICE if porting third-party source.
