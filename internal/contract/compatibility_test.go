@@ -132,7 +132,7 @@ type wireFixture struct {
 // nonempty arrays and if/then requirements survive; optional empty arrays do not.
 func minimalValue(t *testing.T, kind string, root any) any {
 	t.Helper()
-	valid := func() bool { raw, err := json.Marshal(root); return err == nil && Validate(kind, raw) == nil }
+	valid := func() bool { raw, err := json.Marshal(root); return err == nil && ValidateStrict(kind, raw) == nil }
 	var prune func(any)
 	prune = func(value any) {
 		switch v := value.(type) {
@@ -183,9 +183,9 @@ func TestGoWireFixtures(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		valid := Validate(kind, raw) == nil
+		valid := ValidateStrict(kind, raw) == nil
 		if name != "zero" && !valid {
-			t.Fatalf("%s %s: %v", kind, name, Validate(kind, raw))
+			t.Fatalf("%s %s: %v", kind, name, ValidateStrict(kind, raw))
 		}
 		fixtures = append(fixtures, wireFixture{kind, name, valid, raw})
 	}
@@ -288,14 +288,14 @@ func TestArtifactLimitAtBoundary(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := Validate("SegmentResult", raw); (err == nil) != (count == 200) {
+		if err := ValidateStrict("SegmentResult", raw); (err == nil) != (count == 200) {
 			t.Fatalf("artifact limit %d: %v", count, err)
 		}
 	}
-	if err := Validate("not-a-kind", []byte(`{}`)); err == nil {
+	if err := ValidateStrict("not-a-kind", []byte(`{}`)); err == nil {
 		t.Fatal("unknown kind accepted")
 	}
-	if err := Validate("SegmentInput", []byte(`null`)); err == nil {
+	if err := ValidateStrict("SegmentInput", []byte(`null`)); err == nil {
 		t.Fatal("null payload accepted")
 	}
 }

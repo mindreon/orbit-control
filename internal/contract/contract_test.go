@@ -219,7 +219,7 @@ func TestInvalidExamplesFail(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := Validate(ex.typeName, raw); err == nil {
+		if err := ValidateStrict(ex.typeName, raw); err == nil {
 			t.Errorf("%s should be rejected", ex.name)
 		}
 		count++

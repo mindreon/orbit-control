@@ -233,3 +233,7 @@ ported in WP1; market snapshot data is preserved unchanged.
 
 The compiler and CI are pinned to Go 1.27.2 (`go 1.27.0` plus toolchain directive).
 `govulncheck v1.1.4` is the pinned security gate.
+
+Contract boundary validation uses `contract.Validate` to accept future fields on
+`x-extra=ignore` objects; `contract.ValidateStrict` checks producer output against
+the original schemas. Both return only JSON paths and rule names on invalid input.
