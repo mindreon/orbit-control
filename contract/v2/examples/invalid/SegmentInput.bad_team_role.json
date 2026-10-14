@@ -1,0 +1,54 @@
+{
+  "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+  "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+  "run_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+  "member": "researcher-1",
+  "seq": 1,
+  "agent_session_key": "sess:7c9e6679-7425-40de-944b-e07fc1f90ae7:L7f3c",
+  "expected_checkpoint_version": 0,
+  "lock": {
+    "id": "lk-01J9X",
+    "digest": "sha256:0c030586945fe504b604ecc2e875c38ede400cd5cd73da9730302162e6b02c6f"
+  },
+  "input": {
+    "kind": "follow_up",
+    "content_ref": "t/3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f/uploads/up-77"
+  },
+  "steer": [],
+  "limits": {
+    "max_iterations": 25,
+    "max_wall_seconds": 600,
+    "segment_budget_credits": 12.5,
+    "remaining_run_credits": 48.2
+  },
+  "budget_notice": "none",
+  "sandbox": {
+    "provider": "opensandbox",
+    "sandbox_id": "sbx-8841",
+    "isolated_session_id": "iso-researcher-1"
+  },
+  "capability_token": "run-capability-token-example",
+  "event_subject": "run.3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f.9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+  "trace": {
+    "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+  },
+  "mailbox": [
+    {
+      "message_id": "tm-12",
+      "from": "leader",
+      "text": "Use the 2025 filings only.",
+      "sent_at": "2026-10-14T08:20:41Z"
+    }
+  ],
+  "team": {
+    "team_workflow_id": "team:3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f:9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+    "role": "human",
+    "task": {
+      "task_id": "task-3",
+      "title": "Collect 2025 filings",
+      "description": "Download and list every 2025 filing of the target company.",
+      "spec_ref": "t/3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f/uploads/spec-3",
+      "narrowed_tools": ["web_fetch", "write_file"]
+    }
+  }
+}

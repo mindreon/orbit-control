@@ -1,0 +1,35 @@
+{
+  "schema": "orbit.team/v1",
+  "name": "research-squad",
+  "version": "2.0.0",
+  "description": "Researches, cross-checks and writes a report.",
+  "roles": [
+    {
+      "name": "leader",
+      "role": "leader",
+      "agent": "."
+    },
+    {
+      "name": "researcher",
+      "role": "teammate",
+      "agent": "acme/web-researcher@^1.2",
+      "count": 2
+    },
+    {
+      "name": "reviewer",
+      "role": "reviewer",
+      "agent": "./members/reviewer"
+    }
+  ],
+  "dispatch": "scheduled",
+  "maxParallelMembers": 0,
+  "review": {
+    "mode": "veto"
+  },
+  "sharedSkills": [
+    {
+      "id": "public/citation-check",
+      "version": "^1.0"
+    }
+  ]
+}

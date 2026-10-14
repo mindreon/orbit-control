@@ -1,0 +1,20 @@
+{
+  "tool_rules": [
+    {
+      "tool": "shell",
+      "pattern": "rm *",
+      "decision": "deny"
+    },
+    {
+      "tool": "mail.send",
+      "decision": "ask"
+    }
+  ],
+  "grants": [
+    {
+      "tool": "mail.send",
+      "arg_pattern": "to=*@acme.com",
+      "scope": "tenant"
+    }
+  ]
+}

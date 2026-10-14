@@ -12,6 +12,7 @@ require (
 	github.com/lib/pq v1.12.3
 	github.com/minio/minio-go/v7 v7.0.95
 	github.com/pressly/goose/v3 v3.24.1
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/sethvargo/go-retry v0.3.0
 	github.com/spf13/viper v1.20.1
 	go.temporal.io/api v1.46.0

@@ -20,7 +20,8 @@ internal/app/          the task service wiring and the catalog (assistants, conn
 internal/task/         task service, Projector (runtime_outbox → task projection), SSE fan-out, ownership ring
 internal/orch/         Temporal client (TaskWorkflow start, query, update, signal)
 internal/store/        Repository interface; memstore, pgstore (gorm), goose migrations
-internal/contract/v3/  contract v3 types generated from orbit-runtime (scripts/sync-contracts.sh)
+internal/contract/     contract v2 Go types generated from contract/v2/schema (scripts/gen-contracts.sh)
+contract/v2/           schemas (source of truth for orbit-runtime too) and examples; see contract/v2/README.md
 deploy/postgres/       one-time role + database bootstrap (superuser)
 docs/openapi.yaml      the public HTTP contract
 ```

@@ -1,0 +1,14 @@
+{
+  "interaction_id": "ia-0001",
+  "kind": "tool_approval",
+  "tool": {
+    "name": "mail.send",
+    "args_preview": "{\"to\": \"legal@example.com\", \"subject\": \"Contract review\"}",
+    "effect_class": "external_write",
+    "risk_reasons": ["external_write requires approval"]
+  },
+  "question": {
+    "text": "Which of the two contracts should be the baseline?",
+    "options": ["contract-a.docx", "contract-b.docx"]
+  }
+}

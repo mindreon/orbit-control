@@ -1,0 +1,24 @@
+{
+  "mcpServers": {
+    "mail": {
+      "ref": "acme/mail-mcp@^1.0"
+    },
+    "github": {
+      "url": "https://mcp.example.com/github",
+      "transport": "streamable_http",
+      "headers": {
+        "Authorization": "Bearer ${secret:GITHUB_TOKEN}"
+      }
+    },
+    "local-db": {
+      "command": "npx",
+      "args": ["-y", "@example/db-mcp"],
+      "env": {
+        "DB_URL": "${secret:DB_URL}"
+      },
+      "headers": {
+        "A": "b"
+      }
+    }
+  }
+}

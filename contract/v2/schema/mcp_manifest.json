@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orbit.mindreon.com/contract/v2/mcp_manifest.json",
+  "description": "mcp.json of an agent bundle.",
+  "x-exports": ["McpManifest"],
+  "$defs": {
+    "McpManifest": {
+      "description": "mcp.json of an agent bundle. A server is a remote endpoint, a reference to a reviewed mcp_server asset, or a command; a command entry is kept but not bound, so it is not loaded. Values may hold credentials only as ${secret:NAME} placeholders.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mcpServers"],
+      "properties": {
+        "mcpServers": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/McpServer"
+          },
+          "description": "Servers by name."
+        }
+      }
+    },
+    "McpTransport": {
+      "description": "Transport to a remote server.",
+      "enum": ["streamable_http", "sse"]
+    },
+    "McpServer": {
+      "description": "One server. Exactly one of ref, url or command selects the form: ref (an mcp_server asset such as publisher/name@^1.0), url with transport (and optionally headers), or command with optional args and env (unbound).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Reference to an mcp_server asset with an optional version range, publisher/name@range."
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "description": "Endpoint of a remote server."
+        },
+        "transport": {
+          "$ref": "#/$defs/McpTransport"
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Request headers; secret values only as ${secret:NAME}."
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Executable of a stdio server. The entry is kept for the author but never loaded."
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Arguments of command."
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Environment of command; secret values only as ${secret:NAME}."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["ref"]
+          },
+          "then": {
+            "properties": {
+              "url": false,
+              "transport": false,
+              "headers": false,
+              "command": false,
+              "args": false,
+              "env": false
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["url"]
+          },
+          "then": {
+            "required": ["transport"],
+            "properties": {
+              "ref": false,
+              "command": false,
+              "args": false,
+              "env": false
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["command"]
+          },
+          "then": {
+            "properties": {
+              "ref": false,
+              "url": false,
+              "transport": false,
+              "headers": false
+            }
+          }
+        },
+        {
+          "if": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": ["ref"]
+                },
+                {
+                  "required": ["url"]
+                },
+                {
+                  "required": ["command"]
+                }
+              ]
+            }
+          },
+          "then": false
+        }
+      ]
+    }
+  }
+}

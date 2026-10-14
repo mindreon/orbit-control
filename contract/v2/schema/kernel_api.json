@@ -1,0 +1,235 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orbit.mindreon.com/contract/v2/kernel_api.json",
+  "description": "Request and response bodies of the control internal API (/internal/v1/*) that the worker calls with the run capability token.",
+  "x-exports": ["GetLockResponse", "ModelCredentials", "PolicySnapshot", "PersistGrantRequest", "SecretGrant"],
+  "$defs": {
+    "LockFileContent": {
+      "description": "How to obtain the content of one locked file: a short-lived download URL, or the text inline when the file is small text. Exactly one of blob_url and text is present.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "ref", "version", "path", "sha256"],
+      "properties": {
+        "kind": {
+          "$ref": "lock.json#/$defs/AssetKind"
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Asset reference of the entry the file belongs to."
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Version of the entry the file belongs to."
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path of the file inside the bundle."
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Hex sha256 of the content; the worker verifies it."
+        },
+        "blob_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "Pre-signed object store URL of the content."
+        },
+        "text": {
+          "type": "string",
+          "description": "The content itself, for small UTF-8 text files."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["blob_url"]
+          },
+          "then": {
+            "properties": {
+              "text": false
+            }
+          }
+        },
+        {
+          "if": {
+            "not": {
+              "required": ["blob_url"]
+            }
+          },
+          "then": {
+            "required": ["text"]
+          }
+        }
+      ]
+    },
+    "GetLockResponse": {
+      "description": "A run lock and the means to fetch every file in it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lock", "contents"],
+      "properties": {
+        "lock": {
+          "$ref": "lock.json#/$defs/RunLock"
+        },
+        "contents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LockFileContent"
+          },
+          "description": "One element per file of every entry of the lock."
+        }
+      }
+    },
+    "ModelCredentials": {
+      "description": "Endpoint and short-lived key of an OpenAI-compatible model API, issued per segment from the tenant model profile. It never enters Temporal history.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["base_url", "model", "api_key", "expires_at", "params"],
+      "properties": {
+        "base_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "Base URL of the API."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Model name to send."
+        },
+        "api_key": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Bearer key for the API."
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the key stops working."
+        },
+        "params": {
+          "type": "object",
+          "description": "Default request parameters of the profile, such as temperature or max_tokens."
+        }
+      }
+    },
+    "ToolDecision": {
+      "description": "What the policy says about a call: allow, ask for approval, or deny.",
+      "enum": ["allow", "ask", "deny"]
+    },
+    "GrantScope": {
+      "description": "How far a grant of allow_always reaches: the session, the user across sessions, or the whole workspace.",
+      "enum": ["session", "user", "workspace"]
+    },
+    "ToolRule": {
+      "description": "A policy rule for a tool.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "decision"],
+      "properties": {
+        "tool": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Tool name."
+        },
+        "pattern": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Pattern the call arguments must match for the rule to apply; the rule applies to every call when absent."
+        },
+        "decision": {
+          "$ref": "#/$defs/ToolDecision"
+        }
+      }
+    },
+    "PermissionGrant": {
+      "description": "A standing permission a user gave with allow_always or allow_session.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "scope"],
+      "properties": {
+        "tool": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Tool name."
+        },
+        "arg_pattern": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Pattern the call arguments must match; every call of the tool when absent."
+        },
+        "scope": {
+          "$ref": "#/$defs/GrantScope"
+        }
+      }
+    },
+    "PolicySnapshot": {
+      "description": "Tool policy of the run as of the start of a segment: the tenant and workspace rules and the grants that turn ask into allow. A grant never overrides deny.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool_rules", "grants"],
+      "properties": {
+        "tool_rules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ToolRule"
+          },
+          "description": "Rules in precedence order."
+        },
+        "grants": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PermissionGrant"
+          },
+          "description": "Grants in force for the run's principal."
+        }
+      }
+    },
+    "PersistGrantRequest": {
+      "description": "Records an allow_always (or allow_session) decision as a permission grant.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "tool"],
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/GrantScope"
+        },
+        "tool": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Tool name."
+        },
+        "arg_pattern": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Pattern the call arguments must match; every call of the tool when absent."
+        }
+      }
+    },
+    "SecretGrant": {
+      "description": "A short-lived grant of a secret value, issued for a name the lock declares.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "value", "expires_at"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "Secret name."
+        },
+        "value": {
+          "type": "string",
+          "description": "The secret value. It must not be logged, put in events or in Temporal payloads."
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the grant stops being valid."
+        }
+      }
+    }
+  }
+}

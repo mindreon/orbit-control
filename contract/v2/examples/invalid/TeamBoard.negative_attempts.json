@@ -1,0 +1,41 @@
+{
+  "roster": [
+    {
+      "name": "leader",
+      "role": "leader",
+      "status": "idle"
+    },
+    {
+      "name": "researcher-1",
+      "role": "teammate",
+      "status": "working"
+    },
+    {
+      "name": "reviewer",
+      "role": "reviewer",
+      "status": "waiting_approval"
+    }
+  ],
+  "tasks": [
+    {
+      "task_id": "task-1",
+      "title": "Collect 2025 filings",
+      "deps": [],
+      "assignee": "researcher-1",
+      "status": "in_review",
+      "attempts": -1,
+      "review": {
+        "reviewer": "reviewer",
+        "verdict": "reject",
+        "reason": "Q3 is missing."
+      }
+    },
+    {
+      "task_id": "task-2",
+      "title": "Cross-check figures",
+      "deps": ["task-1"],
+      "status": "blocked",
+      "attempts": 0
+    }
+  ]
+}

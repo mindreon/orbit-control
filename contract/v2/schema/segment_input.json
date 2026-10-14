@@ -1,0 +1,388 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orbit.mindreon.com/contract/v2/segment_input.json",
+  "description": "Input of the RunAgentSegment activity.",
+  "x-exports": ["SegmentInput"],
+  "$defs": {
+    "SegmentInput": {
+      "description": "Input of the RunAgentSegment activity: one bounded slice of an agent run, which the worker executes as a single DeepAgent invocation. Kept small (under 8 KiB); anything large is passed by reference.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tenant_id",
+        "session_id",
+        "run_id",
+        "member",
+        "seq",
+        "agent_session_key",
+        "expected_checkpoint_version",
+        "lock",
+        "input",
+        "steer",
+        "limits",
+        "budget_notice",
+        "sandbox",
+        "capability_token",
+        "event_subject"
+      ],
+      "properties": {
+        "tenant_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Tenant that owns the run."
+        },
+        "session_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Session the run belongs to."
+        },
+        "run_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Run this segment belongs to."
+        },
+        "member": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+          "description": "Who executes the segment: the literal agent for a single-agent run, the roster name for a team member."
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Segment number within the (run, member), starting at 1. With run_id and member it is the idempotency key of the segment."
+        },
+        "agent_session_key": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Key of the agent conversation state (checkpoint) this segment continues; one per (run, member) or per session."
+        },
+        "expected_checkpoint_version": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Checkpoint version the segment must start from. The commit is a compare-and-swap to this value plus one."
+        },
+        "lock": {
+          "$ref": "#/$defs/SegmentLockRef"
+        },
+        "input": {
+          "$ref": "#/$defs/SegmentTurn"
+        },
+        "steer": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SteerItem"
+          },
+          "description": "Course corrections from the user that arrived while the run was active, oldest first, injected before the model call."
+        },
+        "mailbox": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MailboxMessage"
+          },
+          "description": "Team messages delivered to this member since its last segment, oldest first. Present only for team members."
+        },
+        "limits": {
+          "$ref": "#/$defs/SegmentLimits"
+        },
+        "budget_notice": {
+          "$ref": "#/$defs/BudgetNotice"
+        },
+        "sandbox": {
+          "$ref": "#/$defs/SegmentSandbox"
+        },
+        "capability_token": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Run-scoped bearer token for the control internal API (audience kernel). It carries no more than the run's rights and expires with the segment."
+        },
+        "event_subject": {
+          "type": "string",
+          "minLength": 1,
+          "description": "NATS subject the worker publishes run events to, run.<tenant>.<run>."
+        },
+        "team": {
+          "$ref": "#/$defs/TeamContext"
+        },
+        "trace": {
+          "$ref": "#/$defs/SegmentTrace"
+        }
+      }
+    },
+    "SegmentLockRef": {
+      "description": "The run lock the segment executes: the exact resolved versions of the agent, its skills and MCP servers.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "digest"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Lock identifier, the lock_id of the RunLock."
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "Digest of the lock content; the worker compiles and caches by it."
+        }
+      }
+    },
+    "SegmentTurnKind": {
+      "description": "What starts the segment: a new user message, the answer to an interaction that parked the run, a follow-up (steer or mailbox delivery), or a plain continuation after a yield.",
+      "enum": ["user_message", "interactive_input", "follow_up", "continue"]
+    },
+    "SegmentTurn": {
+      "description": "The trigger of the segment. user_message needs content_ref or text; interactive_input needs interaction_id and decision.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/SegmentTurnKind"
+        },
+        "content_ref": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Object store reference of the message content when it is too large to inline."
+        },
+        "text": {
+          "type": "string",
+          "description": "Inline message text."
+        },
+        "interaction_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Interaction being answered."
+        },
+        "decision": {
+          "$ref": "interaction.json#/$defs/Decision"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "user_message"
+              }
+            },
+            "required": ["kind"]
+          },
+          "then": {
+            "anyOf": [
+              {
+                "required": ["content_ref"]
+              },
+              {
+                "required": ["text"]
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "interactive_input"
+              }
+            },
+            "required": ["kind"]
+          },
+          "then": {
+            "required": ["interaction_id", "decision"]
+          }
+        }
+      ]
+    },
+    "SteerItem": {
+      "description": "One steering message from the user.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "content_ref": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Object store reference of the content."
+        },
+        "text": {
+          "type": "string",
+          "description": "Inline text."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "not": {
+              "required": ["text"]
+            }
+          },
+          "then": {
+            "required": ["content_ref"]
+          }
+        }
+      ]
+    },
+    "MailboxMessage": {
+      "description": "A message another team member (or the leader) sent to this member.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["message_id", "from", "sent_at"],
+      "properties": {
+        "message_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Message identifier, unique within the team run."
+        },
+        "from": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Roster name of the sender."
+        },
+        "text": {
+          "type": "string",
+          "description": "Inline text."
+        },
+        "content_ref": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Object store reference of the content when it is too large to inline."
+        },
+        "sent_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the message was sent."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "not": {
+              "required": ["text"]
+            }
+          },
+          "then": {
+            "required": ["content_ref"]
+          }
+        }
+      ]
+    },
+    "SegmentLimits": {
+      "description": "Bounds of one segment; the segment yields when any of them is reached.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_iterations", "max_wall_seconds", "segment_budget_credits", "remaining_run_credits"],
+      "properties": {
+        "max_iterations": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum ReAct iterations in the segment."
+        },
+        "max_wall_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Wall-clock bound of the segment; the worker stops the agent before the activity timeout."
+        },
+        "segment_budget_credits": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Credits this segment may spend before it yields with budget_soft."
+        },
+        "remaining_run_credits": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Credits left in the run budget at the start of the segment."
+        }
+      }
+    },
+    "BudgetNotice": {
+      "description": "none, or soft_warning once the run has consumed its warning share of the budget; the agent is told to wrap up.",
+      "enum": ["none", "soft_warning"]
+    },
+    "SegmentSandbox": {
+      "description": "The sandbox lease the segment runs its tools in, acquired by the workflow before the segment.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "sandbox_id"],
+      "properties": {
+        "provider": {
+          "$ref": "sandbox.json#/$defs/SandboxProvider"
+        },
+        "sandbox_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Provider identifier of the sandbox."
+        },
+        "isolated_session_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Isolated session inside a shared sandbox, used for team members."
+        }
+      }
+    },
+    "TeamTaskBrief": {
+      "description": "The task a teammate or reviewer works on in this segment.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task_id", "title", "description", "narrowed_tools"],
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Task identifier on the team board."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Short title."
+        },
+        "description": {
+          "type": "string",
+          "description": "What to do and what done looks like."
+        },
+        "spec_ref": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Object store reference of a longer specification."
+        },
+        "narrowed_tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Tools the leader restricted the task to; empty means the member's full tool set. It can only narrow, never widen."
+        }
+      }
+    },
+    "TeamContext": {
+      "description": "Present when the segment belongs to a team run.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["team_workflow_id", "role"],
+      "properties": {
+        "team_workflow_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Workflow ID of the TeamRunWorkflow; team tools call its Updates."
+        },
+        "role": {
+          "$ref": "team_updates.json#/$defs/TeamRole"
+        },
+        "task": {
+          "$ref": "#/$defs/TeamTaskBrief"
+        }
+      }
+    },
+    "SegmentTrace": {
+      "description": "Trace context of the activity.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["traceparent"],
+      "properties": {
+        "traceparent": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$",
+          "description": "W3C traceparent header value."
+        }
+      }
+    }
+  }
+}

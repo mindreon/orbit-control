@@ -1,0 +1,24 @@
+{
+  "lock_id": "lk-01J9X",
+  "digest": "sha256:0c030586945fe504b604ecc2e875c38ede400cd5cd73da9730302162e6b02c6f",
+  "entry": {
+    "kind": "agent",
+    "ref": "acme/contract-assistant",
+    "version": "1.3.0"
+  },
+  "entries": [],
+  "effective_permissions": {
+    "network": {
+      "egress": ["*.acme-internal.com", "api.example-ocr.com"]
+    },
+    "secrets": [
+      {
+        "name": "OCR_API_KEY"
+      }
+    ],
+    "effect_classes": ["read_only", "sandbox_write", "external_write"],
+    "data_scopes": ["session_files", "workspace_knowledge:read"],
+    "sandbox_profile": "office-standard",
+    "tools_builtin": ["read_file", "write_file", "shell", "web_fetch"]
+  }
+}

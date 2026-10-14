@@ -1,0 +1,8 @@
+{
+  "interaction_id": "ia-0002",
+  "kind": "ask_user",
+  "question": {
+    "text": "Which of the two contracts should be the baseline?",
+    "options": ["contract-a.docx", "contract-b.docx"]
+  }
+}

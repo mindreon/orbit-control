@@ -1,0 +1,19 @@
+{
+  "skills": [
+    {
+      "name": "clause-diff",
+      "source": "bundle"
+    },
+    {
+      "name": "pdf-extract",
+      "source": "catalog",
+      "version": "^2.1"
+    },
+    {
+      "name": "xlsx-writer",
+      "source": "catalog",
+      "id": "public/xlsx-writer",
+      "version": "1.4.2"
+    }
+  ]
+}

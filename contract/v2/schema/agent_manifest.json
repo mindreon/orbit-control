@@ -1,0 +1,245 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orbit.mindreon.com/contract/v2/agent_manifest.json",
+  "description": "agent.json of an agent bundle.",
+  "x-exports": ["AgentManifest"],
+  "$defs": {
+    "AgentManifest": {
+      "description": "agent.json of an agent bundle. orbit.agent/v1 files (schema, name, description, model as a string) are valid unchanged; every other field is new in orbit.agent/v2 and defaulted by the platform when absent. The file never holds credentials.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "name"],
+      "properties": {
+        "schema": {
+          "enum": ["orbit.agent/v1", "orbit.agent/v2"],
+          "description": "Bundle format version."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Name of the agent. The platform derives the asset slug from it."
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.+-]+)?$",
+          "description": "Semantic version of the bundle. Published versions are immutable."
+        },
+        "displayName": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Display name by language tag, for example zh and en."
+        },
+        "description": {
+          "type": "string",
+          "description": "What the agent is for, in one sentence. The leader of a team reads it to pick members."
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Free-form labels for search."
+        },
+        "model": {
+          "description": "The model profile to use: a profile name, or a profile with fallbacks tried in order when it is unavailable.",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/ModelSelection"
+            }
+          ]
+        },
+        "tools": {
+          "$ref": "#/$defs/ToolsSpec"
+        },
+        "rails": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RailSpec"
+          },
+          "description": "Agent rails to enable. The platform keeps an allow-list of rail types; others fail validation."
+        },
+        "limits": {
+          "$ref": "#/$defs/AgentLimits"
+        },
+        "permissions": {
+          "$ref": "#/$defs/AgentPermissions"
+        },
+        "compat": {
+          "$ref": "#/$defs/Compat"
+        }
+      }
+    },
+    "ModelSelection": {
+      "description": "A model profile and its fallbacks.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile"],
+      "properties": {
+        "profile": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Name of a model profile of the tenant."
+        },
+        "fallback": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Profiles to try, in order, when the first is unavailable."
+        }
+      }
+    },
+    "ToolsSpec": {
+      "description": "Tools of the agent.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "builtin": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Built-in tools to enable, from the platform allow-list."
+        }
+      }
+    },
+    "RailSpec": {
+      "description": "One agent rail.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Rail type from the platform allow-list, for example context_compression or circuit_breaker."
+        },
+        "config": {
+          "type": "object",
+          "description": "Parameters of the rail; their schema depends on type."
+        }
+      }
+    },
+    "AgentLimits": {
+      "description": "Limits the agent asks for. They are capped by tenant policy.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxIterationsPerRun": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum ReAct iterations across the whole run."
+        },
+        "defaultRunBudgetCredits": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Credit budget of a run when the caller sets none."
+        }
+      }
+    },
+    "SecretScope": {
+      "description": "Who owns the secret the agent asks for.",
+      "enum": ["tenant", "workspace", "user"]
+    },
+    "SecretDeclaration": {
+      "description": "A secret the agent needs. Only the name is declared; the value is bound by the installer.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "Secret name, as written in ${secret:NAME}."
+        },
+        "scope": {
+          "$ref": "#/$defs/SecretScope"
+        }
+      }
+    },
+    "NetworkDeclaration": {
+      "description": "Network rights the agent asks for.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "egress": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Domain patterns the sandbox may reach; everything else is denied."
+        }
+      }
+    },
+    "SandboxDeclaration": {
+      "description": "Sandbox the agent asks for.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Sandbox image and resource profile."
+        }
+      }
+    },
+    "AgentPermissions": {
+      "description": "Permissions the agent declares. They are the upper bound; tenant, workspace and user policy can only narrow them.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "network": {
+          "$ref": "#/$defs/NetworkDeclaration"
+        },
+        "secrets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SecretDeclaration"
+          },
+          "description": "Secrets the agent may be granted."
+        },
+        "dataScopes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Data the agent may read, for example session_files or workspace_knowledge:read."
+        },
+        "effectClasses": {
+          "type": "array",
+          "items": {
+            "$ref": "common.json#/$defs/EffectClass"
+          },
+          "description": "Side-effect classes the agent may perform."
+        },
+        "sandbox": {
+          "$ref": "#/$defs/SandboxDeclaration"
+        }
+      }
+    },
+    "Compat": {
+      "description": "Versions of the platform the bundle was written for.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kernel": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Version range of the agent kernel, as a pip requirement such as openjiuwen>=0.1.19,<0.2."
+        },
+        "platform": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Version range of the platform, such as >=1.0."
+        }
+      }
+    }
+  }
+}

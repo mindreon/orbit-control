@@ -1,0 +1,308 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orbit.mindreon.com/contract/v2/team_updates.json",
+  "description": "Inputs and outputs of the Updates a TeamRunWorkflow serves to the team tools running inside member segments, and the TeamBoard projection the workflow keeps. The workflow validates each caller against its role.",
+  "x-exports": [
+    "CreateTasksInput",
+    "CreateTasksOutput",
+    "AssignTaskInput",
+    "SendMessageInput",
+    "CompleteTaskInput",
+    "SubmitVerdictInput",
+    "FinishTeamInput",
+    "TeamBoard"
+  ],
+  "$defs": {
+    "TeamRole": {
+      "description": "Role of a member in a team run. Only leaders create and assign tasks and finish the team; reviewers submit verdicts; teammates complete the tasks assigned to them.",
+      "enum": ["leader", "teammate", "reviewer"]
+    },
+    "MemberName": {
+      "description": "Roster name of a team member.",
+      "type": "string",
+      "minLength": 1
+    },
+    "NewTask": {
+      "description": "A task the leader adds to the board.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "description", "deps"],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Short title."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "What to do and what done looks like."
+        },
+        "deps": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Task IDs of tasks that already exist on the board and must be completed first. A DAG is built by creating tasks in dependency order."
+        },
+        "assignee": {
+          "$ref": "#/$defs/MemberName"
+        }
+      }
+    },
+    "CreateTasksInput": {
+      "description": "Update CreateTasks, leader only: add tasks to the board.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["caller", "tasks"],
+      "properties": {
+        "caller": {
+          "$ref": "#/$defs/MemberName"
+        },
+        "tasks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/NewTask"
+          },
+          "description": "Tasks to add, in order."
+        }
+      }
+    },
+    "CreateTasksOutput": {
+      "description": "Result of CreateTasks.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task_ids"],
+      "properties": {
+        "task_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "IDs of the created tasks, in the order of the request."
+        }
+      }
+    },
+    "AssignTaskInput": {
+      "description": "Update AssignTask, leader only: give a task to a member, optionally narrowing its tools.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["caller", "task_id", "member"],
+      "properties": {
+        "caller": {
+          "$ref": "#/$defs/MemberName"
+        },
+        "task_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Task to assign."
+        },
+        "member": {
+          "$ref": "#/$defs/MemberName"
+        },
+        "narrowed_tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Tools the member is limited to for this task. It can only narrow the member's tool set."
+        }
+      }
+    },
+    "SendMessageInput": {
+      "description": "Update SendMessage, any member: put a message in another member's mailbox.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["caller", "to", "text"],
+      "properties": {
+        "caller": {
+          "$ref": "#/$defs/MemberName"
+        },
+        "to": {
+          "$ref": "#/$defs/MemberName"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Message text."
+        }
+      }
+    },
+    "CompleteTaskInput": {
+      "description": "Update CompleteTask, the assignee only: hand in the result; the task moves to in_review.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["caller", "task_id", "result_text"],
+      "properties": {
+        "caller": {
+          "$ref": "#/$defs/MemberName"
+        },
+        "task_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Task being completed."
+        },
+        "result_text": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The result of the task."
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "common.json#/$defs/Artifact"
+          },
+          "description": "Files that are part of the result."
+        }
+      }
+    },
+    "Verdict": {
+      "description": "A reviewer's ruling on a task result. One reject sends the task back to its assignee.",
+      "enum": ["approve", "reject"]
+    },
+    "SubmitVerdictInput": {
+      "description": "Update SubmitVerdict, reviewer only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["caller", "task_id", "verdict", "reason"],
+      "properties": {
+        "caller": {
+          "$ref": "#/$defs/MemberName"
+        },
+        "task_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Task under review."
+        },
+        "verdict": {
+          "$ref": "#/$defs/Verdict"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why; shown to the assignee when the verdict is reject."
+        }
+      }
+    },
+    "FinishTeamInput": {
+      "description": "Update FinishTeam, leader only: declare the work done; the workflow runs the leader's final summary segment.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["caller", "summary"],
+      "properties": {
+        "caller": {
+          "$ref": "#/$defs/MemberName"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "description": "What the team accomplished."
+        }
+      }
+    },
+    "MemberStatus": {
+      "description": "What a member is doing: idle (no task), working, waiting_input (parked on a question), waiting_approval (parked on a tool approval), finished (no more segments in this run).",
+      "enum": ["idle", "working", "waiting_input", "waiting_approval", "finished"]
+    },
+    "RosterEntry": {
+      "description": "A member of the team run.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "role", "status"],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/MemberName"
+        },
+        "role": {
+          "$ref": "#/$defs/TeamRole"
+        },
+        "status": {
+          "$ref": "#/$defs/MemberStatus"
+        }
+      }
+    },
+    "TaskStatus": {
+      "description": "pending: ready to be assigned or started. blocked: waits for dependencies. in_progress: a member works on it. in_review: the result waits for reviewers. completed: approved. cancelled: dropped.",
+      "enum": ["pending", "blocked", "in_progress", "in_review", "completed", "cancelled"]
+    },
+    "TaskReview": {
+      "description": "State of the review of a task result.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reviewer"],
+      "properties": {
+        "reviewer": {
+          "$ref": "#/$defs/MemberName"
+        },
+        "verdict": {
+          "$ref": "#/$defs/Verdict"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Reason given with the verdict."
+        }
+      }
+    },
+    "TeamTask": {
+      "description": "A task on the board.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task_id", "title", "deps", "status", "attempts"],
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Task identifier, unique within the team run."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Short title."
+        },
+        "deps": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Task IDs this task waits for."
+        },
+        "assignee": {
+          "$ref": "#/$defs/MemberName"
+        },
+        "status": {
+          "$ref": "#/$defs/TaskStatus"
+        },
+        "attempts": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many times the task was started; a rejected result starts a new attempt."
+        },
+        "review": {
+          "$ref": "#/$defs/TaskReview"
+        }
+      }
+    },
+    "TeamBoard": {
+      "description": "Projection of the team state, served by the workflow query and mirrored to the UI.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["roster", "tasks"],
+      "properties": {
+        "roster": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RosterEntry"
+          },
+          "description": "Members of the team run."
+        },
+        "tasks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TeamTask"
+          },
+          "description": "Tasks on the board, in creation order."
+        }
+      }
+    }
+  }
+}

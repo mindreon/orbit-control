@@ -1,0 +1,16 @@
+{
+  "caller": "leader",
+  "tasks": [
+    {
+      "title": "Collect 2025 filings",
+      "description": "Download and list every 2025 filing.",
+      "deps": [],
+      "assignee": "researcher-1"
+    },
+    {
+      "title": "Cross-check figures",
+      "description": "Compare the figures across filings.",
+      "deps": ["task-1"]
+    }
+  ]
+}

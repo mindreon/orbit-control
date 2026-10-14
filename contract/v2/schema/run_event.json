@@ -1,0 +1,957 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orbit.mindreon.com/contract/v2/run_event.json",
+  "description": "The run event envelope orbit.event/v1 and the data of each event type.",
+  "x-exports": ["RunEvent"],
+  "$defs": {
+    "RunEvent": {
+      "description": "Envelope orbit.event/v1 of every event of a run, published to NATS JetStream on run.<tenant>.<run> and projected to run_events. A frame is at most 64 KiB; larger content travels as a reference. data has the structure that type selects.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "v",
+        "id",
+        "ts",
+        "tenant_id",
+        "session_id",
+        "run_id",
+        "member",
+        "segment",
+        "attempt",
+        "type",
+        "data"
+      ],
+      "properties": {
+        "v": {
+          "type": "integer",
+          "const": 1,
+          "description": "Envelope version."
+        },
+        "id": {
+          "type": "string",
+          "description": "Event identifier, unique within the run. With the run it is the idempotency key of the projection.",
+          "minLength": 1
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Display order assigned by the publisher. Resumption uses the JetStream sequence, not this field."
+        },
+        "ts": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the event was produced."
+        },
+        "tenant_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Tenant that owns the run."
+        },
+        "session_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Session the run belongs to."
+        },
+        "run_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Run the event belongs to."
+        },
+        "member": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+          "description": "Who produced the event: agent for a single-agent run, the roster name in a team run."
+        },
+        "segment": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Segment number the event belongs to; 0 for events outside any segment."
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Activity attempt that produced the event; 0 outside any segment. A new attempt supersedes unfinished content of lower attempts of the same segment."
+        },
+        "type": {
+          "$ref": "#/$defs/EventType"
+        },
+        "data": {
+          "type": "object",
+          "description": "Payload; its structure is the $defs entry that matches type."
+        },
+        "trace": {
+          "$ref": "#/$defs/EventTrace"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "run.started"
+              }
+            },
+            "required": ["type"]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/RunStarted"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "run.status"
+              }
+            },
+            "required": ["type"]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/RunStatus"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "run.completed"
+              }
+            },
+            "required": ["type"]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/RunCompleted"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "run.failed"
+              }
+            },
+            "required": ["type"]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/RunFailed"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "segment.started"
+              }
+            },
+            "required": ["type"]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/SegmentStarted"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "segment.ended"
+              }
+            },
+            "required": ["type"]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/SegmentEnded"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "message.delta"
+              }
+            },
+            "required": ["type"]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/MessageDelta"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "message.final"
+              }
+            },
+            "required": ["type"]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/MessageFinal"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "reasoning.delta"
+              }
+            },
+            "required": ["type"]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/ReasoningDelta"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "tool.call"
+              }
+            },
+            "required": ["type"]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/ToolCall"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "tool.result"
+              }
+            },
+            "required": ["type"]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/ToolResult"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "sandbox.output"
+              }
+            },
+            "required": ["type"]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/SandboxOutput"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "artifact.created"
+              }
+            },
+            "required": ["type"]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/ArtifactCreated"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "artifact.updated"
+              }
+            },
+            "required": ["type"]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/ArtifactUpdated"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "interaction.requested"
+              }
+            },
+            "required": ["type"]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/InteractionRequested"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "interaction.resolved"
+              }
+            },
+            "required": ["type"]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/InteractionResolved"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "team.task.created"
+              }
+            },
+            "required": ["type"]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/TeamTaskCreated"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "team.task.updated"
+              }
+            },
+            "required": ["type"]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/TeamTaskUpdated"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "team.member.status"
+              }
+            },
+            "required": ["type"]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/TeamMemberStatus"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "team.message"
+              }
+            },
+            "required": ["type"]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/TeamMessage"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "usage.update"
+              }
+            },
+            "required": ["type"]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/UsageUpdate"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "error"
+              }
+            },
+            "required": ["type"]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/ErrorData"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "EventType": {
+      "description": "Event type. It selects the structure of data.",
+      "enum": [
+        "run.started",
+        "run.status",
+        "run.completed",
+        "run.failed",
+        "segment.started",
+        "segment.ended",
+        "message.delta",
+        "message.final",
+        "reasoning.delta",
+        "tool.call",
+        "tool.result",
+        "sandbox.output",
+        "artifact.created",
+        "artifact.updated",
+        "interaction.requested",
+        "interaction.resolved",
+        "team.task.created",
+        "team.task.updated",
+        "team.member.status",
+        "team.message",
+        "usage.update",
+        "error"
+      ]
+    },
+    "RunState": {
+      "description": "Lifecycle state of a run. queued: accepted, waiting for its turn. running: a segment executes. waiting_input: parked on ask_user. waiting_approval: parked on a tool approval or an uncertain effect. The rest are terminal: succeeded, failed, cancelled, budget_exhausted, timed_out.",
+      "enum": [
+        "queued",
+        "running",
+        "waiting_input",
+        "waiting_approval",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "budget_exhausted",
+        "timed_out"
+      ]
+    },
+    "EventTrace": {
+      "description": "Trace context of the event.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trace_id", "span_id"],
+      "properties": {
+        "trace_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$",
+          "description": "W3C trace ID."
+        },
+        "span_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{16}$",
+          "description": "W3C span ID."
+        }
+      }
+    },
+    "RunStarted": {
+      "description": "A run left the queue and began.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lock_id", "entry_kind"],
+      "properties": {
+        "lock_id": {
+          "type": "string",
+          "description": "Lock the run executes.",
+          "minLength": 1
+        },
+        "entry_kind": {
+          "$ref": "lock.json#/$defs/EntryKind"
+        }
+      }
+    },
+    "RunStatus": {
+      "description": "The run changed state.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/RunState"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why, for example the tool or question the run waits on."
+        }
+      }
+    },
+    "RunCompleted": {
+      "description": "The run ended without a failure. status is succeeded, cancelled, budget_exhausted or timed_out; a failure is run.failed.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "description": "Terminal state of the run.",
+          "enum": ["succeeded", "cancelled", "budget_exhausted", "timed_out"]
+        },
+        "final_message_id": {
+          "type": "string",
+          "description": "Last assistant message of the run, when there is one.",
+          "minLength": 1
+        }
+      }
+    },
+    "RunFailed": {
+      "description": "The run ended with state failed.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "Stable machine-readable error code.",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "description": "Human-readable message, without secrets."
+        }
+      }
+    },
+    "SegmentStarted": {
+      "description": "An attempt of a segment began. Consumers drop unfinished content of lower attempts of the same segment.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expected_checkpoint_version"],
+      "properties": {
+        "expected_checkpoint_version": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Checkpoint version the segment starts from."
+        }
+      }
+    },
+    "SegmentEnded": {
+      "description": "A segment committed.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "checkpoint_version", "usage"],
+      "properties": {
+        "status": {
+          "$ref": "segment_result.json#/$defs/SegmentStatus"
+        },
+        "yield_reason": {
+          "$ref": "segment_result.json#/$defs/YieldReason"
+        },
+        "checkpoint_version": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Checkpoint version after the commit."
+        },
+        "usage": {
+          "$ref": "common.json#/$defs/Usage"
+        }
+      }
+    },
+    "MessageDelta": {
+      "description": "A chunk of assistant output. Not persisted.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["message_id", "delta"],
+      "properties": {
+        "message_id": {
+          "type": "string",
+          "description": "Message the chunk belongs to.",
+          "minLength": 1
+        },
+        "delta": {
+          "type": "string",
+          "description": "Text to append."
+        }
+      }
+    },
+    "MessageFinal": {
+      "description": "The complete assistant message. The projection stores it keyed by (run_id, segment, message_id).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["message_id"],
+      "properties": {
+        "message_id": {
+          "type": "string",
+          "description": "Message identifier.",
+          "minLength": 1
+        },
+        "text": {
+          "type": "string",
+          "description": "Full text when it fits in the frame."
+        },
+        "content_ref": {
+          "type": "string",
+          "description": "Object store reference of the full content when it does not.",
+          "minLength": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "not": {
+              "required": ["text"]
+            }
+          },
+          "then": {
+            "required": ["content_ref"]
+          }
+        }
+      ]
+    },
+    "ReasoningDelta": {
+      "description": "A chunk of the model's reasoning. Not persisted; tenants may disable it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["delta"],
+      "properties": {
+        "delta": {
+          "type": "string",
+          "description": "Text to append."
+        }
+      }
+    },
+    "ToolCall": {
+      "description": "The agent called a tool.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["call_id", "tool", "args_preview", "effect_class"],
+      "properties": {
+        "call_id": {
+          "type": "string",
+          "description": "Identifier of the call, matched by the tool.result.",
+          "minLength": 1
+        },
+        "tool": {
+          "type": "string",
+          "description": "Tool name.",
+          "minLength": 1
+        },
+        "args_preview": {
+          "type": "string",
+          "description": "Arguments, truncated and with secrets masked."
+        },
+        "effect_class": {
+          "$ref": "common.json#/$defs/EffectClass"
+        }
+      }
+    },
+    "ToolResult": {
+      "description": "A tool call finished.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["call_id", "ok", "preview"],
+      "properties": {
+        "call_id": {
+          "type": "string",
+          "description": "Call this answers.",
+          "minLength": 1
+        },
+        "ok": {
+          "type": "boolean",
+          "description": "Whether the tool succeeded."
+        },
+        "preview": {
+          "type": "string",
+          "description": "Result, truncated and with secrets masked."
+        },
+        "result_ref": {
+          "type": "string",
+          "description": "Object store reference of the full result when it was truncated.",
+          "minLength": 1
+        }
+      }
+    },
+    "SandboxOutput": {
+      "description": "A chunk of terminal output from the sandbox. Not persisted in run_events.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["call_id", "stream", "text"],
+      "properties": {
+        "call_id": {
+          "type": "string",
+          "description": "Tool call that produced the output.",
+          "minLength": 1
+        },
+        "stream": {
+          "description": "Output stream.",
+          "enum": ["stdout", "stderr"]
+        },
+        "text": {
+          "type": "string",
+          "description": "The output chunk."
+        }
+      }
+    },
+    "ArtifactCreated": {
+      "description": "A new file appeared in the run output.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact"],
+      "properties": {
+        "artifact": {
+          "$ref": "common.json#/$defs/Artifact"
+        }
+      }
+    },
+    "ArtifactUpdated": {
+      "description": "A file in the run output changed.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact"],
+      "properties": {
+        "artifact": {
+          "$ref": "common.json#/$defs/Artifact"
+        }
+      }
+    },
+    "InteractionRequested": {
+      "description": "The run waits for a decision.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["interaction"],
+      "properties": {
+        "interaction": {
+          "$ref": "interaction.json#/$defs/InteractionRequest"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the request expires and counts as denied."
+        }
+      }
+    },
+    "InteractionResolved": {
+      "description": "A decision arrived, or the request expired.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["interaction_id", "decision", "actor"],
+      "properties": {
+        "interaction_id": {
+          "type": "string",
+          "description": "Interaction that was resolved.",
+          "minLength": 1
+        },
+        "decision": {
+          "$ref": "interaction.json#/$defs/Decision"
+        },
+        "actor": {
+          "type": "string",
+          "description": "Principal that decided, or system when the request expired.",
+          "minLength": 1
+        }
+      }
+    },
+    "TeamTaskCreated": {
+      "description": "A task was added to the board.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task"],
+      "properties": {
+        "task": {
+          "$ref": "team_updates.json#/$defs/TeamTask"
+        }
+      }
+    },
+    "TeamTaskUpdated": {
+      "description": "A task on the board changed.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task"],
+      "properties": {
+        "task": {
+          "$ref": "team_updates.json#/$defs/TeamTask"
+        }
+      }
+    },
+    "TeamMemberStatus": {
+      "description": "A member changed state.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "status"],
+      "properties": {
+        "name": {
+          "$ref": "team_updates.json#/$defs/MemberName"
+        },
+        "status": {
+          "$ref": "team_updates.json#/$defs/MemberStatus"
+        },
+        "task_id": {
+          "type": "string",
+          "description": "Task the member works on, when it works on one.",
+          "minLength": 1
+        }
+      }
+    },
+    "TeamMessage": {
+      "description": "A member sent a message to another.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["message_id", "from", "to"],
+      "properties": {
+        "message_id": {
+          "type": "string",
+          "description": "Message identifier.",
+          "minLength": 1
+        },
+        "from": {
+          "$ref": "team_updates.json#/$defs/MemberName"
+        },
+        "to": {
+          "$ref": "team_updates.json#/$defs/MemberName"
+        },
+        "text": {
+          "type": "string",
+          "description": "Message text."
+        },
+        "content_ref": {
+          "type": "string",
+          "description": "Object store reference of the content when it does not fit in the frame.",
+          "minLength": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "not": {
+              "required": ["text"]
+            }
+          },
+          "then": {
+            "required": ["content_ref"]
+          }
+        }
+      ]
+    },
+    "UsageUpdate": {
+      "description": "Cumulative consumption of the run so far. Only the final value is persisted.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "credits"],
+      "properties": {
+        "input_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Prompt tokens at the normal input rate."
+        },
+        "output_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Completion tokens."
+        },
+        "cache_read_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Prompt tokens served from the cache."
+        },
+        "cache_write_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Prompt tokens written to the cache."
+        },
+        "credits": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Credits consumed."
+        },
+        "budget_credits": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Credits the run budget allows."
+        }
+      }
+    },
+    "ErrorData": {
+      "description": "An error. When terminal is true the run is over; consumers must not treat the stream as successful.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "terminal"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "Stable machine-readable error code.",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "description": "Human-readable message, without secrets."
+        },
+        "terminal": {
+          "type": "boolean",
+          "description": "Whether the error ended the run."
+        }
+      }
+    }
+  }
+}

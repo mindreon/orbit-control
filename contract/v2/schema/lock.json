@@ -1,0 +1,197 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orbit.mindreon.com/contract/v2/lock.json",
+  "description": "The run lock: the resolved asset versions a run executes and the permissions it may use.",
+  "x-exports": ["RunLock"],
+  "$defs": {
+    "RunLock": {
+      "description": "The resolved, immutable set of asset versions a run executes: the entry agent or team, every skill and MCP server reachable from it, the content digest of each file and the permissions the run may use at most. Control resolves it once at run start; the worker reads it, never re-resolves.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lock_id", "digest", "entry", "entries", "effective_permissions"],
+      "properties": {
+        "lock_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Identifier of the lock."
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "Digest over the entries and effective permissions; equal digests mean equal runs."
+        },
+        "entry": {
+          "$ref": "#/$defs/LockEntryRef"
+        },
+        "entries": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/LockEntry"
+          },
+          "description": "Every resolved asset version, the entry included."
+        },
+        "effective_permissions": {
+          "$ref": "#/$defs/EffectivePermissions"
+        }
+      }
+    },
+    "EntryKind": {
+      "description": "What a run starts from: a single agent or a team.",
+      "enum": ["agent", "team"]
+    },
+    "LockEntryRef": {
+      "description": "The asset the run starts from.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "ref", "version"],
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/EntryKind"
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Asset reference, publisher/name."
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.+-]+)?$",
+          "description": "Exact semantic version."
+        }
+      }
+    },
+    "AssetKind": {
+      "description": "Kind of a locked asset.",
+      "enum": ["agent", "team", "skill", "mcp_server"]
+    },
+    "LockFile": {
+      "description": "One file of an asset version.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "size_bytes"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Relative, normalized path inside the bundle."
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Hex sha256 of the content; the blob is stored under this key."
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Size of the content in bytes."
+        }
+      }
+    },
+    "LockEntry": {
+      "description": "One resolved asset version.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "ref", "version", "digest", "files"],
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/AssetKind"
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Asset reference, publisher/name."
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.+-]+)?$",
+          "description": "Exact semantic version."
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "Merkle digest over the paths and file digests of the version."
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LockFile"
+          },
+          "description": "Files of the version, sorted by path."
+        }
+      }
+    },
+    "SecretRequirement": {
+      "description": "A tenant secret the run may be granted.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "Secret name, as written in ${secret:NAME}."
+        }
+      }
+    },
+    "NetworkPermissions": {
+      "description": "Network rights of the run.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["egress"],
+      "properties": {
+        "egress": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Domain patterns the sandbox may reach; everything else is denied."
+        }
+      }
+    },
+    "EffectivePermissions": {
+      "description": "Upper bound of what the run may do: what the assets declare, intersected with tenant, workspace and user policy. Runtime policy can only narrow it further.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["network", "secrets", "effect_classes", "data_scopes", "sandbox_profile", "tools_builtin"],
+      "properties": {
+        "network": {
+          "$ref": "#/$defs/NetworkPermissions"
+        },
+        "secrets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SecretRequirement"
+          },
+          "description": "Secrets the run may be granted."
+        },
+        "effect_classes": {
+          "type": "array",
+          "items": {
+            "$ref": "common.json#/$defs/EffectClass"
+          },
+          "description": "Side-effect classes the run may perform."
+        },
+        "data_scopes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Data the run may read, for example session_files or workspace_knowledge:read."
+        },
+        "sandbox_profile": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Sandbox image and resource profile."
+        },
+        "tools_builtin": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Built-in tools the agent may use."
+        }
+      }
+    }
+  }
+}

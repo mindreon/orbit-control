@@ -1,0 +1,217 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orbit.mindreon.com/contract/v2/segment_result.json",
+  "description": "Result of the RunAgentSegment activity.",
+  "x-exports": ["SegmentResult"],
+  "$defs": {
+    "SegmentResult": {
+      "description": "Result of the RunAgentSegment activity. It is also what the worker stores in segment_results in the same transaction as the checkpoint, so a retry that finds it returns it unchanged.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "checkpoint_version", "artifacts", "usage", "progress", "signals"],
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/SegmentStatus"
+        },
+        "yield_reason": {
+          "$ref": "#/$defs/YieldReason"
+        },
+        "checkpoint_version": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Checkpoint version after the segment committed."
+        },
+        "interaction": {
+          "$ref": "interaction.json#/$defs/InteractionRequest"
+        },
+        "final": {
+          "$ref": "#/$defs/FinalMessage"
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "common.json#/$defs/Artifact"
+          },
+          "description": "Files the segment left in the output directory, to be published by the workflow after the commit."
+        },
+        "usage": {
+          "$ref": "common.json#/$defs/Usage"
+        },
+        "progress": {
+          "$ref": "#/$defs/SegmentProgress"
+        },
+        "signals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SegmentSignal"
+          },
+          "description": "Observations the workflow may act on, such as reliability findings."
+        },
+        "error": {
+          "$ref": "#/$defs/SegmentError"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "yielded"
+              }
+            },
+            "required": ["status"]
+          },
+          "then": {
+            "required": ["yield_reason"]
+          },
+          "else": {
+            "properties": {
+              "yield_reason": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "interrupted"
+              }
+            },
+            "required": ["status"]
+          },
+          "then": {
+            "required": ["interaction"]
+          },
+          "else": {
+            "properties": {
+              "interaction": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "failed"
+              }
+            },
+            "required": ["status"]
+          },
+          "then": {
+            "required": ["error"]
+          },
+          "else": {
+            "properties": {
+              "error": false
+            }
+          }
+        }
+      ]
+    },
+    "SegmentStatus": {
+      "description": "completed: the agent finished its work. interrupted: it waits for an interaction. yielded: it stopped at a bound and must continue in another segment. failed: it ended with an error.",
+      "enum": ["completed", "interrupted", "yielded", "failed"]
+    },
+    "YieldReason": {
+      "description": "Why a yielded segment stopped: iteration_cap, wall_cap, effect_boundary (an external write completed), budget_soft (segment budget reached), cancel (cooperative stop requested), goal_continue (the agent has more to do toward its goal), mailbox (a team message arrived that needs the next segment).",
+      "enum": [
+        "iteration_cap",
+        "wall_cap",
+        "effect_boundary",
+        "budget_soft",
+        "cancel",
+        "goal_continue",
+        "mailbox"
+      ]
+    },
+    "FinalMessage": {
+      "description": "The assistant message that ended the run turn.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["message_id", "text_preview"],
+      "properties": {
+        "message_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Identifier of the message, stable across retries."
+        },
+        "content_ref": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Object store reference of the full content."
+        },
+        "text_preview": {
+          "type": "string",
+          "description": "Leading part of the content for notifications and previews."
+        }
+      }
+    },
+    "SegmentProgress": {
+      "description": "What the segment did; the workflow counts segments without progress to detect a stuck run.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["iterations", "tool_calls", "new_output"],
+      "properties": {
+        "iterations": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "ReAct iterations executed."
+        },
+        "tool_calls": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Tool calls executed."
+        },
+        "new_output": {
+          "type": "boolean",
+          "description": "Whether the segment produced output the user has not seen."
+        }
+      }
+    },
+    "SignalLevel": {
+      "description": "Severity of a signal.",
+      "enum": ["info", "warn", "high"]
+    },
+    "SegmentSignal": {
+      "description": "One observation about the segment.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "level", "detail"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Category, for example reliability."
+        },
+        "level": {
+          "$ref": "#/$defs/SignalLevel"
+        },
+        "detail": {
+          "type": "string",
+          "description": "Human-readable detail, without secrets."
+        }
+      }
+    },
+    "SegmentError": {
+      "description": "Why the segment failed.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "retryable"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable machine-readable error code."
+        },
+        "message": {
+          "type": "string",
+          "description": "Human-readable message, without secrets."
+        },
+        "retryable": {
+          "type": "boolean",
+          "description": "Whether a new attempt of the same segment may succeed."
+        }
+      }
+    }
+  }
+}

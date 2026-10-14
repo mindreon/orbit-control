@@ -1,0 +1,9 @@
+{
+  "interaction_id": "ia-0003",
+  "kind": "effect_uncertain",
+  "effect": {
+    "effect_key": "dcb576426a17b7df13907007cb02a1f1dfc12fc6c69f603717abca59d03b888e",
+    "tool": "mail.send",
+    "args_preview": "{\"to\": \"legal@example.com\"}"
+  }
+}

@@ -27,6 +27,6 @@ The agent loop is **AgentScope on orbit-worker**, not this process. Do not add a
 | Public path or error shape | `docs/openapi.yaml` first | orch / worker repos |
 | HTTP mux | `internal/httpapi` | New frameworks |
 | Process entrypoint | `cmd/orbit-control` | Multiple public binaries |
-| Contract v3 types | `scripts/sync-contracts.sh` from orbit-runtime | Hand edits to `internal/contract/v3` |
+| Contract v2 (source of truth) | `contract/v2/schema`, then `scripts/gen-contracts.sh`; copy to orbit-runtime with its `scripts/sync-contracts.sh` | Hand edits to `internal/contract/contract_gen.go` |
 
 `orbit-web` must keep calling **only** this API.

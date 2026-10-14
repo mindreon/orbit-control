@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orbit.mindreon.com/contract/v2/team_manifest.json",
+  "description": "team.json of a team bundle.",
+  "x-exports": ["TeamManifest"],
+  "$defs": {
+    "TeamManifest": {
+      "description": "team.json of a team bundle. The bundle root is the leader's agent bundle; members reference other agent assets or embedded sub-bundles.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "name", "roles", "dispatch"],
+      "properties": {
+        "schema": {
+          "const": "orbit.team/v1",
+          "description": "Bundle format version."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Name of the team."
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.+-]+)?$",
+          "description": "Semantic version of the bundle. Published versions are immutable."
+        },
+        "description": {
+          "type": "string",
+          "description": "What the team is for."
+        },
+        "roles": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/TeamRoleSpec"
+          },
+          "contains": {
+            "properties": {
+              "role": {
+                "const": "leader"
+              }
+            },
+            "required": ["role"]
+          },
+          "minContains": 1,
+          "maxContains": 1,
+          "description": "Members of the team. Exactly one has the role leader."
+        },
+        "dispatch": {
+          "$ref": "#/$defs/DispatchMode"
+        },
+        "maxParallelMembers": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "How many members may run a task at the same time."
+        },
+        "review": {
+          "$ref": "#/$defs/ReviewPolicy"
+        },
+        "sharedSkills": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SharedSkill"
+          },
+          "description": "Skills every member gets in addition to its own."
+        }
+      }
+    },
+    "TeamRoleSpec": {
+      "description": "One entry of the roster.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "role", "agent"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+          "description": "Roster name, unique within the team. With count above 1 it is the prefix of the instance names."
+        },
+        "role": {
+          "$ref": "team_updates.json#/$defs/TeamRole"
+        },
+        "agent": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The agent: . for the bundle root, a relative path such as ./members/reviewer for an embedded sub-bundle, or an asset reference publisher/name@range."
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "How many instances of this member the team has. Defaults to 1."
+        }
+      }
+    },
+    "DispatchMode": {
+      "description": "scheduled: the leader assigns tasks and the workflow starts them when their dependencies are done. Autonomous claiming is not part of this version.",
+      "enum": ["scheduled"]
+    },
+    "ReviewMode": {
+      "description": "veto: a task is approved only if no reviewer rejects it.",
+      "enum": ["veto"]
+    },
+    "ReviewPolicy": {
+      "description": "How task results are reviewed.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/ReviewMode"
+        }
+      }
+    },
+    "SharedSkill": {
+      "description": "A catalog skill shared by all members.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Catalog skill, publisher/name."
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Semantic version or range such as ^1.0."
+        }
+      }
+    }
+  }
+}

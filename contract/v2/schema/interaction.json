@@ -1,0 +1,243 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orbit.mindreon.com/contract/v2/interaction.json",
+  "description": "Human-in-the-loop: a request that parks a run until someone answers, and the answer that resumes it.",
+  "x-exports": ["InteractionRequest", "Decision"],
+  "$defs": {
+    "InteractionKind": {
+      "description": "What a run waits for: approval of a tool call, an answer to a question the agent asked, or a person's ruling on an external effect whose outcome is unknown after a crash.",
+      "enum": ["tool_approval", "ask_user", "effect_uncertain"]
+    },
+    "ToolApprovalRequest": {
+      "description": "The tool call that needs approval.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "args_preview", "effect_class", "risk_reasons"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Tool name as the agent calls it."
+        },
+        "args_preview": {
+          "type": "string",
+          "description": "Arguments rendered for a human, truncated and with secrets masked."
+        },
+        "effect_class": {
+          "$ref": "common.json#/$defs/EffectClass"
+        },
+        "risk_reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Why the policy asks: the matched rules and the shell or path findings, in plain text."
+        }
+      }
+    },
+    "Question": {
+      "description": "A question the agent put to the user.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text"],
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The question."
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Suggested answers; the user may still answer freely."
+        }
+      }
+    },
+    "UncertainEffect": {
+      "description": "An external write that started and may or may not have happened.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["effect_key", "tool", "args_preview"],
+      "properties": {
+        "effect_key": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Key of the effect ledger row: sha256 over run, member, checkpoint version, tool and canonical arguments."
+        },
+        "tool": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Tool that performed the write."
+        },
+        "args_preview": {
+          "type": "string",
+          "description": "Arguments rendered for a human, truncated and with secrets masked."
+        }
+      }
+    },
+    "InteractionRequest": {
+      "description": "A request for a decision. Exactly the member that matches kind is present: tool for tool_approval, question for ask_user, effect for effect_uncertain.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["interaction_id", "kind"],
+      "properties": {
+        "interaction_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Identifier of the interaction, unique within the run."
+        },
+        "kind": {
+          "$ref": "#/$defs/InteractionKind"
+        },
+        "tool": {
+          "$ref": "#/$defs/ToolApprovalRequest"
+        },
+        "question": {
+          "$ref": "#/$defs/Question"
+        },
+        "effect": {
+          "$ref": "#/$defs/UncertainEffect"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "tool_approval"
+              }
+            },
+            "required": ["kind"]
+          },
+          "then": {
+            "required": ["tool"],
+            "properties": {
+              "question": false,
+              "effect": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "ask_user"
+              }
+            },
+            "required": ["kind"]
+          },
+          "then": {
+            "required": ["question"],
+            "properties": {
+              "tool": false,
+              "effect": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "effect_uncertain"
+              }
+            },
+            "required": ["kind"]
+          },
+          "then": {
+            "required": ["effect"],
+            "properties": {
+              "tool": false,
+              "question": false
+            }
+          }
+        }
+      ]
+    },
+    "DecisionChoice": {
+      "description": "A fixed answer. tool_approval takes allow_once, allow_session, allow_always or deny; effect_uncertain takes treat_as_done, retry or abandon. allow_session and allow_always are persisted as permission grants.",
+      "enum": ["allow_once", "allow_session", "allow_always", "deny", "treat_as_done", "retry", "abandon"]
+    },
+    "Decision": {
+      "description": "The answer to an InteractionRequest of the same kind: choice for tool_approval and effect_uncertain, answer for ask_user.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/InteractionKind"
+        },
+        "choice": {
+          "$ref": "#/$defs/DecisionChoice"
+        },
+        "comment": {
+          "type": "string",
+          "description": "Optional note from the approver, shown to the agent when the call is denied."
+        },
+        "answer": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The user's answer to the question."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "tool_approval"
+              }
+            },
+            "required": ["kind"]
+          },
+          "then": {
+            "required": ["choice"],
+            "properties": {
+              "choice": {
+                "enum": ["allow_once", "allow_session", "allow_always", "deny"]
+              },
+              "answer": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "ask_user"
+              }
+            },
+            "required": ["kind"]
+          },
+          "then": {
+            "required": ["answer"],
+            "properties": {
+              "choice": false,
+              "comment": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "effect_uncertain"
+              }
+            },
+            "required": ["kind"]
+          },
+          "then": {
+            "required": ["choice"],
+            "properties": {
+              "choice": {
+                "enum": ["treat_as_done", "retry", "abandon"]
+              },
+              "answer": false
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "schema": "orbit.agent/v2",
+  "name": "a",
+  "model": {
+    "fallback": ["x"]
+  }
+}

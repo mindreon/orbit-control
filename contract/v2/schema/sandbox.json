@@ -1,0 +1,194 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orbit.mindreon.com/contract/v2/sandbox.json",
+  "description": "Inputs and results of the sandbox lifecycle activities, which the SandboxLeaseWorkflow (Go) calls on the sandbox task queue (Python).",
+  "x-exports": [
+    "SandboxAcquireInput",
+    "SandboxLease",
+    "SandboxOpInput",
+    "SandboxSnapshotResult",
+    "SandboxConfigureInput"
+  ],
+  "$defs": {
+    "SandboxProvider": {
+      "description": "Backend of the sandbox: opensandbox in production, docker for development, local for tests only.",
+      "enum": ["opensandbox", "docker", "local"]
+    },
+    "MountKind": {
+      "description": "skills: the locked skills, read-only at /skills. agent: the locked agent bundle, read-only at /agent.",
+      "enum": ["skills", "agent"]
+    },
+    "SandboxMount": {
+      "description": "A read-only mount of locked assets.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "lock_id"],
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/MountKind"
+        },
+        "lock_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Lock whose files are mounted."
+        }
+      }
+    },
+    "SandboxAcquireInput": {
+      "description": "Create, resume or restore the sandbox of an isolation key and configure it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tenant_id", "isolation_key", "profile", "egress", "secret_names", "mounts"],
+      "properties": {
+        "tenant_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Tenant that owns the sandbox."
+        },
+        "isolation_key": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Key that scopes sandbox reuse, normally derived from tenant and session."
+        },
+        "profile": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Sandbox image and resource profile."
+        },
+        "egress": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Allowed outbound domain patterns; everything else is denied."
+        },
+        "secret_names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Names of the secrets the sandbox gets credential injection for. Values never appear here."
+        },
+        "mounts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SandboxMount"
+          },
+          "description": "Read-only asset mounts."
+        },
+        "member": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Team member that needs an isolated session inside the shared sandbox."
+        }
+      }
+    },
+    "SandboxLease": {
+      "description": "A ready sandbox held for a time.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "sandbox_id", "expires_at"],
+      "properties": {
+        "provider": {
+          "$ref": "#/$defs/SandboxProvider"
+        },
+        "sandbox_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Provider identifier of the sandbox."
+        },
+        "isolated_session_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Isolated session of the requesting team member."
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the provider reclaims the sandbox unless it is renewed."
+        }
+      }
+    },
+    "SandboxOpInput": {
+      "description": "Input of the lifecycle operations that address an existing sandbox: renew, pause, resume, snapshot, destroy and snapshot delete.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tenant_id", "provider", "sandbox_id", "isolation_key"],
+      "properties": {
+        "tenant_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Tenant that owns the sandbox."
+        },
+        "provider": {
+          "$ref": "#/$defs/SandboxProvider"
+        },
+        "sandbox_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Provider identifier of the sandbox."
+        },
+        "isolation_key": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Isolation key the sandbox was acquired with."
+        }
+      }
+    },
+    "SandboxSnapshotResult": {
+      "description": "Result of a snapshot.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["snapshot_id"],
+      "properties": {
+        "snapshot_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Provider identifier of the snapshot."
+        }
+      }
+    },
+    "SandboxConfigureInput": {
+      "description": "Reconfigure a running sandbox after a permission change: egress rules, credential bindings and mounts.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tenant_id", "isolation_key", "lease", "egress", "secret_names", "mounts"],
+      "properties": {
+        "tenant_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Tenant that owns the sandbox."
+        },
+        "isolation_key": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Isolation key the sandbox was acquired with."
+        },
+        "lease": {
+          "$ref": "#/$defs/SandboxLease"
+        },
+        "egress": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Allowed outbound domain patterns; replaces the current rules."
+        },
+        "secret_names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Names of the secrets to bind; replaces the current bindings."
+        },
+        "mounts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SandboxMount"
+          },
+          "description": "Read-only asset mounts; replaces the current mounts."
+        }
+      }
+    }
+  }
+}

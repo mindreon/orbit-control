@@ -1,0 +1,6 @@
+{
+  "schema": "orbit.agent/v1",
+  "name": "Contract assistant",
+  "description": "Compares contract clauses.",
+  "model": "default"
+}
