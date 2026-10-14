@@ -67,7 +67,7 @@ func testUsageAndEvents(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	}
 	key := ids.New()
 	at := time.Now().UTC()
-	entry := usage.Entry{TenantID: tenant, RunID: &run, Source: "model", Meter: "tokens", Quantity: "7", UnitPrice: "0.1", Credits: "0.7", IdempotencyKey: key, OccurredAt: at}
+	entry := usage.Entry{TenantID: tenant, RunID: &run, Source: "model", Meter: "tokens", Quantity: "7", UnitPrice: "100", Millicredits: 700, IdempotencyKey: key, OccurredAt: at}
 	var wg sync.WaitGroup
 	results := make(chan bool, 6)
 	errs := make(chan error, 6)
@@ -116,14 +116,14 @@ func testUsageAndEvents(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	if err := admin.QueryRow(ctx, "SELECT count(*) FROM usage_keys WHERE tenant_id=$1 AND idempotency_key=$2", tenant, bad.IdempotencyKey).Scan(&n); err != nil || n != 0 {
 		t.Fatal("orphan claim after rollback", n, err)
 	}
-	event := run + ":leader:1:1:0"
+	event := run + ":leader:1:1:1"
 	if err := d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
 		for range 2 {
 			if _, err := tx.Exec(ctx, `INSERT INTO run_events(tenant_id,run_id,seq,event_id,type,payload,ts) VALUES($1,$2,1,$3,'test','{}',$4) ON CONFLICT DO NOTHING`, tenant, run, event, at); err != nil {
 				return err
 			}
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO run_events(tenant_id,run_id,seq,event_id,type,payload,ts) VALUES($1,$2,1,$3,'test','{}',$4)`, tenant, run, run+":follower:1:1:0", at); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO run_events(tenant_id,run_id,seq,event_id,type,payload,ts) VALUES($1,$2,1,$3,'test','{}',$4)`, tenant, run, run+":follower:1:1:1", at); err != nil {
 			return err
 		}
 		return tx.QueryRow(ctx, "SELECT count(*) FROM run_events WHERE event_id=$1", event).Scan(&n)

@@ -12,11 +12,12 @@ import (
 )
 
 type Entry struct {
-	TenantID                                                    string
-	WorkspaceID, PrincipalID, RunID                             *string
-	SegmentSeq                                                  *int
-	Source, Meter, Quantity, UnitPrice, Credits, IdempotencyKey string
-	OccurredAt                                                  time.Time
+	TenantID                                           string
+	WorkspaceID, PrincipalID, RunID                    *string
+	SegmentSeq                                         *int
+	Source, Meter, Quantity, UnitPrice, IdempotencyKey string
+	Millicredits                                       int64
+	OccurredAt                                         time.Time
 }
 
 // RecordUsage claims the key and appends the ledger entry in the caller's tenant
@@ -31,7 +32,7 @@ func RecordUsage(ctx context.Context, tx pgx.Tx, e Entry) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO usage_ledger(id,tenant_id,workspace_id,principal_id,run_id,segment_seq,source,meter,quantity,unit_price,credits,idempotency_key,occurred_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, ids.New(), e.TenantID, e.WorkspaceID, e.PrincipalID, e.RunID, e.SegmentSeq, e.Source, e.Meter, e.Quantity, e.UnitPrice, e.Credits, e.IdempotencyKey, e.OccurredAt)
+	_, err = tx.Exec(ctx, `INSERT INTO usage_ledger(id,tenant_id,workspace_id,principal_id,run_id,segment_seq,source,meter,quantity,unit_price,millicredits,idempotency_key,occurred_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, ids.New(), e.TenantID, e.WorkspaceID, e.PrincipalID, e.RunID, e.SegmentSeq, e.Source, e.Meter, e.Quantity, e.UnitPrice, e.Millicredits, e.IdempotencyKey, e.OccurredAt)
 	return err == nil, err
 }
 

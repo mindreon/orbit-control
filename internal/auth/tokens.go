@@ -112,6 +112,7 @@ type CapabilityClaims struct {
 	Run     string `json:"run"`
 	Member  string `json:"member"`
 	Seq     int    `json:"seq"`
+	Attempt int    `json:"attempt"`
 	Purpose string `json:"purpose"`
 	LeaseID string `json:"lease_id,omitempty"`
 }
@@ -139,7 +140,7 @@ func NewCapabilitySigner(key ed25519.PrivateKey, kid string, publicKeys map[stri
 	return &CapabilitySigner{key: key, kid: kid, publicKeys: keys}, nil
 }
 func (s *CapabilitySigner) IssueCapability(c CapabilityClaims) (string, error) {
-	if !ids.Valid(c.Tenant) || !ids.Valid(c.Run) || c.Member == "" || c.Seq < 1 || c.Purpose == "" {
+	if !ids.Valid(c.Tenant) || !ids.Valid(c.Run) || c.Member == "" || c.Seq < 1 || c.Attempt < 1 || (c.Purpose != "segment" && c.Purpose != "sandbox") || (c.Purpose == "sandbox" && c.LeaseID == "") {
 		return "", fmt.Errorf("invalid capability identity")
 	}
 	c.RegisteredClaims = registered(CapabilityIssuer, "run:"+c.Run, "kernel", 5*time.Minute)
