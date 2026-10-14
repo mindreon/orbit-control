@@ -128,7 +128,7 @@ func (s *Service) Version(ctx context.Context, asset, id string) (Version, error
 		return v, httpx.E(404, "NOT_FOUND", "Version not found")
 	}
 	var m, p []byte
-	err := db.Tx(ctx).QueryRow(ctx, `SELECT id::text,asset_id::text,version,manifest,content_digest,blob_index_ref,permissions,state,COALESCE(signature,''),created_at,release_error,COALESCE(uploaded_by::text,''),permissions_jcs,identity_jcs FROM asset_versions WHERE tenant_id=$1 AND asset_id=$2 AND id=$3`, auth.Tenant(ctx), asset, id).Scan(&v.ID, &v.AssetID, &v.Version, &m, &v.Digest, &v.BlobRef, &p, &v.State, &v.Signature, &v.CreatedAt, &v.ReleaseError, &v.UploadedBy, &v.PermissionsJCS, &v.IdentityJCS)
+	err := db.Tx(ctx).QueryRow(ctx, `SELECT id::text,asset_id::text,version,manifest,content_digest,blob_index_ref,permissions,state,COALESCE(signature,''),created_at,release_error,uploaded_by::text,permissions_jcs,identity_jcs FROM asset_versions WHERE tenant_id=$1 AND asset_id=$2 AND id=$3`, auth.Tenant(ctx), asset, id).Scan(&v.ID, &v.AssetID, &v.Version, &m, &v.Digest, &v.BlobRef, &p, &v.State, &v.Signature, &v.CreatedAt, &v.ReleaseError, &v.UploadedBy, &v.PermissionsJCS, &v.IdentityJCS)
 	if err != nil {
 		return v, err
 	}

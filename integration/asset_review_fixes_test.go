@@ -1,11 +1,13 @@
 package integration
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/mindreon/orbit-control/internal/assets"
 	"github.com/mindreon/orbit-control/internal/assets/bundle"
 	"github.com/mindreon/orbit-control/internal/auth"
@@ -250,6 +252,27 @@ func testTeamPermissionDiff(t *testing.T, d *db.DB, s *assets.Service, a *assetr
 // Guard SQL privileges through the actual app role, including draft versions.
 func testAssetImmutability(t *testing.T, d *db.DB, tenant, version string) {
 	t.Helper()
+	for _, column := range []string{"uploaded_by", "permissions_jcs", "identity_jcs"} {
+		t.Run(column, func(t *testing.T) {
+			err := d.WithTenant(t.Context(), tenant, func(tx pgx.Tx) error {
+				_, err := tx.Exec(t.Context(), `INSERT INTO asset_versions
+				 SELECT (jsonb_populate_record(NULL::asset_versions,
+				 to_jsonb(v) || jsonb_build_object('id',$2::text,'version','9.9.9',$3::text,NULL))).*
+				 FROM asset_versions v WHERE tenant_id=$4 AND id=$1`, version, ids.New(), column, tenant)
+				return err
+			})
+			if pgErr, ok := errors.AsType[*pgconn.PgError](err); !ok || pgErr.Code != "23502" || pgErr.ColumnName != column {
+				t.Fatalf("missing %s accepted: %v", column, err)
+			}
+			err = d.WithTenant(t.Context(), tenant, func(tx pgx.Tx) error {
+				_, err := tx.Exec(t.Context(), "UPDATE asset_versions SET "+pgx.Identifier{column}.Sanitize()+"=NULL WHERE tenant_id=$2 AND id=$1", version, tenant)
+				return err
+			})
+			if pgErr, ok := errors.AsType[*pgconn.PgError](err); !ok || pgErr.Code != "23514" {
+				t.Fatalf("immutable %s changed: %v", column, err)
+			}
+		})
+	}
 	for _, query := range []string{`DELETE FROM asset_versions WHERE id=$1`, `DELETE FROM asset_files WHERE version_id=$1`, `UPDATE asset_files SET size_bytes=0 WHERE version_id=$1`} {
 		err := d.WithTenant(t.Context(), tenant, func(tx pgx.Tx) error { _, err := tx.Exec(t.Context(), query, version); return err })
 		if err == nil || !strings.Contains(err.Error(), "permission denied") {

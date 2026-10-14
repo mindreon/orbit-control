@@ -54,7 +54,7 @@ func TestSignatureTampering(t *testing.T) {
 	if e = s.Verify(a, v); e != nil {
 		t.Fatal(e)
 	}
-	for name, mutate := range map[string]func(*Asset, *Version){"digest": func(a *Asset, v *Version) { v.Digest += "1" }, "permissions": func(a *Asset, v *Version) { v.Permissions.Network.Egress = []string{"evil.test"} }, "publisher": func(a *Asset, v *Version) { a.Publisher = "other" }, "version": func(a *Asset, v *Version) { v.Version = "2.0.0" }} {
+	for name, mutate := range map[string]func(*Asset, *Version){"digest": func(a *Asset, v *Version) { v.Digest += "1" }, "permissions": func(a *Asset, v *Version) { v.Permissions.Network.Egress = []string{"evil.test"} }, "publisher": func(a *Asset, v *Version) { a.Publisher = "other" }, "version": func(a *Asset, v *Version) { v.Version = "2.0.0" }, "identity bytes": func(a *Asset, v *Version) { v.IdentityJCS = nil }, "permission bytes": func(a *Asset, v *Version) { v.PermissionsJCS = nil }} {
 		t.Run(name, func(t *testing.T) {
 			a, v := a, v
 			mutate(&a, &v)

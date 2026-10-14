@@ -44,20 +44,27 @@ func TestPostgresSuite(t *testing.T) {
 	}
 	ctx := t.Context()
 	owner := roleURL(t, raw, "orbit_owner")
-	for step, command := range []string{"up", "down", "down", "down", "up", "up"} {
+	for _, command := range []string{"up", "down", "up", "up"} {
 		if e := migrations.Run(ctx, owner, command); e != nil {
 			t.Fatalf("migrate %s: %v", command, e)
 		}
-		if command == "down" && step == 3 {
+		if command == "down" {
 			conn, err := pgx.Connect(ctx, raw)
 			if err != nil {
 				t.Fatal(err)
 			}
 			var canCreate bool
+			defer conn.Close(ctx)
 			err = conn.QueryRow(ctx, "SELECT has_schema_privilege('orbit_app','public','CREATE')").Scan(&canCreate)
-			conn.Close(ctx)
 			if err != nil || !canCreate {
 				t.Fatal("down did not restore public CREATE", canCreate, err)
+			}
+			var remaining int
+			err = conn.QueryRow(ctx, `SELECT
+			 (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename<>'goose_db_version') +
+			 (SELECT count(*) FROM pg_proc WHERE pronamespace='public'::regnamespace)`).Scan(&remaining)
+			if err != nil || remaining != 0 {
+				t.Fatal("down left schema objects", remaining, err)
 			}
 		}
 	}
@@ -305,7 +312,7 @@ func insertFixture(t *testing.T, admin *pgx.Conn, app *db.DB, table, base, tenan
 				v = idmap[base]
 			case "tenant_id":
 				v = tenant
-			case "principal_id", "owner_id", "actor_id", "created_by", "reviewer_id", "granted_by", "updated_by":
+			case "principal_id", "owner_id", "actor_id", "created_by", "reviewer_id", "granted_by", "updated_by", "uploaded_by":
 				v = pid
 			case "group_id":
 				v = idmap["groups"]

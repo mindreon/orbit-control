@@ -405,9 +405,6 @@ compare every member's tools, data scopes, effects, secrets, network and sandbox
 profile, including newly requested rights already held by another member.
 Signatures cover the stored canonical JCS identity and the complete canonical
 permission payload, preserving unknown future fields without re-marshalling them.
-Versions uploaded before migration 00003 have no stored canonical preimage and
-fail signature verification; upload a new version rather than automatically
-re-signing those historical declarations.
 
 ### Market snapshot import
 

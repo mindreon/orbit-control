@@ -45,9 +45,6 @@ func SigningIdentity(a Asset, version, digest string, permissions []byte) ([]byt
 	return jcs.Canonicalize(b)
 }
 func signedBytes(a Asset, v Version) ([]byte, error) {
-	if len(v.IdentityJCS) == 0 || len(v.PermissionsJCS) == 0 {
-		return nil, fmt.Errorf("asset signing preimage missing")
-	}
 	canonical, err := jcs.Canonicalize(v.IdentityJCS)
 	if err != nil || !bytes.Equal(canonical, v.IdentityJCS) {
 		return nil, fmt.Errorf("asset signing preimage is not canonical")

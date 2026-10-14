@@ -70,7 +70,7 @@ CREATE TABLE runs (
   id uuid PRIMARY KEY, tenant_id uuid NOT NULL, session_id uuid NOT NULL, trigger text NOT NULL CHECK(trigger IN ('user_message','schedule','api','channel','resume')), status text NOT NULL CHECK(status IN ('queued','running','waiting_input','waiting_approval','paused','succeeded','failed','cancelled','budget_exhausted','timed_out')), lock_id uuid, created_by uuid REFERENCES principals(id), message_id uuid, budget_millicredits bigint NOT NULL DEFAULT 0, used_millicredits bigint NOT NULL DEFAULT 0, temporal_workflow_id text, started_at timestamptz, ended_at timestamptz, error_code text, summary text, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(tenant_id,id), FOREIGN KEY(tenant_id,session_id) REFERENCES sessions(tenant_id,id)
 );
 CREATE TABLE run_locks (
-  id uuid PRIMARY KEY, tenant_id uuid NOT NULL, run_id uuid NOT NULL, digest text NOT NULL, entries jsonb NOT NULL, effective_permissions jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(tenant_id,id), FOREIGN KEY(tenant_id,run_id) REFERENCES runs(tenant_id,id)
+  id uuid PRIMARY KEY, tenant_id uuid NOT NULL, run_id uuid NOT NULL, digest text NOT NULL, entries jsonb NOT NULL, effective_permissions jsonb NOT NULL, lock jsonb, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(tenant_id,id), FOREIGN KEY(tenant_id,run_id) REFERENCES runs(tenant_id,id)
 );
 CREATE TABLE messages (
   id uuid PRIMARY KEY, tenant_id uuid NOT NULL, session_id uuid NOT NULL, run_id uuid, role text NOT NULL CHECK(role IN ('user','assistant','system','tool_summary')), author_id uuid REFERENCES principals(id), content jsonb, content_ref text, created_at timestamptz NOT NULL DEFAULT now(), FOREIGN KEY(tenant_id,session_id) REFERENCES sessions(tenant_id,id), FOREIGN KEY(tenant_id,run_id) REFERENCES runs(tenant_id,id)
@@ -147,7 +147,7 @@ CREATE TABLE assets (
   id uuid PRIMARY KEY, tenant_id uuid NOT NULL REFERENCES tenants(id), publisher text NOT NULL, kind text NOT NULL CHECK(kind IN ('skill','agent','team','mcp_server')), name text NOT NULL, visibility text NOT NULL CHECK(visibility IN ('private','workspace','tenant')), workspace_id uuid, owner_id uuid NOT NULL REFERENCES principals(id), status text NOT NULL CHECK(status IN ('active','suspended','archived')), latest_version text, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(tenant_id,id), UNIQUE(tenant_id,publisher,kind,name), FOREIGN KEY(tenant_id,workspace_id) REFERENCES workspaces(tenant_id,id)
 );
 CREATE TABLE asset_versions (
-  id uuid PRIMARY KEY, tenant_id uuid NOT NULL, asset_id uuid NOT NULL, version text NOT NULL, manifest jsonb NOT NULL, content_digest text NOT NULL, blob_index_ref text NOT NULL, permissions jsonb NOT NULL, compat jsonb NOT NULL, state text NOT NULL CHECK(state IN ('draft','submitted','checking','check_failed','in_review','changes_requested','approved','published','deprecated','suspended','yanked','rejected')), signature text, submitted_by uuid REFERENCES principals(id), published_at timestamptz, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(tenant_id,id), UNIQUE(tenant_id,asset_id,version), FOREIGN KEY(tenant_id,asset_id) REFERENCES assets(tenant_id,id)
+  id uuid PRIMARY KEY, tenant_id uuid NOT NULL, asset_id uuid NOT NULL, version text NOT NULL, manifest jsonb NOT NULL, content_digest text NOT NULL, blob_index_ref text NOT NULL, permissions jsonb NOT NULL, compat jsonb NOT NULL, state text NOT NULL CHECK(state IN ('draft','submitted','checking','check_failed','in_review','changes_requested','approved','published','deprecated','suspended','yanked','rejected')), signature text, release_channel text NOT NULL DEFAULT 'stable', release_started boolean NOT NULL DEFAULT false, withdraw_requested boolean NOT NULL DEFAULT false, withdraw_delivered boolean NOT NULL DEFAULT false, review_required int NOT NULL DEFAULT 1 CHECK(review_required BETWEEN 1 AND 20), workspace_review boolean NOT NULL DEFAULT true, previous_version_id uuid, previous_channel_id uuid, release_generation int NOT NULL DEFAULT 0, uploaded_by uuid NOT NULL REFERENCES principals(id), release_error text, release_retryable boolean NOT NULL DEFAULT true, permissions_jcs bytea NOT NULL, identity_jcs bytea NOT NULL, submitted_by uuid REFERENCES principals(id), published_at timestamptz, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(tenant_id,id), UNIQUE(tenant_id,asset_id,version), FOREIGN KEY(tenant_id,asset_id) REFERENCES assets(tenant_id,id)
 );
 CREATE TABLE asset_files (
   tenant_id uuid NOT NULL, version_id uuid NOT NULL, path text NOT NULL, sha256 text NOT NULL, size_bytes bigint NOT NULL, is_text boolean NOT NULL, blob_ref text NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(tenant_id,version_id,path), FOREIGN KEY(tenant_id,version_id) REFERENCES asset_versions(tenant_id,id)
@@ -156,7 +156,7 @@ CREATE TABLE asset_dependencies (
   tenant_id uuid NOT NULL, version_id uuid NOT NULL, dep_kind text NOT NULL CHECK(dep_kind IN ('skill','agent','team','mcp_server')), dep_ref text NOT NULL, "constraint" text NOT NULL, resolved_version_id uuid, created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(tenant_id,version_id,dep_kind,dep_ref), FOREIGN KEY(tenant_id,version_id) REFERENCES asset_versions(tenant_id,id), FOREIGN KEY(tenant_id,resolved_version_id) REFERENCES asset_versions(tenant_id,id)
 );
 CREATE TABLE asset_channels (
-  tenant_id uuid NOT NULL, asset_id uuid NOT NULL, channel text NOT NULL CHECK(channel IN ('stable','beta')), version_id uuid NOT NULL, updated_by uuid NOT NULL REFERENCES principals(id), updated_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(tenant_id,asset_id,channel), FOREIGN KEY(tenant_id,asset_id) REFERENCES assets(tenant_id,id), FOREIGN KEY(tenant_id,version_id) REFERENCES asset_versions(tenant_id,id)
+  tenant_id uuid NOT NULL, asset_id uuid NOT NULL, channel text NOT NULL CHECK(channel ~ '^[a-z][a-z0-9_-]{0,63}$'), version_id uuid NOT NULL, updated_by uuid NOT NULL REFERENCES principals(id), updated_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(tenant_id,asset_id,channel), FOREIGN KEY(tenant_id,asset_id) REFERENCES assets(tenant_id,id), FOREIGN KEY(tenant_id,version_id) REFERENCES asset_versions(tenant_id,id)
 );
 CREATE TABLE asset_grants (
   tenant_id uuid NOT NULL, asset_id uuid NOT NULL, grantee_type text NOT NULL CHECK(grantee_type IN ('user','service','group','workspace','tenant')), grantee_id uuid NOT NULL, permission text NOT NULL CHECK(permission IN ('use','maintain')), created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(tenant_id,asset_id,grantee_type,grantee_id,permission), FOREIGN KEY(tenant_id,asset_id) REFERENCES assets(tenant_id,id)
@@ -168,8 +168,22 @@ CREATE TABLE asset_check_reports (
   id uuid PRIMARY KEY, tenant_id uuid NOT NULL, version_id uuid NOT NULL, "check" text NOT NULL, status text NOT NULL CHECK(status IN ('pass','warn','fail')), findings jsonb NOT NULL, evidence_ref text, created_at timestamptz NOT NULL DEFAULT now(), FOREIGN KEY(tenant_id,version_id) REFERENCES asset_versions(tenant_id,id)
 );
 CREATE TABLE asset_reviews (
-  id uuid PRIMARY KEY, tenant_id uuid NOT NULL, version_id uuid NOT NULL, reviewer_id uuid NOT NULL REFERENCES principals(id), decision text NOT NULL CHECK(decision IN ('approve','request_changes','reject')), comment text NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), FOREIGN KEY(tenant_id,version_id) REFERENCES asset_versions(tenant_id,id)
+  id uuid PRIMARY KEY, tenant_id uuid NOT NULL, version_id uuid NOT NULL, reviewer_id uuid NOT NULL REFERENCES principals(id), decision text NOT NULL CHECK(decision IN ('approve','request_changes','reject')), comment text NOT NULL, generation int NOT NULL DEFAULT 0, delivered boolean NOT NULL DEFAULT false, created_at timestamptz NOT NULL DEFAULT now(), FOREIGN KEY(tenant_id,version_id) REFERENCES asset_versions(tenant_id,id)
 );
+CREATE UNIQUE INDEX asset_review_once ON asset_reviews(tenant_id,version_id,generation,reviewer_id);
+CREATE UNIQUE INDEX asset_report_once ON asset_check_reports(tenant_id,version_id,"check");
+CREATE UNIQUE INDEX asset_install_scope ON asset_installs(tenant_id,scope_type,scope_id,asset_id);
+-- Prevent any caller (including owner) from replacing a version's frozen content.
+-- +goose StatementBegin
+CREATE FUNCTION protect_asset_content() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF (NEW.asset_id,NEW.version,NEW.manifest,NEW.content_digest,NEW.blob_index_ref,NEW.permissions,NEW.compat,NEW.uploaded_by,NEW.permissions_jcs,NEW.identity_jcs)
+ IS DISTINCT FROM (OLD.asset_id,OLD.version,OLD.manifest,OLD.content_digest,OLD.blob_index_ref,OLD.permissions,OLD.compat,OLD.uploaded_by,OLD.permissions_jcs,OLD.identity_jcs)
+ THEN RAISE EXCEPTION 'asset version content is immutable' USING ERRCODE='23514'; END IF;
+ RETURN NEW;
+END $$;
+-- +goose StatementEnd
+CREATE TRIGGER asset_content_immutable BEFORE UPDATE ON asset_versions FOR EACH ROW EXECUTE FUNCTION protect_asset_content();
 CREATE TABLE quota_policies (
   id uuid PRIMARY KEY, tenant_id uuid NOT NULL REFERENCES tenants(id), scope_type text NOT NULL CHECK(scope_type IN ('tenant','workspace','user','run')), scope_id uuid NOT NULL, metric text NOT NULL CHECK(metric IN ('millicredits','tokens','runs_concurrent','sandbox_minutes','storage_bytes','schedules','assets_published')), "limit" numeric NOT NULL, period text NOT NULL CHECK(period IN ('hour','day','month','total')), action text NOT NULL CHECK(action IN ('block','warn','degrade')), created_at timestamptz NOT NULL DEFAULT now()
 );
@@ -402,11 +416,11 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON assets TO orbit_app;
 ALTER TABLE asset_versions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE asset_versions FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON asset_versions USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
-GRANT SELECT, INSERT, UPDATE, DELETE ON asset_versions TO orbit_app;
+GRANT SELECT, INSERT, UPDATE ON asset_versions TO orbit_app;
 ALTER TABLE asset_files ENABLE ROW LEVEL SECURITY;
 ALTER TABLE asset_files FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON asset_files USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
-GRANT SELECT, INSERT, UPDATE, DELETE ON asset_files TO orbit_app;
+GRANT SELECT, INSERT ON asset_files TO orbit_app;
 ALTER TABLE asset_dependencies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE asset_dependencies FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON asset_dependencies USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
@@ -548,6 +562,7 @@ DROP TABLE asset_channels CASCADE;
 DROP TABLE asset_dependencies CASCADE;
 DROP TABLE asset_files CASCADE;
 DROP TABLE asset_versions CASCADE;
+DROP FUNCTION protect_asset_content();
 DROP TABLE assets CASCADE;
 DROP TABLE permission_grants CASCADE;
 DROP TABLE schedules CASCADE;

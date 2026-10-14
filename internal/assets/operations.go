@@ -119,7 +119,7 @@ func (s *Service) Review(ctx context.Context, id, decision, comment string) (str
 	}
 	var assetID, submitter, uploader, state string
 	var generation int
-	if err := db.Tx(ctx).QueryRow(ctx, `SELECT asset_id::text,COALESCE(submitted_by::text,''),COALESCE(uploaded_by::text,''),state,release_generation FROM asset_versions WHERE tenant_id=$2 AND id=$1 FOR UPDATE`, id, auth.Tenant(ctx)).Scan(&assetID, &submitter, &uploader, &state, &generation); err != nil {
+	if err := db.Tx(ctx).QueryRow(ctx, `SELECT asset_id::text,COALESCE(submitted_by::text,''),uploaded_by::text,state,release_generation FROM asset_versions WHERE tenant_id=$2 AND id=$1 FOR UPDATE`, id, auth.Tenant(ctx)).Scan(&assetID, &submitter, &uploader, &state, &generation); err != nil {
 		return "", err
 	}
 	a, err := s.Get(ctx, assetID, "asset.review")
