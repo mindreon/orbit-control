@@ -53,13 +53,32 @@ func (a *Activities) SnapshotAssetRelease(ctx context.Context, in Input) (Snapsh
 			if err := assets.SetState(ctx, v.ID, "checking"); err != nil {
 				return err
 			}
-		} else if v.State != "checking" {
+		} else if v.State != "checking" && v.State != "approved" && v.State != "in_review" {
 			return temporal.NewNonRetryableApplicationError("invalid release state", "InvalidState", nil)
 		}
 		var previous *string
 		err := db.Tx(ctx).QueryRow(ctx, `SELECT review_required,workspace_review,previous_version_id::text,submitted_by::text FROM asset_versions WHERE id=$1`, v.ID).Scan(&out.Required, &out.WorkspaceReview, &previous, &out.Author)
 		if err != nil {
 			return err
+		}
+		out.State = v.State
+		out.Uploader = v.UploadedBy
+		if v.State == "in_review" {
+			rows, err := db.Tx(ctx).Query(ctx, `SELECT id::text,reviewer_id::text,decision,comment FROM asset_reviews WHERE tenant_id=$1 AND version_id=$2 AND generation=$3 ORDER BY id`, in.Tenant, v.ID, in.Generation)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				review := Review{Input: in}
+				if err = rows.Scan(&review.ID, &review.Reviewer, &review.Decision, &review.Comment); err != nil {
+					return err
+				}
+				out.Reviews = append(out.Reviews, review)
+			}
+			if err = rows.Err(); err != nil {
+				return err
+			}
 		}
 		out.Visibility = asset.Visibility
 		out.Owner = asset.OwnerID
@@ -73,16 +92,24 @@ func (a *Activities) AssetCheckPermissionDiff(ctx context.Context, input contrac
 	err := a.DB.WithTenant(ctx, input.TenantId, func(tx pgx.Tx) error {
 		var raw []byte
 		var current contract.EffectivePermissions
+		var currentManifest, previousManifest assets.Manifest
+		var manifestRaw []byte
 		var workspace, submitter string
 		var previous contract.EffectivePermissions
-		if err := tx.QueryRow(ctx, `SELECT v.permissions,COALESCE(a.workspace_id::text,''),v.submitted_by::text FROM asset_versions v JOIN assets a ON a.id=v.asset_id WHERE v.tenant_id=$1 AND v.id=$2 AND v.asset_id=$3`, input.TenantId, input.AssetVersionId, input.AssetId).Scan(&raw, &workspace, &submitter); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT v.permissions,v.manifest,COALESCE(a.workspace_id::text,''),v.submitted_by::text FROM asset_versions v JOIN assets a ON a.id=v.asset_id WHERE v.tenant_id=$1 AND v.id=$2 AND v.asset_id=$3`, input.TenantId, input.AssetVersionId, input.AssetId).Scan(&raw, &manifestRaw, &workspace, &submitter); err != nil {
+			return err
+		}
+		if err := json.Unmarshal(manifestRaw, &currentManifest); err != nil {
 			return err
 		}
 		if err := json.Unmarshal(raw, &current); err != nil {
 			return err
 		}
 		if input.PreviousVersionId != nil {
-			if err := tx.QueryRow(ctx, `SELECT permissions FROM asset_versions WHERE tenant_id=$1 AND id=$2 AND asset_id=$3`, input.TenantId, *input.PreviousVersionId, input.AssetId).Scan(&raw); err != nil {
+			if err := tx.QueryRow(ctx, `SELECT permissions,manifest FROM asset_versions WHERE tenant_id=$1 AND id=$2 AND asset_id=$3`, input.TenantId, *input.PreviousVersionId, input.AssetId).Scan(&raw, &manifestRaw); err != nil {
+				return err
+			}
+			if err := json.Unmarshal(manifestRaw, &previousManifest); err != nil {
 				return err
 			}
 			if err := json.Unmarshal(raw, &previous); err != nil {
@@ -99,8 +126,20 @@ func (a *Activities) AssetCheckPermissionDiff(ctx context.Context, input contrac
 		if err != nil {
 			return err
 		}
-		if Expanded(previous, current) {
-			report.Findings = []contract.AssetCheckFinding{{Check: "permission_diff", RuleId: "permissions.expanded", Severity: "review", Message: "Declared network, secrets or side-effect permissions increased"}}
+		expanded := Expanded(previous, current)
+		for path, after := range currentManifest.MemberPermissions {
+			before, e := locks.NarrowPermissions(ctx, previousManifest.MemberPermissions[path], workspace)
+			if e != nil {
+				return e
+			}
+			after, e = locks.NarrowPermissions(ctx, after, workspace)
+			if e != nil {
+				return e
+			}
+			expanded = expanded || Expanded(before, after)
+		}
+		if expanded {
+			report.Findings = []contract.AssetCheckFinding{{Check: "permission_diff", RuleId: "permissions.expanded", Severity: "review", Message: "Declared member permissions increased"}}
 		}
 		return nil
 	})
@@ -122,30 +161,28 @@ func Expanded(before, after contract.EffectivePermissions) bool {
 			return true
 		}
 	}
-	rank := func(e contract.EffectClass) int {
-		switch e {
-		case "read_only":
-			return 0
-		case "sandbox_write":
-			return 1
-		case "network_read":
-			return 2
-		case "external_write":
-			return 3
-		case "privileged":
-			return 4
-		}
-		return 5
-	}
-	maxBefore := 0
-	for _, v := range before.EffectClasses {
-		maxBefore = max(maxBefore, rank(v))
-	}
 	for _, v := range after.EffectClasses {
-		if rank(v) > maxBefore {
+		if !slices.Contains(before.EffectClasses, v) {
 			return true
 		}
 	}
+	for _, v := range after.ToolsBuiltin {
+		if !slices.Contains(before.ToolsBuiltin, v) {
+			return true
+		}
+	}
+	for _, v := range after.DataScopes {
+		if !slices.Contains(before.DataScopes, v) {
+			return true
+		}
+	}
+	if after.SandboxProfile != "" && after.SandboxProfile != "default" && after.SandboxProfile != before.SandboxProfile {
+		return true
+	}
+	if before.SandboxProfile != "" && after.SandboxProfile != before.SandboxProfile {
+		return true
+	}
+
 	return false
 }
 func (a *Activities) AggregateAssetChecks(ctx context.Context, in Aggregate) error {
@@ -230,7 +267,7 @@ func (a *Activities) LoadAssetReview(ctx context.Context, review Review) (Review
 		if err := db.Tx(ctx).QueryRow(ctx, `SELECT id::text,reviewer_id::text,decision,comment FROM asset_reviews WHERE tenant_id=$1 AND version_id=$2 AND generation=$3 AND id=$4`, review.Input.Tenant, v.ID, review.Input.Generation, review.ID).Scan(&out.ID, &out.Reviewer, &out.Decision, &out.Comment); err != nil {
 			return err
 		}
-		if out.Reviewer == asset.OwnerID || out.Reviewer == auth.From(ctx).ID {
+		if out.Reviewer == asset.OwnerID || out.Reviewer == auth.From(ctx).ID || out.Reviewer == v.UploadedBy {
 			return temporal.NewNonRetryableApplicationError("author cannot review", "InvalidReview", nil)
 		}
 		return nil
@@ -309,7 +346,7 @@ func (a *Activities) Publish(ctx context.Context, in Input) error {
 		if err := a.Assets.SetChannel(ctx, asset, channel, v.ID); err != nil {
 			return err
 		}
-		_, err := db.Tx(ctx).Exec(ctx, `UPDATE asset_versions SET published_at=now() WHERE id=$1`, v.ID)
+		_, err := db.Tx(ctx).Exec(ctx, `UPDATE asset_versions SET published_at=now(),release_error=NULL,release_retryable=true WHERE id=$1`, v.ID)
 		if err != nil {
 			return err
 		}
@@ -348,30 +385,28 @@ func (a *Activities) CompensateAssetPublish(ctx context.Context, in Input) error
 		return assets.Log(ctx, "asset.publish_compensated", "asset_version", v.ID, map[string]any{"channel": channel, "previous_version_id": previous})
 	})
 }
-func (a *Activities) AbortAssetRelease(ctx context.Context, in Input) (Result, error) {
+func (a *Activities) AbortAssetRelease(ctx context.Context, failure Failure) (Result, error) {
 	out := Result{}
-	err := a.transaction(ctx, in, func(ctx context.Context, asset assets.Asset, v assets.Version) error {
-		state := v.State
-		if state == "submitted" {
-			if err := assets.SetState(ctx, v.ID, "checking"); err != nil {
+	err := a.transaction(ctx, failure.Input, func(ctx context.Context, asset assets.Asset, v assets.Version) error {
+		out.State = v.State
+		var requested bool
+		if err := db.Tx(ctx).QueryRow(ctx, `SELECT withdraw_requested FROM asset_versions WHERE id=$1`, v.ID).Scan(&requested); err != nil {
+			return err
+		}
+		if (failure.Withdrawn || requested) && v.State == "draft" {
+			return nil
+		}
+		if (failure.Withdrawn || requested) && (v.State == "submitted" || v.State == "checking" || v.State == "in_review") {
+			if err := a.Assets.Withdraw(ctx, v.ID); err != nil {
 				return err
 			}
-			state = "checking"
+			out.State = "draft"
+			return nil
 		}
-		target := state
-		if state == "checking" {
-			target = "check_failed"
+		if _, err := db.Tx(ctx).Exec(ctx, `UPDATE asset_versions SET release_error=$2,release_retryable=$3 WHERE id=$1`, v.ID, failure.Code, failure.Retryable); err != nil {
+			return err
 		}
-		if state == "in_review" {
-			target = "rejected"
-		}
-		if state != target {
-			if err := assets.SetState(ctx, v.ID, target); err != nil {
-				return err
-			}
-		}
-		out.State = target
-		return nil
+		return assets.Log(ctx, "asset.release_failed", "asset_version", v.ID, map[string]any{"code": failure.Code, "retryable": failure.Retryable})
 	})
 	return out, err
 }

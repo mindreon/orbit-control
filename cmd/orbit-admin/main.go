@@ -57,6 +57,9 @@ func run(args []string) error {
 	if args[0] == "market" {
 		return importMarket(ctx, d, c, args[1:])
 	}
+	if args[0] == "asset" {
+		return retryAssetRelease(ctx, d, args[1:])
+	}
 	f := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	tenant := f.String("tenant", "", "tenant UUID")
 	pid := f.String("principal", "", "principal UUID")

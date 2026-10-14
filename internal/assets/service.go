@@ -301,7 +301,7 @@ func (s *Service) Install(ctx context.Context, a Asset, scope, scopeID, constrai
 		return "", err
 	}
 	// Lock against concurrent metadata changes and use the current ceiling.
-	if err := db.Tx(ctx).QueryRow(ctx, `SELECT visibility FROM assets WHERE tenant_id=$1 AND id=$2 FOR SHARE`, auth.Tenant(ctx), a.ID).Scan(&a.Visibility); err != nil {
+	if err := db.Tx(ctx).QueryRow(ctx, `SELECT visibility,status FROM assets WHERE tenant_id=$1 AND id=$2 FOR SHARE`, auth.Tenant(ctx), a.ID).Scan(&a.Visibility, &a.Status); err != nil {
 		return "", err
 	}
 	if a.Visibility != "tenant" && (scope == "tenant" || a.Visibility != "workspace" || a.WorkspaceID != scopeID) {

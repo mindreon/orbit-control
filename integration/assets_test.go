@@ -229,6 +229,8 @@ func testAssets(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	check(code, 204, out)
 	code, out, _ = request("GET", privateBase, reviewer, tenant, "", nil)
 	check(code, 404, out)
+	testAssetReviewBoundaries(t, d, service, activities, request, token, reviewer, tenant, owner, reviewerID, workspace)
+	testDispatchIsolation(t, d, service, activities, tenant, owner, workspace)
 	upload := func(version string) string {
 		raw, e := bundle.Pack(map[string][]byte{"AGENTS.md": []byte("Work safely."), "agent.json": []byte(`{"schema":"orbit.agent/v2","name":"j5-agent","version":"` + version + `","permissions":{"effectClasses":["read_only"]}}`)})
 		if e != nil {
@@ -370,6 +372,7 @@ func testAssets(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		}
 	}
 	release(first)
+	testAssetImmutability(t, d, tenant, first)
 	code, out, _ = request("GET", base+"/versions/"+first+"/checks", token, tenant, "", nil)
 	check(code, 200, out)
 	if len(out["items"].([]any)) != 6 {
@@ -446,6 +449,7 @@ func testAssets(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	testAssetGraphs(t, d, service, activities, tenant, owner, workspace, publisher)
 	if tc != nil {
 		saveReplay(t, tc, assetrelease.ID(assetrelease.Input{Tenant: tenant, VersionID: second}), "release")
+		testReplayBranches(t, tenant)
 	}
 }
 

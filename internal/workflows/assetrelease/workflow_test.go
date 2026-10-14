@@ -25,7 +25,7 @@ func TestReleasePaths(t *testing.T) {
 		{name: "reject", visibility: "tenant", decision: "reject", want: "rejected", required: 1},
 		{name: "changes", visibility: "tenant", decision: "request_changes", want: "changes_requested", required: 1},
 		{name: "multiple independent reviewers", visibility: "tenant", decision: "approve", want: "published", required: 2},
-		{name: "withdraw", visibility: "tenant", want: "rejected", required: 1, withdraw: true},
+		{name: "withdraw", visibility: "tenant", want: "draft", required: 1, withdraw: true},
 		{name: "publish compensation", visibility: "private", required: 1, fail: true},
 		{name: "sla", visibility: "tenant", decision: "approve", want: "published", required: 1, sla: true},
 		{name: "permission expansion", visibility: "private", decision: "approve", want: "published", required: 1, expanded: true},
@@ -60,7 +60,7 @@ func TestReleasePaths(t *testing.T) {
 			for _, name := range []string{"Sign", "Publish", "CompensateAssetPublish", "NotifyAuthor"} {
 				env.RegisterActivityWithOptions(func(context.Context, Input) error { return nil }, activity.RegisterOptions{Name: name})
 			}
-			env.RegisterActivityWithOptions(func(context.Context, Input) (Result, error) { return Result{"rejected"}, nil }, activity.RegisterOptions{Name: "AbortAssetRelease"})
+			env.RegisterActivityWithOptions(func(context.Context, Failure) (Result, error) { return Result{"draft"}, nil }, activity.RegisterOptions{Name: "AbortAssetRelease"})
 			if tc.fail {
 				env.OnActivity("Publish", mock.Anything, in).Return(temporal.NewNonRetryableApplicationError("publish failed", "PublishFailure", nil)).Once()
 				env.OnActivity("CompensateAssetPublish", mock.Anything, in).Return(nil).Once()
@@ -152,9 +152,78 @@ func TestPermissionExpansion(t *testing.T) {
 			t.Fatal("missed expansion")
 		}
 	}
-	before := contract.EffectivePermissions{Network: contract.NetworkPermissions{Egress: []string{"*.example.com"}}, EffectClasses: []contract.EffectClass{"privileged"}}
+	before := contract.EffectivePermissions{Network: contract.NetworkPermissions{Egress: []string{"*.example.com"}}, EffectClasses: []contract.EffectClass{"read_only", "privileged"}}
 	after := contract.EffectivePermissions{Network: contract.NetworkPermissions{Egress: []string{"api.example.com"}}, EffectClasses: []contract.EffectClass{"read_only"}}
 	if Expanded(before, after) {
 		t.Fatal("narrowing marked expanded")
+	}
+}
+
+func TestPermissionExpansionSets(t *testing.T) {
+	before := contract.EffectivePermissions{SandboxProfile: "default", EffectClasses: []contract.EffectClass{"network_read"}}
+	for _, after := range []contract.EffectivePermissions{
+		{SandboxProfile: "default", EffectClasses: []contract.EffectClass{"sandbox_write"}},
+		{SandboxProfile: "default", ToolsBuiltin: []string{"shell"}},
+		{SandboxProfile: "default", DataScopes: []string{"workspace_shared"}},
+		{SandboxProfile: "elevated"},
+	} {
+		if !Expanded(before, after) {
+			t.Fatal("permission expansion missed", after)
+		}
+	}
+}
+func TestApprovedReleaseResumesWithoutChecks(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	env.RegisterActivityWithOptions(func(context.Context, Input) (Snapshot, error) {
+		return Snapshot{State: "approved", Check: contract.AssetCheckInput{V: 1, TenantId: "tenant", AssetId: "asset", AssetVersionId: "version", Kind: "agent", BlobRef: "blob", ContentDigest: "sha256:" + strings.Repeat("0", 64)}}, nil
+	}, activity.RegisterOptions{Name: "SnapshotAssetRelease"})
+	for _, name := range []string{"Sign", "Publish", "NotifyAuthor"} {
+		env.RegisterActivityWithOptions(func(context.Context, Input) error { return nil }, activity.RegisterOptions{Name: name})
+	}
+	env.RegisterActivityWithOptions(func(_ context.Context, f Failure) (Result, error) {
+		t.Errorf("unexpected abort: %+v", f)
+		return Result{}, nil
+	}, activity.RegisterOptions{Name: "AbortAssetRelease"})
+	env.ExecuteWorkflow(Run, Input{Tenant: "tenant", VersionID: "version", Generation: 2})
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatal(err)
+	}
+	var result Result
+	if err := env.GetWorkflowResult(&result); err != nil || result.State != "published" {
+		t.Fatal(result, err)
+	}
+}
+
+func TestReviewInfrastructureFailureLeavesReviewRecoverable(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	in := Input{Tenant: "tenant", VersionID: "version", Generation: 1}
+	env.RegisterActivityWithOptions(func(context.Context, Input) (Snapshot, error) {
+		return Snapshot{State: "in_review", Author: "author", Owner: "owner", Required: 1, Check: contract.AssetCheckInput{V: 1, TenantId: "tenant", AssetId: "asset", AssetVersionId: "version", Kind: "agent", BlobRef: "blob", ContentDigest: "sha256:" + strings.Repeat("0", 64)}}, nil
+	}, activity.RegisterOptions{Name: "SnapshotAssetRelease"})
+	env.RegisterActivityWithOptions(func(context.Context, Input) error { return nil }, activity.RegisterOptions{Name: "CreateReviewTask"})
+	env.RegisterActivityWithOptions(func(context.Context, Review) (Review, error) {
+		return Review{}, temporal.NewApplicationError("temporary database failure", "TestUnavailable")
+	}, activity.RegisterOptions{Name: "LoadAssetReview"})
+	aborted := false
+	env.RegisterActivityWithOptions(func(_ context.Context, f Failure) (Result, error) {
+		aborted = true
+		if !f.Retryable || f.Withdrawn || f.Code != "TestUnavailable" {
+			t.Errorf("incorrect failure classification: %+v", f)
+		}
+		return Result{State: "in_review"}, nil
+	}, activity.RegisterOptions{Name: "AbortAssetRelease"})
+	env.RegisterDelayedCallback(func() {
+		review := Review{ID: "review", Reviewer: "reviewer", Decision: "approve", Input: in}
+		env.UpdateWorkflow(SubmitReview, "review", &testsuite.TestUpdateCallback{OnComplete: func(_ any, err error) {
+			if err == nil {
+				t.Error("failed review activity was accepted")
+			}
+		}}, review)
+	}, time.Second)
+	env.ExecuteWorkflow(Run, in)
+	if env.GetWorkflowError() == nil || !aborted {
+		t.Fatal("failed Update cannot trigger workflow recovery")
 	}
 }

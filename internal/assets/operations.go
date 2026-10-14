@@ -80,6 +80,9 @@ func (s *Service) ChangeVersionState(ctx context.Context, a Asset, v Version, st
 	if !slices.Contains([]string{"draft", "deprecated", "suspended", "yanked", "published"}, state) {
 		return v, Invalid("Invalid requested state")
 	}
+	if state == "draft" && v.State != "check_failed" && v.State != "changes_requested" {
+		return v, httpx.E(409, "INVALID_ASSET_STATE", "Use the withdraw operation for a pending release")
+	}
 	if state == "published" {
 		if v.State != "suspended" {
 			return v, httpx.E(409, "INVALID_ASSET_STATE", "Only suspended versions can be restored through this operation")

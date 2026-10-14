@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/mindreon/orbit-control/internal/assets"
 	"github.com/mindreon/orbit-control/internal/contract"
 	"github.com/mindreon/orbit-control/internal/platform/config"
 	"github.com/mindreon/orbit-control/internal/platform/db"
@@ -19,6 +20,7 @@ import (
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/converter"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 )
@@ -71,8 +73,8 @@ func NewWorker(c client.Client, a *Activities) worker.Worker {
 // API crashes; Temporal workflow/update IDs make redelivery safe.
 func Dispatch(ctx context.Context, d *db.DB, c client.Client, l *slog.Logger) error {
 	for {
-		if err := dispatchOnce(ctx, d, c); err != nil && ctx.Err() == nil {
-			l.Error("asset release dispatch failed", "error_type", fmt.Sprintf("%T", err))
+		if err := dispatchOnce(ctx, d, c, l); err != nil && ctx.Err() == nil {
+			l.Error("asset release dispatch failed", "error", err)
 		}
 		select {
 		case <-ctx.Done():
@@ -81,10 +83,44 @@ func Dispatch(ctx context.Context, d *db.DB, c client.Client, l *slog.Logger) er
 		}
 	}
 }
-func dispatchOnce(ctx context.Context, d *db.DB, c client.Client) error {
+
+// dispatchOnce isolates every tenant and every delivery. A poison row cannot
+// starve unrelated releases, withdrawals or reviewer updates.
+func dispatchOnce(ctx context.Context, d *db.DB, c client.Client, l *slog.Logger) error {
+	tenants, err := releaseTenants(ctx, d)
+	if err != nil {
+		return err
+	}
+	for _, tenant := range tenants {
+		releases, reviews, err := releaseDeliveries(ctx, d, tenant)
+		if err != nil {
+			l.Error("asset dispatch tenant failed", "tenant", tenant, "error", err)
+			continue
+		}
+		for _, row := range releases {
+			if err = dispatchRelease(ctx, d, c, row); err != nil {
+				recordDispatchError(ctx, d, l, row.Input, err)
+			}
+		}
+		for _, review := range reviews {
+			if err = dispatchReview(ctx, d, c, review); err != nil {
+				recordDispatchError(ctx, d, l, review.Input, err)
+			}
+		}
+	}
+	return nil
+}
+
+type releaseDelivery struct {
+	Input
+	Withdraw  bool
+	Delivered bool
+}
+
+func releaseTenants(ctx context.Context, d *db.DB) ([]string, error) {
 	tenants := []string{}
-	if err := d.Global(ctx, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT id::text FROM tenants WHERE status='active'`)
+	err := d.Global(ctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT id::text FROM tenants WHERE status='active' ORDER BY id`)
 		if err != nil {
 			return err
 		}
@@ -97,115 +133,162 @@ func dispatchOnce(ctx context.Context, d *db.DB, c client.Client) error {
 			tenants = append(tenants, id)
 		}
 		return rows.Err()
-	}); err != nil {
-		return err
-	}
-	for _, tenant := range tenants {
-		starts := []Input{}
-		withdrawals := []Input{}
-		reviews := []Review{}
-		err := d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
-			rows, err := tx.Query(ctx, `SELECT id::text,release_generation,release_started,withdraw_requested AND NOT withdraw_delivered FROM asset_versions WHERE (state='submitted' AND NOT release_started) OR (withdraw_requested AND NOT withdraw_delivered)`)
-			if err != nil {
-				return err
-			}
-			for rows.Next() {
-				var id string
-				var generation int
-				var started, withdraw bool
-				if err = rows.Scan(&id, &generation, &started, &withdraw); err != nil {
-					rows.Close()
-					return err
-				}
-				in := Input{tenant, id, generation}
-				if !started {
-					starts = append(starts, in)
-				}
-				if withdraw {
-					if started {
-						withdrawals = append(withdrawals, in)
-					}
-				}
-			}
-			err = rows.Err()
-			rows.Close()
-			if err != nil {
-				return err
-			}
-			rows, err = tx.Query(ctx, `SELECT r.id::text,r.version_id::text,r.generation FROM asset_reviews r JOIN asset_versions v ON v.id=r.version_id WHERE NOT r.delivered AND r.generation=v.release_generation AND v.state='in_review' ORDER BY r.id`)
-			if err != nil {
-				return err
-			}
-			defer rows.Close()
-			for rows.Next() {
-				var review Review
-				review.Input.Tenant = tenant
-				if err = rows.Scan(&review.ID, &review.Input.VersionID, &review.Input.Generation); err != nil {
-					return err
-				}
-				reviews = append(reviews, review)
-			}
-			return rows.Err()
-		})
+	})
+	return tenants, err
+}
+func releaseDeliveries(ctx context.Context, d *db.DB, tenant string) ([]releaseDelivery, []Review, error) {
+	releases := []releaseDelivery{}
+	reviews := []Review{}
+	err := d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT id::text,release_generation,withdraw_requested,withdraw_delivered FROM asset_versions WHERE (release_retryable OR withdraw_requested) AND state IN ('submitted','checking','in_review','approved') ORDER BY id`)
 		if err != nil {
 			return err
 		}
-		for _, in := range starts {
-			_, err = c.ExecuteWorkflow(ctx, client.StartWorkflowOptions{ID: ID(in), TaskQueue: contract.TaskQueueCtl, WorkflowIDReusePolicy: enums.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE, Memo: map[string]any{"generation": in.Generation}}, Name, in)
-			if err != nil {
-				if _, already := errors.AsType[*serviceerror.WorkflowExecutionAlreadyStarted](err); !already {
-					return err
-				}
-				execution, e := c.DescribeWorkflowExecution(ctx, ID(in), "")
-				if e != nil {
-					return e
-				}
-				var generation int
-				if execution.WorkflowExecutionInfo.Memo == nil {
-					return fmt.Errorf("release workflow memo missing")
-				}
-				if e = converter.GetDefaultDataConverter().FromPayload(execution.WorkflowExecutionInfo.Memo.Fields["generation"], &generation); e != nil {
-					return e
-				}
-				if generation != in.Generation {
-					continue
-				}
-			}
-			if err = d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
-				_, err := tx.Exec(ctx, `UPDATE asset_versions SET release_started=true WHERE id=$1 AND release_generation=$2`, in.VersionID, in.Generation)
-				return err
-			}); err != nil {
+		for rows.Next() {
+			row := releaseDelivery{Input: Input{Tenant: tenant}}
+			if err = rows.Scan(&row.VersionID, &row.Generation, &row.Withdraw, &row.Delivered); err != nil {
+				rows.Close()
 				return err
 			}
+			releases = append(releases, row)
 		}
-		for _, in := range withdrawals {
-			if err = c.SignalWorkflow(ctx, ID(in), "", Withdraw, nil); err != nil {
-				if _, ok := errors.AsType[*serviceerror.NotFound](err); !ok {
-					return err
-				}
-			}
-			if err = d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
-				_, err := tx.Exec(ctx, `UPDATE asset_versions SET withdraw_delivered=true WHERE id=$1 AND release_generation=$2`, in.VersionID, in.Generation)
-				return err
-			}); err != nil {
-				return err
-			}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
 		}
-		for _, review := range reviews {
-			handle, e := c.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{WorkflowID: ID(review.Input), UpdateName: SubmitReview, UpdateID: review.ID, Args: []any{review}, WaitForStage: client.WorkflowUpdateStageCompleted})
-			if e != nil {
-				return e
-			}
-			if e = handle.Get(ctx, nil); e != nil {
-				return e
-			}
-			if err = d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
-				_, err := tx.Exec(ctx, `UPDATE asset_reviews SET delivered=true WHERE id=$1`, review.ID)
-				return err
-			}); err != nil {
-				return err
-			}
+		rows, err = tx.Query(ctx, `SELECT r.id::text,r.version_id::text,r.generation FROM asset_reviews r JOIN asset_versions v ON v.id=r.version_id WHERE v.release_retryable AND NOT r.delivered AND r.generation=v.release_generation AND v.state='in_review' ORDER BY r.id`)
+		if err != nil {
+			return err
 		}
+		defer rows.Close()
+		for rows.Next() {
+			review := Review{Input: Input{Tenant: tenant}}
+			if err = rows.Scan(&review.ID, &review.Input.VersionID, &review.Input.Generation); err != nil {
+				return err
+			}
+			reviews = append(reviews, review)
+		}
+		return rows.Err()
+	})
+	return releases, reviews, err
+}
+func dispatchRelease(ctx context.Context, d *db.DB, c client.Client, row releaseDelivery) error {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	in := row.Input
+	execution, err := c.DescribeWorkflowExecution(ctx, ID(in), "")
+	running := false
+	runID := ""
+	if err == nil {
+		info := execution.WorkflowExecutionInfo
+		if info == nil {
+			return temporal.NewNonRetryableApplicationError("workflow info missing", "InvalidWorkflow", nil)
+		}
+		running = info.Status == enums.WORKFLOW_EXECUTION_STATUS_RUNNING
+		if running {
+			var generation int
+			if info.Memo == nil {
+				return temporal.NewNonRetryableApplicationError("workflow memo missing", "InvalidWorkflow", nil)
+			}
+			if err = converter.GetDefaultDataConverter().FromPayload(info.Memo.Fields["generation"], &generation); err != nil {
+				return temporal.NewNonRetryableApplicationError("invalid workflow memo", "InvalidWorkflow", err)
+			}
+			// An older generation may still be closing after withdrawal. Never signal it.
+			if generation != in.Generation {
+				return nil
+			}
+			runID = info.Execution.RunId
+		}
+	} else if _, missing := errors.AsType[*serviceerror.NotFound](err); !missing {
+		return err
+	}
+	if row.Withdraw && !running {
+		return (&Activities{DB: d, Assets: &assets.Service{}}).AbortWithdraw(ctx, in)
+	}
+	if !running {
+		return startRelease(ctx, d, c, in)
+	}
+
+	if row.Withdraw && !row.Delivered {
+		if err = c.SignalWorkflow(ctx, ID(in), runID, Withdraw, nil); err != nil {
+			return err
+		}
+		return d.WithTenant(ctx, in.Tenant, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `UPDATE asset_versions SET withdraw_delivered=true WHERE tenant_id=$1 AND id=$2 AND release_generation=$3`, in.Tenant, in.VersionID, in.Generation)
+			return err
+		})
 	}
 	return nil
+}
+func startRelease(ctx context.Context, d *db.DB, c client.Client, in Input) error {
+	eligible := false
+	if err := d.WithTenant(ctx, in.Tenant, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT release_generation=$3 AND release_retryable AND NOT withdraw_requested AND state IN ('submitted','checking','in_review','approved') FROM asset_versions WHERE tenant_id=$1 AND id=$2`, in.Tenant, in.VersionID, in.Generation).Scan(&eligible)
+	}); err != nil {
+		return err
+	}
+	if !eligible {
+		return nil
+	}
+	_, err := c.ExecuteWorkflow(ctx, client.StartWorkflowOptions{ID: ID(in), TaskQueue: contract.TaskQueueCtl, WorkflowIDReusePolicy: enums.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE, WorkflowExecutionErrorWhenAlreadyStarted: true, Memo: map[string]any{"generation": in.Generation}}, Name, in)
+	if err != nil {
+		if _, already := errors.AsType[*serviceerror.WorkflowExecutionAlreadyStarted](err); !already {
+			return err
+		}
+	}
+	return d.WithTenant(ctx, in.Tenant, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE asset_versions SET release_started=true WHERE tenant_id=$1 AND id=$2 AND release_generation=$3`, in.Tenant, in.VersionID, in.Generation)
+		return err
+	})
+}
+func (a *Activities) AbortWithdraw(ctx context.Context, in Input) error {
+	_, err := a.AbortAssetRelease(ctx, Failure{Input: in, Withdrawn: true})
+	return err
+}
+func dispatchReview(ctx context.Context, d *db.DB, c client.Client, review Review) error {
+	ctx, cancelDelivery := context.WithTimeout(ctx, 3*time.Second)
+	defer cancelDelivery()
+	// Do not wait for an unregistered Update handler: it can stall this dispatcher
+	// for minutes. Accepted delivery is durable; SQL votes remain the authority.
+	handle, err := c.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{WorkflowID: ID(review.Input), UpdateName: SubmitReview, UpdateID: review.ID, Args: []any{review}, WaitForStage: client.WorkflowUpdateStageAccepted})
+	if err != nil {
+		return err
+	}
+	// Get is deliberately bounded so a stalled Activity cannot starve later rows.
+	getCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if err = handle.Get(getCtx, nil); err != nil {
+		return err
+	}
+	return d.WithTenant(ctx, review.Input.Tenant, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE asset_reviews SET delivered=true WHERE tenant_id=$1 AND id=$2 AND generation=$3`, review.Input.Tenant, review.ID, review.Input.Generation)
+		return err
+	})
+}
+func dispatchPermanent(err error) bool {
+	if _, ok := errors.AsType[*serviceerror.InvalidArgument](err); ok {
+		return true
+	}
+	if _, ok := errors.AsType[*serviceerror.PermissionDenied](err); ok {
+		return true
+	}
+	if _, ok := errors.AsType[*serviceerror.NamespaceNotFound](err); ok {
+		return true
+	}
+	if e, ok := errors.AsType[*temporal.ApplicationError](err); ok {
+		return e.NonRetryable()
+	}
+	return false
+}
+func recordDispatchError(ctx context.Context, d *db.DB, l *slog.Logger, in Input, err error) {
+	permanent := dispatchPermanent(err)
+	l.Error("asset release delivery failed", "tenant", in.Tenant, "version", in.VersionID, "generation", in.Generation, "permanent", permanent, "error", err)
+	code := fmt.Sprintf("Dispatch:%T", err)
+	if saveErr := d.WithTenant(ctx, in.Tenant, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `UPDATE asset_versions SET release_error=$3,release_retryable=release_retryable AND $4 WHERE tenant_id=$1 AND id=$2 AND release_generation=$5`, in.Tenant, in.VersionID, code, !permanent, in.Generation)
+		return e
+	}); saveErr != nil {
+		l.Error("asset dispatch error recording failed", "tenant", in.Tenant, "version", in.VersionID, "error", saveErr)
+	}
 }
