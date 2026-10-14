@@ -2,6 +2,7 @@ package contract
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"path"
 	"regexp"
@@ -11,13 +12,33 @@ import (
 	"github.com/mindreon/orbit-control/internal/platform/jcs"
 )
 
-// ObjectDigest hashes RFC 8785 JCS JSON. For a RunLock, omit lock_id and digest first.
+// ObjectDigest hashes RFC 8785 JCS JSON.
 func ObjectDigest(raw []byte) (string, error) {
 	canonical, err := jcs.Canonicalize(raw)
 	if err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("sha256:%x", sha256.Sum256(canonical)), nil
+}
+
+// RunLockDigest hashes a wire lock after omitting only its top-level lock_id and digest.
+// Use the wire encoder first so empty optional arrays are omitted consistently.
+func RunLockDigest(raw []byte) (string, error) {
+	canonical, err := jcs.Canonicalize(raw)
+	if err != nil {
+		return "", err
+	}
+	var value map[string]json.RawMessage
+	if err := json.Unmarshal(canonical, &value); err != nil || value == nil {
+		return "", fmt.Errorf("run lock must be an object")
+	}
+	delete(value, "lock_id")
+	delete(value, "digest")
+	content, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	return ObjectDigest(content)
 }
 
 var fileDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)

@@ -133,8 +133,9 @@ block reuse. Errors always have `{error:{code,message,retryable,details}}`.
   must fit both issuer and recipient effective permissions, including issuer key
   scopes. Any excess returns 403. Revoke via `DELETE /v1/admin/api-keys/{k}`.
 - `CapabilitySigner.IssueCapability(CapabilityClaims)` signs five-minute tokens
-  (`aud=kernel`, `sub=run:<UUID>`, `kid`) with tenant/run/member/seq/purpose and an
-  optional lease_id. `VerifyCapability(token)` returns those claims after signature,
+  (`aud=kernel`, `sub=run:<UUID>`, `kid`) with tenant/run/purpose and
+  member/seq/attempt for segment tokens or lease_id for sandbox tokens.
+  `VerifyCapability(token)` returns those claims after signature,
   audience, expiry and not-before checks. Callers must compare current run state.
 
 Tenant admin can manage members, API keys and audit; workspace creators get
@@ -237,3 +238,8 @@ The compiler and CI are pinned to Go 1.27.2 (`go 1.27.0` plus toolchain directiv
 Contract boundary validation uses `contract.Validate` to accept future fields on
 `x-extra=ignore` objects; `contract.ValidateStrict` checks producer output against
 the original schemas. Both return only JSON paths and rule names on invalid input.
+
+`contract.RunLockDigest` omits the top-level `lock_id` and `digest` before JCS
+hashing; `BundleDigest` checks each entry’s sorted file digests. Sandbox renewal
+uses `SandboxRenewInput` with required positive `ttl_seconds`; operations with no
+output use the shared `EmptyResult`, whose Go zero value encodes as `{}`.
