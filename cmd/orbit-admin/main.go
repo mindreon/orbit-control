@@ -37,7 +37,11 @@ func run(args []string) error {
 	if e = c.ValidateAdmin(); e != nil {
 		return e
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	duration := time.Minute
+	if args[0] == "market" {
+		duration = 2 * time.Hour
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), duration)
 	defer cancel()
 	if args[0] == "migrate" {
 		if len(args) != 2 {
@@ -50,6 +54,9 @@ func run(args []string) error {
 		return e
 	}
 	defer d.Close()
+	if args[0] == "market" {
+		return importMarket(ctx, d, c, args[1:])
+	}
 	f := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	tenant := f.String("tenant", "", "tenant UUID")
 	pid := f.String("principal", "", "principal UUID")
