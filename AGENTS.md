@@ -5,7 +5,7 @@ control is the only public HTTP API. Agent execution belongs to orbit-runtime.
 
 ## Layout and boundaries
 
-- Go 1.25, `net/http` method-aware ServeMux, pgx v5 + handwritten SQL, goose SQL.
+- Go 1.27, `net/http` method-aware ServeMux, pgx v5 + handwritten SQL, goose SQL.
   No gin, gorm, viper, agent runtime or LLM SDK.
 - `cmd/orbit-control api` is the only current service role. Add worker/all only
   when Workflow implementations exist. `cmd/orbit-admin` handles provisioning,
