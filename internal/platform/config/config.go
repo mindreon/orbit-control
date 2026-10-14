@@ -11,19 +11,56 @@ import (
 )
 
 type Config struct {
-	DatabaseURL, AdminDatabaseURL, Addr, AuthMode, Issuer, ClientID, Audience, KeyFile, LogFormat string
-	CORS                                                                                          []string
-	AllowDevNetwork                                                                               bool
-	PersonalTenants                                                                               bool
-	PublicOrigin                                                                                  string
-	CapabilityKeyFile, CapabilityKeyID                                                            string
-	CapabilityPublicKeys                                                                          map[string][]byte
-	SecretsKeyVersion                                                                             int
-	SecretsKEKs                                                                                   map[int][]byte
+	TemporalAddress, TemporalNamespace, TemporalCAFile, TemporalCertFile, TemporalKeyFile, TemporalServerName string
+	TemporalTLS                                                                                               bool
+	ObjectEndpoint, ObjectBucket, ObjectAccessKey, ObjectSecretKey                                            string
+	ObjectTLS                                                                                                 bool
+	AssetKeyFile, AssetKeyID                                                                                  string
+	AssetPublicKeys                                                                                           map[string][]byte
+	DatabaseURL, AdminDatabaseURL, Addr, AuthMode, Issuer, ClientID, Audience, KeyFile, LogFormat             string
+	CORS                                                                                                      []string
+	AllowDevNetwork                                                                                           bool
+	PersonalTenants                                                                                           bool
+	PublicOrigin                                                                                              string
+	CapabilityKeyFile, CapabilityKeyID                                                                        string
+	CapabilityPublicKeys                                                                                      map[string][]byte
+	SecretsKeyVersion                                                                                         int
+	SecretsKEKs                                                                                               map[int][]byte
 }
 
 func Load() (Config, error) {
 	c := Config{DatabaseURL: os.Getenv("ORBIT_DATABASE_URL"), AdminDatabaseURL: os.Getenv("ORBIT_ADMIN_DATABASE_URL"), Addr: env("ORBIT_HTTP_ADDR", "127.0.0.1:8080"), AuthMode: env("ORBIT_AUTH_MODE", "oidc"), Issuer: os.Getenv("ORBIT_OIDC_ISSUER"), ClientID: os.Getenv("ORBIT_OIDC_CLIENT_ID"), Audience: os.Getenv("ORBIT_OIDC_AUDIENCE"), KeyFile: env("ORBIT_SIGNING_KEY_FILE", ".orbit-data/signing.key"), LogFormat: env("ORBIT_LOG_FORMAT", "json"), AllowDevNetwork: os.Getenv("ORBIT_ALLOW_DEV_AUTH_ON_NETWORK") == "1"}
+	c.TemporalAddress = env("ORBIT_TEMPORAL_ADDRESS", "127.0.0.1:7233")
+	c.TemporalNamespace = env("ORBIT_TEMPORAL_NAMESPACE", "default")
+	for _, name := range []string{"ORBIT_TEMPORAL_TLS", "ORBIT_OBJECT_TLS"} {
+		if v := os.Getenv(name); v != "" && v != "true" && v != "false" {
+			return c, fmt.Errorf("%s must be true or false", name)
+		}
+	}
+	c.TemporalTLS = os.Getenv("ORBIT_TEMPORAL_TLS") == "true"
+	c.TemporalCAFile = os.Getenv("ORBIT_TEMPORAL_TLS_CA_FILE")
+	c.TemporalCertFile = os.Getenv("ORBIT_TEMPORAL_TLS_CERT_FILE")
+	c.TemporalKeyFile = os.Getenv("ORBIT_TEMPORAL_TLS_KEY_FILE")
+	c.TemporalServerName = os.Getenv("ORBIT_TEMPORAL_TLS_SERVER_NAME")
+	c.ObjectEndpoint = os.Getenv("ORBIT_OBJECT_ENDPOINT")
+	c.ObjectBucket = env("ORBIT_OBJECT_BUCKET", "orbit")
+	c.ObjectAccessKey = os.Getenv("ORBIT_OBJECT_ACCESS_KEY")
+	c.ObjectSecretKey = os.Getenv("ORBIT_OBJECT_SECRET_KEY")
+	c.ObjectTLS = os.Getenv("ORBIT_OBJECT_TLS") == "true"
+	c.AssetKeyFile = env("ORBIT_ASSET_SIGNING_KEY_FILE", ".orbit-data/assets.key")
+	c.AssetKeyID = env("ORBIT_ASSET_SIGNING_KEY_ID", "1")
+	c.AssetPublicKeys = map[string][]byte{}
+	for pair := range strings.SplitSeq(os.Getenv("ORBIT_ASSET_PUBLIC_KEYS"), ",") {
+		if pair == "" {
+			continue
+		}
+		id, encoded, ok := strings.Cut(pair, ":")
+		b, e := base64.StdEncoding.DecodeString(encoded)
+		if !ok || id == "" || e != nil || len(b) != 32 || c.AssetPublicKeys[id] != nil {
+			return c, fmt.Errorf("ORBIT_ASSET_PUBLIC_KEYS must contain distinct kid:base64 Ed25519 keys")
+		}
+		c.AssetPublicKeys[id] = b
+	}
 	c.PersonalTenants = os.Getenv("ORBIT_PERSONAL_TENANTS") == "true"
 	if v := os.Getenv("ORBIT_PERSONAL_TENANTS"); v != "" && v != "true" && v != "false" {
 		return c, fmt.Errorf("ORBIT_PERSONAL_TENANTS must be true or false")
@@ -147,4 +184,37 @@ func env(k, d string) string {
 		return v
 	}
 	return d
+}
+
+func (c Config) ValidateAssets() error {
+	for _, v := range []struct{ name, value string }{{"ORBIT_OBJECT_ENDPOINT", c.ObjectEndpoint}, {"ORBIT_OBJECT_BUCKET", c.ObjectBucket}, {"ORBIT_OBJECT_ACCESS_KEY", c.ObjectAccessKey}, {"ORBIT_OBJECT_SECRET_KEY", c.ObjectSecretKey}, {"ORBIT_ASSET_SIGNING_KEY_FILE", c.AssetKeyFile}, {"ORBIT_ASSET_SIGNING_KEY_ID", c.AssetKeyID}} {
+		if v.value == "" {
+			return fmt.Errorf("%s is required", v.name)
+		}
+	}
+	if c.AssetKeyFile == c.KeyFile || c.AssetKeyFile == c.CapabilityKeyFile {
+		return fmt.Errorf("ORBIT_ASSET_SIGNING_KEY_FILE must differ from authentication signing keys")
+	}
+	if strings.Contains(c.AssetKeyID, ":") {
+		return fmt.Errorf("ORBIT_ASSET_SIGNING_KEY_ID cannot contain a colon")
+	}
+	return nil
+}
+func (c Config) ValidateWorker() error {
+	if err := validateURL("ORBIT_DATABASE_URL", c.DatabaseURL); err != nil {
+		return err
+	}
+	if _, _, err := net.SplitHostPort(c.TemporalAddress); err != nil {
+		return fmt.Errorf("ORBIT_TEMPORAL_ADDRESS must be host:port")
+	}
+	if c.TemporalNamespace == "" {
+		return fmt.Errorf("ORBIT_TEMPORAL_NAMESPACE is required")
+	}
+	if (c.TemporalCertFile == "") != (c.TemporalKeyFile == "") {
+		return fmt.Errorf("ORBIT_TEMPORAL_TLS_CERT_FILE and ORBIT_TEMPORAL_TLS_KEY_FILE must be provided together")
+	}
+	if !c.TemporalTLS && (c.TemporalCertFile != "" || c.TemporalCAFile != "" || c.TemporalServerName != "") {
+		return fmt.Errorf("ORBIT_TEMPORAL_TLS=true is required for TLS options")
+	}
+	return nil
 }

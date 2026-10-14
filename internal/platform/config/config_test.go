@@ -61,3 +61,38 @@ func TestKeyAndOriginConfiguration(t *testing.T) {
 		})
 	}
 }
+
+func TestAssetWorkerConfiguration(t *testing.T) {
+	c := Config{DatabaseURL: "postgres://orbit_app@localhost/orbit", TemporalAddress: "localhost:7233", TemporalNamespace: "orbit-dev"}
+	if err := c.ValidateWorker(); err != nil {
+		t.Fatal("worker should not require OIDC or HTTP credentials", err)
+	}
+	c.TemporalCertFile = "client.pem"
+	if err := c.ValidateWorker(); err == nil {
+		t.Fatal("unpaired TLS cert accepted")
+	}
+	c.TemporalKeyFile = "client.key"
+	if err := c.ValidateWorker(); err == nil {
+		t.Fatal("ignored TLS credentials")
+	}
+	c.TemporalTLS = true
+	if err := c.ValidateWorker(); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"ORBIT_TEMPORAL_TLS", "ORBIT_OBJECT_TLS"} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv(name, "invalid")
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), name) {
+				t.Fatal(err)
+			}
+		})
+	}
+	c = Config{ObjectEndpoint: "localhost:9000", ObjectBucket: "orbit", ObjectAccessKey: "test", ObjectSecretKey: "test", AssetKeyFile: "asset.key", AssetKeyID: "1", KeyFile: "auth.key", CapabilityKeyFile: "cap.key"}
+	if err := c.ValidateAssets(); err != nil {
+		t.Fatal(err)
+	}
+	c.AssetKeyFile = c.KeyFile
+	if err := c.ValidateAssets(); err == nil {
+		t.Fatal("shared asset/auth key allowed")
+	}
+}
