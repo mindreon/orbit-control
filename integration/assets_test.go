@@ -499,6 +499,7 @@ func testAssetGraphs(t *testing.T, d *db.DB, s *assets.Service, activities *asse
 		if e != nil {
 			t.Fatal(e)
 		}
+ staged,e:=s.PrepareUpload(auth.Context(ctx,auth.Principal{ID:owner,Kind:"user"},tenant),"1.0.0",raw);if e!=nil{t.Fatal(e)}
 		var asset assets.Asset
 		var version assets.Version
 		e = d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
@@ -508,7 +509,7 @@ func testAssetGraphs(t *testing.T, d *db.DB, s *assets.Service, activities *asse
 			if e != nil {
 				return e
 			}
-			version, e = s.Upload(ctx, asset, "1.0.0", raw)
+			version, e = s.Upload(ctx,asset,staged)
 			if e != nil {
 				return e
 			}

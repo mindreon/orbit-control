@@ -44,11 +44,11 @@ func TestPostgresSuite(t *testing.T) {
 	}
 	ctx := t.Context()
 	owner := roleURL(t, raw, "orbit_owner")
-	for step, command := range []string{"up", "down", "down", "up", "up"} {
+	for step, command := range []string{"up", "down", "down", "down", "up", "up"} {
 		if e := migrations.Run(ctx, owner, command); e != nil {
 			t.Fatalf("migrate %s: %v", command, e)
 		}
-		if command == "down" && step == 2 {
+		if command == "down" && step == 3 {
 			conn, err := pgx.Connect(ctx, raw)
 			if err != nil {
 				t.Fatal(err)

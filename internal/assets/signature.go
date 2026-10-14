@@ -1,6 +1,7 @@
 package assets
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
@@ -30,20 +31,58 @@ type Identity struct {
 	PermissionsDigest string             `json:"permissionsDigest"`
 }
 
-func signedBytes(a Asset, v Version) ([]byte, error) {
-	p, err := json.Marshal(v.Permissions)
+// SigningIdentity creates the immutable canonical preimage at upload time.
+// Verification consumes these stored bytes, preserving future optional fields.
+func SigningIdentity(a Asset, version, digest string, permissions []byte) ([]byte, error) {
+	d, err := contract.ObjectDigest(permissions)
 	if err != nil {
 		return nil, err
 	}
-	digest, err := contract.ObjectDigest(p)
-	if err != nil {
-		return nil, err
-	}
-	b, err := json.Marshal(Identity{a.Kind, a.Publisher, a.Name, v.Version, v.Digest, digest})
+	b, err := json.Marshal(Identity{a.Kind, a.Publisher, a.Name, version, digest, d})
 	if err != nil {
 		return nil, err
 	}
 	return jcs.Canonicalize(b)
+}
+func signedBytes(a Asset, v Version) ([]byte, error) {
+	if len(v.IdentityJCS) == 0 || len(v.PermissionsJCS) == 0 {
+		return nil, fmt.Errorf("asset signing preimage missing")
+	}
+	canonical, err := jcs.Canonicalize(v.IdentityJCS)
+	if err != nil || !bytes.Equal(canonical, v.IdentityJCS) {
+		return nil, fmt.Errorf("asset signing preimage is not canonical")
+	}
+	var identity Identity
+	if err = json.Unmarshal(v.IdentityJCS, &identity); err != nil {
+		return nil, err
+	}
+	canonicalPermissions, err := jcs.Canonicalize(v.PermissionsJCS)
+	if err != nil || !bytes.Equal(canonicalPermissions, v.PermissionsJCS) {
+		return nil, fmt.Errorf("asset permissions preimage is not canonical")
+	}
+	var stored struct {
+		Effective contract.EffectivePermissions            `json:"effective_permissions"`
+		Members   map[string]contract.EffectivePermissions `json:"members"`
+	}
+	if err := json.Unmarshal(v.PermissionsJCS, &stored); err != nil {
+		return nil, err
+	}
+	known, _ := json.Marshal(stored, json.Deterministic(true))
+	current, _ := json.Marshal(struct {
+		Effective contract.EffectivePermissions            `json:"effective_permissions"`
+		Members   map[string]contract.EffectivePermissions `json:"members"`
+	}{v.Permissions, v.Manifest.MemberPermissions}, json.Deterministic(true))
+	if !bytes.Equal(known, current) {
+		return nil, fmt.Errorf("asset permissions mismatch")
+	}
+	digest, err := contract.ObjectDigest(v.PermissionsJCS)
+	if err != nil {
+		return nil, err
+	}
+	if identity != (Identity{a.Kind, a.Publisher, a.Name, v.Version, v.Digest, digest}) {
+		return nil, fmt.Errorf("asset signing identity mismatch")
+	}
+	return v.IdentityJCS, nil
 }
 func (s *Signer) Sign(a Asset, v Version) (string, error) {
 	b, err := signedBytes(a, v)

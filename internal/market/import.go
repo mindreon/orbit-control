@@ -249,6 +249,10 @@ func Import(ctx context.Context, d *db.DB, s *assets.Service, tenant, actor, fil
 		if err != nil {
 			return result, err
 		}
+		staged, err := s.PrepareUpload(auth.Context(ctx, auth.Principal{ID: actor, Kind: "user"}, tenant), "0.1.0", archive)
+		if err != nil {
+			return result, err
+		}
 		skipped := false
 		err = d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
 			ctx := auth.Context(db.Context(ctx, tx), auth.Principal{ID: actor, Kind: "user"}, tenant)
@@ -267,7 +271,7 @@ func Import(ctx context.Context, d *db.DB, s *assets.Service, tenant, actor, fil
 			if e != nil {
 				return e
 			}
-			v, e := s.Upload(ctx,a,"0.1.0",archive)
+			v, e := s.Upload(ctx, a, staged)
 			if e != nil {
 				return e
 			}

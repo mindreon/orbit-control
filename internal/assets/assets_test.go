@@ -3,6 +3,7 @@ package assets
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json/v2"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,12 +11,13 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/mindreon/orbit-control/internal/assets/bundle"
 	"github.com/mindreon/orbit-control/internal/contract"
+	"github.com/mindreon/orbit-control/internal/platform/jcs"
 )
 
 func TestTransitionMatrix(t *testing.T) {
 	states := []string{"draft", "submitted", "checking", "check_failed", "in_review", "changes_requested", "approved", "published", "deprecated", "suspended", "yanked", "rejected", "unknown"}
 	edges := map[string]bool{}
-	for _, edge := range []string{"draft/submitted", "submitted/checking", "checking/check_failed", "check_failed/draft", "checking/in_review", "checking/approved", "in_review/changes_requested", "changes_requested/draft", "in_review/rejected", "in_review/approved", "approved/published", "published/deprecated", "published/suspended", "suspended/published", "deprecated/yanked", "suspended/yanked"} {
+	for _, edge := range []string{"submitted/draft", "checking/draft", "in_review/draft", "draft/submitted", "submitted/checking", "checking/check_failed", "check_failed/draft", "checking/in_review", "checking/approved", "in_review/changes_requested", "changes_requested/draft", "in_review/rejected", "in_review/approved", "approved/published", "published/deprecated", "published/suspended", "suspended/published", "deprecated/yanked", "suspended/yanked"} {
 		edges[edge] = true
 	}
 	for _, from := range states {
@@ -34,6 +36,17 @@ func TestSignatureTampering(t *testing.T) {
 	s := Signer{key, "test", map[string]ed25519.PublicKey{"test": pub}}
 	a := Asset{Kind: "agent", Publisher: "acme", Name: "assistant"}
 	v := Version{Version: "1.0.0", Digest: "sha256:001", Permissions: contract.EffectivePermissions{SandboxProfile: "default"}}
+	raw, _ := json.Marshal(struct {
+		Effective contract.EffectivePermissions `json:"effective_permissions"`
+	}{v.Permissions})
+	v.PermissionsJCS, e = jcs.Canonicalize(raw)
+	if e != nil {
+		t.Fatal(e)
+	}
+	v.IdentityJCS, e = SigningIdentity(a, v.Version, v.Digest, v.PermissionsJCS)
+	if e != nil {
+		t.Fatal(e)
+	}
 	v.Signature, e = s.Sign(a, v)
 	if e != nil {
 		t.Fatal(e)
@@ -93,5 +106,45 @@ func TestManifestDependenciesAndMCPPermissions(t *testing.T) {
 	}
 	if len(m.Dependencies) != 1 || m.Dependencies[0].Constraint != "^2.0" || len(p.Secrets) != 1 || p.Secrets[0].Name != "KEY" || len(p.Network.Egress) != 1 || len(p.EffectClasses) != 1 {
 		t.Fatal(m, p)
+	}
+}
+
+func TestStoredSigningPreimagePreservesUnknownFields(t *testing.T) {
+	pub, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := Signer{Key: key, ID: "test", Public: map[string]ed25519.PublicKey{"test": pub}}
+	a := Asset{Kind: "team", Publisher: "acme", Name: "team"}
+	v := Version{Version: "1.0.0", Digest: "sha256:001", Permissions: contract.EffectivePermissions{SandboxProfile: "default"}}
+	raw, _ := json.Marshal(map[string]any{"effective_permissions": v.Permissions, "future_permission": "retained"})
+	v.PermissionsJCS, err = jcs.Canonicalize(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v.IdentityJCS, err = SigningIdentity(a, v.Version, v.Digest, v.PermissionsJCS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var identity map[string]any
+	if err = json.Unmarshal(v.IdentityJCS, &identity); err != nil {
+		t.Fatal(err)
+	}
+	identity["future_identity"] = "retained"
+	raw, _ = json.Marshal(identity)
+	v.IdentityJCS, err = jcs.Canonicalize(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v.Signature, err = s.Sign(a, v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Verify(a, v); err != nil {
+		t.Fatal("future fields broke stored signature", err)
+	}
+	v.IdentityJCS = append(v.IdentityJCS, ' ')
+	if s.Verify(a, v) == nil {
+		t.Fatal("noncanonical signing bytes accepted")
 	}
 }

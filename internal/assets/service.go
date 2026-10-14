@@ -2,9 +2,7 @@ package assets
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json/v2"
-	"fmt"
 	"mime"
 	"net/http"
 	"path"
@@ -43,16 +41,20 @@ type Asset struct {
 	CreatedAt   time.Time          `json:"created_at"`
 }
 type Version struct {
-	ID          string                        `json:"id"`
-	AssetID     string                        `json:"asset_id"`
-	Version     string                        `json:"version"`
-	Manifest    Manifest                      `json:"manifest"`
-	Digest      string                        `json:"content_digest"`
-	BlobRef     string                        `json:"blob_ref"`
-	Permissions contract.EffectivePermissions `json:"permissions"`
-	State       string                        `json:"state"`
-	Signature   string                        `json:"signature,omitempty"`
-	CreatedAt   time.Time                     `json:"created_at"`
+	ID             string                        `json:"id"`
+	AssetID        string                        `json:"asset_id"`
+	Version        string                        `json:"version"`
+	Manifest       Manifest                      `json:"manifest"`
+	Digest         string                        `json:"content_digest"`
+	BlobRef        string                        `json:"blob_ref"`
+	Permissions    contract.EffectivePermissions `json:"permissions"`
+	State          string                        `json:"state"`
+	Signature      string                        `json:"signature,omitempty"`
+	CreatedAt      time.Time                     `json:"created_at"`
+	ReleaseError   *string                       `json:"release_error,omitempty"`
+	UploadedBy     string                        `json:"uploaded_by,omitempty"`
+	PermissionsJCS []byte                        `json:"-"`
+	IdentityJCS    []byte                        `json:"-"`
 }
 
 var Slug = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{2,63}$`)
@@ -126,7 +128,7 @@ func (s *Service) Version(ctx context.Context, asset, id string) (Version, error
 		return v, httpx.E(404, "NOT_FOUND", "Version not found")
 	}
 	var m, p []byte
-	err := db.Tx(ctx).QueryRow(ctx, `SELECT id::text,asset_id::text,version,manifest,content_digest,blob_index_ref,permissions,state,COALESCE(signature,''),created_at FROM asset_versions WHERE tenant_id=$1 AND asset_id=$2 AND id=$3`, auth.Tenant(ctx), asset, id).Scan(&v.ID, &v.AssetID, &v.Version, &m, &v.Digest, &v.BlobRef, &p, &v.State, &v.Signature, &v.CreatedAt)
+	err := db.Tx(ctx).QueryRow(ctx, `SELECT id::text,asset_id::text,version,manifest,content_digest,blob_index_ref,permissions,state,COALESCE(signature,''),created_at,release_error,COALESCE(uploaded_by::text,''),permissions_jcs,identity_jcs FROM asset_versions WHERE tenant_id=$1 AND asset_id=$2 AND id=$3`, auth.Tenant(ctx), asset, id).Scan(&v.ID, &v.AssetID, &v.Version, &m, &v.Digest, &v.BlobRef, &p, &v.State, &v.Signature, &v.CreatedAt, &v.ReleaseError, &v.UploadedBy, &v.PermissionsJCS, &v.IdentityJCS)
 	if err != nil {
 		return v, err
 	}
@@ -135,70 +137,6 @@ func (s *Service) Version(ctx context.Context, asset, id string) (Version, error
 	}
 	err = json.Unmarshal(p, &v.Permissions)
 	return v, err
-}
-func (s *Service) Upload(ctx context.Context, a Asset, version string, raw []byte) (Version, error) {
-	if _, err := semver.StrictNewVersion(version); err != nil {
-		return Version{}, Invalid("version must be an exact semantic version")
-	}
-	b, err := bundle.Parse(raw, bundle.DefaultLimits)
-	if err != nil {
-		return Version{}, Invalid(err.Error())
-	}
-	m, p, err := ParseManifest(b.Files)
-	if err != nil {
-		return Version{}, Invalid(err.Error())
-	}
-	if m.Agent != nil && m.Agent.Version != nil && *m.Agent.Version != version || m.Team != nil && m.Team.Version != nil && *m.Team.Version != version {
-		return Version{}, Invalid("Manifest version differs from upload version")
-	}
-	for _, d := range m.Dependencies {
-		if _, err := semver.NewConstraint(d.Constraint); err != nil {
-			return Version{}, Invalid("Invalid dependency version constraint")
-		}
-	}
-	if s.Store == nil {
-		return Version{}, httpx.E(503, "STORAGE_UNAVAILABLE", "Asset storage is unavailable")
-	}
-	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(b.Archive))
-	ref, err := s.Store.Put(ctx, auth.Tenant(ctx), digest, b.Archive)
-	if err != nil {
-		return Version{}, err
-	}
-	mb, err := json.Marshal(m)
-	if err != nil {
-		return Version{}, err
-	}
-	pb, err := json.Marshal(p)
-	if err != nil {
-		return Version{}, err
-	}
-	id := ids.New()
-	_, err = db.Tx(ctx).Exec(ctx, `INSERT INTO asset_versions(id,tenant_id,asset_id,version,manifest,content_digest,blob_index_ref,permissions,compat,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'{}','draft')`, id, auth.Tenant(ctx), a.ID, version, mb, b.Digest, ref, pb)
-	if err != nil {
-		return Version{}, err
-	}
-	for _, f := range b.Files {
-		ref, err = s.Store.Put(ctx, auth.Tenant(ctx), f.Digest, f.Data)
-		if err != nil {
-			return Version{}, err
-		}
-		_, err = db.Tx(ctx).Exec(ctx, `INSERT INTO asset_files(tenant_id,version_id,path,sha256,size_bytes,is_text,blob_ref) VALUES($1,$2,$3,$4,$5,$6,$7)`, auth.Tenant(ctx), id, f.Path, f.Digest, len(f.Data), f.Text, ref)
-		if err != nil {
-			return Version{}, err
-		}
-	}
-	// Dependencies with the same reference but incompatible constraints are retained
-	// in manifest; SQL projection is only an index, not the resolver's authority.
-	for _, d := range m.Dependencies {
-		_, err = db.Tx(ctx).Exec(ctx, `INSERT INTO asset_dependencies(tenant_id,version_id,dep_kind,dep_ref,"constraint") VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`, auth.Tenant(ctx), id, d.Kind, d.Ref, d.Constraint)
-		if err != nil {
-			return Version{}, err
-		}
-	}
-	if err = Log(ctx, "asset.version_uploaded", "asset_version", id, map[string]any{"content_digest": b.Digest, "excluded": b.Excluded}); err != nil {
-		return Version{}, err
-	}
-	return s.Version(ctx, a.ID, id)
 }
 func SetState(ctx context.Context, id, to string) error {
 	var from string
@@ -264,7 +202,7 @@ func (s *Service) Submit(ctx context.Context, a Asset, id, channel string) error
 		return err
 	}
 	// Workspace policies are edited through workspace settings, not request input.
-	if a.WorkspaceID != "" {
+	if a.WorkspaceID != "" && a.Visibility != "private" {
 		var raw []byte
 		if err := db.Tx(ctx).QueryRow(ctx, `SELECT settings FROM workspaces WHERE id=$1`, a.WorkspaceID).Scan(&raw); err != nil {
 			return err
@@ -278,17 +216,21 @@ func (s *Service) Submit(ctx context.Context, a Asset, id, channel string) error
 		if err := json.Unmarshal(raw, &settings); err != nil {
 			return err
 		}
-		if settings.Assets.ReviewRequired != nil {
+		if a.Visibility == "workspace" && settings.Assets.ReviewRequired != nil {
 			review = *settings.Assets.ReviewRequired
 		}
 		if settings.Assets.Approvals != 0 {
-			required = settings.Assets.Approvals
+			if a.Visibility == "tenant" {
+				required = max(required, settings.Assets.Approvals)
+			} else {
+				required = settings.Assets.Approvals
+			}
 		}
 	}
 	if required < 1 || required > 20 {
 		return Invalid("Asset approvals policy must be between 1 and 20")
 	}
-	_, err = db.Tx(ctx).Exec(ctx, `UPDATE asset_versions SET submitted_by=$2,release_channel=$3,release_started=false,withdraw_requested=false,withdraw_delivered=false,review_required=$4,workspace_review=$5,release_generation=release_generation+1,previous_version_id=(SELECT id FROM asset_versions WHERE asset_id=$6 AND state IN ('published','deprecated') ORDER BY published_at DESC,id DESC LIMIT 1),previous_channel_id=(SELECT version_id FROM asset_channels WHERE asset_id=$6 AND channel=$3) WHERE id=$1`, id, auth.From(ctx).ID, channel, required, review, a.ID)
+	_, err = db.Tx(ctx).Exec(ctx, `UPDATE asset_versions SET submitted_by=$2,release_channel=$3,release_started=false,withdraw_requested=false,withdraw_delivered=false,review_required=$4,workspace_review=$5,release_generation=release_generation+1,release_error=NULL,release_retryable=true,previous_version_id=(SELECT id FROM asset_versions WHERE asset_id=$6 AND state IN ('published','deprecated') ORDER BY published_at DESC,id DESC LIMIT 1),previous_channel_id=(SELECT version_id FROM asset_channels WHERE asset_id=$6 AND channel=$3) WHERE id=$1`, id, auth.From(ctx).ID, channel, required, review, a.ID)
 	return err
 }
 func (s *Service) SetChannel(ctx context.Context, a Asset, channel, id string) error {
@@ -355,15 +297,15 @@ func (s *Service) File(ctx context.Context, id, name string) ([]byte, string, er
 	return data, typ, nil
 }
 func (s *Service) Install(ctx context.Context, a Asset, scope, scopeID, constraint, channel, pinned string) (string, error) {
-	if scope != "workspace" && scope != "tenant" || !ids.Valid(scopeID) || scope == "tenant" && scopeID != auth.Tenant(ctx) {
-		return "", Invalid("Invalid install scope")
-	}
-	action := "asset.use"
-	if scope == "tenant" {
-		action = "policy.manage"
-	}
-	if err := s.Authz.Require(ctx, action, policy.Resource{Type: scope, ID: scopeID}); err != nil {
+	if err := s.requireInstall(ctx, scope, scopeID); err != nil {
 		return "", err
+	}
+	// Lock against concurrent metadata changes and use the current ceiling.
+	if err := db.Tx(ctx).QueryRow(ctx, `SELECT visibility FROM assets WHERE tenant_id=$1 AND id=$2 FOR SHARE`, auth.Tenant(ctx), a.ID).Scan(&a.Visibility); err != nil {
+		return "", err
+	}
+	if a.Visibility != "tenant" && (scope == "tenant" || a.Visibility != "workspace" || a.WorkspaceID != scopeID) {
+		return "", httpx.E(403, "VISIBILITY_BOUNDARY", "Asset must be visible to every member of the installation scope")
 	}
 	if a.Status != "active" {
 		return "", Invalid("Asset is unavailable")
@@ -390,9 +332,8 @@ func (s *Service) Install(ctx context.Context, a Asset, scope, scopeID, constrai
 	}
 	return id, Log(ctx, "asset.installed", "asset_install", id, map[string]any{"asset_id": a.ID, "scope_type": scope, "scope_id": scopeID})
 }
-func ArchiveDigest(ref string) string { return "sha256:" + path.Base(ref) }
-func Ref(a Asset) string              { return a.Publisher + "/" + a.Name }
-func IsLocal(ref string) bool         { return ref == "." || strings.HasPrefix(ref, "./") }
+func Ref(a Asset) string      { return a.Publisher + "/" + a.Name }
+func IsLocal(ref string) bool { return ref == "." || strings.HasPrefix(ref, "./") }
 
 // SelectVersion is shared by installation validation and recursive lock
 // resolution. A pin or channel is authoritative; an unavailable pointer never

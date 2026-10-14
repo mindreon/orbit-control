@@ -52,6 +52,13 @@ func (k ReplayKeys) cipher(version int) (cipher.AEAD, error) {
 	return cipher.NewGCMWithRandomNonce(block)
 }
 
+type requestBodyKey struct{}
+
+// WithRequestBody reuses a bounded upload body already read before the transaction.
+func WithRequestBody(ctx context.Context, b []byte) context.Context {
+	return context.WithValue(ctx, requestBodyKey{}, b)
+}
+
 // Idempotent must execute inside the same tenant transaction as the handler.
 // Advisory locking prevents concurrent requests from performing duplicate writes.
 func Idempotent(ctx context.Context, tx pgx.Tx, tenant, principal string, replayKeys ReplayKeys, w http.ResponseWriter, r *http.Request, next func(http.ResponseWriter, *http.Request) error) error {
@@ -62,9 +69,13 @@ func Idempotent(ctx context.Context, tx pgx.Tx, tenant, principal string, replay
 	if len(key) > 256 {
 		return E(422, "INVALID_IDEMPOTENCY_KEY", "Idempotency-Key is too long")
 	}
-	b, e := io.ReadAll(r.Body)
-	if e != nil {
-		return E(413, "BODY_TOO_LARGE", "Request body exceeds limit")
+	b, ok := ctx.Value(requestBodyKey{}).([]byte)
+	var e error
+	if !ok {
+		b, e = io.ReadAll(r.Body)
+		if e != nil {
+			return E(413, "BODY_TOO_LARGE", "Request body exceeds limit")
+		}
 	}
 	r.Body = io.NopCloser(bytes.NewReader(b))
 	hash := sha256.Sum256(b)

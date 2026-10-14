@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -26,12 +27,14 @@ import (
 )
 
 type Handler struct {
-	Assets *assets.Service
-	DB     *db.DB
-	Auth   *auth.Service
-	Authz  policy.Authorizer
-	Config config.Config
-	Logger *slog.Logger
+	uploadOnce      sync.Once
+	uploadSemaphore chan struct{}
+	Assets          *assets.Service
+	DB              *db.DB
+	Auth            *auth.Service
+	Authz           policy.Authorizer
+	Config          config.Config
+	Logger          *slog.Logger
 }
 type endpoint func(http.ResponseWriter, *http.Request) error
 type route struct {
@@ -57,6 +60,7 @@ var routes = []route{
 	{"GET /v1/assets/{a}/versions/{v}/checks", false, func(h *Handler) endpoint { return h.listAssetChecks }},
 	{"GET /v1/assets/{a}/channels", false, func(h *Handler) endpoint { return h.listAssetChannels }},
 	{"POST /v1/assets/{a}/channels/{c}", false, func(h *Handler) endpoint { return h.setAssetChannel }},
+	{"POST /v1/assets/{a}:restore", false, func(h *Handler) endpoint { return h.restoreAsset }},
 	{"POST /v1/assets/{a}:suspend", false, func(h *Handler) endpoint { return h.suspendAsset }},
 	{"GET /v1/assets/{a}/grants", false, func(h *Handler) endpoint { return h.listAssetGrants }},
 	{"POST /v1/assets/{a}/grants", false, func(h *Handler) endpoint { return h.grantAsset }},
@@ -207,6 +211,20 @@ func (h *Handler) protected(w http.ResponseWriter, r *http.Request, fn endpoint)
 			return httpx.E(403, "TENANT_REQUIRED", "X-Orbit-Tenant is required")
 		}
 		return fn(w, r)
+	}
+	if r.Pattern == "POST /v1/assets/{a}/versions" {
+		slots := h.uploadSlots()
+		select {
+		case slots <- struct{}{}:
+			defer func() { <-slots }()
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		r, e = h.stageUpload(r)
+		if e != nil {
+			return e
+		}
+		ctx = r.Context()
 	}
 	return h.DB.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
 		if e := tenancy.Active(ctx, tx, p.ID); e != nil {

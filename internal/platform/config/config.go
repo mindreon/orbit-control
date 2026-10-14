@@ -11,6 +11,7 @@ import (
 )
 
 type Config struct {
+	AssetUploadConcurrency                                                                                    int
 	TemporalAddress, TemporalNamespace, TemporalCAFile, TemporalCertFile, TemporalKeyFile, TemporalServerName string
 	TemporalTLS                                                                                               bool
 	ObjectEndpoint, ObjectBucket, ObjectAccessKey, ObjectSecretKey                                            string
@@ -30,6 +31,14 @@ type Config struct {
 
 func Load() (Config, error) {
 	c := Config{DatabaseURL: os.Getenv("ORBIT_DATABASE_URL"), AdminDatabaseURL: os.Getenv("ORBIT_ADMIN_DATABASE_URL"), Addr: env("ORBIT_HTTP_ADDR", "127.0.0.1:8080"), AuthMode: env("ORBIT_AUTH_MODE", "oidc"), Issuer: os.Getenv("ORBIT_OIDC_ISSUER"), ClientID: os.Getenv("ORBIT_OIDC_CLIENT_ID"), Audience: os.Getenv("ORBIT_OIDC_AUDIENCE"), KeyFile: env("ORBIT_SIGNING_KEY_FILE", ".orbit-data/signing.key"), LogFormat: env("ORBIT_LOG_FORMAT", "json"), AllowDevNetwork: os.Getenv("ORBIT_ALLOW_DEV_AUTH_ON_NETWORK") == "1"}
+	c.AssetUploadConcurrency = 2
+	if value := os.Getenv("ORBIT_ASSET_UPLOAD_CONCURRENCY"); value != "" {
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 1 || n > 32 {
+			return c, fmt.Errorf("ORBIT_ASSET_UPLOAD_CONCURRENCY must be between 1 and 32")
+		}
+		c.AssetUploadConcurrency = n
+	}
 	c.TemporalAddress = env("ORBIT_TEMPORAL_ADDRESS", "127.0.0.1:7233")
 	c.TemporalNamespace = env("ORBIT_TEMPORAL_NAMESPACE", "default")
 	for _, name := range []string{"ORBIT_TEMPORAL_TLS", "ORBIT_OBJECT_TLS"} {

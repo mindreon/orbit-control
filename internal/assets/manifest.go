@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"net/url"
+	"path"
 	"regexp"
 	"slices"
 	"strings"
@@ -21,11 +22,12 @@ type Dependency struct {
 	Constraint string             `json:"constraint"`
 }
 type Manifest struct {
-	Agent        *contract.AgentManifest  `json:"agent,omitempty"`
-	Team         *contract.TeamManifest   `json:"team,omitempty"`
-	Skills       *contract.SkillsManifest `json:"skills,omitempty"`
-	MCP          *contract.McpManifest    `json:"mcp,omitempty"`
-	Dependencies []Dependency             `json:"dependencies,omitempty"`
+	Agent             *contract.AgentManifest                  `json:"agent,omitempty"`
+	Team              *contract.TeamManifest                   `json:"team,omitempty"`
+	Skills            *contract.SkillsManifest                 `json:"skills,omitempty"`
+	MCP               *contract.McpManifest                    `json:"mcp,omitempty"`
+	MemberPermissions map[string]contract.EffectivePermissions `json:"member_permissions,omitempty"`
+	Dependencies      []Dependency                             `json:"dependencies,omitempty"`
 }
 
 func SplitRef(ref string) (string, string) {
@@ -72,24 +74,7 @@ func ParseManifest(files []bundle.File) (Manifest, contract.EffectivePermissions
 		}
 	}
 	if m.Agent != nil {
-		a := m.Agent
-		if a.Tools != nil {
-			p.ToolsBuiltin = a.Tools.Builtin
-		}
-		if a.Permissions != nil {
-			v := a.Permissions
-			p.DataScopes = v.DataScopes
-			p.EffectClasses = v.EffectClasses
-			if v.Network != nil {
-				p.Network.Egress = v.Network.Egress
-			}
-			if v.Sandbox != nil && v.Sandbox.Profile != nil {
-				p.SandboxProfile = *v.Sandbox.Profile
-			}
-			for _, s := range v.Secrets {
-				p.Secrets = append(p.Secrets, contract.SecretRequirement{Name: s.Name})
-			}
-		}
+		p = AgentPermissions(m.Agent)
 	}
 	add := func(kind contract.AssetKind, ref, c string) {
 		if c == "" {
@@ -153,8 +138,49 @@ func ParseManifest(files []bundle.File) (Manifest, contract.EffectivePermissions
 			add("skill", s.Id, c)
 		}
 	}
+	if m.Team != nil {
+		m.MemberPermissions = map[string]contract.EffectivePermissions{".": p}
+		for _, f := range files {
+			if !strings.HasPrefix(f.Path, "members/") || !strings.HasSuffix(f.Path, "/agent.json") {
+				continue
+			}
+			if err := contract.Validate("AgentManifest", f.Data); err != nil {
+				return m, p, fmt.Errorf("%s: %w", f.Path, err)
+			}
+			var agent contract.AgentManifest
+			if err := json.Unmarshal(f.Data, &agent); err != nil {
+				return m, p, err
+			}
+			permissions := AgentPermissions(&agent)
+			m.MemberPermissions[path.Dir(f.Path)] = permissions
+			p = UnionPermissions(p, permissions)
+		}
+	}
 	slices.SortFunc(m.Dependencies, func(a, b Dependency) int {
 		return strings.Compare(string(a.Kind)+a.Ref+a.Constraint, string(b.Kind)+b.Ref+b.Constraint)
 	})
 	return m, p, nil
+}
+
+func AgentPermissions(a *contract.AgentManifest) contract.EffectivePermissions {
+	p := contract.EffectivePermissions{SandboxProfile: "default"}
+
+	if a.Tools != nil {
+		p.ToolsBuiltin = a.Tools.Builtin
+	}
+	if a.Permissions != nil {
+		v := a.Permissions
+		p.DataScopes = v.DataScopes
+		p.EffectClasses = v.EffectClasses
+		if v.Network != nil {
+			p.Network.Egress = v.Network.Egress
+		}
+		if v.Sandbox != nil && v.Sandbox.Profile != nil {
+			p.SandboxProfile = *v.Sandbox.Profile
+		}
+		for _, s := range v.Secrets {
+			p.Secrets = append(p.Secrets, contract.SecretRequirement{Name: s.Name})
+		}
+	}
+	return p
 }
