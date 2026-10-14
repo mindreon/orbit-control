@@ -16,6 +16,7 @@ import (
 	"github.com/mindreon/orbit-control/internal/platform/httpx"
 	"github.com/mindreon/orbit-control/internal/platform/ids"
 	"github.com/mindreon/orbit-control/internal/tenancy"
+	"github.com/mindreon/orbit-control/internal/usage"
 	"github.com/mindreon/orbit-control/migrations"
 )
 
@@ -27,7 +28,7 @@ func main() {
 }
 func run(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: orbit-admin migrate up|down|status | seed | create-tenant | create-user | grant-role | audit verify --tenant UUID")
+		return fmt.Errorf("usage: orbit-admin migrate up|down|status | seed | create-tenant | create-user | grant-role | create-group | add-group-member | maintenance prune [--usage-before RFC3339] | audit verify --tenant UUID")
 	}
 	c, e := config.Load()
 	if e != nil {
@@ -62,7 +63,15 @@ func run(args []string) error {
 	subjectType := f.String("principal-type", "user", "user|service|group")
 	issuer := f.String("issuer", auth.DevIssuer, "identity issuer")
 	subject := f.String("subject", "", "identity provider subject")
+	usageBefore := f.String("usage-before", "", "RFC3339 retention cutoff for both usage ledger and dedup keys")
+	group := f.String("group", "", "group UUID")
 	rest := args[1:]
+	if args[0] == "maintenance" {
+		if len(rest) == 0 || rest[0] != "prune" {
+			return fmt.Errorf("maintenance requires prune")
+		}
+		rest = rest[1:]
+	}
 	if args[0] == "audit" {
 		if len(rest) == 0 || rest[0] != "verify" {
 			return fmt.Errorf("audit requires verify")
@@ -76,6 +85,20 @@ func run(args []string) error {
 		return fmt.Errorf("unexpected arguments")
 	}
 	emit := func(v any) error { return json.NewEncoder(os.Stdout).Encode(v) }
+	if args[0] == "maintenance" {
+		var cutoff *time.Time
+		if *usageBefore != "" {
+			v, err := time.Parse(time.RFC3339, *usageBefore)
+			if err != nil {
+				return fmt.Errorf("--usage-before must be RFC3339")
+			}
+			if v.After(time.Now()) {
+				return fmt.Errorf("--usage-before cannot be in the future")
+			}
+			cutoff = &v
+		}
+		return usage.Prune(ctx, d, cutoff)
+	}
 	if args[0] == "audit" {
 		if !ids.Valid(*tenant) {
 			return fmt.Errorf("--tenant UUID required")
@@ -85,7 +108,7 @@ func run(args []string) error {
 			if e != nil {
 				return e
 			}
-			return emit(map[string]any{"verified": n, "tenant_id": *tenant})
+			return emit(map[string]any{"head": n, "tenant_id": *tenant})
 		})
 	}
 	if args[0] == "seed" {
@@ -105,7 +128,7 @@ func run(args []string) error {
 		if e != nil {
 			return e
 		}
-		ts, e := tenancy.EnsurePersonal(ctx, d, p)
+		ts, e := tenancy.Tenants(ctx, d, p.ID)
 		if e != nil {
 			return e
 		}
@@ -141,6 +164,28 @@ func run(args []string) error {
 			return e
 		}
 		return emit(t)
+	}
+	if args[0] == "create-group" || args[0] == "add-group-member" {
+		if !ids.Valid(*tenant) || !ids.Valid(*actor) {
+			return fmt.Errorf("--tenant and --actor UUID required")
+		}
+		a, err := loadPrincipal(ctx, d, *actor)
+		if err != nil {
+			return err
+		}
+		return d.WithTenant(ctx, *tenant, func(tx pgx.Tx) error {
+			if args[0] == "create-group" {
+				id, err := tenancy.CreateGroup(ctx, tx, a, *tenant, *name)
+				if err != nil {
+					return err
+				}
+				return emit(map[string]string{"id": id})
+			}
+			if !ids.Valid(*group) || !ids.Valid(*pid) {
+				return fmt.Errorf("--group and --principal UUID required")
+			}
+			return tenancy.AddGroupMember(ctx, tx, a, *tenant, *group, *pid)
+		})
 	}
 	if args[0] == "grant-role" {
 		if !ids.Valid(*tenant) || !ids.Valid(*pid) || !ids.Valid(*actor) {

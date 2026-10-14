@@ -38,7 +38,7 @@ func TestOIDCDiscoveryVerificationAndJWKSCache(t *testing.T) {
 	}))
 	defer server.Close()
 	issuer = server.URL
-	c := config.Config{AuthMode: "oidc", Issuer: issuer, Audience: "orbit-api", ClientID: "web", KeyFile: t.TempDir() + "/signing.key"}
+	c := config.Config{AuthMode: "oidc", Issuer: issuer, Audience: "orbit-api", ClientID: "web", KeyFile: t.TempDir() + "/signing.key", CapabilityKeyFile: t.TempDir() + "/capability.key", CapabilityKeyID: "1", SecretsKeyVersion: 1, SecretsKEKs: map[int][]byte{1: make([]byte, 32)}}
 	a, e := New(t.Context(), nil, c, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if e != nil {
 		t.Fatal(e)

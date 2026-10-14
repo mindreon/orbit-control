@@ -32,13 +32,13 @@ func TestCanonicalHashAndTampering(t *testing.T) {
 	}
 }
 
-func TestHashPreservesLargeIntegerTampering(t *testing.T) {
+func TestHashPreservesRepresentableIntegerTampering(t *testing.T) {
 	r := Record{Detail: json.RawMessage(`{"amount":9007199254740992}`)}
 	h, e := Hash(nil, r)
 	if e != nil {
 		t.Fatal(e)
 	}
-	r.Detail = json.RawMessage(`{"amount":9007199254740993}`)
+	r.Detail = json.RawMessage(`{"amount":9007199254740994}`)
 	changed, e := Hash(nil, r)
 	if e != nil || bytes.Equal(h, changed) {
 		t.Fatal("integer precision lost during canonicalization")

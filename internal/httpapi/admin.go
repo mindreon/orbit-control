@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"net/http"
-	"slices"
 	"time"
 
 	"github.com/mindreon/orbit-control/internal/auth"
@@ -57,7 +56,6 @@ func (h *Handler) addMember(w http.ResponseWriter, r *http.Request) error {
 		PrincipalID string `json:"principal_id"`
 		Role        string `json:"role"`
 		Status      string `json:"status"`
-		Source      string `json:"source"`
 	}
 	if e := httpx.Decode(r, &in); e != nil {
 		return e
@@ -65,24 +63,15 @@ func (h *Handler) addMember(w http.ResponseWriter, r *http.Request) error {
 	if in.Status == "" {
 		in.Status = "active"
 	}
-	if in.Source == "" {
-		in.Source = "direct"
-	}
-	if in.Source != "direct" && in.Source != "invite" && in.Source != "jit" {
-		return httpx.E(422, "INVALID_INPUT", "Invalid member source")
-	}
 	if e := tenancy.ValidateStatus(in.Status); e != nil {
 		return e
-	}
-	if in.Source == "invite" && in.Status != "invited" {
-		return httpx.E(422, "INVALID_INPUT", "Invitations require invited status")
 	}
 	if in.Role == "tenant.owner" {
 		if e := h.Authz.Require(ctx, "tenant.manage", tenantResource(ctx)); e != nil {
 			return e
 		}
 	}
-	if e := tenancy.AddMember(ctx, db.Tx(ctx), auth.From(ctx), auth.Tenant(ctx), in.PrincipalID, in.Status, in.Source, in.Role); e != nil {
+	if e := tenancy.AddMember(ctx, db.Tx(ctx), auth.From(ctx), auth.Tenant(ctx), in.PrincipalID, in.Status, "direct", in.Role); e != nil {
 		return e
 	}
 	httpx.JSON(w, 201, in)
@@ -226,17 +215,8 @@ func (h *Handler) createKey(w http.ResponseWriter, r *http.Request) error {
 	if len(in.Scopes) == 0 {
 		return httpx.E(422, "INVALID_INPUT", "At least one scope required")
 	}
-	for _, scope := range in.Scopes {
-		known := false
-		for _, actions := range policy.Matrix {
-			if slices.Contains(actions, scope) {
-				known = true
-				break
-			}
-		}
-		if !known {
-			return httpx.E(422, "INVALID_INPUT", "Unknown API key scope")
-		}
+	if e := h.Authz.RequireKeyIssuance(ctx, in.PrincipalID, in.Scopes); e != nil {
+		return e
 	}
 	token, prefix, hash, e := auth.GenerateAPIKey()
 	if e != nil {
@@ -258,9 +238,9 @@ func (h *Handler) deleteKey(w http.ResponseWriter, r *http.Request) error {
 	if e := h.Authz.Require(ctx, "apikey.manage", tenantResource(ctx)); e != nil {
 		return e
 	}
-	id := r.URL.Query().Get("id")
+	id := r.PathValue("k")
 	if !ids.Valid(id) {
-		return httpx.E(422, "INVALID_INPUT", "id query parameter required")
+		return httpx.E(404, "NOT_FOUND", "API key not found")
 	}
 	n, e := db.Tx(ctx).Exec(ctx, "DELETE FROM api_keys WHERE id=$1", id)
 	if e != nil {

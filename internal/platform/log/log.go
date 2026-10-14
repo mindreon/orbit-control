@@ -59,3 +59,19 @@ func New(w io.Writer, format string) *slog.Logger {
 	}
 	return slog.New(slog.NewJSONHandler(w, opts))
 }
+
+// PanicValue keeps structured diagnostics while redacting sensitive fields.
+// Arbitrary strings and errors may contain credentials, so their type is the
+// only safe representation; the separately logged stack locates the panic.
+func PanicValue(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		copy := map[string]any{}
+		for k, v := range x {
+			copy[k] = v
+		}
+		return redact(copy)
+	default:
+		return "[REDACTED]"
+	}
+}

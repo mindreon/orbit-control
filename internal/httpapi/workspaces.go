@@ -3,7 +3,9 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"time"
 
 	"github.com/mindreon/orbit-control/internal/auth"
 	"github.com/mindreon/orbit-control/internal/platform/db"
@@ -18,7 +20,7 @@ type Workspace struct {
 	Name            string          `json:"name"`
 	DefaultAgentRef *string         `json:"default_agent_ref"`
 	Settings        json.RawMessage `json:"settings"`
-	CreatedAt       string          `json:"created_at"`
+	CreatedAt       time.Time       `json:"created_at"`
 }
 
 func (h *Handler) workspace(ctx context.Context, id string, action string) (Workspace, error) {
@@ -26,7 +28,13 @@ func (h *Handler) workspace(ctx context.Context, id string, action string) (Work
 	if !ids.Valid(id) {
 		return ws, httpx.E(404, "NOT_FOUND", "Workspace not found")
 	}
-	e := db.Tx(ctx).QueryRow(ctx, "SELECT id::text,name,default_agent_ref,settings,created_at::text FROM workspaces WHERE id=$1", id).Scan(&ws.ID, &ws.Name, &ws.DefaultAgentRef, &ws.Settings, &ws.CreatedAt)
+	if e := h.Authz.Require(ctx, "workspace.read", policy.Resource{Type: "workspace", ID: id}); e != nil {
+		if v, ok := errors.AsType[*httpx.Error](e); ok && v.Status == 403 {
+			return ws, httpx.E(404, "NOT_FOUND", "Workspace not found")
+		}
+		return ws, e
+	}
+	e := db.Tx(ctx).QueryRow(ctx, "SELECT id::text,name,default_agent_ref,settings,created_at FROM workspaces WHERE id=$1", id).Scan(&ws.ID, &ws.Name, &ws.DefaultAgentRef, &ws.Settings, &ws.CreatedAt)
 	if e != nil {
 		return ws, e
 	}
@@ -42,7 +50,7 @@ func (h *Handler) listWorkspaces(w http.ResponseWriter, r *http.Request) error {
 	if e != nil {
 		return e
 	}
-	rows, e := db.Tx(ctx).Query(ctx, `SELECT id::text,name,default_agent_ref,settings,created_at::text FROM workspaces WHERE ($1='' OR id>NULLIF($1,'')::uuid) AND ($2 OR id=ANY($3::uuid[])) ORDER BY id LIMIT $4`, page.Cursor, all, visible, page.Limit+1)
+	rows, e := db.Tx(ctx).Query(ctx, `SELECT id::text,name,default_agent_ref,settings,created_at FROM workspaces WHERE ($1='' OR id>NULLIF($1,'')::uuid) AND ($2 OR id=ANY($3::uuid[])) ORDER BY id LIMIT $4`, page.Cursor, all, visible, page.Limit+1)
 	if e != nil {
 		return e
 	}

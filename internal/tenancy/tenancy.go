@@ -122,10 +122,7 @@ func CreateTenant(ctx context.Context, d *db.DB, p auth.Principal, slug, name st
 	if e := httpx.Required(name, "name"); e != nil {
 		return t, e
 	}
-	e := d.Global(ctx, func(tx pgx.Tx) error {
-		if _, e := tx.Exec(ctx, "SELECT set_config('app.tenant_id',$1,true)", t.ID); e != nil {
-			return e
-		}
+	e := d.WithTenant(ctx, t.ID, func(tx pgx.Tx) error {
 		if _, e := tx.Exec(ctx, "INSERT INTO tenants(id,slug,name) VALUES($1,$2,$3)", t.ID, slug, name); e != nil {
 			return e
 		}
@@ -137,41 +134,12 @@ func CreateTenant(ctx context.Context, d *db.DB, p auth.Principal, slug, name st
 	return t, e
 }
 
-// Personal tenant provisioning is serialized by principal to prevent two first
-// requests from creating independent tenants for the same identity.
-func EnsurePersonal(ctx context.Context, d *db.DB, p auth.Principal) ([]Tenant, error) {
-	e := d.Global(ctx, func(tx pgx.Tx) error {
-		if _, e := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1,1))", p.ID); e != nil {
-			return e
-		}
-		var n int
-		if e := tx.QueryRow(ctx, "SELECT count(*) FROM principal_tenants($1)", p.ID).Scan(&n); e != nil {
-			return e
-		}
-		if n > 0 {
-			return nil
-		}
-		// Suspended/invited existing members must not acquire another tenant via JIT.
-		var existing bool
-		if e := tx.QueryRow(ctx, "SELECT principal_has_membership($1)", p.ID).Scan(&existing); e != nil {
-			return e
-		}
-		if existing {
-			return nil
-		}
-		t := ids.New()
-		if _, e := tx.Exec(ctx, "SELECT set_config('app.tenant_id',$1,true)", t); e != nil {
-			return e
-		}
-		if _, e := tx.Exec(ctx, "INSERT INTO tenants(id,slug,name) VALUES($1,$2,$3)", t, "personal-"+p.ID, "Personal workspace"); e != nil {
-			return e
-		}
-		return AddMember(ctx, tx, p, t, p.ID, "active", "jit", "tenant.owner")
-	})
-	if e != nil {
-		return nil, e
+// EnsurePersonal is called only inside a first-JIT WithTenant transaction.
+func EnsurePersonal(ctx context.Context, tx pgx.Tx, p auth.Principal, tenant string) error {
+	if _, err := tx.Exec(ctx, "INSERT INTO tenants(id,slug,name) VALUES($1,$2,$3)", tenant, "personal-"+p.ID, "Personal workspace"); err != nil {
+		return err
 	}
-	return Tenants(ctx, d, p.ID)
+	return AddMember(ctx, tx, p, tenant, p.ID, "active", "jit", "tenant.owner")
 }
 func CreateGroup(ctx context.Context, tx pgx.Tx, p auth.Principal, tenant, name string) (string, error) {
 	id := ids.New()
@@ -189,16 +157,6 @@ func AddGroupMember(ctx context.Context, tx pgx.Tx, p auth.Principal, tenant, gr
 		return e
 	}
 	return audit.Append(ctx, tx, p, tenant, "group.member_added", "group", group, map[string]any{"principal_id": pid})
-}
-func CreateProject(ctx context.Context, tx pgx.Tx, p auth.Principal, tenant, workspace, name, kind string) (string, error) {
-	id := ids.New()
-	if e := httpx.Required(name, "name"); e != nil {
-		return "", e
-	}
-	if _, e := tx.Exec(ctx, "INSERT INTO projects(id,tenant_id,workspace_id,name,kind) VALUES($1,$2,$3,$4,$5)", id, tenant, workspace, name, kind); e != nil {
-		return "", e
-	}
-	return id, audit.Append(ctx, tx, p, tenant, "project.created", "project", id, map[string]any{"workspace_id": workspace, "name": name})
 }
 func ValidateStatus(status string) error {
 	if status != "active" && status != "invited" && status != "suspended" {
@@ -223,19 +181,16 @@ func CreateUser(ctx context.Context, d *db.DB, email, name, subject, tenant, rol
 	if tenant != "" && !policy.ValidRole(role, "tenant") {
 		return p, fmt.Errorf("invalid tenant role")
 	}
-	e := d.Global(ctx, func(tx pgx.Tx) error {
-		if _, e := tx.Exec(ctx, "INSERT INTO principals(id,kind,email,display_name,idp_subject) VALUES($1,$2,$3,$4,$5)", p.ID, p.Kind, email, name, subject); e != nil {
-			return e
-		}
-		personal := tenant == ""
-		if personal {
-			tenant = ids.New()
-			role = "tenant.owner"
-		}
-		if actor.ID == "" {
-			actor = p
-		}
-		if _, e := tx.Exec(ctx, "SELECT set_config('app.tenant_id',$1,true)", tenant); e != nil {
+	personal := tenant == ""
+	if personal {
+		tenant = ids.New()
+		role = "tenant.owner"
+	}
+	if actor.ID == "" {
+		actor = p
+	}
+	e := d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
+		if _, e := tx.Exec(ctx, "INSERT INTO principals(id,kind,email,display_name,idp_subject,email_verified) VALUES($1,$2,$3,$4,$5,true)", p.ID, p.Kind, email, name, subject); e != nil {
 			return e
 		}
 		if personal {

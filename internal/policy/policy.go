@@ -118,3 +118,47 @@ func (a Authorizer) WorkspaceFilter(ctx context.Context) (bool, []string, error)
 	}
 	return false, ids, nil
 }
+
+// RequireKeyIssuance prevents impersonation and permission amplification. Action
+// scopes intersect all tenant-local RBAC grants again on each authenticated call.
+func (a Authorizer) RequireKeyIssuance(ctx context.Context, target string, scopes []string) error {
+	issuer := auth.From(ctx)
+	var kind string
+	err := db.Tx(ctx).QueryRow(ctx, `SELECT p.kind FROM principals p JOIN memberships m ON m.principal_id=p.id WHERE p.id=$1 AND m.status='active' AND p.status='active'`, target).Scan(&kind)
+	if err != nil {
+		return err
+	}
+	if target != issuer.ID {
+		if kind != "service" {
+			return httpx.E(403, "FORBIDDEN", "API keys cannot impersonate another user")
+		}
+		if err = a.Require(ctx, "tenant.manage", Resource{Type: "tenant", ID: auth.Tenant(ctx)}); err != nil {
+			return err
+		}
+	}
+	issuerBindings, err := a.Bindings(ctx)
+	if err != nil {
+		return err
+	}
+	recipientCtx := auth.Context(ctx, auth.Principal{ID: target, Kind: kind}, auth.Tenant(ctx))
+	recipientBindings, err := a.Bindings(recipientCtx)
+	if err != nil {
+		return err
+	}
+	for _, scope := range scopes {
+		if issuer.APIKey && !slices.Contains(issuer.Scopes, scope) || !hasAction(issuerBindings, scope) || !hasAction(recipientBindings, scope) {
+			return httpx.E(403, "FORBIDDEN", "API key scopes exceed issuer or recipient permissions")
+		}
+	}
+
+	return nil
+}
+
+func hasAction(bindings []Binding, action string) bool {
+	for _, b := range bindings {
+		if slices.Contains(Matrix[b.Role], action) {
+			return true
+		}
+	}
+	return false
+}

@@ -3,8 +3,6 @@ package httpapi
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -59,7 +57,13 @@ var routes = []route{
 	{"PATCH /v1/admin/members/{p}", false, func(h *Handler) endpoint { return h.patchMember }},
 	{"GET /v1/admin/api-keys", false, func(h *Handler) endpoint { return h.listKeys }},
 	{"POST /v1/admin/api-keys", false, func(h *Handler) endpoint { return h.createKey }},
-	{"DELETE /v1/admin/api-keys", false, func(h *Handler) endpoint { return h.deleteKey }},
+	{"DELETE /v1/admin/api-keys/{k}", false, func(h *Handler) endpoint { return h.deleteKey }},
+	{"POST /v1/admin/service-principals", false, func(h *Handler) endpoint { return h.createServicePrincipal }},
+	{"GET /v1/admin/service-principals", false, func(h *Handler) endpoint { return h.listServicePrincipals }},
+	{"POST /v1/admin/invitations", false, func(h *Handler) endpoint { return h.createInvitation }},
+	{"GET /v1/admin/invitations", false, func(h *Handler) endpoint { return h.listInvitations }},
+	{"DELETE /v1/admin/invitations/{i}", false, func(h *Handler) endpoint { return h.deleteInvitation }},
+	{"POST /v1/invitations/{token}:accept", false, func(h *Handler) endpoint { return h.acceptInvitation }},
 	{"GET /v1/admin/audit", false, func(h *Handler) endpoint { return h.listAudit }},
 }
 
@@ -71,10 +75,13 @@ func Routes() []string {
 	return out
 }
 func (h *Handler) Router() http.Handler {
+	h.Auth.OnCreate = h.provisionIdentity
 	mux := http.NewServeMux()
 	for _, route := range routes {
 		fn := route.Handle(h)
-		mux.HandleFunc(route.Pattern, func(w http.ResponseWriter, r *http.Request) {
+		// ServeMux wildcards occupy an entire segment; acceptance validates the suffix.
+		pattern := strings.Replace(route.Pattern, "{token}:accept", "{token}", 1)
+		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 			ip, _, _ := net.SplitHostPort(r.RemoteAddr)
 			r = r.WithContext(audit.Context(r.Context(), ip, r.UserAgent()))
 			rec := httpx.NewRecorder()
@@ -103,7 +110,7 @@ func (h *Handler) Router() http.Handler {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, httpx.E(404, "NOT_FOUND", "Route not found"))
 	})
-	return httpx.Middleware(h.Logger, h.Config.CORS, mux)
+	return httpx.Middleware(h.Logger, h.Config.PublicOrigin, h.Config.CORS, mux)
 }
 func (h *Handler) protected(w http.ResponseWriter, r *http.Request, fn endpoint) error {
 	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -116,31 +123,16 @@ func (h *Handler) protected(w http.ResponseWriter, r *http.Request, fn endpoint)
 	}
 	p, e := h.Auth.Authenticate(r.Context(), token, tenant)
 	if e != nil {
-		return httpx.E(401, "UNAUTHENTICATED", "Invalid credentials")
-	}
-	ts, e := tenancy.EnsurePersonal(r.Context(), h.DB, p)
-	if e != nil {
-		return e
-	}
-	if !p.APIKey && h.Config.AuthMode == "oidc" {
-		for _, t := range ts {
-			if e = h.DB.WithTenant(r.Context(), t.ID, func(tx pgx.Tx) error {
-				hash := sha256.Sum256([]byte(token))
-				n, e := tx.Exec(r.Context(), `INSERT INTO idempotency_keys(tenant_id,principal_id,key,namespace,method,path,request_hash,status,headers,response,expires_at) VALUES($1,$2,$3,'auth','AUTH',$4,$5,200,'{}','',now()+interval '24 hours') ON CONFLICT DO NOTHING`, t.ID, p.ID, hex.EncodeToString(hash[:]), h.Config.Issuer, hash[:])
-				if e != nil {
-					return e
-				}
-				if n.RowsAffected() == 0 {
-					return nil
-				}
-				return audit.Append(r.Context(), tx, p, t.ID, "login", "principal", p.ID, map[string]any{"mode": "oidc"})
-			}); e != nil {
-				return e
-			}
+		if errors.Is(e, pgx.ErrNoRows) {
+			return httpx.E(401, "UNAUTHENTICATED", "Invalid credentials")
 		}
+		return e
 	}
 	ctx := auth.Context(r.Context(), p, tenant)
 	r = r.WithContext(ctx)
+	if r.Pattern == "POST /v1/invitations/{token}" {
+		return fn(w, r)
+	}
 	if tenant == "" {
 		if r.URL.Path != "/v1/me" && r.URL.Path != "/v1/tenants" {
 			return httpx.E(403, "TENANT_REQUIRED", "X-Orbit-Tenant is required")
@@ -154,7 +146,7 @@ func (h *Handler) protected(w http.ResponseWriter, r *http.Request, fn endpoint)
 		ctx = db.Context(ctx, tx)
 		r = r.WithContext(ctx)
 
-		return httpx.Idempotent(ctx, tx, tenant, p.ID, h.Auth.Signer.ReplayKey(), w, r, fn)
+		return httpx.Idempotent(ctx, tx, tenant, p.ID, h.Auth.Replay, w, r, fn)
 	})
 }
 func (h *Handler) health(w http.ResponseWriter, r *http.Request) error {
@@ -203,16 +195,21 @@ func (h *Handler) devToken(w http.ResponseWriter, r *http.Request) error {
 	if len(input.Name) > 256 {
 		return httpx.E(422, "INVALID_INPUT", "display_name too long")
 	}
-	p, e := h.Auth.JIT(r.Context(), auth.DevIssuer, input.Email, input.Email, input.Name)
+	p, e := h.Auth.JIT(r.Context(), auth.DevIssuer, input.Email, input.Email, input.Name, true)
 	if e != nil {
 		return e
 	}
-	ts, e := tenancy.EnsurePersonal(r.Context(), h.DB, p)
+	ts, e := tenancy.Tenants(r.Context(), h.DB, p.ID)
 	if e != nil {
 		return e
 	}
 	if len(ts) == 0 {
-		return httpx.E(403, "FORBIDDEN", "No active tenant membership")
+		token, e := h.Auth.Signer.DevToken(p)
+		if e != nil {
+			return e
+		}
+		httpx.JSON(w, 200, map[string]any{"access_token": token, "expires_in": 3600})
+		return nil
 	}
 	tenant := ts[0].ID
 	if requested := r.Header.Get("X-Orbit-Tenant"); requested != "" {
@@ -229,7 +226,7 @@ func (h *Handler) devToken(w http.ResponseWriter, r *http.Request) error {
 	}
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	return h.DB.WithTenant(r.Context(), tenant, func(tx pgx.Tx) error {
-		return httpx.Idempotent(r.Context(), tx, tenant, p.ID, h.Auth.Signer.ReplayKey(), w, r, func(w http.ResponseWriter, r *http.Request) error {
+		return httpx.Idempotent(r.Context(), tx, tenant, p.ID, h.Auth.Replay, w, r, func(w http.ResponseWriter, r *http.Request) error {
 			if e := audit.Append(r.Context(), tx, p, tenant, "login", "principal", p.ID, map[string]any{"mode": "dev"}); e != nil {
 				return e
 			}
@@ -294,4 +291,19 @@ func tenantResource(ctx context.Context) policy.Resource {
 }
 func (h *Handler) logWrite(ctx context.Context, action, typ, id string, detail any) error {
 	return audit.Append(ctx, db.Tx(ctx), auth.From(ctx), auth.Tenant(ctx), action, typ, id, detail)
+}
+
+// First JIT creation, personal tenant membership and OIDC login audit share one
+// transaction. With personal tenants disabled there is no tenant audit to append.
+func (h *Handler) provisionIdentity(ctx context.Context, tx pgx.Tx, p auth.Principal, tenant string) error {
+	if tenant == "" {
+		return nil
+	}
+	if err := tenancy.EnsurePersonal(ctx, tx, p, tenant); err != nil {
+		return err
+	}
+	if h.Config.AuthMode == "oidc" {
+		return audit.Append(ctx, tx, p, tenant, "login", "principal", p.ID, map[string]any{"mode": "oidc", "jit": true})
+	}
+	return nil
 }

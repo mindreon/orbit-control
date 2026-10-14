@@ -8,6 +8,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/mindreon/orbit-control/internal/platform/ids"
+	orbitlog "github.com/mindreon/orbit-control/internal/platform/log"
 )
 
 type Error struct {
@@ -75,7 +78,7 @@ func Pagination(r *http.Request) (Page, error) {
 	if s := r.URL.Query().Get("limit"); s != "" {
 		n, e := strconv.Atoi(s)
 		if e != nil || n < 1 || n > 100 {
-			return p, E(400, "INVALID_CURSOR", "limit must be between 1 and 100")
+			return p, E(400, "INVALID_LIMIT", "limit must be between 1 and 100")
 		}
 		p.Limit = n
 	}
@@ -118,47 +121,47 @@ func (r *Recorder) FlushTo(w http.ResponseWriter) {
 	w.WriteHeader(r.Status)
 	_, _ = w.Write(r.Body)
 }
-func Middleware(logger *slog.Logger, origins []string, next http.Handler) http.Handler {
+func Middleware(logger *slog.Logger, publicOrigin string, origins []string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get("X-Request-ID")
 		if !ids.Valid(id) {
 			id = ids.New()
 		}
 		w.Header().Set("X-Request-ID", id)
+		w.Header().Add("Vary", "Origin")
 		started := time.Now()
 		rec := NewRecorder()
 		defer func() {
-			if recover() != nil {
+			if value := recover(); value != nil {
+				headers := rec.H.Clone()
 				rec = NewRecorder()
+				rec.H = headers
 				WriteError(rec, E(500, "INTERNAL", "Request failed"))
-				logger.Error("request panic", "request_id", id)
+				logger.Error("request panic", "request_id", id, "panic_type", fmt.Sprintf("%T", value), "panic", orbitlog.PanicValue(value), "stack", string(debug.Stack()))
 			}
 			if rec.Status == 0 {
 				rec.Status = 200
 			}
 			rec.FlushTo(w)
-			logger.Info("http access", "request_id", id, "method", r.Method, "path", r.URL.Path, "status", rec.Status, "duration_ms", time.Since(started).Milliseconds())
+			logger.Info("http access", "request_id", id, "method", r.Method, "path", logPath(r.URL.Path), "status", rec.Status, "duration_ms", time.Since(started).Milliseconds())
 		}()
 		if o := r.Header.Get("Origin"); o != "" {
-			allowed := false
-			for _, s := range origins {
-				if o == s {
-					allowed = true
-					break
-				}
-			}
-			rec.Header().Add("Vary", "Origin")
+			allowed := o == publicOrigin || slices.Contains(origins, o)
 			if !allowed {
-				WriteError(rec, E(403, "CORS_DENIED", "Origin is not allowed"))
-				return
-			}
-			rec.Header().Set("Access-Control-Allow-Origin", o)
-			rec.Header().Set("Access-Control-Expose-Headers", "X-Request-ID")
-			if r.Method == "OPTIONS" {
-				rec.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
-				rec.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Orbit-Tenant, X-Request-ID, Idempotency-Key")
-				rec.WriteHeader(204)
-				return
+				if r.Method != "GET" && r.Method != "HEAD" && r.Method != "OPTIONS" {
+					WriteError(rec, E(403, "CORS_DENIED", "Origin is not allowed"))
+					return
+				}
+			} else {
+				rec.Header().Set("Access-Control-Allow-Origin", o)
+				rec.Header().Set("Access-Control-Expose-Headers", "X-Request-ID")
+				if r.Method == "OPTIONS" {
+					rec.Header().Set("Access-Control-Max-Age", "600")
+					rec.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, POST, PATCH, DELETE, OPTIONS")
+					rec.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Orbit-Tenant, X-Request-ID, Idempotency-Key")
+					rec.WriteHeader(204)
+					return
+				}
 			}
 		}
 		r.Body = http.MaxBytesReader(rec, r.Body, 1<<20)
@@ -170,4 +173,11 @@ func Required(s, name string) error {
 		return E(422, "INVALID_INPUT", fmt.Sprintf("%s is required and must be at most 256 bytes", name))
 	}
 	return nil
+}
+
+func logPath(path string) string {
+	if strings.HasPrefix(path, "/v1/invitations/") {
+		return "/v1/invitations/[REDACTED]:accept"
+	}
+	return path
 }

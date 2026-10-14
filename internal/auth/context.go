@@ -3,12 +3,13 @@ package auth
 import "context"
 
 type Principal struct {
-	ID          string   `json:"id"`
-	Kind        string   `json:"kind"`
-	Email       string   `json:"email"`
-	DisplayName string   `json:"display_name"`
-	Scopes      []string `json:"-"`
-	APIKey      bool     `json:"-"`
+	ID            string   `json:"id"`
+	Kind          string   `json:"kind"`
+	Email         string   `json:"email"`
+	DisplayName   string   `json:"display_name"`
+	Scopes        []string `json:"-"`
+	EmailVerified bool     `json:"-"`
+	APIKey        bool     `json:"-"`
 }
 type identity struct {
 	Principal Principal

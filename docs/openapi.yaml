@@ -1,3206 +1,1126 @@
-{
-  "openapi": "3.1.0",
-  "info": {
-    "title": "Orbit v2 Control API",
-    "version": "2.0.0",
-    "description": "WP1 identity, tenancy, workspaces and administration. Bearer OIDC access tokens, dev tokens or API keys. Tenant-scoped calls require X-Orbit-Tenant. Lists sort by UUIDv7 and use opaque cursors."
-  },
-  "servers": [
-    {
-      "url": "http://127.0.0.1:8080"
-    }
-  ],
-  "security": [
-    {
-      "BearerAuth": []
-    },
-    {
-      "APIKeyAuth": []
-    }
-  ],
-  "paths": {
-    "/health": {
-      "get": {
-        "operationId": "get_health",
-        "summary": "GET /health",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Health"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthenticated",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Body too large",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Invalid input or idempotency mismatch",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Not ready",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "security": []
-      }
-    },
-    "/ready": {
-      "get": {
-        "operationId": "get_ready",
-        "summary": "GET /ready",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Health"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthenticated",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Body too large",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Invalid input or idempotency mismatch",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Not ready",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "security": []
-      }
-    },
-    "/v1/auth/config": {
-      "get": {
-        "operationId": "get_v1_auth_config",
-        "summary": "GET /v1/auth/config",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AuthConfig"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthenticated",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Body too large",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Invalid input or idempotency mismatch",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Not ready",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "security": []
-      }
-    },
-    "/v1/auth/dev/token": {
-      "post": {
-        "operationId": "post_v1_auth_dev_token",
-        "summary": "POST /v1/auth/dev/token",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DevToken"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthenticated",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Body too large",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Invalid input or idempotency mismatch",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Not ready",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "security": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/DevTokenInput"
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/me": {
-      "get": {
-        "operationId": "get_v1_me",
-        "summary": "GET /v1/me",
-        "parameters": [
-          {
-            "name": "X-Orbit-Tenant",
-            "in": "header",
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "description": "Select current tenant; optional for identity discovery."
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Me"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthenticated",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Body too large",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Invalid input or idempotency mismatch",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Not ready",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/tenants": {
-      "get": {
-        "operationId": "get_v1_tenants",
-        "summary": "GET /v1/tenants",
-        "parameters": [
-          {
-            "name": "X-Orbit-Tenant",
-            "in": "header",
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "description": "Select current tenant; optional for identity discovery."
-          },
-          {
-            "$ref": "#/components/parameters/Cursor"
-          },
-          {
-            "$ref": "#/components/parameters/Limit"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TenantPage"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthenticated",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Body too large",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Invalid input or idempotency mismatch",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Not ready",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/workspaces": {
-      "get": {
-        "operationId": "get_v1_workspaces",
-        "summary": "GET /v1/workspaces",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Tenant"
-          },
-          {
-            "$ref": "#/components/parameters/Cursor"
-          },
-          {
-            "$ref": "#/components/parameters/Limit"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkspacePage"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthenticated",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Body too large",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Invalid input or idempotency mismatch",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Not ready",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "operationId": "post_v1_workspaces",
-        "summary": "POST /v1/workspaces",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Tenant"
-          },
-          {
-            "$ref": "#/components/parameters/Idempotency"
-          }
-        ],
-        "responses": {
-          "201": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Workspace"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthenticated",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Body too large",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Invalid input or idempotency mismatch",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Not ready",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateWorkspace"
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/workspaces/{w}": {
-      "get": {
-        "operationId": "get_v1_workspaces__w_",
-        "summary": "GET /v1/workspaces/{w}",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Tenant"
-          },
-          {
-            "name": "w",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Workspace"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthenticated",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Body too large",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Invalid input or idempotency mismatch",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Not ready",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      },
-      "patch": {
-        "operationId": "patch_v1_workspaces__w_",
-        "summary": "PATCH /v1/workspaces/{w}",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Tenant"
-          },
-          {
-            "name": "w",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          {
-            "$ref": "#/components/parameters/Idempotency"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Workspace"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthenticated",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Body too large",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Invalid input or idempotency mismatch",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Not ready",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PatchWorkspace"
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/workspaces/{w}/members": {
-      "get": {
-        "operationId": "get_v1_workspaces__w__members",
-        "summary": "GET /v1/workspaces/{w}/members",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Tenant"
-          },
-          {
-            "name": "w",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          {
-            "$ref": "#/components/parameters/Cursor"
-          },
-          {
-            "$ref": "#/components/parameters/Limit"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PrincipalPage"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthenticated",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Body too large",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Invalid input or idempotency mismatch",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Not ready",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "operationId": "post_v1_workspaces__w__members",
-        "summary": "POST /v1/workspaces/{w}/members",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Tenant"
-          },
-          {
-            "name": "w",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          {
-            "$ref": "#/components/parameters/Idempotency"
-          }
-        ],
-        "responses": {
-          "201": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkspaceMemberInput"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthenticated",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Body too large",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Invalid input or idempotency mismatch",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Not ready",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/WorkspaceMemberInput"
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/workspaces/{w}/members/{p}": {
-      "delete": {
-        "operationId": "delete_v1_workspaces__w__members__p_",
-        "summary": "DELETE /v1/workspaces/{w}/members/{p}",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Tenant"
-          },
-          {
-            "name": "w",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          {
-            "name": "p",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          {
-            "$ref": "#/components/parameters/Idempotency"
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Invalid request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthenticated",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Body too large",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Invalid input or idempotency mismatch",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Not ready",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/admin/members": {
-      "get": {
-        "operationId": "get_v1_admin_members",
-        "summary": "GET /v1/admin/members",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Tenant"
-          },
-          {
-            "$ref": "#/components/parameters/Cursor"
-          },
-          {
-            "$ref": "#/components/parameters/Limit"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MemberPage"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthenticated",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Body too large",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Invalid input or idempotency mismatch",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Not ready",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "operationId": "post_v1_admin_members",
-        "summary": "POST /v1/admin/members",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Tenant"
-          },
-          {
-            "$ref": "#/components/parameters/Idempotency"
-          }
-        ],
-        "responses": {
-          "201": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MemberInput"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthenticated",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Body too large",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Invalid input or idempotency mismatch",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Not ready",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MemberInput"
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/admin/members/{p}": {
-      "patch": {
-        "operationId": "patch_v1_admin_members__p_",
-        "summary": "PATCH /v1/admin/members/{p}",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Tenant"
-          },
-          {
-            "name": "p",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          {
-            "$ref": "#/components/parameters/Idempotency"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MemberPatchResult"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthenticated",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Body too large",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Invalid input or idempotency mismatch",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Not ready",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MemberPatch"
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/admin/api-keys": {
-      "get": {
-        "operationId": "get_v1_admin_api_keys",
-        "summary": "GET /v1/admin/api-keys",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Tenant"
-          },
-          {
-            "$ref": "#/components/parameters/Cursor"
-          },
-          {
-            "$ref": "#/components/parameters/Limit"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/APIKeyPage"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthenticated",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Body too large",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Invalid input or idempotency mismatch",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Not ready",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "operationId": "post_v1_admin_api_keys",
-        "summary": "POST /v1/admin/api-keys",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Tenant"
-          },
-          {
-            "$ref": "#/components/parameters/Idempotency"
-          }
-        ],
-        "responses": {
-          "201": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/APIKeyCreated"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthenticated",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Body too large",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Invalid input or idempotency mismatch",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Not ready",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/APIKeyInput"
-              }
-            }
-          }
-        }
-      },
-      "delete": {
-        "operationId": "delete_v1_admin_api_keys",
-        "summary": "DELETE /v1/admin/api-keys",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Tenant"
-          },
-          {
-            "$ref": "#/components/parameters/Idempotency"
-          },
-          {
-            "name": "id",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Success"
-          },
-          "400": {
-            "description": "Invalid request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthenticated",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Body too large",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Invalid input or idempotency mismatch",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Not ready",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/admin/audit": {
-      "get": {
-        "operationId": "get_v1_admin_audit",
-        "summary": "GET /v1/admin/audit",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Tenant"
-          },
-          {
-            "$ref": "#/components/parameters/Cursor"
-          },
-          {
-            "$ref": "#/components/parameters/Limit"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AuditEntryPage"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthenticated",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "Body too large",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Invalid input or idempotency mismatch",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Not ready",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  },
-  "components": {
-    "schemas": {
-      "Error": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "error": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "code": {
-                "type": "string"
-              },
-              "message": {
-                "type": "string"
-              },
-              "retryable": {
-                "type": "boolean"
-              },
-              "details": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            },
-            "required": [
-              "code",
-              "message",
-              "retryable",
-              "details"
-            ]
-          }
-        },
-        "required": [
-          "error"
-        ]
-      },
-      "Principal": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "kind": {
-            "enum": [
-              "user",
-              "service"
-            ]
-          },
-          "email": {
-            "type": "string"
-          },
-          "display_name": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "kind",
-          "email",
-          "display_name"
-        ]
-      },
-      "Tenant": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "slug": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "slug",
-          "name"
-        ]
-      },
-      "Me": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "principal": {
-            "$ref": "#/components/schemas/Principal"
-          },
-          "tenants": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Tenant"
-            }
-          },
-          "current_tenant": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid"
-          },
-          "roles": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        },
-        "required": [
-          "principal",
-          "tenants",
-          "current_tenant",
-          "roles"
-        ]
-      },
-      "AuthConfig": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "mode": {
-            "enum": [
-              "dev",
-              "oidc"
-            ]
-          },
-          "issuer": {
-            "type": "string"
-          },
-          "client_id": {
-            "type": "string"
-          },
-          "audience": {
-            "type": "string"
-          },
-          "scopes": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        },
-        "required": [
-          "mode"
-        ]
-      },
-      "DevTokenInput": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "email": {
-            "type": "string",
-            "format": "email"
-          },
-          "display_name": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "email"
-        ]
-      },
-      "DevToken": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "access_token": {
-            "type": "string"
-          },
-          "expires_in": {
-            "type": "integer"
-          }
-        },
-        "required": [
-          "access_token",
-          "expires_in"
-        ]
-      },
-      "Health": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "status": {
-            "const": "ok"
-          }
-        },
-        "required": [
-          "status"
-        ]
-      },
-      "Workspace": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "name": {
-            "type": "string"
-          },
-          "settings": {
-            "type": "object",
-            "additionalProperties": true
-          },
-          "default_agent_ref": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "created_at": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "name",
-          "settings",
-          "default_agent_ref",
-          "created_at"
-        ]
-      },
-      "CreateWorkspace": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "name": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 256
-          },
-          "settings": {
-            "type": "object",
-            "additionalProperties": true
-          },
-          "default_agent_ref": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "name"
-        ]
-      },
-      "PatchWorkspace": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "name": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 256
-          },
-          "settings": {
-            "type": "object",
-            "additionalProperties": true
-          },
-          "default_agent_ref": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "minProperties": 1
-      },
-      "WorkspaceMemberInput": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "principal_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "role": {
-            "enum": [
-              "ws.admin",
-              "ws.editor",
-              "ws.member",
-              "ws.viewer"
-            ]
-          }
-        },
-        "required": [
-          "principal_id"
-        ]
-      },
-      "Member": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "principal": {
-            "$ref": "#/components/schemas/Principal"
-          },
-          "status": {
-            "enum": [
-              "active",
-              "invited",
-              "suspended"
-            ]
-          },
-          "source": {
-            "enum": [
-              "scim",
-              "invite",
-              "jit",
-              "direct"
-            ]
-          },
-          "roles": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        },
-        "required": [
-          "id",
-          "principal",
-          "status",
-          "source",
-          "roles"
-        ]
-      },
-      "MemberInput": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "principal_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "role": {
-            "enum": [
-              "tenant.owner",
-              "tenant.admin",
-              "tenant.auditor",
-              "tenant.reviewer",
-              "tenant.member"
-            ]
-          },
-          "status": {
-            "enum": [
-              "active",
-              "invited",
-              "suspended"
-            ]
-          },
-          "source": {
-            "enum": [
-              "direct",
-              "invite",
-              "jit"
-            ]
-          }
-        },
-        "required": [
-          "principal_id"
-        ]
-      },
-      "MemberPatch": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "role": {
-            "enum": [
-              "tenant.owner",
-              "tenant.admin",
-              "tenant.auditor",
-              "tenant.reviewer",
-              "tenant.member"
-            ]
-          },
-          "status": {
-            "enum": [
-              "active",
-              "invited",
-              "suspended"
-            ]
-          }
-        },
-        "minProperties": 1
-      },
-      "MemberPatchResult": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "principal_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "role": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "status": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "principal_id",
-          "role",
-          "status"
-        ]
-      },
-      "APIKey": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "principal_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "name": {
-            "type": "string"
-          },
-          "prefix": {
-            "type": "string"
-          },
-          "scopes": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "expires_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "last_used_at": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date-time"
-          }
-        },
-        "required": [
-          "id",
-          "principal_id",
-          "name",
-          "prefix",
-          "scopes",
-          "expires_at",
-          "last_used_at"
-        ]
-      },
-      "APIKeyInput": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "principal_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "name": {
-            "type": "string"
-          },
-          "scopes": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "expires_at": {
-            "type": "string",
-            "format": "date-time"
-          }
-        },
-        "required": [
-          "name",
-          "scopes",
-          "expires_at"
-        ]
-      },
-      "APIKeyCreated": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "key": {
-            "type": "string"
-          },
-          "prefix": {
-            "type": "string"
-          },
-          "scopes": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "expires_at": {
-            "type": "string",
-            "format": "date-time"
-          }
-        },
-        "required": [
-          "id",
-          "key",
-          "prefix",
-          "scopes",
-          "expires_at"
-        ]
-      },
-      "AuditEntry": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "actor_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "actor_kind": {
-            "enum": [
-              "user",
-              "service"
-            ]
-          },
-          "action": {
-            "type": "string"
-          },
-          "target_type": {
-            "type": "string"
-          },
-          "target_id": {
-            "type": "string"
-          },
-          "detail": {
-            "type": "object",
-            "additionalProperties": true
-          },
-          "prev_hash": {
-            "type": "string"
-          },
-          "hash": {
-            "type": "string"
-          },
-          "occurred_at": {
-            "type": "string",
-            "format": "date-time"
-          }
-        },
-        "required": [
-          "id",
-          "actor_id",
-          "actor_kind",
-          "action",
-          "target_type",
-          "target_id",
-          "detail",
-          "prev_hash",
-          "hash",
-          "occurred_at"
-        ]
-      },
-      "TenantPage": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "items": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Tenant"
-            }
-          },
-          "next_cursor": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "items",
-          "next_cursor"
-        ]
-      },
-      "WorkspacePage": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "items": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Workspace"
-            }
-          },
-          "next_cursor": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "items",
-          "next_cursor"
-        ]
-      },
-      "PrincipalPage": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "items": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Principal"
-            }
-          },
-          "next_cursor": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "items",
-          "next_cursor"
-        ]
-      },
-      "MemberPage": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "items": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Member"
-            }
-          },
-          "next_cursor": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "items",
-          "next_cursor"
-        ]
-      },
-      "APIKeyPage": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "items": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/APIKey"
-            }
-          },
-          "next_cursor": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "items",
-          "next_cursor"
-        ]
-      },
-      "AuditEntryPage": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "items": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/AuditEntry"
-            }
-          },
-          "next_cursor": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "items",
-          "next_cursor"
-        ]
-      }
-    },
-    "securitySchemes": {
-      "BearerAuth": {
-        "type": "http",
-        "scheme": "bearer",
-        "bearerFormat": "JWT"
-      },
-      "APIKeyAuth": {
-        "type": "http",
-        "scheme": "bearer",
-        "description": "orbit_<prefix>_<random>; X-Orbit-Tenant required; explicit action scopes."
-      }
-    },
-    "parameters": {
-      "Tenant": {
-        "name": "X-Orbit-Tenant",
-        "in": "header",
-        "required": true,
-        "schema": {
-          "type": "string",
-          "format": "uuid"
-        }
-      },
-      "Cursor": {
-        "name": "cursor",
-        "in": "query",
-        "schema": {
-          "type": "string"
-        }
-      },
-      "Limit": {
-        "name": "limit",
-        "in": "query",
-        "schema": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 100,
-          "default": 50
-        }
-      },
-      "Idempotency": {
-        "name": "Idempotency-Key",
-        "in": "header",
-        "schema": {
-          "type": "string",
-          "maxLength": 256
-        },
-        "description": "Tenant writes are replayed for 24 hours. Reuse with changed body, method or path returns 422. Replay responses are encrypted at rest, including API key creation."
-      }
-    }
-  }
-}
+# Maintained by hand. internal/httpapi/openapi_test.go checks the route inventory.
+openapi: 3.1.0
+info:
+  title: Orbit control API
+  version: 2.0.0
+  description: Identity, tenant administration, workspaces and audit for Orbit v2.
+servers:
+  - url: /
+security:
+  - bearerAuth: []
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Check process health
+      security: []
+      responses:
+        '200':
+          $ref: '#/components/responses/Health'
+        default:
+          $ref: '#/components/responses/Error'
+  /ready:
+    get:
+      operationId: getReadiness
+      summary: Check PostgreSQL readiness
+      security: []
+      responses:
+        '200':
+          $ref: '#/components/responses/Health'
+        '503':
+          $ref: '#/components/responses/Error'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/auth/config:
+    get:
+      operationId: getAuthConfig
+      summary: Get the public OIDC or development login configuration
+      security: []
+      responses:
+        '200':
+          description: Browser login configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthConfig'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/auth/dev/token:
+    post:
+      operationId: createDevToken
+      summary: Sign in with the development issuer
+      description: Available only in dev mode. A first login creates a personal tenant only when enabled.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/OptionalTenant'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DevTokenInput'
+      responses:
+        '200':
+          description: One-hour development access token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DevToken'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/me:
+    get:
+      operationId: getMe
+      summary: Get the authenticated principal and tenant roles
+      parameters:
+        - $ref: '#/components/parameters/OptionalTenant'
+      responses:
+        '200':
+          description: Current identity and memberships
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/tenants:
+    get:
+      operationId: listTenants
+      summary: List active tenant memberships
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Tenant page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantPage'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/workspaces:
+    parameters:
+      - $ref: '#/components/parameters/Tenant'
+    get:
+      operationId: listWorkspaces
+      summary: List readable workspaces
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Workspace page filtered by RBAC and API key scopes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspacePage'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      operationId: createWorkspace
+      summary: Create a workspace and grant its creator ws.admin
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWorkspace'
+      responses:
+        '201':
+          $ref: '#/components/responses/Workspace'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/workspaces/{w}:
+    parameters:
+      - $ref: '#/components/parameters/Tenant'
+      - $ref: '#/components/parameters/WorkspaceId'
+    get:
+      operationId: getWorkspace
+      summary: Get a readable workspace
+      description: Missing workspace.read returns 404, including for existing resources.
+      responses:
+        '200':
+          $ref: '#/components/responses/Workspace'
+        default:
+          $ref: '#/components/responses/Error'
+    patch:
+      operationId: updateWorkspace
+      summary: Update a workspace
+      description: Unreadable resources return 404; readable resources without write permission return 403.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchWorkspace'
+      responses:
+        '200':
+          $ref: '#/components/responses/Workspace'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/workspaces/{w}/members:
+    parameters:
+      - $ref: '#/components/parameters/Tenant'
+      - $ref: '#/components/parameters/WorkspaceId'
+    get:
+      operationId: listWorkspaceMembers
+      summary: List workspace members
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Workspace member page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrincipalPage'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      operationId: addWorkspaceMember
+      summary: Add an active tenant member to a workspace
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceMemberInput'
+      responses:
+        '201':
+          description: Membership and role granted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceMemberInput'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/workspaces/{w}/members/{p}:
+    parameters:
+      - $ref: '#/components/parameters/Tenant'
+      - $ref: '#/components/parameters/WorkspaceId'
+      - $ref: '#/components/parameters/PrincipalId'
+    delete:
+      operationId: removeWorkspaceMember
+      summary: Remove a workspace member and their direct workspace roles
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '204':
+          $ref: '#/components/responses/NoContent'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/admin/members:
+    parameters:
+      - $ref: '#/components/parameters/Tenant'
+    get:
+      operationId: listMembers
+      summary: List tenant members and direct tenant roles
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Tenant member page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemberPage'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      operationId: addMember
+      summary: Directly add an existing principal to the tenant
+      description: The server sets source to direct. Granting tenant.owner requires tenant.manage.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MemberInput'
+      responses:
+        '201':
+          description: Member added
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemberInput'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/admin/members/{p}:
+    parameters:
+      - $ref: '#/components/parameters/Tenant'
+      - $ref: '#/components/parameters/PrincipalId'
+    patch:
+      operationId: updateMember
+      summary: Update tenant membership status or replace direct tenant roles
+      description: Owner changes require tenant.manage; the last active owner cannot be removed.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MemberPatch'
+      responses:
+        '200':
+          description: Updated membership fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemberPatchResult'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/admin/api-keys:
+    parameters:
+      - $ref: '#/components/parameters/Tenant'
+    get:
+      operationId: listApiKeys
+      summary: List tenant API key metadata
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: API key page; plaintext keys are never listed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIKeyPage'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      operationId: createApiKey
+      summary: Issue an API key for yourself or an authorized service principal
+      description: >-
+        Requires apikey.manage. Other human principals are forbidden. A different
+        service principal requires tenant.manage. Scopes must be a subset of both
+        issuer and recipient effective tenant permissions, including issuer API key
+        scopes. Violations return 403. The plaintext key is returned only here.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/APIKeyInput'
+      responses:
+        '201':
+          description: Newly issued API key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIKeyCreated'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/admin/api-keys/{k}:
+    parameters:
+      - $ref: '#/components/parameters/Tenant'
+      - name: k
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+    delete:
+      operationId: deleteApiKey
+      summary: Revoke an API key
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '204':
+          $ref: '#/components/responses/NoContent'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/admin/service-principals:
+    parameters:
+      - $ref: '#/components/parameters/Tenant'
+    get:
+      operationId: listServicePrincipals
+      summary: List service principals in the tenant
+      description: Requires tenant.manage.
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Service principal page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrincipalPage'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      operationId: createServicePrincipal
+      summary: Create a service principal and its initial tenant role
+      description: Requires tenant.manage.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ServicePrincipalInput'
+      responses:
+        '201':
+          description: Created service principal
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Principal'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/admin/invitations:
+    parameters:
+      - $ref: '#/components/parameters/Tenant'
+    get:
+      operationId: listInvitations
+      summary: List tenant invitations without bearer tokens
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Invitation page; expiration is determined by expires_at
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitationPage'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      operationId: createInvitation
+      summary: Invite a verified email address into the tenant
+      description: Requires member.manage, plus tenant.manage to invite an owner. Only a token hash is stored.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvitationInput'
+      responses:
+        '201':
+          description: Invitation with its one-time bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitationCreated'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/admin/invitations/{i}:
+    parameters:
+      - $ref: '#/components/parameters/Tenant'
+      - name: i
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+    delete:
+      operationId: revokeInvitation
+      summary: Revoke a pending invitation
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '204':
+          $ref: '#/components/responses/NoContent'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/invitations/{token}:accept:
+    post:
+      operationId: acceptInvitation
+      summary: Accept an invitation using a matching verified email
+      description: >-
+        Requires a logged-in human user; API keys are forbidden. X-Orbit-Tenant is
+        unnecessary. Email matching ignores case. Expired, revoked or already
+        accepted tokens return 404 unless replaying the same Idempotency-Key.
+        Existing memberships are never reactivated or escalated by invitations.
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema: {type: string, minLength: 43, maxLength: 43}
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Active tenant membership created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tenant_id]
+                properties:
+                  tenant_id: {type: string, format: uuid}
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/admin/audit:
+    parameters:
+      - $ref: '#/components/parameters/Tenant'
+    get:
+      operationId: listAuditEntries
+      summary: List tenant audit entries and chain hashes
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Audit page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditEntryPage'
+        default:
+          $ref: '#/components/responses/Error'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: OIDC/dev JWT or orbit_ API key; selected tenant requires active membership.
+  parameters:
+    Tenant:
+      name: X-Orbit-Tenant
+      in: header
+      required: true
+      schema: {type: string, format: uuid}
+    OptionalTenant:
+      name: X-Orbit-Tenant
+      in: header
+      required: false
+      schema: {type: string, format: uuid}
+    Cursor:
+      name: cursor
+      in: query
+      schema: {type: string}
+      description: Opaque cursor from the previous page; omit for the first page.
+    Limit:
+      name: limit
+      in: query
+      schema: {type: integer, minimum: 1, maximum: 100, default: 50}
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      schema: {type: string, maxLength: 256}
+      description: >-
+        Optional 24-hour encrypted replay within a tenant. Reuse with different
+        method, URI or body returns 422. Available for dev login when a tenant exists.
+    WorkspaceId:
+      name: w
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    PrincipalId:
+      name: p
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+  responses:
+    Error:
+      description: >-
+        Structured error. 400 invalid JSON/cursor/limit/tenant; 401 invalid credentials;
+        403 forbidden; 404 absent or unreadable resource; 409 conflict; 413 body too
+        large; 422 invalid input or idempotency mismatch; 500 transient internal failure;
+        503 database unavailable. retryable indicates whether retrying may succeed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NoContent:
+      description: Operation completed
+    Health:
+      description: Service is healthy
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Health'
+    Workspace:
+      description: Workspace representation
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Workspace'
+  schemas:
+    APIKey:
+        additionalProperties: false
+        properties:
+            expires_at:
+                format: date-time
+                type: string
+            id:
+                format: uuid
+                type: string
+            last_used_at:
+                format: date-time
+                type:
+                    - string
+                    - "null"
+            name:
+                type: string
+            prefix:
+                type: string
+            principal_id:
+                format: uuid
+                type: string
+            scopes:
+                items:
+                    type: string
+                type: array
+        required:
+            - id
+            - principal_id
+            - name
+            - prefix
+            - scopes
+            - expires_at
+            - last_used_at
+        type: object
+    APIKeyCreated:
+        additionalProperties: false
+        properties:
+            expires_at:
+                format: date-time
+                type: string
+            id:
+                format: uuid
+                type: string
+            key:
+                type: string
+            prefix:
+                type: string
+            scopes:
+                items:
+                    type: string
+                type: array
+        required:
+            - id
+            - key
+            - prefix
+            - scopes
+            - expires_at
+        type: object
+    APIKeyInput:
+        additionalProperties: false
+        properties:
+            expires_at:
+                format: date-time
+                type: string
+            name:
+                type: string
+            principal_id:
+                format: uuid
+                type: string
+            scopes:
+                items:
+                    type: string
+                type: array
+        required:
+            - name
+            - scopes
+            - expires_at
+        type: object
+    APIKeyPage:
+        additionalProperties: false
+        properties:
+            items:
+                items:
+                    $ref: '#/components/schemas/APIKey'
+                type: array
+            next_cursor:
+                type: string
+        required:
+            - items
+            - next_cursor
+        type: object
+    AuditEntry:
+        additionalProperties: false
+        properties:
+            action:
+                type: string
+            actor_id:
+                format: uuid
+                type: string
+            actor_kind:
+                enum:
+                    - user
+                    - service
+            detail:
+                additionalProperties: true
+                type: object
+            hash:
+                type: string
+            id:
+                format: uuid
+                type: string
+            occurred_at:
+                format: date-time
+                type: string
+            prev_hash:
+                type: string
+            target_id:
+                type: string
+            target_type:
+                type: string
+        required:
+            - id
+            - actor_id
+            - actor_kind
+            - action
+            - target_type
+            - target_id
+            - detail
+            - prev_hash
+            - hash
+            - occurred_at
+        type: object
+    AuditEntryPage:
+        additionalProperties: false
+        properties:
+            items:
+                items:
+                    $ref: '#/components/schemas/AuditEntry'
+                type: array
+            next_cursor:
+                type: string
+        required:
+            - items
+            - next_cursor
+        type: object
+    AuthConfig:
+        additionalProperties: false
+        properties:
+            audience:
+                type: string
+            client_id:
+                type: string
+            issuer:
+                type: string
+            mode:
+                enum:
+                    - dev
+                    - oidc
+            scopes:
+                items:
+                    type: string
+                type: array
+        required:
+            - mode
+        type: object
+    CreateWorkspace:
+        additionalProperties: false
+        properties:
+            default_agent_ref:
+                type:
+                    - string
+                    - "null"
+            name:
+                maxLength: 256
+                minLength: 1
+                type: string
+            settings:
+                additionalProperties: true
+                type: object
+        required:
+            - name
+        type: object
+    DevToken:
+        additionalProperties: false
+        properties:
+            access_token:
+                type: string
+            expires_in:
+                type: integer
+        required:
+            - access_token
+            - expires_in
+        type: object
+    DevTokenInput:
+        additionalProperties: false
+        properties:
+            display_name:
+                type: string
+            email:
+                format: email
+                type: string
+        required:
+            - email
+        type: object
+    Error:
+        additionalProperties: false
+        properties:
+            error:
+                additionalProperties: false
+                properties:
+                    code:
+                        type: string
+                    details:
+                        additionalProperties: true
+                        type: object
+                    message:
+                        type: string
+                    retryable:
+                        type: boolean
+                required:
+                    - code
+                    - message
+                    - retryable
+                    - details
+                type: object
+        required:
+            - error
+        type: object
+    Health:
+        additionalProperties: false
+        properties:
+            status:
+                const: ok
+        required:
+            - status
+        type: object
+    Invitation:
+        properties:
+            email:
+                format: email
+                type: string
+            expires_at:
+                format: date-time
+                type: string
+            id:
+                format: uuid
+                type: string
+            role:
+                $ref: '#/components/schemas/TenantRole'
+            status:
+                enum:
+                    - pending
+                    - accepted
+                    - revoked
+                type: string
+        required:
+            - id
+            - email
+            - role
+            - expires_at
+            - status
+        type: object
+    InvitationCreated:
+        allOf:
+            - $ref: '#/components/schemas/Invitation'
+            - properties:
+                token:
+                    description: Bearer secret, returned only upon creation.
+                    type: string
+              required:
+                - token
+              type: object
+    InvitationInput:
+        additionalProperties: false
+        properties:
+            email:
+                format: email
+                type: string
+            expires_at:
+                format: date-time
+                type: string
+            role:
+                $ref: '#/components/schemas/TenantRole'
+        required:
+            - email
+            - expires_at
+        type: object
+    InvitationPage:
+        properties:
+            items:
+                items:
+                    $ref: '#/components/schemas/Invitation'
+                type: array
+            next_cursor:
+                type: string
+        required:
+            - items
+            - next_cursor
+        type: object
+    Me:
+        additionalProperties: false
+        properties:
+            current_tenant:
+                format: uuid
+                type:
+                    - string
+                    - "null"
+            principal:
+                $ref: '#/components/schemas/Principal'
+            roles:
+                items:
+                    type: string
+                type: array
+            tenants:
+                items:
+                    $ref: '#/components/schemas/Tenant'
+                type: array
+        required:
+            - principal
+            - tenants
+            - current_tenant
+            - roles
+        type: object
+    Member:
+        additionalProperties: false
+        properties:
+            id:
+                format: uuid
+                type: string
+            principal:
+                $ref: '#/components/schemas/Principal'
+            roles:
+                items:
+                    type: string
+                type: array
+            source:
+                enum:
+                    - scim
+                    - invite
+                    - jit
+                    - direct
+            status:
+                enum:
+                    - active
+                    - invited
+                    - suspended
+        required:
+            - id
+            - principal
+            - status
+            - source
+            - roles
+        type: object
+    MemberInput:
+        additionalProperties: false
+        properties:
+            principal_id:
+                format: uuid
+                type: string
+            role:
+                enum:
+                    - tenant.owner
+                    - tenant.admin
+                    - tenant.auditor
+                    - tenant.reviewer
+                    - tenant.member
+            status:
+                enum:
+                    - active
+                    - invited
+                    - suspended
+        required:
+            - principal_id
+        type: object
+    MemberPage:
+        additionalProperties: false
+        properties:
+            items:
+                items:
+                    $ref: '#/components/schemas/Member'
+                type: array
+            next_cursor:
+                type: string
+        required:
+            - items
+            - next_cursor
+        type: object
+    MemberPatch:
+        additionalProperties: false
+        minProperties: 1
+        properties:
+            role:
+                enum:
+                    - tenant.owner
+                    - tenant.admin
+                    - tenant.auditor
+                    - tenant.reviewer
+                    - tenant.member
+            status:
+                enum:
+                    - active
+                    - invited
+                    - suspended
+        type: object
+    MemberPatchResult:
+        additionalProperties: false
+        properties:
+            principal_id:
+                format: uuid
+                type: string
+            role:
+                type:
+                    - string
+                    - "null"
+            status:
+                type:
+                    - string
+                    - "null"
+        required:
+            - principal_id
+            - role
+            - status
+        type: object
+    PatchWorkspace:
+        additionalProperties: false
+        minProperties: 1
+        properties:
+            default_agent_ref:
+                type:
+                    - string
+                    - "null"
+            name:
+                maxLength: 256
+                minLength: 1
+                type: string
+            settings:
+                additionalProperties: true
+                type: object
+        type: object
+    Principal:
+        additionalProperties: false
+        properties:
+            display_name:
+                type: string
+            email:
+                type: string
+            id:
+                format: uuid
+                type: string
+            kind:
+                enum:
+                    - user
+                    - service
+        required:
+            - id
+            - kind
+            - email
+            - display_name
+        type: object
+    PrincipalPage:
+        additionalProperties: false
+        properties:
+            items:
+                items:
+                    $ref: '#/components/schemas/Principal'
+                type: array
+            next_cursor:
+                type: string
+        required:
+            - items
+            - next_cursor
+        type: object
+    ServicePrincipalInput:
+        additionalProperties: false
+        properties:
+            display_name:
+                maxLength: 256
+                minLength: 1
+                type: string
+            role:
+                $ref: '#/components/schemas/TenantRole'
+        required:
+            - display_name
+        type: object
+    Tenant:
+        additionalProperties: false
+        properties:
+            id:
+                format: uuid
+                type: string
+            name:
+                type: string
+            slug:
+                type: string
+        required:
+            - id
+            - slug
+            - name
+        type: object
+    TenantPage:
+        additionalProperties: false
+        properties:
+            items:
+                items:
+                    $ref: '#/components/schemas/Tenant'
+                type: array
+            next_cursor:
+                type: string
+        required:
+            - items
+            - next_cursor
+        type: object
+    TenantRole:
+        enum:
+            - tenant.owner
+            - tenant.admin
+            - tenant.auditor
+            - tenant.reviewer
+            - tenant.member
+        type: string
+    Workspace:
+        additionalProperties: false
+        properties:
+            created_at:
+                type: string
+            default_agent_ref:
+                type:
+                    - string
+                    - "null"
+            id:
+                format: uuid
+                type: string
+            name:
+                type: string
+            settings:
+                additionalProperties: true
+                type: object
+        required:
+            - id
+            - name
+            - settings
+            - default_agent_ref
+            - created_at
+        type: object
+    WorkspaceMemberInput:
+        additionalProperties: false
+        properties:
+            principal_id:
+                format: uuid
+                type: string
+            role:
+                enum:
+                    - ws.admin
+                    - ws.editor
+                    - ws.member
+                    - ws.viewer
+        required:
+            - principal_id
+        type: object
+    WorkspacePage:
+        additionalProperties: false
+        properties:
+            items:
+                items:
+                    $ref: '#/components/schemas/Workspace'
+                type: array
+            next_cursor:
+                type: string
+        required:
+            - items
+            - next_cursor
+        type: object

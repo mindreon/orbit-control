@@ -23,53 +23,77 @@ func testSigner(t *testing.T) *Signer {
 	return NewSigner(k)
 }
 func TestTokenBoundaries(t *testing.T) {
-	s := testSigner(t)
-	tenant, run := ids.New(), ids.New()
-	token, e := s.IssueCapability(tenant, run, []string{"secret.read"})
-	if e != nil {
-		t.Fatal(e)
+	dev := testSigner(t)
+	original := testSigner(t)
+	signer, err := NewCapabilitySigner(original.key, "old", nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	c, e := s.VerifyCapability(token, tenant, run)
-	if e != nil || c.Subject != "run:"+run {
-		t.Fatal(c, e)
+	claims := CapabilityClaims{Tenant: ids.New(), Run: ids.New(), Member: "leader", Seq: 3, Purpose: "segment", LeaseID: ids.New()}
+	token, err := signer.IssueCapability(claims)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, v := range []struct{ name, tenant, run string }{{"tenant", ids.New(), run}, {"run", tenant, ids.New()}} {
-		t.Run(v.name, func(t *testing.T) {
-			if _, e = s.VerifyCapability(token, v.tenant, v.run); e == nil {
-				t.Fatal("accepted wrong scope")
-			}
-		})
+	got, err := signer.VerifyCapability(token)
+	if err != nil || got.Tenant != claims.Tenant || got.Run != claims.Run || got.Member != claims.Member || got.Seq != 3 || got.Purpose != "segment" || got.LeaseID != claims.LeaseID || got.Subject != "run:"+claims.Run || got.ExpiresAt.Sub(got.IssuedAt.Time) != 5*time.Minute {
+		t.Fatal(got, err)
 	}
-	if _, e = s.VerifyDev(token); e == nil {
-		t.Fatal("kernel token accepted by public API")
+	if _, err = dev.VerifyDev(token); err == nil {
+		t.Fatal("capability accepted as dev token")
 	}
-	for _, test := range []string{"expired", "audience", "issuer", "duration", "future", "signature"} {
-		t.Run(test, func(t *testing.T) {
-			c := Claims{RegisteredClaims: registered(CapabilityIssuer, "run:"+run, "kernel", 5*time.Minute), TenantID: tenant}
-			switch test {
+	devToken, _ := dev.DevToken(Principal{ID: ids.New()})
+	if _, err = signer.VerifyCapability(devToken); err == nil {
+		t.Fatal("dev token accepted as capability")
+	}
+	next := testSigner(t)
+	rotated, err := NewCapabilitySigner(next.key, "new", map[string][]byte{"old": original.key.Public().(ed25519.PublicKey)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = rotated.VerifyCapability(token); err != nil {
+		t.Fatal("rotation lost old key", err)
+	}
+	fresh, err := rotated.IssueCapability(claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = rotated.VerifyCapability(fresh); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = signer.VerifyCapability(fresh); err == nil {
+		t.Fatal("accepted unknown kid")
+	}
+	for _, name := range []string{"expired", "audience", "future-nbf", "missing-nbf", "signature", "missing-kid"} {
+		t.Run(name, func(t *testing.T) {
+			c := got
+			c.RegisteredClaims = registered(CapabilityIssuer, "run:"+c.Run, "kernel", 5*time.Minute)
+			c.NotBefore = c.IssuedAt
+			key := original.key
+			kid := "old"
+			switch name {
 			case "expired":
 				c.ExpiresAt = jwt.NewNumericDate(time.Now().Add(-time.Minute))
 			case "audience":
 				c.Audience = jwt.ClaimStrings{"orbit-api"}
-			case "issuer":
-				c.Issuer = "attacker"
-			case "duration":
-				c.ExpiresAt = jwt.NewNumericDate(c.IssuedAt.Add(6 * time.Minute))
-			case "future":
-				c.IssuedAt = jwt.NewNumericDate(time.Now().Add(time.Hour))
+			case "future-nbf":
+				c.NotBefore = jwt.NewNumericDate(time.Now().Add(time.Hour))
+			case "missing-nbf":
+				c.NotBefore = nil
 			case "signature":
-				s = testSigner(t)
+				key = next.key
+			case "missing-kid":
+				kid = ""
 			}
-			token, e := s.sign(c)
+			jwtToken := jwt.NewWithClaims(jwt.SigningMethodEdDSA, c)
+			if kid != "" {
+				jwtToken.Header["kid"] = kid
+			}
+			bad, e := jwtToken.SignedString(key)
 			if e != nil {
 				t.Fatal(e)
 			}
-			verifier := s
-			if test == "signature" {
-				verifier = testSigner(t)
-			}
-			if _, e = verifier.VerifyCapability(token, tenant, run); e == nil {
-				t.Fatal("accepted invalid token")
+			if _, e = signer.VerifyCapability(bad); e == nil {
+				t.Fatal("accepted invalid capability")
 			}
 		})
 	}
@@ -110,8 +134,8 @@ func TestAPIKeyHash(t *testing.T) {
 	if string(hash) != string(expected[:]) {
 		t.Fatal("wrong hash")
 	}
-	other, _, _, e := GenerateAPIKey()
-	if e != nil || other == token {
+	other, otherPrefix, _, e := GenerateAPIKey()
+	if e != nil || other == token || otherPrefix == prefix {
 		t.Fatal("not random")
 	}
 }

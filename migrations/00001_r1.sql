@@ -3,7 +3,7 @@ SET LOCAL ROLE orbit_owner;
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 GRANT USAGE ON SCHEMA public TO orbit_app, orbit_worker;
 CREATE TABLE principals (
-  id uuid PRIMARY KEY, kind text NOT NULL CHECK(kind IN ('user','service')), email text NOT NULL, display_name text NOT NULL, idp_subject text NOT NULL UNIQUE, status text NOT NULL DEFAULT 'active' CHECK(status IN ('active','disabled')), created_at timestamptz NOT NULL DEFAULT now()
+  id uuid PRIMARY KEY, kind text NOT NULL CHECK(kind IN ('user','service')), email text NOT NULL, email_verified boolean NOT NULL DEFAULT false, display_name text NOT NULL, idp_subject text NOT NULL UNIQUE, status text NOT NULL DEFAULT 'active' CHECK(status IN ('active','disabled')), created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE tenants (
   id uuid PRIMARY KEY, slug text NOT NULL UNIQUE, name text NOT NULL, plan text NOT NULL DEFAULT 'free', region text NOT NULL DEFAULT 'local', isolation_tier text NOT NULL DEFAULT 'shared' CHECK(isolation_tier IN ('shared','dedicated')), kms_key_ref text, status text NOT NULL DEFAULT 'active' CHECK(status IN ('active','suspended','archived')), created_at timestamptz NOT NULL DEFAULT now()
@@ -11,6 +11,28 @@ CREATE TABLE tenants (
 CREATE TABLE memberships (
   tenant_id uuid NOT NULL REFERENCES tenants(id), principal_id uuid NOT NULL REFERENCES principals(id), status text NOT NULL CHECK(status IN ('invited','active','suspended')), joined_at timestamptz NOT NULL DEFAULT now(), source text NOT NULL CHECK(source IN ('scim','invite','jit','direct')), PRIMARY KEY(tenant_id,principal_id)
 );
+CREATE TABLE invitations (
+ id uuid PRIMARY KEY, tenant_id uuid NOT NULL REFERENCES tenants(id), email text NOT NULL,
+ role text NOT NULL CHECK(role IN ('tenant.owner','tenant.admin','tenant.auditor','tenant.reviewer','tenant.member')),
+ token_hash bytea NOT NULL UNIQUE, expires_at timestamptz NOT NULL,
+ status text NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','accepted','revoked')),
+ created_by uuid NOT NULL REFERENCES principals(id), created_at timestamptz NOT NULL DEFAULT now(),
+ accepted_by uuid REFERENCES principals(id), accepted_at timestamptz
+);
+CREATE INDEX ON invitations(tenant_id,id);
+ALTER TABLE invitations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE invitations FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON invitations USING(tenant_id = NULLIF(current_setting('app.tenant_id',true),'')::uuid) WITH CHECK(tenant_id = NULLIF(current_setting('app.tenant_id',true),'')::uuid);
+GRANT SELECT,INSERT,UPDATE ON invitations TO orbit_app;
+-- Token hash discovers the tenant for acceptance or encrypted acceptance replay.
+-- +goose StatementBegin
+CREATE FUNCTION invitation_tenant(token bytea) RETURNS SETOF uuid
+LANGUAGE sql SECURITY DEFINER STABLE SET search_path=public,pg_temp AS $$
+ SELECT tenant_id FROM invitations WHERE token_hash=token AND (status='accepted' OR (status='pending' AND expires_at>now()));
+$$;
+-- +goose StatementEnd
+REVOKE ALL ON FUNCTION invitation_tenant(bytea) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION invitation_tenant(bytea) TO orbit_app;
 CREATE TABLE groups (
   id uuid PRIMARY KEY, tenant_id uuid NOT NULL REFERENCES tenants(id), name text NOT NULL, external_id text, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(tenant_id,id), UNIQUE(tenant_id,name)
 );
@@ -33,7 +55,7 @@ CREATE TABLE policies (
   id uuid PRIMARY KEY, tenant_id uuid NOT NULL REFERENCES tenants(id), scope_type text NOT NULL CHECK(scope_type IN ('tenant','workspace','asset','session')), scope_id uuid NOT NULL, kind text NOT NULL CHECK(kind IN ('cedar','tool_rules')), body jsonb NOT NULL, version bigint NOT NULL, status text NOT NULL CHECK(status IN ('active','draft','archived')), created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE api_keys (
-  id uuid PRIMARY KEY, tenant_id uuid NOT NULL, principal_id uuid NOT NULL, name text NOT NULL, prefix text NOT NULL, hash bytea NOT NULL UNIQUE, scopes text[] NOT NULL, expires_at timestamptz NOT NULL, last_used_at timestamptz, created_at timestamptz NOT NULL DEFAULT now(), FOREIGN KEY(tenant_id,principal_id) REFERENCES memberships(tenant_id,principal_id)
+  id uuid PRIMARY KEY, tenant_id uuid NOT NULL, principal_id uuid NOT NULL, name text NOT NULL, prefix text NOT NULL UNIQUE, hash bytea NOT NULL UNIQUE, scopes text[] NOT NULL, expires_at timestamptz NOT NULL, last_used_at timestamptz, created_at timestamptz NOT NULL DEFAULT now(), FOREIGN KEY(tenant_id,principal_id) REFERENCES memberships(tenant_id,principal_id)
 );
 CREATE TABLE secrets (
   id uuid PRIMARY KEY, tenant_id uuid NOT NULL REFERENCES tenants(id), name text NOT NULL, scope text NOT NULL, ciphertext bytea NOT NULL, key_version int NOT NULL, created_by uuid NOT NULL REFERENCES principals(id), created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(tenant_id,id), UNIQUE(tenant_id,name,scope)
@@ -56,9 +78,11 @@ CREATE TABLE messages (
 CREATE TABLE run_segments (
   tenant_id uuid NOT NULL, run_id uuid NOT NULL, member text NOT NULL, seq int NOT NULL CHECK(seq>=1), status text NOT NULL CHECK(status IN ('running','completed','interrupted','yielded','failed')), checkpoint_version bigint, iterations int NOT NULL DEFAULT 0, usage jsonb NOT NULL DEFAULT '{}', result_ref text, started_at timestamptz NOT NULL DEFAULT now(), ended_at timestamptz, PRIMARY KEY(tenant_id,run_id,member,seq), FOREIGN KEY(tenant_id,run_id) REFERENCES runs(tenant_id,id)
 );
+-- Event IDs are <run>:<member>:<seq>:<attempt>:<n>; ts is the immutable RunEvent timestamp.
+-- Historical reads and cursors order by (ts,event_id); seq is not globally unique.
 CREATE TABLE run_events (
-  tenant_id uuid NOT NULL, run_id uuid NOT NULL, seq bigint NOT NULL, event_id uuid NOT NULL, type text NOT NULL, payload jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(tenant_id,run_id,event_id,created_at), FOREIGN KEY(tenant_id,run_id) REFERENCES runs(tenant_id,id)
-) PARTITION BY RANGE (created_at);
+  tenant_id uuid NOT NULL, run_id uuid NOT NULL, seq bigint NOT NULL, event_id text NOT NULL, type text NOT NULL, payload jsonb NOT NULL, ts timestamptz NOT NULL, PRIMARY KEY(tenant_id,run_id,event_id,ts), FOREIGN KEY(tenant_id,run_id) REFERENCES runs(tenant_id,id)
+) PARTITION BY RANGE (ts);
 CREATE TABLE run_events_default PARTITION OF run_events DEFAULT;
 CREATE TABLE interactions (
   id uuid PRIMARY KEY, tenant_id uuid NOT NULL, run_id uuid NOT NULL, member text NOT NULL, kind text NOT NULL CHECK(kind IN ('tool_approval','ask_user','effect_uncertain','question','plan','human_task')), request jsonb NOT NULL, approvers jsonb NOT NULL, status text NOT NULL CHECK(status IN ('pending','resolved','expired','cancelled','escalated')), decision jsonb, decided_by uuid REFERENCES principals(id), due_at timestamptz, escalated_at timestamptz, created_at timestamptz NOT NULL DEFAULT now(), FOREIGN KEY(tenant_id,run_id) REFERENCES runs(tenant_id,id)
@@ -164,17 +188,15 @@ CREATE TABLE audit_log (
 ) PARTITION BY RANGE (occurred_at);
 CREATE TABLE audit_log_default PARTITION OF audit_log DEFAULT;
 CREATE TABLE idempotency_keys (
-  tenant_id uuid NOT NULL REFERENCES tenants(id), principal_id uuid NOT NULL REFERENCES principals(id), key text NOT NULL, namespace text NOT NULL DEFAULT 'http' CHECK(namespace IN ('http','auth')), method text NOT NULL, path text NOT NULL, request_hash bytea NOT NULL, status int NOT NULL, headers jsonb NOT NULL, response bytea NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), expires_at timestamptz NOT NULL, PRIMARY KEY(tenant_id,principal_id,namespace,key)
+  tenant_id uuid NOT NULL REFERENCES tenants(id), principal_id uuid NOT NULL REFERENCES principals(id), key text NOT NULL, method text NOT NULL, path text NOT NULL, request_hash bytea NOT NULL, status int NOT NULL, headers jsonb NOT NULL, response bytea NOT NULL, key_version int NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), expires_at timestamptz NOT NULL, PRIMARY KEY(tenant_id,principal_id,key)
 );
 ALTER TABLE runs ADD FOREIGN KEY(tenant_id,lock_id) REFERENCES run_locks(tenant_id,id);
 ALTER TABLE sessions ADD FOREIGN KEY(tenant_id,pinned_lock_id) REFERENCES run_locks(tenant_id,id);
-CREATE INDEX ON memberships(tenant_id,principal_id);
+CREATE INDEX ON memberships(principal_id);
 CREATE INDEX ON memberships(tenant_id,joined_at DESC);
 CREATE INDEX ON groups(tenant_id,created_at DESC);
-CREATE INDEX ON group_members(tenant_id,group_id);
 CREATE INDEX ON group_members(tenant_id,principal_id);
 CREATE INDEX ON workspaces(tenant_id,created_at DESC);
-CREATE INDEX ON workspace_members(tenant_id,workspace_id);
 CREATE INDEX ON workspace_members(tenant_id,principal_id);
 CREATE INDEX ON workspace_members(tenant_id,created_at DESC);
 CREATE INDEX ON projects(tenant_id,workspace_id);
@@ -204,16 +226,13 @@ CREATE INDEX ON messages(tenant_id,session_id);
 CREATE INDEX ON messages(tenant_id,run_id);
 CREATE INDEX ON messages(tenant_id,author_id);
 CREATE INDEX ON messages(tenant_id,created_at DESC);
-CREATE INDEX ON run_segments(tenant_id,run_id);
 CREATE INDEX ON run_events(tenant_id,event_id);
-CREATE INDEX ON run_events(tenant_id,run_id);
-CREATE INDEX ON run_events(tenant_id,created_at DESC);
+CREATE INDEX ON run_events(tenant_id,run_id,ts,event_id);
 CREATE INDEX ON interactions(tenant_id,run_id);
 CREATE INDEX ON interactions(tenant_id,created_at DESC);
 CREATE INDEX ON artifacts(tenant_id,session_id);
 CREATE INDEX ON artifacts(tenant_id,run_id);
 CREATE INDEX ON artifacts(tenant_id,created_at DESC);
-CREATE INDEX ON team_runs(tenant_id,run_id);
 CREATE INDEX ON agent_checkpoints(tenant_id,created_at DESC);
 CREATE INDEX ON segment_results(tenant_id,created_at DESC);
 CREATE INDEX ON tool_effects(tenant_id,created_at DESC);
@@ -226,18 +245,13 @@ CREATE INDEX ON permission_grants(tenant_id,created_at DESC);
 CREATE INDEX ON assets(tenant_id,owner_id);
 CREATE INDEX ON assets(tenant_id,workspace_id);
 CREATE INDEX ON assets(tenant_id,created_at DESC);
-CREATE INDEX ON asset_versions(tenant_id,asset_id);
 CREATE INDEX ON asset_versions(tenant_id,created_at DESC);
-CREATE INDEX ON asset_files(tenant_id,version_id);
 CREATE INDEX ON asset_files(tenant_id,created_at DESC);
-CREATE INDEX ON asset_dependencies(tenant_id,version_id);
 CREATE INDEX ON asset_dependencies(tenant_id,resolved_version_id);
 CREATE INDEX ON asset_dependencies(tenant_id,created_at DESC);
 CREATE INDEX ON asset_channels(tenant_id,version_id);
-CREATE INDEX ON asset_channels(tenant_id,asset_id);
 CREATE INDEX ON asset_channels(tenant_id,updated_at DESC);
 CREATE INDEX ON asset_grants(tenant_id,grantee_id);
-CREATE INDEX ON asset_grants(tenant_id,asset_id);
 CREATE INDEX ON asset_grants(tenant_id,created_at DESC);
 CREATE INDEX ON asset_installs(tenant_id,pinned_version_id);
 CREATE INDEX ON asset_installs(tenant_id,scope_id);
@@ -260,201 +274,200 @@ CREATE INDEX ON usage_rollups(tenant_id,scope_id);
 CREATE INDEX ON usage_rollups(tenant_id,period_start DESC);
 CREATE INDEX ON audit_log(tenant_id,actor_id);
 CREATE INDEX ON audit_log(tenant_id,occurred_at DESC);
-CREATE INDEX ON idempotency_keys(tenant_id,principal_id);
 CREATE INDEX ON idempotency_keys(tenant_id,created_at DESC);
 CREATE UNIQUE INDEX ON model_profiles(tenant_id) WHERE is_default;
 CREATE INDEX ON role_bindings(tenant_id,scope_type,scope_id);
 CREATE INDEX ON idempotency_keys(expires_at);
 ALTER TABLE memberships ENABLE ROW LEVEL SECURITY;
 ALTER TABLE memberships FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON memberships USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON memberships USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON memberships TO orbit_app;
 ALTER TABLE groups ENABLE ROW LEVEL SECURITY;
 ALTER TABLE groups FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON groups USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON groups USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON groups TO orbit_app;
 ALTER TABLE group_members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE group_members FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON group_members USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON group_members USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON group_members TO orbit_app;
 ALTER TABLE workspaces ENABLE ROW LEVEL SECURITY;
 ALTER TABLE workspaces FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON workspaces USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON workspaces USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON workspaces TO orbit_app;
 ALTER TABLE workspace_members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE workspace_members FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON workspace_members USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON workspace_members USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON workspace_members TO orbit_app;
 ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
 ALTER TABLE projects FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON projects USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON projects USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON projects TO orbit_app;
 ALTER TABLE role_bindings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE role_bindings FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON role_bindings USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON role_bindings USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON role_bindings TO orbit_app;
 ALTER TABLE policies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE policies FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON policies USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON policies USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON policies TO orbit_app;
 ALTER TABLE api_keys ENABLE ROW LEVEL SECURITY;
 ALTER TABLE api_keys FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON api_keys USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON api_keys USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON api_keys TO orbit_app;
 ALTER TABLE secrets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE secrets FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON secrets USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON secrets USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON secrets TO orbit_app;
 ALTER TABLE model_profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE model_profiles FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON model_profiles USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON model_profiles USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON model_profiles TO orbit_app;
 ALTER TABLE sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE sessions FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON sessions USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON sessions USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON sessions TO orbit_app;
 ALTER TABLE runs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE runs FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON runs USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON runs USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON runs TO orbit_app;
 ALTER TABLE run_locks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE run_locks FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON run_locks USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON run_locks USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON run_locks TO orbit_app;
 ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE messages FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON messages USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON messages USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON messages TO orbit_app;
 ALTER TABLE run_segments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE run_segments FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON run_segments USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON run_segments USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON run_segments TO orbit_app;
 ALTER TABLE run_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE run_events FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON run_events USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON run_events USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON run_events TO orbit_app;
 ALTER TABLE run_events_default ENABLE ROW LEVEL SECURITY;
 ALTER TABLE run_events_default FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON run_events_default USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON run_events_default USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON run_events_default TO orbit_app;
 ALTER TABLE interactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE interactions FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON interactions USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON interactions USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON interactions TO orbit_app;
 ALTER TABLE artifacts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE artifacts FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON artifacts USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON artifacts USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON artifacts TO orbit_app;
 ALTER TABLE team_runs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE team_runs FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON team_runs USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON team_runs USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON team_runs TO orbit_app;
 ALTER TABLE agent_checkpoints ENABLE ROW LEVEL SECURITY;
 ALTER TABLE agent_checkpoints FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON agent_checkpoints USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON agent_checkpoints USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON agent_checkpoints TO orbit_app;
 GRANT SELECT, INSERT, UPDATE ON agent_checkpoints TO orbit_worker;
 ALTER TABLE segment_results ENABLE ROW LEVEL SECURITY;
 ALTER TABLE segment_results FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON segment_results USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON segment_results USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON segment_results TO orbit_app;
 GRANT SELECT, INSERT, UPDATE ON segment_results TO orbit_worker;
 ALTER TABLE tool_effects ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tool_effects FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON tool_effects USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON tool_effects USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON tool_effects TO orbit_app;
 GRANT SELECT, INSERT, UPDATE ON tool_effects TO orbit_worker;
 ALTER TABLE sandboxes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE sandboxes FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON sandboxes USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON sandboxes USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON sandboxes TO orbit_app;
 ALTER TABLE schedules ENABLE ROW LEVEL SECURITY;
 ALTER TABLE schedules FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON schedules USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON schedules USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON schedules TO orbit_app;
 ALTER TABLE permission_grants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE permission_grants FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON permission_grants USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON permission_grants USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON permission_grants TO orbit_app;
 ALTER TABLE assets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE assets FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON assets USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON assets USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON assets TO orbit_app;
 ALTER TABLE asset_versions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE asset_versions FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON asset_versions USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON asset_versions USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON asset_versions TO orbit_app;
 ALTER TABLE asset_files ENABLE ROW LEVEL SECURITY;
 ALTER TABLE asset_files FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON asset_files USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON asset_files USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON asset_files TO orbit_app;
 ALTER TABLE asset_dependencies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE asset_dependencies FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON asset_dependencies USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON asset_dependencies USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON asset_dependencies TO orbit_app;
 ALTER TABLE asset_channels ENABLE ROW LEVEL SECURITY;
 ALTER TABLE asset_channels FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON asset_channels USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON asset_channels USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON asset_channels TO orbit_app;
 ALTER TABLE asset_grants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE asset_grants FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON asset_grants USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON asset_grants USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON asset_grants TO orbit_app;
 ALTER TABLE asset_installs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE asset_installs FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON asset_installs USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON asset_installs USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON asset_installs TO orbit_app;
 ALTER TABLE asset_check_reports ENABLE ROW LEVEL SECURITY;
 ALTER TABLE asset_check_reports FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON asset_check_reports USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON asset_check_reports USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON asset_check_reports TO orbit_app;
 ALTER TABLE asset_reviews ENABLE ROW LEVEL SECURITY;
 ALTER TABLE asset_reviews FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON asset_reviews USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON asset_reviews USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON asset_reviews TO orbit_app;
 ALTER TABLE quota_policies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE quota_policies FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON quota_policies USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON quota_policies USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON quota_policies TO orbit_app;
 ALTER TABLE budget_reservations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE budget_reservations FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON budget_reservations USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON budget_reservations USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON budget_reservations TO orbit_app;
 ALTER TABLE usage_ledger ENABLE ROW LEVEL SECURITY;
 ALTER TABLE usage_ledger FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON usage_ledger USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON usage_ledger USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT ON usage_ledger TO orbit_app;
 ALTER TABLE usage_ledger_default ENABLE ROW LEVEL SECURITY;
 ALTER TABLE usage_ledger_default FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON usage_ledger_default USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON usage_ledger_default USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT ON usage_ledger_default TO orbit_app;
 ALTER TABLE usage_rollups ENABLE ROW LEVEL SECURITY;
 ALTER TABLE usage_rollups FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON usage_rollups USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON usage_rollups USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON usage_rollups TO orbit_app;
 ALTER TABLE audit_log ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_log FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON audit_log USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON audit_log USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT ON audit_log TO orbit_app;
 ALTER TABLE audit_log_default ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_log_default FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON audit_log_default USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON audit_log_default USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT ON audit_log_default TO orbit_app;
 ALTER TABLE idempotency_keys ENABLE ROW LEVEL SECURITY;
 ALTER TABLE idempotency_keys FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON idempotency_keys USING (tenant_id = current_setting('app.tenant_id', true)::uuid) WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+CREATE POLICY tenant_isolation ON idempotency_keys USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON idempotency_keys TO orbit_app;
 GRANT SELECT, INSERT ON principals, tenants TO orbit_app;
 -- +goose StatementBegin
 CREATE FUNCTION ensure_monthly_partitions(parent_table text, months_ahead int) RETURNS void
-LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
+LANGUAGE plpgsql SET search_path = public, pg_temp SET TimeZone = 'UTC' AS $$
 DECLARE start_at timestamptz; end_at timestamptz; child text; time_column text; i int;
 BEGIN
  IF current_user <> 'orbit_owner' THEN RAISE EXCEPTION 'owner required'; END IF;
  IF parent_table NOT IN ('run_events','usage_ledger','audit_log') OR months_ahead NOT BETWEEN 0 AND 24 THEN
   RAISE EXCEPTION 'invalid partition request';
  END IF;
- time_column := CASE WHEN parent_table='run_events' THEN 'created_at' ELSE 'occurred_at' END;
+ time_column := CASE WHEN parent_table='run_events' THEN 'ts' ELSE 'occurred_at' END;
  EXECUTE format('LOCK TABLE %I IN ACCESS EXCLUSIVE MODE',parent_table);
  FOR i IN 0..months_ahead LOOP
   start_at := date_trunc('month',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' + make_interval(months=>i);
@@ -467,7 +480,7 @@ BEGIN
    EXECUTE format('ALTER TABLE %I ATTACH PARTITION %I FOR VALUES FROM (%L) TO (%L)',parent_table,child,start_at,end_at);
    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY',child);
    EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY',child);
-   EXECUTE format('CREATE POLICY tenant_isolation ON %I USING (tenant_id = current_setting(''app.tenant_id'', true)::uuid) WITH CHECK (tenant_id = current_setting(''app.tenant_id'', true)::uuid)',child);
+   EXECUTE format('CREATE POLICY tenant_isolation ON %I USING (tenant_id = NULLIF(current_setting(''app.tenant_id'', true), '''')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting(''app.tenant_id'', true), '''')::uuid)',child);
    IF parent_table='run_events' THEN EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON %I TO orbit_app',child);
    ELSE EXECUTE format('GRANT SELECT, INSERT ON %I TO orbit_app',child); END IF;
   END IF;
@@ -475,20 +488,12 @@ BEGIN
 END $$;
 -- +goose StatementEnd
 REVOKE ALL ON FUNCTION ensure_monthly_partitions(text,int) FROM PUBLIC;
-CREATE TABLE usage_keys(tenant_id uuid NOT NULL REFERENCES tenants(id), idempotency_key text NOT NULL, PRIMARY KEY(tenant_id,idempotency_key));
+CREATE TABLE usage_keys(tenant_id uuid NOT NULL REFERENCES tenants(id), idempotency_key text NOT NULL, created_at timestamptz NOT NULL, PRIMARY KEY(tenant_id,idempotency_key));
 ALTER TABLE usage_keys ENABLE ROW LEVEL SECURITY;
 ALTER TABLE usage_keys FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON usage_keys USING(tenant_id = current_setting('app.tenant_id',true)::uuid) WITH CHECK(tenant_id = current_setting('app.tenant_id',true)::uuid);
+CREATE POLICY tenant_isolation ON usage_keys USING(tenant_id = NULLIF(current_setting('app.tenant_id',true),'')::uuid) WITH CHECK(tenant_id = NULLIF(current_setting('app.tenant_id',true),'')::uuid);
 GRANT SELECT, INSERT ON usage_keys TO orbit_app;
--- +goose StatementBegin
-CREATE FUNCTION claim_usage_key() RETURNS trigger LANGUAGE plpgsql SET search_path=public,pg_temp AS $$
-BEGIN
- INSERT INTO usage_keys VALUES(NEW.tenant_id,NEW.idempotency_key);
- RETURN NEW;
-END $$;
--- +goose StatementEnd
-CREATE TRIGGER usage_dedup BEFORE INSERT ON usage_ledger FOR EACH ROW EXECUTE FUNCTION claim_usage_key();
-REVOKE ALL ON FUNCTION claim_usage_key() FROM PUBLIC;
+CREATE INDEX ON usage_keys(created_at);
 -- Membership discovery is the only cross-tenant membership read. The caller supplies
 -- the authenticated principal; no tenant business contents are exposed.
 -- +goose StatementBegin
@@ -500,14 +505,6 @@ $$;
 -- +goose StatementEnd
 REVOKE ALL ON FUNCTION principal_tenants(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION principal_tenants(uuid) TO orbit_app;
--- +goose StatementBegin
-CREATE FUNCTION principal_has_membership(pid uuid) RETURNS boolean
-LANGUAGE sql SECURITY DEFINER STABLE SET search_path=public,pg_temp AS $$
- SELECT EXISTS(SELECT 1 FROM memberships WHERE principal_id=pid);
-$$;
--- +goose StatementEnd
-REVOKE ALL ON FUNCTION principal_has_membership(uuid) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION principal_has_membership(uuid) TO orbit_app;
 -- The worker may finish a started effect or resolve an uncertain one; completed
 -- effects cannot be rewritten or retried under the same key.
 -- +goose StatementBegin
@@ -525,12 +522,12 @@ END $$;
 CREATE TRIGGER worker_effect_update BEFORE UPDATE ON tool_effects FOR EACH ROW EXECUTE FUNCTION protect_worker_effect();
 REVOKE ALL ON FUNCTION protect_worker_effect() FROM PUBLIC;
 -- +goose Down
-DROP FUNCTION principal_has_membership(uuid);
-DROP FUNCTION principal_tenants(uuid);
 SET LOCAL ROLE orbit_owner;
+DROP FUNCTION invitation_tenant(bytea);
+DROP TABLE invitations;
+DROP FUNCTION principal_tenants(uuid);
 DROP FUNCTION ensure_monthly_partitions(text,int);
 DROP TABLE usage_ledger CASCADE;
-DROP FUNCTION claim_usage_key();
 DROP TABLE usage_keys;
 DROP TABLE idempotency_keys CASCADE;
 DROP TABLE audit_log CASCADE;
@@ -575,3 +572,4 @@ DROP TABLE groups CASCADE;
 DROP TABLE memberships CASCADE;
 DROP TABLE tenants CASCADE;
 DROP TABLE principals CASCADE;
+GRANT CREATE ON SCHEMA public TO PUBLIC;

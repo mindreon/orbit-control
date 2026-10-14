@@ -3,7 +3,6 @@ package auth
 import (
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
@@ -77,15 +76,13 @@ func LoadSigner(path string) (*Signer, error) {
 	return NewSigner(key), nil
 }
 
-type Claims struct {
+type DevClaims struct {
 	jwt.RegisteredClaims
-	TenantID    string   `json:"tenant_id,omitempty"`
-	Email       string   `json:"email,omitempty"`
-	DisplayName string   `json:"display_name,omitempty"`
-	Scopes      []string `json:"scopes,omitempty"`
+	Email       string `json:"email,omitempty"`
+	DisplayName string `json:"display_name,omitempty"`
 }
 
-func (s *Signer) sign(c Claims) (string, error) {
+func (s *Signer) sign(c DevClaims) (string, error) {
 	return jwt.NewWithClaims(jwt.SigningMethodEdDSA, c).SignedString(s.key)
 }
 func registered(iss, sub, aud string, ttl time.Duration) jwt.RegisteredClaims {
@@ -93,37 +90,79 @@ func registered(iss, sub, aud string, ttl time.Duration) jwt.RegisteredClaims {
 	return jwt.RegisteredClaims{Issuer: iss, Subject: sub, Audience: jwt.ClaimStrings{aud}, IssuedAt: jwt.NewNumericDate(n), ExpiresAt: jwt.NewNumericDate(n.Add(ttl)), ID: ids.New()}
 }
 func (s *Signer) DevToken(p Principal) (string, error) {
-	return s.sign(Claims{RegisteredClaims: registered(DevIssuer, p.ID, "orbit-api", time.Hour), Email: p.Email, DisplayName: p.DisplayName})
+	return s.sign(DevClaims{RegisteredClaims: registered(DevIssuer, p.ID, "orbit-api", time.Hour), Email: p.Email, DisplayName: p.DisplayName})
 }
-func (s *Signer) IssueCapability(tenantID, runID string, scopes []string) (string, error) {
-	if !ids.Valid(tenantID) || !ids.Valid(runID) {
-		return "", fmt.Errorf("invalid capability tenant or run")
-	}
-	return s.sign(Claims{RegisteredClaims: registered(CapabilityIssuer, "run:"+runID, "kernel", 5*time.Minute), TenantID: tenantID, Scopes: scopes})
-}
-func (s *Signer) verify(token, issuer, audience string) (Claims, error) {
-	var c Claims
+func (s *Signer) verify(token, issuer, audience string) (DevClaims, error) {
+	var c DevClaims
 	_, e := jwt.ParseWithClaims(token, &c, func(t *jwt.Token) (any, error) { return s.key.Public(), nil }, jwt.WithValidMethods([]string{"EdDSA"}), jwt.WithIssuer(issuer), jwt.WithAudience(audience), jwt.WithExpirationRequired(), jwt.WithIssuedAt())
 	if e != nil {
 		return c, fmt.Errorf("invalid or expired token")
 	}
 	return c, nil
 }
-func (s *Signer) VerifyDev(token string) (Claims, error) {
+func (s *Signer) VerifyDev(token string) (DevClaims, error) {
 	return s.verify(token, DevIssuer, "orbit-api")
 }
-func (s *Signer) VerifyCapability(token, tenantID, runID string) (Claims, error) {
-	c, e := s.verify(token, CapabilityIssuer, "kernel")
-	if e != nil {
-		return c, e
-	}
-	if c.TenantID != tenantID || c.Subject != "run:"+runID || c.IssuedAt == nil || c.ExpiresAt.Sub(c.IssuedAt.Time) > 5*time.Minute {
-		return c, fmt.Errorf("capability scope mismatch")
-	}
-	return c, nil
+
+// CapabilityClaims carries segment identity; callers compare it with current run
+// state after verification. It is deliberately independent of public dev claims.
+type CapabilityClaims struct {
+	jwt.RegisteredClaims
+	Tenant  string `json:"tenant"`
+	Run     string `json:"run"`
+	Member  string `json:"member"`
+	Seq     int    `json:"seq"`
+	Purpose string `json:"purpose"`
+	LeaseID string `json:"lease_id,omitempty"`
+}
+type CapabilitySigner struct {
+	key        ed25519.PrivateKey
+	kid        string
+	publicKeys map[string]ed25519.PublicKey
 }
 
-func (s *Signer) ReplayKey() []byte {
-	h := sha256.Sum256(append([]byte("orbit:idempotency:v1:"), s.key.Seed()...))
-	return h[:]
+func NewCapabilitySigner(key ed25519.PrivateKey, kid string, publicKeys map[string][]byte) (*CapabilitySigner, error) {
+	if len(key) != ed25519.PrivateKeySize || kid == "" {
+		return nil, fmt.Errorf("invalid capability signing key or kid")
+	}
+	keys := map[string]ed25519.PublicKey{}
+	for id, k := range publicKeys {
+		if id == "" || len(k) != ed25519.PublicKeySize {
+			return nil, fmt.Errorf("invalid capability public key")
+		}
+		keys[id] = ed25519.PublicKey(k)
+	}
+	if previous, ok := keys[kid]; ok && !previous.Equal(key.Public()) {
+		return nil, fmt.Errorf("capability kid conflicts with configured public key")
+	}
+	keys[kid] = key.Public().(ed25519.PublicKey)
+	return &CapabilitySigner{key: key, kid: kid, publicKeys: keys}, nil
+}
+func (s *CapabilitySigner) IssueCapability(c CapabilityClaims) (string, error) {
+	if !ids.Valid(c.Tenant) || !ids.Valid(c.Run) || c.Member == "" || c.Seq < 1 || c.Purpose == "" {
+		return "", fmt.Errorf("invalid capability identity")
+	}
+	c.RegisteredClaims = registered(CapabilityIssuer, "run:"+c.Run, "kernel", 5*time.Minute)
+	c.NotBefore = c.IssuedAt
+	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, c)
+	token.Header["kid"] = s.kid
+	return token.SignedString(s.key)
+}
+
+// VerifyCapability verifies cryptographic and time boundaries only. Run/segment
+// status and authorization belong to the caller, never this offline verifier.
+func (s *CapabilitySigner) VerifyCapability(token string) (CapabilityClaims, error) {
+	var c CapabilityClaims
+	_, err := jwt.ParseWithClaims(token, &c, func(t *jwt.Token) (any, error) {
+		kid, ok := t.Header["kid"].(string)
+		key, known := s.publicKeys[kid]
+		if !ok || !known {
+			return nil, fmt.Errorf("unknown capability kid")
+		}
+		return key, nil
+	}, jwt.WithValidMethods([]string{"EdDSA"}), jwt.WithAudience("kernel"), jwt.WithExpirationRequired())
+	if err != nil || c.NotBefore == nil {
+		return c, fmt.Errorf("invalid or expired capability")
+	}
+	return c, nil
 }

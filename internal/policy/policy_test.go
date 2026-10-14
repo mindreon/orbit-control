@@ -1,31 +1,58 @@
 package policy
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
 
 func TestEveryRoleAndAction(t *testing.T) {
-	// Independent minimal grants establish the intended least-privilege boundaries.
+	expected := map[string][]string{
+		"tenant.owner":         {"tenant.read", "tenant.manage", "member.read", "member.manage", "role.manage", "workspace.create", "workspace.read", "workspace.update", "workspace.members", "project.manage", "group.manage", "asset.read", "asset.create", "asset.update", "asset.publish", "asset.review", "asset.use", "session.read", "session.create", "session.update", "session.share", "run.create", "run.control", "audit.read", "apikey.read", "apikey.manage", "model.manage", "secret.manage", "policy.manage", "quota.manage"},
+		"tenant.admin":         {"tenant.read", "member.read", "member.manage", "role.manage", "workspace.create", "workspace.read", "workspace.update", "workspace.members", "project.manage", "group.manage", "asset.read", "asset.create", "asset.update", "asset.publish", "asset.review", "asset.use", "session.read", "session.create", "session.update", "session.share", "run.create", "run.control", "audit.read", "apikey.read", "apikey.manage", "model.manage", "secret.manage", "policy.manage", "quota.manage"},
+		"tenant.auditor":       {"tenant.read", "audit.read"},
+		"tenant.reviewer":      {"tenant.read", "asset.read", "asset.review"},
+		"tenant.member":        {"tenant.read", "workspace.create"},
+		"ws.admin":             {"workspace.read", "workspace.update", "workspace.members", "project.manage", "asset.read", "asset.create", "asset.update", "asset.publish", "asset.use", "session.read", "session.create", "session.update", "session.share", "run.create", "run.control"},
+		"ws.editor":            {"workspace.read", "asset.read", "asset.create", "asset.update", "asset.publish", "asset.use", "session.read", "session.create", "session.update", "run.create", "run.control"},
+		"ws.member":            {"workspace.read", "asset.read", "asset.use", "session.create", "run.create"},
+		"ws.viewer":            {"workspace.read", "asset.read", "session.read"},
+		"asset.owner":          {"asset.read", "asset.update", "asset.publish", "asset.use", "asset.share"},
+		"asset.maintainer":     {"asset.read", "asset.update", "asset.publish", "asset.use"},
+		"asset.user":           {"asset.read", "asset.use"},
+		"session.owner":        {"session.read", "session.update", "session.share", "run.create", "run.control"},
+		"session.collaborator": {"session.read", "session.update", "run.create", "run.control"},
+		"session.viewer":       {"session.read"},
+	}
 	cases := []struct {
 		role            string
 		allowed, denied []string
-	}{
-		{"tenant.owner", []string{"tenant.manage", "member.manage", "workspace.update", "audit.read"}, []string{"platform.read"}},
-		{"tenant.admin", []string{"member.manage", "model.manage", "secret.manage", "policy.manage", "quota.manage"}, []string{"tenant.manage", "platform.read"}},
-		{"tenant.auditor", []string{"audit.read"}, []string{"member.manage", "workspace.read", "secret.manage"}},
-		{"tenant.reviewer", []string{"asset.review", "asset.read"}, []string{"asset.update", "workspace.read", "audit.read"}},
-		{"tenant.member", []string{"workspace.create"}, []string{"workspace.read", "member.manage", "asset.review"}},
-		{"ws.admin", []string{"workspace.members", "workspace.update", "project.manage"}, []string{"member.manage", "asset.review"}},
-		{"ws.editor", []string{"asset.publish", "asset.update", "session.create"}, []string{"workspace.members", "workspace.update"}},
-		{"ws.member", []string{"session.create", "asset.use"}, []string{"asset.publish", "workspace.members"}},
-		{"ws.viewer", []string{"workspace.read", "session.read"}, []string{"session.create", "run.create", "asset.use"}},
-		{"asset.owner", []string{"asset.share", "asset.publish", "asset.update"}, []string{"workspace.read", "asset.review"}},
-		{"asset.maintainer", []string{"asset.publish", "asset.update"}, []string{"asset.share", "asset.review"}},
-		{"asset.user", []string{"asset.read", "asset.use"}, []string{"asset.update", "asset.publish"}},
-		{"session.owner", []string{"session.share", "session.update", "run.control"}, []string{"asset.read"}},
-		{"session.collaborator", []string{"session.update", "run.create"}, []string{"session.share"}},
-		{"session.viewer", []string{"session.read"}, []string{"session.update", "run.create"}},
+	}{}
+	actions := []string{"platform.read", "unknown"}
+	for _, allowed := range expected {
+		actions = append(actions, allowed...)
+	}
+	for _, allowed := range Matrix {
+		actions = append(actions, allowed...)
+	}
+	for role, allowed := range expected {
+		denied := []string{}
+		for _, action := range actions {
+			if !slices.Contains(allowed, action) {
+				denied = append(denied, action)
+			}
+		}
+		cases = append(cases, struct {
+			role            string
+			allowed, denied []string
+		}{role, allowed, denied})
+		actual := slices.Clone(Matrix[role])
+		want := slices.Clone(allowed)
+		slices.Sort(actual)
+		slices.Sort(want)
+		if !slices.Equal(actual, want) {
+			t.Errorf("%s matrix got %v want %v", role, actual, want)
+		}
 	}
 	if len(cases) != len(Matrix) {
 		t.Fatal("untested role")

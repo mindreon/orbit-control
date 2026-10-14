@@ -13,9 +13,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/mindreon/orbit-control/internal/auth"
 	"github.com/mindreon/orbit-control/internal/platform/ids"
+	"github.com/mindreon/orbit-control/internal/platform/jcs"
 )
 
-// Record is the canonical payload; encoding/json sorts map keys recursively.
+// Record is the payload canonicalized with RFC 8785 before hashing.
 type Record struct {
 	ID         string          `json:"id"`
 	TenantID   string          `json:"tenant_id"`
@@ -31,18 +32,7 @@ type Record struct {
 }
 
 func Hash(prev []byte, r Record) ([]byte, error) {
-	var detail any
-	decoder := json.NewDecoder(bytes.NewReader(r.Detail))
-	decoder.UseNumber()
-	if e := decoder.Decode(&detail); e != nil {
-		return nil, e
-	}
-	b, e := json.Marshal(detail)
-	if e != nil {
-		return nil, e
-	}
-	r.Detail = b
-	b, e = json.Marshal(r)
+	b, e := jcs.Marshal(r)
 	if e != nil {
 		return nil, e
 	}
@@ -69,8 +59,7 @@ func Append(ctx context.Context, tx pgx.Tx, p auth.Principal, tenant, action, ta
 	if e != nil {
 		return e
 	}
-	// Normalize numbers exactly as PostgreSQL will persist them before hashing.
-	// UseNumber in Hash preserves integer precision during verification.
+	// Normalize persisted JSON before computing the JCS hash.
 	if e = tx.QueryRow(ctx, "SELECT $1::jsonb", b).Scan(&b); e != nil {
 		return e
 	}
@@ -83,32 +72,39 @@ func Append(ctx context.Context, tx pgx.Tx, p auth.Principal, tenant, action, ta
 	_, e = tx.Exec(ctx, "INSERT INTO audit_log(id,tenant_id,actor_id,actor_kind,action,target_type,target_id,detail,ip,user_agent,prev_hash,hash,occurred_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)", r.ID, tenant, p.ID, p.Kind, action, targetType, target, b, r.IP, r.UserAgent, prev, h, now)
 	return e
 }
-func Verify(ctx context.Context, tx pgx.Tx) (int, error) {
-	rows, e := tx.Query(ctx, "SELECT id::text,tenant_id::text,actor_id::text,actor_kind,action,target_type,target_id,detail,ip,user_agent,occurred_at,prev_hash,hash FROM audit_log WHERE tenant_id=current_setting('app.tenant_id',true)::uuid ORDER BY occurred_at,id")
+
+type Head struct {
+	Count int    `json:"count"`
+	Hash  string `json:"hash"`
+}
+
+func Verify(ctx context.Context, tx pgx.Tx) (Head, error) {
+	head := Head{Hash: hex.EncodeToString(make([]byte, 32))}
+	rows, e := tx.Query(ctx, "SELECT id::text,tenant_id::text,actor_id::text,actor_kind,action,target_type,target_id,detail,ip,user_agent,occurred_at,prev_hash,hash FROM audit_log WHERE tenant_id=NULLIF(current_setting('app.tenant_id',true),'')::uuid ORDER BY occurred_at,id")
 	if e != nil {
-		return 0, e
+		return head, e
 	}
 	defer rows.Close()
 	prev := make([]byte, 32)
-	n := 0
 	for rows.Next() {
 		var r Record
 		var ph, h []byte
 		if e = rows.Scan(&r.ID, &r.TenantID, &r.ActorID, &r.ActorKind, &r.Action, &r.TargetType, &r.TargetID, &r.Detail, &r.IP, &r.UserAgent, &r.OccurredAt, &ph, &h); e != nil {
-			return n, e
+			return head, e
 		}
 		r.OccurredAt = r.OccurredAt.UTC()
 		expected, e := Hash(prev, r)
 		if e != nil {
-			return n, e
+			return head, e
 		}
 		if !bytes.Equal(prev, ph) || !bytes.Equal(expected, h) {
-			return n, fmt.Errorf("audit chain broken at %s (hash %s)", r.ID, hex.EncodeToString(h))
+			return head, fmt.Errorf("audit chain broken at %s (hash %s)", r.ID, hex.EncodeToString(h))
 		}
 		prev = h
-		n++
+		head.Count++
+		head.Hash = hex.EncodeToString(h)
 	}
-	return n, rows.Err()
+	return head, rows.Err()
 }
 
 type metadataKey struct{}
