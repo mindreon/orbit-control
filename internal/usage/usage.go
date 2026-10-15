@@ -89,9 +89,9 @@ func Prune(ctx context.Context, d *db.DB, cutoff *time.Time) error {
  WHERE k.tenant_id=$1
  AND k.created_at<$2
  AND NOT EXISTS(SELECT 1
- FROM usage_ledger l
- WHERE l.tenant_id=k.tenant_id
- AND l.idempotency_key=k.idempotency_key)`, tenant, *cutoff)
+   FROM usage_ledger l
+   WHERE l.tenant_id=k.tenant_id
+   AND l.idempotency_key=k.idempotency_key)`, tenant, *cutoff)
 			return err
 		}); err != nil {
 			return err
@@ -111,12 +111,7 @@ func Admit(ctx context.Context, tenant, workspace, principal string, budget int6
  WHERE tenant_id=$1
  AND action='block'
  AND metric IN ('runs_concurrent','millicredits')
- AND ((scope_type='tenant'
- AND scope_id=$1)
- OR (scope_type='workspace'
- AND scope_id=$2)
- OR (scope_type='user'
- AND scope_id=$3))
+ AND ((scope_type='tenant' AND scope_id=$1) OR (scope_type='workspace' AND scope_id=$2) OR (scope_type='user' AND scope_id=$3))
  ORDER BY id`, tenant, workspace, principal)
 	if err != nil {
 		return err
@@ -148,11 +143,7 @@ func Admit(ctx context.Context, tenant, workspace, principal string, budget int6
  JOIN sessions s ON s.id=r.session_id
  WHERE r.tenant_id=$1
  AND r.ended_at IS NULL
- AND ($2='tenant'
- OR ($2='workspace'
- AND s.workspace_id=$3::uuid)
- OR ($2='user'
- AND r.created_by=$3::uuid))`, tenant, q.scope, q.id).
+ AND ($2='tenant' OR ($2='workspace' AND s.workspace_id=$3::uuid) OR ($2='user' AND r.created_by=$3::uuid))`, tenant, q.scope, q.id).
 				Scan(&used)
 			if err == nil && used >= q.limit {
 				return httpx.E(429, "QUOTA_EXCEEDED", "Concurrent run quota exceeded")
@@ -161,14 +152,9 @@ func Admit(ctx context.Context, tenant, workspace, principal string, budget int6
 			err = tx.QueryRow(ctx, `SELECT COALESCE(sum(millicredits),0)::bigint
  FROM usage_ledger
  WHERE tenant_id=$1
- AND ($2='tenant'
- OR ($2='workspace'
- AND workspace_id=$3::uuid)
- OR ($2='user'
- AND principal_id=$3::uuid))
- AND ($4='total'
- OR occurred_at>=date_trunc(CASE $4 WHEN 'hour' THEN 'hour' WHEN 'day' THEN 'day' ELSE 'month' END,now() AT TIME
- ZONE 'UTC') AT TIME ZONE 'UTC')`, tenant, q.scope, q.id, q.period).Scan(&used)
+ AND ($2='tenant' OR ($2='workspace' AND workspace_id=$3::uuid) OR ($2='user' AND principal_id=$3::uuid))
+ AND ($4='total' OR occurred_at>=date_trunc(CASE $4 WHEN 'hour' THEN 'hour' WHEN 'day' THEN 'day' ELSE 'month' END,now() AT TIME
+   ZONE 'UTC') AT TIME ZONE 'UTC')`, tenant, q.scope, q.id, q.period).Scan(&used)
 			if err == nil && (budget > q.limit || used > q.limit-budget) {
 				return httpx.E(429, "QUOTA_EXCEEDED", "Credit quota exceeded")
 			}

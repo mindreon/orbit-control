@@ -39,9 +39,7 @@ func Credentials(ctx context.Context, tenant, profile string, expires time.Time,
 	err := db.Tx(ctx).QueryRow(ctx, `SELECT id::text,base_url,model,secret_id::text,params,pricing,context_window
  FROM model_profiles
  WHERE tenant_id=$1
- AND (($2=''
- AND is_default)
- OR name=$2)
+ AND (($2='' AND is_default) OR name=$2)
  ORDER BY id
  LIMIT 1`, tenant, profile).Scan(&id, &c.BaseUrl, &c.Model, &secret, &params, &pricing, &c.ContextWindow)
 	if err != nil {
@@ -84,8 +82,7 @@ func Bind(ctx context.Context, c auth.CapabilityClaims, id string, credentials c
  AND run_id=$2
  AND member=$3
  AND seq=$4
- AND (NOT model_profiles ? $5
- OR model_profiles->$5=$6::jsonb)`, c.Tenant, c.Run, c.Member, c.Seq, key, binding)
+ AND (NOT model_profiles ? $5 OR model_profiles->$5=$6::jsonb)`, c.Tenant, c.Run, c.Member, c.Seq, key, binding)
 	if err != nil {
 		return err
 	}

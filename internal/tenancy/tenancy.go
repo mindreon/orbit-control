@@ -43,11 +43,11 @@ func Tenants(ctx context.Context, d *db.DB, pid string) ([]Tenant, error) {
 func Active(ctx context.Context, tx pgx.Tx, pid string) error {
 	var ok bool
 	e := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1
- FROM memberships m
- JOIN tenants t ON t.id=m.tenant_id
- WHERE m.principal_id=$1
- AND m.status='active'
- AND t.status='active')`, pid).
+   FROM memberships m
+   JOIN tenants t ON t.id=m.tenant_id
+   WHERE m.principal_id=$1
+   AND m.status='active'
+   AND t.status='active')`, pid).
 		Scan(&ok)
 	if e != nil {
 		return e
@@ -68,11 +68,11 @@ func Bind(ctx context.Context, tx pgx.Tx, p auth.Principal, tenant, subjectType,
 		e = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM groups WHERE id=$1 AND tenant_id=$2)", subject, tenant).Scan(&exists)
 	} else if subjectType == "user" || subjectType == "service" {
 		e = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1
- FROM memberships m
- JOIN principals p ON p.id=m.principal_id
- WHERE m.principal_id=$1
- AND p.kind=$2
- AND m.tenant_id=$3)`, subject, subjectType, tenant).Scan(&exists)
+   FROM memberships m
+   JOIN principals p ON p.id=m.principal_id
+   WHERE m.principal_id=$1
+   AND p.kind=$2
+   AND m.tenant_id=$3)`, subject, subjectType, tenant).Scan(&exists)
 	} else {
 		return httpx.E(422, "INVALID_INPUT", "Invalid principal type")
 	}
@@ -106,16 +106,8 @@ func Bind(ctx context.Context, tx pgx.Tx, p auth.Principal, tenant, subjectType,
 	if e != nil {
 		return e
 	}
-	return audit.Append(
-		ctx,
-		tx,
-		p,
-		tenant,
-		"role.granted",
-		scopeType,
-		scope,
-		map[string]any{"principal_id": subject, "principal_type": subjectType, "role": role},
-	)
+	return audit.Append(ctx, tx, p, tenant, "role.granted", scopeType, scope,
+		map[string]any{"principal_id": subject, "principal_type": subjectType, "role": role})
 }
 func AddMember(ctx context.Context, tx pgx.Tx, p auth.Principal, tenant, pid, status, source, role string) error {
 	if !ids.Valid(pid) {

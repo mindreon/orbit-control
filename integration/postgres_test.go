@@ -62,13 +62,13 @@ func TestPostgresSuite(t *testing.T) {
 			}
 			var remaining int
 			err = conn.QueryRow(ctx, `SELECT
-			 (SELECT count(*)
- FROM pg_tables
- WHERE schemaname='public'
- AND tablename<>'goose_db_version') +
-			 (SELECT count(*)
- FROM pg_proc
- WHERE pronamespace='public'::regnamespace)`).Scan(&remaining)
+ (SELECT count(*)
+   FROM pg_tables
+   WHERE schemaname='public'
+   AND tablename<>'goose_db_version') +
+ (SELECT count(*)
+   FROM pg_proc
+   WHERE pronamespace='public'::regnamespace)`).Scan(&remaining)
 			if err != nil || remaining != 0 {
 				t.Fatal("down left schema objects", remaining, err)
 			}

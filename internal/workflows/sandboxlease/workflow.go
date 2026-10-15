@@ -13,16 +13,10 @@ import (
 )
 
 type leaseWorkflow struct {
-	in               w.LeaseInput
-	st               *w.LeaseCarry
-	mutex            workflow.Mutex
-	wake             workflow.Channel
-	retryAt          time.Time
-	backoff          time.Duration
-	dirty            bool
-	pendingRestored  *bool
-	snapshotPending  bool
-	obsoleteSnapshot string
+	in    w.LeaseInput
+	st    *w.LeaseCarry
+	mutex workflow.Mutex
+	wake  workflow.Channel
 }
 
 func Run(ctx workflow.Context, in w.LeaseInput) error {
@@ -44,29 +38,29 @@ func Run(ctx workflow.Context, in w.LeaseInput) error {
 	}
 	for {
 		l.drainSignals(ctx)
-		if st.Archived {
-			if err := workflow.Await(ctx, func() bool { return workflow.AllHandlersFinished(ctx) }); err != nil {
-				return err
-			}
-			if err := l.archive(ctx); err == nil {
-				return nil
-			} else {
-				l.retry(ctx, err)
-				if err := workflow.Sleep(ctx, l.backoff); err != nil {
-					return err
-				}
-			}
-			continue
-		}
-		if st.Lease != nil && l.retryAt.IsZero() && !l.dirty && !l.snapshotPending &&
-			workflow.AllHandlersFinished(ctx) &&
+		if st.Lease != nil && workflow.AllHandlersFinished(ctx) &&
+			(!st.Archived || !st.RetryAt.IsZero()) &&
 			(st.Touches >= 1000 || workflow.GetInfo(ctx).GetContinueAsNewSuggested()) {
 			st.Touches = 0
 			in.Carry = st
 			return workflow.NewContinueAsNewError(ctx, w.SandboxLeaseWorkflow, in)
 		}
+		if st.Archived {
+			if err := workflow.Await(ctx, func() bool { return workflow.AllHandlersFinished(ctx) }); err != nil {
+				return err
+			}
+			if workflow.Now(ctx).Before(st.RetryAt) {
+				l.wait(ctx)
+				continue
+			}
+			if err := l.archive(ctx); err != nil {
+				l.retry(ctx, err)
+				continue
+			}
+			return nil
+		}
 		l.wait(ctx)
-		if st.Archived || workflow.Now(ctx).Before(l.retryAt) {
+		if st.Archived || workflow.Now(ctx).Before(l.st.RetryAt) {
 			continue
 		}
 		if err := l.mutex.Lock(ctx); err != nil {
@@ -77,16 +71,16 @@ func Run(ctx workflow.Context, in w.LeaseInput) error {
 		if err != nil {
 			l.retry(ctx, err)
 		} else {
-			l.retryAt, l.backoff = time.Time{}, 0
+			l.st.RetryAt, l.st.Backoff = time.Time{}, 0
 		}
 	}
 }
 
 // Provider retries are bounded per Activity; maintenance keeps trying for the lease lifetime.
 func (l *leaseWorkflow) retry(ctx workflow.Context, err error) {
-	l.backoff = min(15*time.Minute, max(time.Minute, 2*l.backoff))
-	l.retryAt = workflow.Now(ctx).Add(l.backoff)
-	workflow.GetLogger(ctx).Warn("lease maintenance failed", "error", err, "retry_after", l.backoff)
+	l.st.Backoff = min(15*time.Minute, max(time.Minute, 2*l.st.Backoff))
+	l.st.RetryAt = workflow.Now(ctx).Add(l.st.Backoff)
+	workflow.GetLogger(ctx).Warn("lease maintenance failed", "error", err, "retry_after", l.st.Backoff)
 }
 func (l *leaseWorkflow) touch(ctx workflow.Context, in w.TouchInput) {
 	l.st.LastTouch = workflow.Now(ctx)
@@ -113,20 +107,20 @@ func (l *leaseWorkflow) exec(ctx workflow.Context, name string, arg, out any) er
 	return workflow.ExecuteActivity(w.Sandbox(ctx), name, arg).Get(ctx, out)
 }
 func (l *leaseWorkflow) record(ctx workflow.Context, restored *bool) error {
-	l.dirty = true
+	l.st.Dirty = true
 	if restored != nil {
-		l.pendingRestored = restored
+		l.st.PendingRestored = restored
 	}
 	in := w.SandboxStateInput{
 		TenantID: l.in.TenantID, IsolationKey: l.in.IsolationKey, SessionID: l.st.Spec.SessionID,
 		Gen: l.st.Gen, State: l.st.State, Lease: l.st.Lease, SnapshotID: l.st.SnapshotID,
-		Profile: l.st.Spec.Profile, RunID: l.st.Spec.RunID, Restored: l.pendingRestored, Provider: l.st.Spec.Provider,
+		Profile: l.st.Spec.Profile, RunID: l.st.Spec.RunID, Restored: l.st.PendingRestored, Provider: l.st.Spec.Provider,
 		EventN: l.st.Spec.EventN, EventAt: l.st.Spec.EventAt,
 	}
 	err := workflow.ExecuteActivity(w.Ctl(ctx, "RecordSandboxState"), "RecordSandboxState", in).Get(ctx, nil)
 	if err == nil {
-		l.dirty = false
-		l.pendingRestored = nil
+		l.st.Dirty = false
+		l.st.PendingRestored = nil
 	}
 	return err
 }
@@ -148,7 +142,10 @@ func (l *leaseWorkflow) register(ctx workflow.Context) error {
 	}
 	return workflow.SetUpdateHandlerWithOptions(ctx, w.Acquire, l.acquire,
 		workflow.UpdateHandlerOptions{Validator: func(ac w.AcquireInput) error {
-			if l.st.Archived || ac.RunID == "" || ac.SessionID == "" || ac.Profile == "" ||
+			if l.st.Archived {
+				return temporal.NewNonRetryableApplicationError("lease closing", "LEASE_CLOSING", nil)
+			}
+			if ac.RunID == "" || ac.SessionID == "" || ac.Profile == "" ||
 				(ac.Provider != "local" && ac.Provider != "opensandbox") {
 				return fmt.Errorf("lease unavailable")
 			}
@@ -161,12 +158,12 @@ func (l *leaseWorkflow) acquire(ctx workflow.Context, ac w.AcquireInput) (contra
 	}
 	defer l.mutex.Unlock()
 	if l.st.Archived {
-		return contract.SandboxLease{}, fmt.Errorf("lease archived")
+		return contract.SandboxLease{}, temporal.NewNonRetryableApplicationError("lease closing", "LEASE_CLOSING", nil)
 	}
 	if ac.TTLSeconds <= 0 {
 		ac.TTLSeconds = 1800
 	}
-	if l.snapshotPending {
+	if l.st.SnapshotPending {
 		if err := l.snapshot(ctx); err != nil {
 			return contract.SandboxLease{}, err
 		}
@@ -220,9 +217,10 @@ func (l *leaseWorkflow) acquire(ctx workflow.Context, ac w.AcquireInput) (contra
 	if restored {
 		event = new(fromSnapshot)
 	}
-	err := l.record(ctx, event)
+	// The ready identity is already persisted; maintenance retries this projection.
+	_ = l.record(ctx, event)
 	l.wake.SendAsync(true)
-	return *st.Lease, err
+	return *st.Lease, nil
 }
 func (l *leaseWorkflow) create(ctx workflow.Context, ac w.AcquireInput) error {
 	st := l.st
@@ -272,17 +270,17 @@ func (l *leaseWorkflow) wait(ctx workflow.Context) {
 	addTimer := func(at time.Time) {
 		selector.AddFuture(workflow.NewTimer(timerCtx, max(time.Duration(0), at.Sub(now))), func(workflow.Future) {})
 	}
-	if !l.retryAt.IsZero() {
-		addTimer(l.retryAt)
+	if !l.st.RetryAt.IsZero() {
+		addTimer(l.st.RetryAt)
 	} else if st.Lease != nil && st.State == "ready" {
 		addTimer(st.NextRenew)
 	}
-	if l.retryAt.IsZero() {
+	if l.st.RetryAt.IsZero() {
 		for _, key := range workflow.DeterministicKeys(st.InUse) {
 			addTimer(st.InUse[key].Add(30 * time.Minute))
 		}
 	}
-	if l.retryAt.IsZero() && st.Lease != nil && st.Lease.Provider == "opensandbox" && len(st.InUse) == 0 {
+	if l.st.RetryAt.IsZero() && st.Lease != nil && st.Lease.Provider == "opensandbox" && len(st.InUse) == 0 {
 		switch st.State {
 		case "ready":
 			addTimer(st.LastTouch.Add(2 * time.Minute))
@@ -307,12 +305,12 @@ func (l *leaseWorkflow) maintain(ctx workflow.Context) error {
 	if st.Archived {
 		return nil
 	}
-	if l.dirty {
+	if l.st.Dirty {
 		if err := l.record(ctx, nil); err != nil {
 			return err
 		}
 	}
-	if l.snapshotPending {
+	if l.st.SnapshotPending {
 		return l.snapshot(ctx)
 	}
 	now := workflow.Now(ctx)
@@ -365,34 +363,34 @@ func (l *leaseWorkflow) renew(ctx workflow.Context) error {
 	return l.record(ctx, nil)
 }
 func (l *leaseWorkflow) snapshot(ctx workflow.Context) error {
-	if !l.snapshotPending {
+	if !l.st.SnapshotPending {
 		var snapshot contract.SandboxSnapshotResult
 		if err := l.exec(ctx, contract.ActivitySandboxSnapshot, l.op(), &snapshot); err != nil {
 			return err
 		}
-		l.obsoleteSnapshot = l.st.SnapshotID
+		l.st.ObsoleteSnapshot = l.st.SnapshotID
 		l.st.SnapshotID = snapshot.SnapshotId
-		l.snapshotPending = true
+		l.st.SnapshotPending = true
 	}
-	if l.obsoleteSnapshot != "" && l.obsoleteSnapshot != l.st.SnapshotID {
-		if err := l.removeSnapshot(ctx, l.obsoleteSnapshot); err != nil {
+	if l.st.ObsoleteSnapshot != "" && l.st.ObsoleteSnapshot != l.st.SnapshotID {
+		if err := l.removeSnapshot(ctx, l.st.ObsoleteSnapshot); err != nil {
 			return err
 		}
-		l.obsoleteSnapshot = ""
+		l.st.ObsoleteSnapshot = ""
 	}
 	if err := l.exec(ctx, contract.ActivitySandboxDestroy, l.op(), nil); err != nil {
 		return err
 	}
-	l.snapshotPending = false
+	l.st.SnapshotPending = false
 	l.st.State = "snapshotted"
 	return l.record(ctx, nil)
 }
 func (l *leaseWorkflow) archive(ctx workflow.Context) error {
-	if l.obsoleteSnapshot != "" && l.obsoleteSnapshot != l.st.SnapshotID {
-		if err := l.removeSnapshot(ctx, l.obsoleteSnapshot); err != nil {
+	if l.st.ObsoleteSnapshot != "" && l.st.ObsoleteSnapshot != l.st.SnapshotID {
+		if err := l.removeSnapshot(ctx, l.st.ObsoleteSnapshot); err != nil {
 			return err
 		}
-		l.obsoleteSnapshot = ""
+		l.st.ObsoleteSnapshot = ""
 	}
 	if l.st.Lease != nil {
 		if l.st.State != "snapshotted" && l.st.State != "none" && l.st.State != "destroyed" {

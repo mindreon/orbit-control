@@ -122,8 +122,7 @@ func releaseDeliveries(ctx context.Context, d *db.DB, tenant string) ([]releaseD
 	err := d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT id::text,release_generation,withdraw_requested,withdraw_delivered
  FROM asset_versions
- WHERE (release_retryable
- OR withdraw_requested)
+ WHERE (release_retryable OR withdraw_requested)
  AND state IN ('submitted','checking','in_review','approved')
  ORDER BY id`)
 		if err != nil {

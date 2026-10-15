@@ -309,11 +309,11 @@ func (a *Activities) onceAudit(ctx context.Context, in Input, action string) err
 	return a.transaction(ctx, in, func(ctx context.Context, asset assets.Asset, v assets.Version) error {
 		var exists bool
 		if err := db.Tx(ctx).QueryRow(ctx, `SELECT EXISTS(SELECT 1
- FROM audit_log
- WHERE tenant_id=$1
- AND target_id=$2
- AND action=$3
- AND detail->>'generation'=$4)`, in.Tenant, v.ID, action, fmt.Sprint(in.Generation)).Scan(&exists); err != nil {
+   FROM audit_log
+   WHERE tenant_id=$1
+   AND target_id=$2
+   AND action=$3
+   AND detail->>'generation'=$4)`, in.Tenant, v.ID, action, fmt.Sprint(in.Generation)).Scan(&exists); err != nil {
 			return err
 		}
 		if exists {
@@ -486,11 +486,11 @@ func (a *Activities) CompensateAssetPublish(ctx context.Context, in Input) error
 		}
 		if _, err := db.Tx(ctx).Exec(ctx, `UPDATE assets
  SET latest_version=(SELECT version
- FROM asset_versions
- WHERE asset_id=$1
- AND state IN ('published','deprecated')
- ORDER BY published_at DESC,id DESC
- LIMIT 1)
+   FROM asset_versions
+   WHERE asset_id=$1
+   AND state IN ('published','deprecated')
+   ORDER BY published_at DESC,id DESC
+   LIMIT 1)
  WHERE id=$1
  AND latest_version=$2`, asset.ID, v.Version); err != nil {
 			return err

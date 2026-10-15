@@ -23,16 +23,11 @@ func (s *Service) List(ctx context.Context, page httpx.Page, f Filter) (Page[Ass
 		rows, e := db.Tx(ctx).
 			Query(ctx, `SELECT id::text
  FROM assets
- WHERE ($1=''
- OR id>NULLIF($1,'')::uuid)
- AND ($2=''
- OR kind=$2)
- AND ($3=''
- OR visibility=$3)
- AND ($4=''
- OR name ILIKE '%'||$4||'%')
- AND ($5=''
- OR workspace_id=NULLIF($5,'')::uuid)
+ WHERE ($1='' OR id>NULLIF($1,'')::uuid)
+ AND ($2='' OR kind=$2)
+ AND ($3='' OR visibility=$3)
+ AND ($4='' OR name ILIKE '%'||$4||'%')
+ AND ($5='' OR workspace_id=NULLIF($5,'')::uuid)
  ORDER BY id
  LIMIT 100`, cursor, f.Kind, f.Visibility, f.Query, f.WorkspaceID)
 		if e != nil {
@@ -173,8 +168,7 @@ func (s *Service) Checks(ctx context.Context, p httpx.Page, id string) (Page[jso
 		`SELECT id::text,jsonb_build_object('id',id,'report',findings,'status',status)
  FROM asset_check_reports
  WHERE version_id=$1
- AND ($2=''
- OR id>NULLIF($2,'')::uuid)
+ AND ($2='' OR id>NULLIF($2,'')::uuid)
  ORDER BY id
  LIMIT $3`,
 		id,

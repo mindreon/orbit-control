@@ -90,34 +90,27 @@ func assetGrants(ctx context.Context, r Asset, bindings []Binding) (bool, bool, 
 	var member, granted, maintain bool
 	err := db.Tx(ctx).QueryRow(ctx, `SELECT
  EXISTS(SELECT 1
- FROM workspace_members
- WHERE workspace_id=NULLIF($1,'')::uuid
- AND principal_id=$2),
+   FROM workspace_members
+   WHERE workspace_id=NULLIF($1,'')::uuid
+   AND principal_id=$2),
  COALESCE(bool_or(permission IN ('use','maintain')),false),
  COALESCE(bool_or(permission='maintain'),false)
  FROM asset_grants
  WHERE asset_id=$3
- AND (grantee_type NOT IN ('tenant','workspace')
- OR grantee_type='tenant'
- AND $7='tenant'
- OR grantee_type='workspace'
- AND ($7='tenant'
- OR $7='workspace'
- AND grantee_id=NULLIF($1,'')::uuid))
+ AND (grantee_type NOT IN ('tenant','workspace') OR grantee_type='tenant' AND $7='tenant' OR grantee_type='workspace' AND
+   ($7='tenant' OR $7='workspace' AND grantee_id=NULLIF($1,'')::uuid))
  AND (
- (grantee_type IN ('user','service')
- AND grantee_id=$2)
+ (grantee_type IN ('user','service') AND grantee_id=$2)
  OR (grantee_type='group'
  AND grantee_id IN (SELECT group_id
- FROM group_members
- WHERE principal_id=$2))
- OR (grantee_type='tenant'
- AND grantee_id=$4)
+   FROM group_members
+   WHERE principal_id=$2))
+ OR (grantee_type='tenant' AND grantee_id=$4)
  OR (grantee_type='workspace'
  AND (grantee_id IN
  (SELECT workspace_id
- FROM workspace_members
- WHERE principal_id=$2)
+   FROM workspace_members
+   WHERE principal_id=$2)
  OR grantee_id=ANY($5::uuid[])
  OR $6)))`, r.WorkspaceID, p.ID, r.ID, tenant, workspaces,
 		Allows(bindings, "workspace.read", Resource{}, tenant), r.Visibility).Scan(&member, &granted, &maintain)

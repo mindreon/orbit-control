@@ -3,6 +3,7 @@ package ctl
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/temporal"
 
 	"github.com/mindreon/orbit-control/internal/contract"
 	"github.com/mindreon/orbit-control/internal/platform/jcs"
@@ -39,33 +41,49 @@ func (a *Activities) AcquireSandbox(ctx context.Context, in w.AcquireSandboxInpu
 			}
 		}
 	}()
-	start := a.Temporal.NewWithStartWorkflowOperation(
-		client.StartWorkflowOptions{
-			ID:                       w.LeaseWorkflowID(in.TenantID, in.Spec.IsolationKey),
-			TaskQueue:                contract.TaskQueueCtl,
-			WorkflowIDConflictPolicy: enums.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING,
-			WorkflowIDReusePolicy:    enums.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE,
-		},
-		w.SandboxLeaseWorkflow,
-		w.LeaseInput{TenantID: in.TenantID, IsolationKey: in.Spec.IsolationKey},
-	)
-	handle, err := a.Temporal.UpdateWithStartWorkflow(
-		ctx,
-		client.UpdateWithStartWorkflowOptions{
-			StartWorkflowOperation: start,
-			UpdateOptions: client.UpdateWorkflowOptions{
-				UpdateName:   w.Acquire,
-				UpdateID:     fmt.Sprintf("run:%s:acq:%d", in.RunID, in.Attempt),
-				WaitForStage: client.WorkflowUpdateStageCompleted,
-				Args:         []any{ac},
+	return a.acquireLease(ctx, in, ac)
+}
+
+func (a *Activities) acquireLease(ctx context.Context, in w.AcquireSandboxInput, ac w.AcquireInput) (contract.SandboxLease, error) {
+	var lease contract.SandboxLease
+	for {
+		start := a.Temporal.NewWithStartWorkflowOperation(
+			client.StartWorkflowOptions{
+				ID:                       w.LeaseWorkflowID(in.TenantID, in.Spec.IsolationKey),
+				TaskQueue:                contract.TaskQueueCtl,
+				WorkflowIDConflictPolicy: enums.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING,
+				WorkflowIDReusePolicy:    enums.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE,
 			},
-		},
-	)
-	if err != nil {
-		return lease, err
+			w.SandboxLeaseWorkflow,
+			w.LeaseInput{TenantID: in.TenantID, IsolationKey: in.Spec.IsolationKey},
+		)
+		handle, err := a.Temporal.UpdateWithStartWorkflow(
+			ctx,
+			client.UpdateWithStartWorkflowOptions{
+				StartWorkflowOperation: start,
+				UpdateOptions: client.UpdateWorkflowOptions{
+					UpdateName:   w.Acquire,
+					UpdateID:     fmt.Sprintf("run:%s:acq:%d", in.RunID, in.Attempt),
+					WaitForStage: client.WorkflowUpdateStageCompleted,
+					Args:         []any{ac},
+				},
+			},
+		)
+		if err == nil {
+			err = handle.Get(ctx, &lease)
+		}
+		app, closing := errors.AsType[*temporal.ApplicationError](err)
+		if !closing || app.Type() != "LEASE_CLOSING" {
+			return lease, err
+		}
+		if handle == nil {
+			return lease, err
+		}
+		// Wait for this exact execution, so a newly started lease is never awaited.
+		if err := a.Temporal.GetWorkflow(ctx, handle.WorkflowID(), handle.RunID()).Get(ctx, nil); err != nil {
+			return lease, err
+		}
 	}
-	err = handle.Get(ctx, &lease)
-	return lease, err
 }
 func (a *Activities) RecordSandboxState(ctx context.Context, in w.SandboxStateInput) error {
 	if in.Restored != nil {

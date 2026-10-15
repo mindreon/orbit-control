@@ -35,9 +35,9 @@ func (s *Service) ChangeVisibility(ctx context.Context, id, visibility string) (
 	if visibility != a.Visibility {
 		var frozen bool
 		if err = db.Tx(ctx).QueryRow(ctx, `SELECT EXISTS(SELECT 1
- FROM asset_versions
- WHERE asset_id=$1
- AND state NOT IN ('draft','check_failed','changes_requested','rejected'))`, id).Scan(&frozen); err != nil {
+   FROM asset_versions
+   WHERE asset_id=$1
+   AND state NOT IN ('draft','check_failed','changes_requested','rejected'))`, id).Scan(&frozen); err != nil {
 			return a, err
 		}
 		if frozen {

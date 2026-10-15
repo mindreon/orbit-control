@@ -484,7 +484,7 @@ Go source uses keyed struct literals, separate statements, grouped imports and
 lines of at most 140 characters.
 
 The testsuite covers the 36 cases in WP6 §6.1 without external services.
-`TestReplay` replays all 12 committed histories recorded from a real Temporal
+`TestReplay` replays all 14 committed histories recorded from a real Temporal
 server. `workflow_test_limits` lowers continuation thresholds to three;
 SideEffect records the threshold so those histories also replay in normal builds.
 To regenerate the histories, run

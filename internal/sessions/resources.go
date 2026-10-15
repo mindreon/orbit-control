@@ -81,37 +81,36 @@ func readPage[T any](ctx context.Context, query string, page httpx.Page, args ..
 }
 func Messages(ctx context.Context, session string, page httpx.Page) (Page[Message], error) {
 	return readPage[Message](ctx, `SELECT jsonb_build_object('id',id,'session_id',session_id,'run_id',run_id,
- 'role',role,'text',content->>'text','truncated',COALESCE(content->'truncated','false'::jsonb),
- 'content_ref',content_ref,'created_at',created_at)
+   'role',role,'text',content->>'text','truncated',COALESCE(content->'truncated','false'::jsonb),
+   'content_ref',content_ref,'created_at',created_at)
  FROM messages
  WHERE tenant_id=$1
  AND session_id=$2
  AND ($3=''
  OR (created_at,id)>(SELECT created_at,id
- FROM messages
- WHERE tenant_id=$1
- AND id=NULLIF($3,'')::uuid))
+   FROM messages
+   WHERE tenant_id=$1
+   AND id=NULLIF($3,'')::uuid))
  ORDER BY created_at,id
  LIMIT $4`, page, auth.Tenant(ctx), session, page.Cursor, page.Limit+1)
 }
 func Runs(ctx context.Context, session string, page httpx.Page) (Page[Run], error) {
 	return readPage[Run](ctx, `SELECT to_jsonb(r)||jsonb_build_object('segments_count',
  (SELECT count(*)
- FROM run_segments g
- WHERE g.tenant_id=r.tenant_id
- AND g.run_id=r.id),
+   FROM run_segments g
+   WHERE g.tenant_id=r.tenant_id
+   AND g.run_id=r.id),
  'pending_interaction_id',(SELECT id
- FROM interactions i
- WHERE i.tenant_id=r.tenant_id
- AND i.run_id=r.id
- AND i.status IN ('pending','escalated')
- ORDER BY created_at
- LIMIT 1))
+   FROM interactions i
+   WHERE i.tenant_id=r.tenant_id
+   AND i.run_id=r.id
+   AND i.status IN ('pending','escalated')
+   ORDER BY created_at
+   LIMIT 1))
  FROM runs r
  WHERE tenant_id=$1
  AND session_id=$2
- AND ($3=''
- OR id>NULLIF($3,'')::uuid)
+ AND ($3='' OR id>NULLIF($3,'')::uuid)
  ORDER BY id
  LIMIT $4`,
 		page, auth.Tenant(ctx), session, page.Cursor, page.Limit+1)
@@ -121,8 +120,7 @@ func Artifacts(ctx context.Context, session string, page httpx.Page) (Page[Artif
  FROM artifacts a
  WHERE tenant_id=$1
  AND session_id=$2
- AND ($3=''
- OR id>NULLIF($3,'')::uuid)
+ AND ($3='' OR id>NULLIF($3,'')::uuid)
  ORDER BY id
  LIMIT $4`,
 		page, auth.Tenant(ctx), session, page.Cursor, page.Limit+1)

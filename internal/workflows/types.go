@@ -177,17 +177,23 @@ type LeaseInput struct {
 	Carry        *LeaseCarry `json:"carry,omitempty"`
 }
 type LeaseCarry struct {
-	NextRenew  time.Time              `json:"next_renew"`
-	State      string                 `json:"state"`
-	Lease      *contract.SandboxLease `json:"lease,omitempty"`
-	SnapshotID string                 `json:"snapshot_id"`
-	Gen        int                    `json:"gen"`
-	SpecDigest string                 `json:"spec_digest"`
-	InUse      map[string]time.Time   `json:"in_use,omitempty"`
-	LastTouch  time.Time              `json:"last_touch"`
-	Touches    int                    `json:"touches"`
-	Archived   bool                   `json:"archived"`
-	Spec       AcquireInput           `json:"spec"`
+	RetryAt          time.Time              `json:"retry_at"`
+	Backoff          time.Duration          `json:"backoff"`
+	Dirty            bool                   `json:"dirty"`
+	PendingRestored  *bool                  `json:"pending_restored,omitempty"`
+	SnapshotPending  bool                   `json:"snapshot_pending"`
+	ObsoleteSnapshot string                 `json:"obsolete_snapshot"`
+	NextRenew        time.Time              `json:"next_renew"`
+	State            string                 `json:"state"`
+	Lease            *contract.SandboxLease `json:"lease,omitempty"`
+	SnapshotID       string                 `json:"snapshot_id"`
+	Gen              int                    `json:"gen"`
+	SpecDigest       string                 `json:"spec_digest"`
+	InUse            map[string]time.Time   `json:"in_use,omitempty"`
+	LastTouch        time.Time              `json:"last_touch"`
+	Touches          int                    `json:"touches"`
+	Archived         bool                   `json:"archived"`
+	Spec             AcquireInput           `json:"spec"`
 }
 type AcquireInput struct {
 	Provider    contract.SandboxProvider `json:"provider"`

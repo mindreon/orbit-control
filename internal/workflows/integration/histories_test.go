@@ -285,6 +285,13 @@ func TestRecordHistories(t *testing.T) {
 	}
 	t.Run("session", func(t *testing.T) { recordSession(t, c, queue) })
 	t.Run("lease", func(t *testing.T) { recordLease(t, c, queue) })
+	for _, archived := range []bool{false, true} {
+		name := "lease-maintenance-can"
+		if archived {
+			name = "lease-archive-can"
+		}
+		t.Run(name, func(t *testing.T) { recordLeaseContinuation(t, c, queue, name, archived) })
+	}
 }
 func recordRun(t *testing.T, c client.Client, queue, name string, fixture *fixtures) {
 	in := runInput(name)
@@ -450,4 +457,26 @@ func save(t *testing.T, c client.Client, id, runID, name string) {
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0755))
 		require.NoError(t, os.WriteFile(path, raw, 0644))
 	}
+}
+
+func recordLeaseContinuation(t *testing.T, c client.Client, queue, name string, archived bool) {
+	carry := &w.LeaseCarry{
+		State: "paused", Gen: 2, Touches: 1000, Archived: archived,
+		Lease:   &contract.SandboxLease{Provider: "opensandbox", SandboxId: "fixture"},
+		Spec:    w.AcquireInput{Provider: "opensandbox", RunID: "lease-run", SessionID: "session", Profile: "default", TTLSeconds: 3600},
+		RetryAt: time.Now().Add(2 * time.Second), Backoff: time.Minute, Dirty: true, PendingRestored: new(true),
+		SnapshotPending: true, SnapshotID: "snapshot", ObsoleteSnapshot: "old-snapshot",
+	}
+	run, err := c.ExecuteWorkflow(t.Context(), client.StartWorkflowOptions{ID: queue + ":" + name, TaskQueue: queue},
+		w.SandboxLeaseWorkflow, w.LeaseInput{TenantID: "tenant", IsolationKey: "isolation", Carry: carry})
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		d, err := c.DescribeWorkflowExecution(t.Context(), run.GetID(), run.GetRunID())
+		return err == nil && d.WorkflowExecutionInfo.Status == enums.WORKFLOW_EXECUTION_STATUS_CONTINUED_AS_NEW
+	}, 10*time.Second, 100*time.Millisecond)
+	save(t, c, run.GetID(), run.GetRunID(), name)
+	if !archived {
+		require.NoError(t, c.SignalWorkflow(t.Context(), run.GetID(), "", w.Archive, w.ArchiveInput{}))
+	}
+	require.NoError(t, c.GetWorkflow(t.Context(), run.GetID(), "").Get(t.Context(), nil))
 }

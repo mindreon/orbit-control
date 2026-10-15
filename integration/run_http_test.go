@@ -130,13 +130,25 @@ func testRunHTTP(t *testing.T, d *db.DB, admin *pgx.Conn) {
 			response := httptest.NewRecorder()
 			h.ServeHTTP(response, request)
 			want := http.StatusAccepted
-			if mode == "rejected" || mode == "duplicate" {
+			if mode == "rejected" {
 				want = 409
 			}
 			if mode == "lease-unavailable" {
 				want = 503
 			}
 			require.Equal(t, want, response.Code, response.Body.String())
+			if mode == "duplicate" {
+				var accepted w.SubmitMessageOutput
+				require.NoError(t, json.Unmarshal(response.Body.Bytes(), &accepted))
+				require.NotEmpty(t, accepted.RunID)
+				require.Equal(t, "queued", accepted.Disposition)
+				replay := httptest.NewRecorder()
+				retry := httptest.NewRequest("POST", path, bytes.NewBufferString(`{"text":"new input"}`))
+				retry.Header = request.Header.Clone()
+				h.ServeHTTP(replay, retry)
+				require.Equal(t, 202, replay.Code)
+				require.JSONEq(t, response.Body.String(), replay.Body.String())
+			}
 			if strings.HasPrefix(mode, "lease-") {
 				return
 			}

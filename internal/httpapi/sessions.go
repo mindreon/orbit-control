@@ -272,6 +272,20 @@ func (h *Handler) submitDelivery(
 			},
 			msg,
 		)
+		if app, ok := errors.AsType[*temporal.ApplicationError](e); ok && app.Type() == "DUPLICATE_RUN" {
+			e = h.DB.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
+				var status string
+				if err := tx.QueryRow(ctx, `SELECT id::text,status FROM runs WHERE tenant_id=$1 AND id=$2 AND session_id=$3`,
+					tenant, runID, s.ID).Scan(&result.RunID, &status); err != nil {
+					return err
+				}
+				result.Disposition = "started"
+				if status == "queued" {
+					result.Disposition = "queued"
+				}
+				return nil
+			})
+		}
 		if e != nil {
 			mapped := temporalError(e, "SESSION_UNAVAILABLE")
 			if app, ok := errors.AsType[*temporal.ApplicationError](e); ok &&

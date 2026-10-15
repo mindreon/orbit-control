@@ -159,16 +159,11 @@ func TestSessionValidatorErrorTypes(t *testing.T) {
 	for _, mode := range []string{"QUEUE_FULL", "DUPLICATE_RUN"} {
 		t.Run(mode, func(t *testing.T) {
 			h := newSessionHarness(t)
-			if mode == "QUEUE_FULL" || mode == "DUPLICATE_RUN" {
-				h.in.Carry = &w.SessionCarry{Policy: "queue"}
-				for n := range 20 {
-					h.in.Carry.Queue = append(h.in.Carry.Queue, sessionMessage(string(rune('a'+n))))
-				}
+			h.in.Carry = &w.SessionCarry{Policy: "queue"}
+			for n := range 20 {
+				h.in.Carry.Queue = append(h.in.Carry.Queue, sessionMessage(string(rune('a'+n))))
 			}
 			h.env.RegisterDelayedCallback(func() {
-				if mode == "SESSION_ARCHIVED" {
-					h.env.SignalWorkflow(w.Archive, w.ArchiveInput{})
-				}
 				msg := sessionMessage("new")
 				if mode == "DUPLICATE_RUN" {
 					msg = sessionMessage("b")

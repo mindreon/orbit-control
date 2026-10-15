@@ -218,8 +218,7 @@ func (a *Service) apiKey(ctx context.Context, token, tenant string) (Principal, 
 				_, e := tx.Exec(c, `UPDATE api_keys
  SET last_used_at=now()
  WHERE id=$1
- AND (last_used_at IS NULL
- OR last_used_at<now()-interval '1 minute')`, keyID)
+ AND (last_used_at IS NULL OR last_used_at<now()-interval '1 minute')`, keyID)
 				return e
 			})
 			if e != nil {

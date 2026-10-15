@@ -7,6 +7,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/mindreon/orbit-control/internal/auth"
 	"github.com/mindreon/orbit-control/internal/contract"
 	"github.com/mindreon/orbit-control/internal/platform/db"
@@ -32,18 +34,23 @@ type Interaction struct {
 
 func Get(ctx context.Context, tenant, id string) (Interaction, error) {
 	var i Interaction
-	var req, approvers, decision []byte
 	if !ids.Valid(id) {
 		return i, httpx.E(404, "NOT_FOUND", "Interaction not found")
 	}
-	err := db.Tx(ctx).
+	return scanInteraction(db.Tx(ctx).
 		QueryRow(ctx,
 			`SELECT id::text,run_id::text,session_id::text,member,kind,request,status,approvers,decision,decided_by::text,
  expires_at,created_at
  FROM interactions
  WHERE tenant_id=$1
- AND id=$2`, tenant, id).
-		Scan(&i.ID, &i.RunID, &i.SessionID, &i.Member, &i.Kind, &req, &i.Status, &approvers, &decision, &i.DecidedBy, &i.ExpiresAt, &i.CreatedAt)
+ AND id=$2`, tenant, id))
+}
+
+func scanInteraction(row pgx.Row) (Interaction, error) {
+	var i Interaction
+	var req, approvers, decision []byte
+	err := row.Scan(&i.ID, &i.RunID, &i.SessionID, &i.Member, &i.Kind, &req, &i.Status, &approvers, &decision,
+		&i.DecidedBy, &i.ExpiresAt, &i.CreatedAt)
 	if err != nil {
 		return i, err
 	}
@@ -107,12 +114,11 @@ func WorkspaceAdmins(ctx context.Context, workspace string) ([]string, error) {
 		Query(ctx, `SELECT DISTINCT m.principal_id::text
  FROM memberships m
  JOIN principals p ON p.id=m.principal_id
- JOIN role_bindings b ON ((b.principal_type IN ('user','service')
- AND b.principal_id=m.principal_id)
+ JOIN role_bindings b ON ((b.principal_type IN ('user','service') AND b.principal_id=m.principal_id)
  OR (b.principal_type='group'
  AND b.principal_id IN (SELECT group_id
- FROM group_members
- WHERE principal_id=m.principal_id)))
+   FROM group_members
+   WHERE principal_id=m.principal_id)))
  WHERE m.status='active'
  AND p.status='active'
  AND b.role='ws.admin'

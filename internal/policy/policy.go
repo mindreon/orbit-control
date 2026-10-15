@@ -158,12 +158,11 @@ func (Authorizer) Bindings(ctx context.Context) ([]Binding, error) {
 	rows, e := db.Tx(ctx).
 		Query(ctx, `SELECT role,scope_type,scope_id::text
  FROM role_bindings
- WHERE (principal_type IN ('user','service')
- AND principal_id=$1)
+ WHERE (principal_type IN ('user','service') AND principal_id=$1)
  OR (principal_type='group'
  AND principal_id IN (SELECT group_id
- FROM group_members
- WHERE principal_id=$1))`, p.ID)
+   FROM group_members
+   WHERE principal_id=$1))`, p.ID)
 	if e != nil {
 		return nil, e
 	}

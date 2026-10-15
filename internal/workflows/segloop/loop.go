@@ -176,7 +176,7 @@ func (l *loop) segmentError(ctx workflow.Context, err error, seg contract.Segmen
 		case contract.ErrorCheckpointConflict:
 			var rec w.ReconcileOutput
 			if e := l.exec(ctx, "ReconcileCheckpoint", w.ReconcileInput{RunOp: l.op(ctx), SessionKey: in.AgentSessionKey}, &rec); e != nil {
-				return res, false, true, l.finish(ctx, "failed", "RECONCILE_FAILED")
+				return res, false, true, l.failure(ctx, e, "RECONCILE_FAILED")
 			}
 			if rec.Result == nil {
 				return res, false, true, l.finish(ctx, "failed", "CHECKPOINT_CONFLICT")
@@ -193,10 +193,10 @@ func (l *loop) segmentError(ctx workflow.Context, err error, seg contract.Segmen
 		case contract.ErrorSandboxUnavailable:
 			st.SandboxRetries++
 			if st.SandboxRetries > 2 {
-				return res, false, true, l.finish(ctx, "failed", "SANDBOX_UNAVAILABLE")
+				return res, false, true, l.failure(ctx, err, "SANDBOX_UNAVAILABLE")
 			}
 			if e := l.acquire(ctx); e != nil {
-				return res, false, true, l.finish(ctx, "failed", "SANDBOX_UNAVAILABLE")
+				return res, false, true, l.failure(ctx, e, "SANDBOX_UNAVAILABLE")
 			}
 			return res, true, false, nil
 		case contract.ErrorBudgetExhausted:
@@ -314,10 +314,7 @@ func (l *loop) touch(ctx workflow.Context, use bool) {
 		"",
 		w.Touch,
 		w.TouchInput{RunID: l.in.RunID, InUse: use},
-	).Get(
-		ctx,
-		nil,
-	)
+	).Get(ctx, nil)
 	if err != nil {
 		workflow.GetLogger(ctx).Warn("lease touch failed", "error", err)
 	}
@@ -333,10 +330,7 @@ func (l *loop) finish(ctx workflow.Context, status, code string) error {
 		w.Ctl(ctx, "FinalizeRun"),
 		"FinalizeRun",
 		w.FinalizeInput{RunOp: l.op(ctx), Status: status, ErrorCode: code, Reason: reason},
-	).Get(
-		ctx,
-		nil,
-	)
+	).Get(ctx, nil)
 }
 func (l *loop) register(ctx workflow.Context) error {
 	st := l.st

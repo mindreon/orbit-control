@@ -21,48 +21,32 @@ func List(ctx context.Context, page httpx.Page, status string) (sessions.Page[In
 	}
 	args["tenant"], args["actor"], args["status"], args["cursor"], args["limit"] =
 		auth.Tenant(ctx), auth.From(ctx).ID, status, page.Cursor, page.Limit+1
-	rows, err := db.Tx(ctx).Query(ctx, `SELECT i.id::text
+	rows, err := db.Tx(ctx).Query(ctx, `SELECT i.id::text,i.run_id::text,i.session_id::text,i.member,i.kind,i.request,i.status,i.approvers,
+ i.decision,i.decided_by::text,i.expires_at,i.created_at
  FROM interactions i
  JOIN sessions s ON s.tenant_id=i.tenant_id
  AND s.id=i.session_id
  WHERE i.tenant_id=@tenant
  AND i.approvers @> jsonb_build_array(@actor::text)
- AND (@status='all'
- OR i.status=@status
- OR (@status='pending'
- AND i.status='escalated'))
- AND (@cursor=''
- OR i.id>NULLIF(@cursor,'')::uuid)
+ AND (@status='all' OR i.status=@status OR (@status='pending' AND i.status='escalated'))
+ AND (@cursor='' OR i.id>NULLIF(@cursor,'')::uuid)
  AND `+policy.SessionReadPredicate+`
  ORDER BY i.id
  LIMIT @limit`, args)
 	if err != nil {
 		return result, err
 	}
-	var candidates []string
+	defer rows.Close()
 	for rows.Next() {
-		var id string
-		if err = rows.Scan(&id); err != nil {
-			rows.Close()
+		item, err := scanInteraction(rows)
+		if err != nil {
 			return result, err
 		}
-		candidates = append(candidates, id)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return result, err
-	}
-	for _, id := range candidates {
 		if len(result.Items) == page.Limit {
 			result.NextCursor = httpx.Cursor(result.Items[len(result.Items)-1].ID)
 			break
 		}
-		item, err := Get(ctx, auth.Tenant(ctx), id)
-		if err != nil {
-			return result, err
-		}
 		result.Items = append(result.Items, item)
 	}
-	return result, nil
+	return result, rows.Err()
 }

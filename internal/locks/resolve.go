@@ -103,10 +103,7 @@ func (x *resolution) loadInstalled() error {
  JOIN assets a ON a.id=i.asset_id
  WHERE i.enabled
  AND a.kind='skill'
- AND ((i.scope_type='tenant'
- AND i.scope_id=$1)
- OR (i.scope_type='workspace'
- AND i.scope_id=NULLIF($2,'')::uuid))
+ AND ((i.scope_type='tenant' AND i.scope_id=$1) OR (i.scope_type='workspace' AND i.scope_id=NULLIF($2,'')::uuid))
  ORDER BY a.publisher,a.name`, auth.Tenant(x.ctx), x.scope.WorkspaceID)
 	if err != nil {
 		return err
@@ -225,10 +222,7 @@ func (x *resolution) policies() error {
  FROM policies
  WHERE status='active'
  AND kind='tool_rules'
- AND ((scope_type='tenant'
- AND scope_id=$1)
- OR (scope_type='workspace'
- AND scope_id=NULLIF($2,'')::uuid))
+ AND ((scope_type='tenant' AND scope_id=$1) OR (scope_type='workspace' AND scope_id=NULLIF($2,'')::uuid))
  ORDER BY scope_type DESC,id`, auth.Tenant(x.ctx), x.scope.WorkspaceID)
 	if err != nil {
 		return err
@@ -590,10 +584,7 @@ func (x *resolution) selectInstalledVersion(a assets.Asset, constraint string) (
  FROM asset_installs
  WHERE asset_id=$1
  AND enabled
- AND ((scope_type='tenant'
- AND scope_id=$2)
- OR (scope_type='workspace'
- AND scope_id=NULLIF($3,'')::uuid))
+ AND ((scope_type='tenant' AND scope_id=$2) OR (scope_type='workspace' AND scope_id=NULLIF($3,'')::uuid))
  ORDER BY CASE scope_type WHEN 'workspace' THEN 0 ELSE 1 END
  LIMIT 1`, a.ID, auth.Tenant(x.ctx), x.scope.WorkspaceID)
 	if err != nil {

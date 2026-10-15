@@ -216,14 +216,14 @@ func (s *Service) Submit(ctx context.Context, a Asset, id, channel string) error
  SET submitted_by=$2,release_channel=$3,release_started=false,withdraw_requested=false,withdraw_delivered=false,
  review_required=$4,workspace_review=$5,release_generation=release_generation+1,release_error=NULL,
  release_retryable=true,previous_version_id=(SELECT id
- FROM asset_versions
- WHERE asset_id=$6
- AND state IN ('published','deprecated')
- ORDER BY published_at DESC,id DESC
- LIMIT 1),previous_channel_id=(SELECT version_id
- FROM asset_channels
- WHERE asset_id=$6
- AND channel=$3)
+   FROM asset_versions
+   WHERE asset_id=$6
+   AND state IN ('published','deprecated')
+   ORDER BY published_at DESC,id DESC
+   LIMIT 1),previous_channel_id=(SELECT version_id
+   FROM asset_channels
+   WHERE asset_id=$6
+   AND channel=$3)
  WHERE id=$1`, id, auth.From(ctx).ID, channel, required, review, a.ID)
 	return err
 }
@@ -404,8 +404,7 @@ func (s *Service) SelectVersion(ctx context.Context, a Asset, ranges []string, p
  FROM asset_versions
  WHERE asset_id=$1
  AND state IN ('published','deprecated')
- AND ($2=''
- OR id=NULLIF($2,'')::uuid)`, a.ID, pinned)
+ AND ($2='' OR id=NULLIF($2,'')::uuid)`, a.ID, pinned)
 	if err != nil {
 		return Version{}, err
 	}

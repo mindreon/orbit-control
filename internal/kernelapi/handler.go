@@ -117,29 +117,29 @@ func check(ctx context.Context, c auth.CapabilityClaims) error {
 	var valid bool
 	if c.Purpose == "segment" && c.Member != "" && c.Seq > 0 && c.Attempt > 0 {
 		if err := db.Tx(ctx).QueryRow(ctx, `SELECT EXISTS(SELECT 1
- FROM runs r
- JOIN run_segments s ON s.tenant_id=r.tenant_id
- AND s.run_id=r.id
- WHERE r.tenant_id=$1
- AND r.id=$2
- AND r.ended_at IS NULL
- AND s.member=$3
- AND s.seq=$4
- AND s.status='running')`, c.Tenant, c.Run, c.Member, c.Seq).Scan(&valid); err != nil {
+   FROM runs r
+   JOIN run_segments s ON s.tenant_id=r.tenant_id
+   AND s.run_id=r.id
+   WHERE r.tenant_id=$1
+   AND r.id=$2
+   AND r.ended_at IS NULL
+   AND s.member=$3
+   AND s.seq=$4
+   AND s.status='running')`, c.Tenant, c.Run, c.Member, c.Seq).Scan(&valid); err != nil {
 			return err
 		}
 	}
 	if c.Purpose == "sandbox" && c.LeaseID != "" {
 		if err := db.Tx(ctx).QueryRow(ctx, `SELECT EXISTS(SELECT 1
- FROM runs r
- JOIN sandboxes s ON s.tenant_id=r.tenant_id
- AND s.session_id=r.session_id
- WHERE r.tenant_id=$1
- AND r.id=$2
- AND r.ended_at IS NULL
- AND s.isolation_key=$3
- AND s.isolation_key='t-'||r.tenant_id||'-s-'||r.session_id
- AND s.state NOT IN ('destroyed','failed'))`, c.Tenant, c.Run, c.LeaseID).Scan(&valid); err != nil {
+   FROM runs r
+   JOIN sandboxes s ON s.tenant_id=r.tenant_id
+   AND s.session_id=r.session_id
+   WHERE r.tenant_id=$1
+   AND r.id=$2
+   AND r.ended_at IS NULL
+   AND s.isolation_key=$3
+   AND s.isolation_key='t-'||r.tenant_id||'-s-'||r.session_id
+   AND s.state NOT IN ('destroyed','failed'))`, c.Tenant, c.Run, c.LeaseID).Scan(&valid); err != nil {
 			return err
 		}
 	}
@@ -380,10 +380,7 @@ func (h *Handler) policy(w http.ResponseWriter, r *http.Request, c auth.Capabili
  WHERE tenant_id=$1
  AND kind='tool_rules'
  AND status='active'
- AND ((scope_type='tenant'
- AND scope_id=$1)
- OR (scope_type='workspace'
- AND scope_id=$2))
+ AND ((scope_type='tenant' AND scope_id=$1) OR (scope_type='workspace' AND scope_id=$2))
  ORDER BY CASE scope_type WHEN 'tenant' THEN 0 ELSE 1 END,version,id`, c.Tenant, workspace)
 	if err != nil {
 		return err
@@ -414,12 +411,7 @@ func (h *Handler) policy(w http.ResponseWriter, r *http.Request, c auth.Capabili
  WHERE tenant_id=$1
  AND decision='allow'
  AND expires_at>now()
- AND ((scope_type='session'
- AND scope_id=$2)
- OR (scope_type='user'
- AND scope_id=$3)
- OR (scope_type='workspace'
- AND scope_id=$4))
+ AND ((scope_type='session' AND scope_id=$2) OR (scope_type='user' AND scope_id=$3) OR (scope_type='workspace' AND scope_id=$4))
  ORDER BY created_at,id`, c.Tenant, session, principal, workspace)
 	if err != nil {
 		return err

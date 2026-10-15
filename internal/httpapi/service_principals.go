@@ -61,8 +61,7 @@ func (h *Handler) listServicePrincipals(w http.ResponseWriter, r *http.Request) 
  FROM principals p
  JOIN memberships m ON m.principal_id=p.id
  WHERE p.kind='service'
- AND ($1=''
- OR p.id>NULLIF($1,'')::uuid)
+ AND ($1='' OR p.id>NULLIF($1,'')::uuid)
  ORDER BY p.id
  LIMIT $2`, page.Cursor, page.Limit+1)
 	if err != nil {

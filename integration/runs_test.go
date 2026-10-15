@@ -409,8 +409,7 @@ func testSandboxProjection(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		require.NoError(t, tx.QueryRow(ctx, `SELECT count(*)
  FROM control_events
  WHERE run_id=$1
- AND
- payload->>'type'='sandbox.restored'`, f.run).Scan(&count))
+ AND payload->>'type'='sandbox.restored'`, f.run).Scan(&count))
 		require.Equal(t, 1, count)
 		return nil
 	})

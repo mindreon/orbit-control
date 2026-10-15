@@ -105,8 +105,7 @@ func (h *Handler) listInvitations(w http.ResponseWriter, r *http.Request) error 
 	rows, err := db.Tx(ctx).
 		Query(ctx, `SELECT id::text,email,role,expires_at,status
  FROM invitations
- WHERE ($1=''
- OR id>NULLIF($1,'')::uuid)
+ WHERE ($1='' OR id>NULLIF($1,'')::uuid)
  ORDER BY id
  LIMIT $2`, page.Cursor, page.Limit+1)
 	if err != nil {

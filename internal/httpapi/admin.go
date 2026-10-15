@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -23,16 +24,14 @@ func (h *Handler) listMembers(w http.ResponseWriter, r *http.Request) error {
 	}
 	rows, e := db.Tx(ctx).
 		Query(ctx,
-			`SELECT p.id::text,p.kind,p.email,p.display_name,m.status,m.source,COALESCE((SELECT jsonb_agg(role
- ORDER BY role)
- FROM role_bindings rb
- WHERE rb.principal_type IN ('user','service')
- AND rb.principal_id=p.id
- AND rb.scope_type='tenant'),'[]')
+			`SELECT p.id::text,p.kind,p.email,p.display_name,m.status,m.source,COALESCE((SELECT jsonb_agg(role ORDER BY role)
+     FROM role_bindings rb
+     WHERE rb.principal_type IN ('user','service')
+     AND rb.principal_id=p.id
+     AND rb.scope_type='tenant'),'[]')
  FROM memberships m
  JOIN principals p ON p.id=m.principal_id
- WHERE ($1=''
- OR p.id>NULLIF($1,'')::uuid)
+ WHERE ($1='' OR p.id>NULLIF($1,'')::uuid)
  ORDER BY p.id
  LIMIT $2`, page.Cursor, page.Limit+1)
 	if e != nil {
@@ -124,37 +123,8 @@ func (h *Handler) patchMember(w http.ResponseWriter, r *http.Request) error {
 		pid).Scan(&kind); e != nil {
 		return e
 	}
-	var owner bool
-	if e := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1
- FROM role_bindings
- WHERE principal_id=$1
- AND principal_type IN ('user','service')
- AND role='tenant.owner')`, pid).Scan(&owner); e != nil {
-		return e
-	}
-	if owner || in.Role != nil && *in.Role == "tenant.owner" {
-		if e := h.Authz.Require(ctx, "tenant.manage", tenantResource(ctx)); e != nil {
-			return e
-		}
-	}
-	// Serialize owner changes and preserve at least one active owner.
-	if _, e := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1,3))", auth.Tenant(ctx)); e != nil {
-		return e
-	}
-	if owner && (in.Role != nil && *in.Role != "tenant.owner" || in.Status != nil && *in.Status != "active") {
-		var count int
-		if e := tx.QueryRow(ctx, `SELECT count(*)
- FROM role_bindings rb
- JOIN memberships m ON m.principal_id=rb.principal_id
- AND m.tenant_id=rb.tenant_id
- WHERE rb.role='tenant.owner'
- AND rb.principal_type IN ('user','service')
- AND m.status='active'`).Scan(&count); e != nil {
-			return e
-		}
-		if count <= 1 {
-			return httpx.E(409, "LAST_OWNER", "Cannot remove the last active tenant owner")
-		}
+	if err := h.checkMemberOwnerChange(ctx, pid, in.Role, in.Status); err != nil {
+		return err
 	}
 	if in.Role != nil {
 		if !policy.ValidRole(*in.Role, "tenant") {
@@ -194,8 +164,7 @@ func (h *Handler) listKeys(w http.ResponseWriter, r *http.Request) error {
 	rows, e := db.Tx(ctx).
 		Query(ctx, `SELECT id::text,principal_id::text,name,prefix,scopes,expires_at,last_used_at
  FROM api_keys
- WHERE ($1=''
- OR id>NULLIF($1,'')::uuid)
+ WHERE ($1='' OR id>NULLIF($1,'')::uuid)
  ORDER BY id
  LIMIT $2`, page.Cursor, page.Limit+1)
 	if e != nil {
@@ -318,11 +287,9 @@ func (h *Handler) listAudit(w http.ResponseWriter, r *http.Request) error {
 	}
 	rows, e := db.Tx(ctx).
 		Query(ctx,
-			`SELECT id::text,actor_id::text,actor_kind,action,target_type,target_id,detail,encode(prev_hash,'hex'),encode(hash,
- 'hex'),occurred_at
+			`SELECT id::text,actor_id::text,actor_kind,action,target_type,target_id,detail,encode(prev_hash,'hex'),encode(hash, 'hex'),occurred_at
  FROM audit_log
- WHERE ($1=''
- OR id>NULLIF($1,'')::uuid)
+ WHERE ($1='' OR id>NULLIF($1,'')::uuid)
  ORDER BY id
  LIMIT $2`, page.Cursor, page.Limit+1)
 	if e != nil {
@@ -362,5 +329,42 @@ func (h *Handler) listAudit(w http.ResponseWriter, r *http.Request) error {
 		next = httpx.Cursor(items[len(items)-1]["id"].(string))
 	}
 	httpx.JSON(w, 200, map[string]any{"items": items, "next_cursor": next})
+	return nil
+}
+
+func (h *Handler) checkMemberOwnerChange(ctx context.Context, pid string, role, status *string) error {
+	tx := db.Tx(ctx)
+	var owner bool
+	if e := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1
+   FROM role_bindings
+   WHERE principal_id=$1
+   AND principal_type IN ('user','service')
+   AND role='tenant.owner')`, pid).Scan(&owner); e != nil {
+		return e
+	}
+	if owner || role != nil && *role == "tenant.owner" {
+		if e := h.Authz.Require(ctx, "tenant.manage", tenantResource(ctx)); e != nil {
+			return e
+		}
+	}
+	// Serialize owner changes and preserve at least one active owner.
+	if _, e := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1,3))", auth.Tenant(ctx)); e != nil {
+		return e
+	}
+	if owner && (role != nil && *role != "tenant.owner" || status != nil && *status != "active") {
+		var count int
+		if e := tx.QueryRow(ctx, `SELECT count(*)
+ FROM role_bindings rb
+ JOIN memberships m ON m.principal_id=rb.principal_id
+ AND m.tenant_id=rb.tenant_id
+ WHERE rb.role='tenant.owner'
+ AND rb.principal_type IN ('user','service')
+ AND m.status='active'`).Scan(&count); e != nil {
+			return e
+		}
+		if count <= 1 {
+			return httpx.E(409, "LAST_OWNER", "Cannot remove the last active tenant owner")
+		}
+	}
 	return nil
 }

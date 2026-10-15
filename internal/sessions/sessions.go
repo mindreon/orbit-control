@@ -77,15 +77,15 @@ func GetRun(ctx context.Context, id, action string) (Run, Session, error) {
 	}
 	var raw []byte
 	err := db.Tx(ctx).QueryRow(ctx, `SELECT to_jsonb(r)||jsonb_build_object('pending_interaction_id',(SELECT i.id
- FROM interactions i
- WHERE i.tenant_id=r.tenant_id
- AND i.run_id=r.id
- AND i.status IN ('pending','escalated')
- ORDER BY i.created_at
- LIMIT 1),'segments_count',(SELECT count(*)
- FROM run_segments g
- WHERE g.tenant_id=r.tenant_id
- AND g.run_id=r.id))
+     FROM interactions i
+     WHERE i.tenant_id=r.tenant_id
+     AND i.run_id=r.id
+     AND i.status IN ('pending','escalated')
+     ORDER BY i.created_at
+     LIMIT 1),'segments_count',(SELECT count(*)
+     FROM run_segments g
+     WHERE g.tenant_id=r.tenant_id
+     AND g.run_id=r.id))
  FROM runs r
  WHERE tenant_id=$1
  AND id=$2`, auth.Tenant(ctx), id).Scan(&raw)

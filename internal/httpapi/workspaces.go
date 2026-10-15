@@ -54,10 +54,8 @@ func (h *Handler) listWorkspaces(w http.ResponseWriter, r *http.Request) error {
 	rows, e := db.Tx(ctx).
 		Query(ctx, `SELECT id::text,name,default_agent_ref,settings,created_at
  FROM workspaces
- WHERE ($1=''
- OR id>NULLIF($1,'')::uuid)
- AND ($2
- OR id=ANY($3::uuid[]))
+ WHERE ($1='' OR id>NULLIF($1,'')::uuid)
+ AND ($2 OR id=ANY($3::uuid[]))
  ORDER BY id
  LIMIT $4`, page.Cursor, all, visible, page.Limit+1)
 	if e != nil {
@@ -199,8 +197,7 @@ func (h *Handler) listWorkspaceMembers(w http.ResponseWriter, r *http.Request) e
  FROM workspace_members wm
  JOIN principals p ON p.id=wm.principal_id
  WHERE wm.workspace_id=$1
- AND ($2=''
- OR p.id>NULLIF($2,'')::uuid)
+ AND ($2='' OR p.id>NULLIF($2,'')::uuid)
  ORDER BY p.id
  LIMIT $3`, id, page.Cursor, page.Limit+1)
 	if e != nil {

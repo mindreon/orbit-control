@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/api/enums/v1"
@@ -24,7 +25,7 @@ import (
 func TestReplay(t *testing.T) {
 	paths, err := filepath.Glob("testdata/histories/*.json")
 	require.NoError(t, err)
-	require.Len(t, paths, 12, "all WP6 branches need real server histories")
+	require.Len(t, paths, 14, "all WP6 branches need real server histories")
 	for _, path := range paths {
 		t.Run(filepath.Base(path), func(t *testing.T) {
 			raw, err := os.ReadFile(path)
@@ -64,6 +65,23 @@ func assertHistoryScenario(t *testing.T, name string, history *historypb.History
 	segments := historyInputs[contract.SegmentInput](t, history, contract.ActivityRunAgentSegment)
 	final := historyInputs[w.FinalizeInput](t, history, "FinalizeRun")
 	switch name {
+	case "lease-maintenance-can", "lease-archive-can":
+		require.Contains(t, types, enums.EVENT_TYPE_WORKFLOW_EXECUTION_CONTINUED_AS_NEW)
+		event := history.Events[len(history.Events)-1].GetWorkflowExecutionContinuedAsNewEventAttributes()
+		require.NotNil(t, event)
+		var input w.LeaseInput
+		require.NoError(t, converter.GetDefaultDataConverter().FromPayloads(event.Input, &input))
+		require.Equal(t, name == "lease-archive-can", input.Carry.Archived)
+		require.Equal(t, "paused", input.Carry.State)
+		require.Equal(t, 2, input.Carry.Gen)
+		require.Zero(t, input.Carry.Touches)
+		require.Equal(t, "snapshot", input.Carry.SnapshotID)
+		require.True(t, input.Carry.Dirty)
+		require.True(t, input.Carry.SnapshotPending)
+		require.Equal(t, "old-snapshot", input.Carry.ObsoleteSnapshot)
+		require.Equal(t, new(true), input.Carry.PendingRestored)
+		require.False(t, input.Carry.RetryAt.IsZero())
+		require.Equal(t, time.Minute, input.Carry.Backoff)
 	case "can":
 		require.Contains(t, types, enums.EVENT_TYPE_WORKFLOW_EXECUTION_CONTINUED_AS_NEW)
 	case "cancel":

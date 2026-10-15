@@ -121,12 +121,9 @@ func List(ctx context.Context, page httpx.Page, workspace, status string) (Page[
 	rows, err := db.Tx(ctx).Query(ctx, `SELECT to_jsonb(s)
  FROM sessions s
  WHERE s.tenant_id=@tenant
- AND (@cursor=''
- OR s.id>NULLIF(@cursor,'')::uuid)
- AND (@workspace=''
- OR s.workspace_id=NULLIF(@workspace,'')::uuid)
- AND (@status=''
- OR s.status=@status)
+ AND (@cursor='' OR s.id>NULLIF(@cursor,'')::uuid)
+ AND (@workspace='' OR s.workspace_id=NULLIF(@workspace,'')::uuid)
+ AND (@status='' OR s.status=@status)
  AND `+policy.SessionReadPredicate+`
  ORDER BY s.id
  LIMIT @limit`, args)
