@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+
 	"github.com/mindreon/orbit-control/internal/assets"
 	"github.com/mindreon/orbit-control/internal/assets/bundle"
 	"github.com/mindreon/orbit-control/internal/audit"
@@ -35,14 +36,34 @@ func Save(ctx context.Context, tx pgx.Tx, runID string, lock contract.RunLock) e
 	if err != nil {
 		return err
 	}
-	n, err := tx.Exec(ctx, `INSERT INTO run_locks(id,tenant_id,run_id,digest,entries,effective_permissions,lock) SELECT $1,$2,id,$4,$5,$6,$7 FROM runs WHERE tenant_id=$2 AND id=$3`, lock.LockId, auth.Tenant(ctx), runID, lock.Digest, entries, permissions, raw)
+	n, err := tx.Exec(
+		ctx,
+		"INSERT INTO run_locks(id,tenant_id,run_id,digest,entries,effective_permissions,lock) "+
+			"SELECT $1,$2,id,$4,$5,$6,$7 FROM runs WHERE tenant_id=$2 AND id=$3",
+		lock.LockId,
+		auth.Tenant(ctx),
+		runID,
+		lock.Digest,
+		entries,
+		permissions,
+		raw,
+	)
 	if err != nil {
 		return err
 	}
 	if n.RowsAffected() != 1 {
 		return assets.Invalid("Run does not belong to the lock tenant")
 	}
-	return audit.Append(ctx, tx, auth.From(ctx), auth.Tenant(ctx), "run.lock_created", "run_lock", lock.LockId, map[string]string{"digest": lock.Digest})
+	return audit.Append(
+		ctx,
+		tx,
+		auth.From(ctx),
+		auth.Tenant(ctx),
+		"run.lock_created",
+		"run_lock",
+		lock.LockId,
+		map[string]string{"digest": lock.Digest},
+	)
 }
 
 // Files reads every entry, including derived embedded bundles, by its immutable

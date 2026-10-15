@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+
 	"github.com/mindreon/orbit-control/internal/platform/ids"
 )
 
@@ -29,13 +30,26 @@ func TestTokenBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	claims := CapabilityClaims{Tenant: ids.New(), Run: ids.New(), Member: "leader", Seq: 3, Attempt: 1, Purpose: "segment", LeaseID: ids.New()}
+	claims := CapabilityClaims{
+		Tenant:  ids.New(),
+		Run:     ids.New(),
+		Member:  "leader",
+		Seq:     3,
+		Attempt: 1,
+		Purpose: "segment",
+		LeaseID: ids.New(),
+	}
 	token, err := signer.IssueCapability(claims)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got, err := signer.VerifyCapability(token)
-	if err != nil || got.Tenant != claims.Tenant || got.Run != claims.Run || got.Member != claims.Member || got.Seq != 3 || got.Purpose != "segment" || got.LeaseID != claims.LeaseID || got.Subject != "run:"+claims.Run || got.ExpiresAt.Sub(got.IssuedAt.Time) != 5*time.Minute {
+	if err != nil || got.Tenant != claims.Tenant || got.Run != claims.Run || got.Member != claims.Member ||
+		got.Seq != 3 ||
+		got.Purpose != "segment" ||
+		got.LeaseID != claims.LeaseID ||
+		got.Subject != "run:"+claims.Run ||
+		got.ExpiresAt.Sub(got.IssuedAt.Time) != 5*time.Minute {
 		t.Fatal(got, err)
 	}
 	if _, err = dev.VerifyDev(token); err == nil {
@@ -46,7 +60,11 @@ func TestTokenBoundaries(t *testing.T) {
 		t.Fatal("dev token accepted as capability")
 	}
 	next := testSigner(t)
-	rotated, err := NewCapabilitySigner(next.key, "new", map[string][]byte{"old": original.key.Public().(ed25519.PublicKey)})
+	rotated, err := NewCapabilitySigner(
+		next.key,
+		"new",
+		map[string][]byte{"old": original.key.Public().(ed25519.PublicKey)},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +163,15 @@ func TestCapabilityPurposeAndAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	valid := CapabilityClaims{Tenant: ids.New(), Run: ids.New(), Member: "main", Seq: 1, Attempt: 2, Purpose: "sandbox", LeaseID: "lease-1"}
+	valid := CapabilityClaims{
+		Tenant:  ids.New(),
+		Run:     ids.New(),
+		Member:  "main",
+		Seq:     1,
+		Attempt: 2,
+		Purpose: "sandbox",
+		LeaseID: "lease-1",
+	}
 	token, err := signer.IssueCapability(valid)
 	if err != nil {
 		t.Fatal(err)
@@ -155,7 +181,10 @@ func TestCapabilityPurposeAndAttempt(t *testing.T) {
 		t.Fatal("lost sandbox binding", err)
 	}
 	for _, change := range []func(*CapabilityClaims){
-		func(c *CapabilityClaims) { c.Purpose = "segment"; c.Attempt = 0 },
+		func(c *CapabilityClaims) {
+			c.Purpose = "segment"
+			c.Attempt = 0
+		},
 		func(c *CapabilityClaims) { c.Purpose = "worker" },
 		func(c *CapabilityClaims) { c.LeaseID = "" },
 	} {
@@ -178,7 +207,10 @@ func TestSandboxCapabilityNeedsOnlyLeaseIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := signer.VerifyCapability(token)
-	if err != nil || got.Tenant != claims.Tenant || got.Run != claims.Run || got.LeaseID != claims.LeaseID || got.Member != "" || got.Seq != 0 || got.Attempt != 0 {
+	if err != nil || got.Tenant != claims.Tenant || got.Run != claims.Run || got.LeaseID != claims.LeaseID ||
+		got.Member != "" ||
+		got.Seq != 0 ||
+		got.Attempt != 0 {
 		t.Fatalf("sandbox binding: %v", err)
 	}
 	for _, change := range []func(*CapabilityClaims){

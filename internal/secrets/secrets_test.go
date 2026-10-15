@@ -2,13 +2,14 @@ package secrets
 
 import (
 	"bytes"
-	"github.com/mindreon/orbit-control/internal/platform/ids"
 	"testing"
+
+	"github.com/mindreon/orbit-control/internal/platform/ids"
 )
 
 func TestTenantEncryption(t *testing.T) {
 	tenant := ids.New()
-	keys := Keys{1, map[int][]byte{1: bytes.Repeat([]byte{7}, 32)}}
+	keys := Keys{Current: 1, KEKs: map[int][]byte{1: bytes.Repeat([]byte{7}, 32)}}
 	encrypted, e := keys.Encrypt(tenant, "KEY", "tenant", []byte("sensitive"))
 	if e != nil {
 		t.Fatal(e)
@@ -17,7 +18,7 @@ func TestTenantEncryption(t *testing.T) {
 	if e != nil || string(plain) != "sensitive" {
 		t.Fatal("roundtrip", e)
 	}
-	for _, v := range []struct{ tenant, name string }{{ids.New(), "KEY"}, {tenant, "OTHER"}} {
+	for _, v := range []struct{ tenant, name string }{{tenant: ids.New(), name: "KEY"}, {tenant: tenant, name: "OTHER"}} {
 		if _, e = keys.Decrypt(v.tenant, v.name, "tenant", 1, encrypted); e == nil {
 			t.Fatal("cross identity decrypt")
 		}

@@ -9,7 +9,15 @@ import (
 
 func sensitive(k string) bool {
 	k = strings.ToLower(k)
-	for _, s := range []string{"password", "secret", "token", "authorization", "cookie", "ciphertext", "database_url", "api_key", "request_body"} {
+	for _, s := range []string{"password",
+		"secret",
+		"token",
+		"authorization",
+		"cookie",
+		"ciphertext",
+		"database_url",
+		"api_key",
+		"request_body"} {
 		if strings.Contains(k, s) {
 			return true
 		}

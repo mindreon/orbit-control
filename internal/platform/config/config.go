@@ -32,144 +32,40 @@ type Config struct {
 }
 
 func Load() (Config, error) {
-	c := Config{DatabaseURL: os.Getenv("ORBIT_DATABASE_URL"), AdminDatabaseURL: os.Getenv("ORBIT_ADMIN_DATABASE_URL"), Addr: env("ORBIT_HTTP_ADDR", "127.0.0.1:8080"), AuthMode: env("ORBIT_AUTH_MODE", "oidc"), Issuer: os.Getenv("ORBIT_OIDC_ISSUER"), ClientID: os.Getenv("ORBIT_OIDC_CLIENT_ID"), Audience: os.Getenv("ORBIT_OIDC_AUDIENCE"), KeyFile: env("ORBIT_SIGNING_KEY_FILE", ".orbit-data/signing.key"), LogFormat: env("ORBIT_LOG_FORMAT", "json"), AllowDevNetwork: os.Getenv("ORBIT_ALLOW_DEV_AUTH_ON_NETWORK") == "1"}
-	c.InternalAddr = env("ORBIT_INTERNAL_ADDR", "127.0.0.1:8081")
-	c.NATSURL = env("ORBIT_NATS_URL", "nats://127.0.0.1:4222")
-	c.WorkerServiceTokenSHA256 = os.Getenv("ORBIT_WORKER_SERVICE_TOKEN_SHA256")
-	c.Environment = env("ORBIT_ENV", "dev")
-	if c.Environment != "dev" && c.Environment != "prod" {
-		return c, fmt.Errorf("ORBIT_ENV must be dev or prod")
+	c := Config{
+		DatabaseURL:      os.Getenv("ORBIT_DATABASE_URL"),
+		AdminDatabaseURL: os.Getenv("ORBIT_ADMIN_DATABASE_URL"),
+		Addr:             env("ORBIT_HTTP_ADDR", "127.0.0.1:8080"),
+		AuthMode:         env("ORBIT_AUTH_MODE", "oidc"),
+		Issuer:           os.Getenv("ORBIT_OIDC_ISSUER"),
+		ClientID:         os.Getenv("ORBIT_OIDC_CLIENT_ID"),
+		Audience:         os.Getenv("ORBIT_OIDC_AUDIENCE"),
+		KeyFile:          env("ORBIT_SIGNING_KEY_FILE", ".orbit-data/signing.key"),
+		LogFormat:        env("ORBIT_LOG_FORMAT", "json"),
+		AllowDevNetwork:  os.Getenv("ORBIT_ALLOW_DEV_AUTH_ON_NETWORK") == "1",
 	}
-	c.DefaultRunBudget = 200000
-	if value := os.Getenv("ORBIT_DEFAULT_RUN_BUDGET_MILLICREDITS"); value != "" {
-		n, err := strconv.ParseInt(value, 10, 64)
-		if err != nil || n < 1 || n > 9007199254740991 {
-			return c, fmt.Errorf("ORBIT_DEFAULT_RUN_BUDGET_MILLICREDITS must be a positive safe integer")
-		}
-		c.DefaultRunBudget = n
+	if err := c.loadRunEnvironment(); err != nil {
+		return c, err
 	}
-	c.AssetUploadConcurrency = 2
-	if value := os.Getenv("ORBIT_ASSET_UPLOAD_CONCURRENCY"); value != "" {
-		n, err := strconv.Atoi(value)
-		if err != nil || n < 1 || n > 32 {
-			return c, fmt.Errorf("ORBIT_ASSET_UPLOAD_CONCURRENCY must be between 1 and 32")
-		}
-		c.AssetUploadConcurrency = n
-	}
-	c.TemporalAddress = env("ORBIT_TEMPORAL_ADDRESS", "127.0.0.1:7233")
-	c.TemporalNamespace = env("ORBIT_TEMPORAL_NAMESPACE", "default")
-	for _, name := range []string{"ORBIT_TEMPORAL_TLS", "ORBIT_OBJECT_TLS"} {
-		if v := os.Getenv(name); v != "" && v != "true" && v != "false" {
-			return c, fmt.Errorf("%s must be true or false", name)
-		}
-	}
-	c.TemporalTLS = os.Getenv("ORBIT_TEMPORAL_TLS") == "true"
-	c.TemporalCAFile = os.Getenv("ORBIT_TEMPORAL_TLS_CA_FILE")
-	c.TemporalCertFile = os.Getenv("ORBIT_TEMPORAL_TLS_CERT_FILE")
-	c.TemporalKeyFile = os.Getenv("ORBIT_TEMPORAL_TLS_KEY_FILE")
-	c.TemporalServerName = os.Getenv("ORBIT_TEMPORAL_TLS_SERVER_NAME")
-	c.ObjectEndpoint = env("ORBIT_S3_ENDPOINT", os.Getenv("ORBIT_OBJECT_ENDPOINT"))
-	c.ObjectBucket = env("ORBIT_S3_BUCKET", env("ORBIT_OBJECT_BUCKET", "orbit"))
-	c.ObjectAccessKey = env("ORBIT_S3_ACCESS_KEY", os.Getenv("ORBIT_OBJECT_ACCESS_KEY"))
-	c.ObjectSecretKey = env("ORBIT_S3_SECRET_KEY", os.Getenv("ORBIT_OBJECT_SECRET_KEY"))
-	c.ObjectTLS = env("ORBIT_S3_USE_TLS", os.Getenv("ORBIT_OBJECT_TLS")) == "true"
-	c.AssetKeyFile = env("ORBIT_ASSET_SIGNING_KEY_FILE", ".orbit-data/assets.key")
-	c.AssetKeyID = env("ORBIT_ASSET_SIGNING_KEY_ID", "1")
-	c.AssetPublicKeys = map[string][]byte{}
-	for pair := range strings.SplitSeq(os.Getenv("ORBIT_ASSET_PUBLIC_KEYS"), ",") {
-		if pair == "" {
-			continue
-		}
-		id, encoded, ok := strings.Cut(pair, ":")
-		b, e := base64.StdEncoding.DecodeString(encoded)
-		if !ok || id == "" || e != nil || len(b) != 32 || c.AssetPublicKeys[id] != nil {
-			return c, fmt.Errorf("ORBIT_ASSET_PUBLIC_KEYS must contain distinct kid:base64 Ed25519 keys")
-		}
-		c.AssetPublicKeys[id] = b
+	if err := c.loadStorageEnvironment(); err != nil {
+		return c, err
 	}
 	c.PersonalTenants = os.Getenv("ORBIT_PERSONAL_TENANTS") == "true"
 	if v := os.Getenv("ORBIT_PERSONAL_TENANTS"); v != "" && v != "true" && v != "false" {
 		return c, fmt.Errorf("ORBIT_PERSONAL_TENANTS must be true or false")
 	}
 	c.PublicOrigin = os.Getenv("ORBIT_PUBLIC_ORIGIN")
-	c.CapabilityKeyFile = env("ORBIT_CAPABILITY_KEY_FILE", ".orbit-data/capability.key")
-	c.CapabilityKeyID = env("ORBIT_CAPABILITY_KEY_ID", "1")
-	c.CapabilityPublicKeys = map[string][]byte{}
-	// Rotation keys are kid:base64(raw Ed25519 public key), comma-separated.
-	if v := os.Getenv("ORBIT_CAPABILITY_PUBLIC_KEYS"); v != "" {
-		for pair := range strings.SplitSeq(v, ",") {
-			id, encoded, ok := strings.Cut(pair, ":")
-			b, err := base64.StdEncoding.DecodeString(encoded)
-			if !ok || id == "" || err != nil || len(b) != 32 {
-				return c, fmt.Errorf("ORBIT_CAPABILITY_PUBLIC_KEYS must contain kid:base64 Ed25519 keys")
-			}
-			if _, ok := c.CapabilityPublicKeys[id]; ok {
-				return c, fmt.Errorf("ORBIT_CAPABILITY_PUBLIC_KEYS duplicate kid")
-			}
-			c.CapabilityPublicKeys[id] = b
-		}
+	if err := c.loadCapabilityEnvironment(); err != nil {
+		return c, err
 	}
-	c.SecretsKeyVersion = 1
-	if v := os.Getenv("ORBIT_SECRETS_KEY_VERSION"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 1 {
-			return c, fmt.Errorf("ORBIT_SECRETS_KEY_VERSION must be positive")
-		}
-		c.SecretsKeyVersion = n
-	}
-	c.SecretsKEKs = map[int][]byte{}
-	if file := os.Getenv("ORBIT_KEK_FILE"); file != "" {
-		info, err := os.Stat(file)
-		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
-			return c, fmt.Errorf("ORBIT_KEK_FILE must be a regular file with mode 0600")
-		}
-		raw, err := os.ReadFile(file)
-		if err != nil {
-			return c, fmt.Errorf("ORBIT_KEK_FILE cannot be read")
-		}
-		key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(raw)))
-		if err != nil || len(key) != 32 {
-			return c, fmt.Errorf("ORBIT_KEK_FILE must contain base64 of 32 bytes")
-		}
-		c.SecretsKEKs[c.SecretsKeyVersion] = key
-	}
-
-	if v := os.Getenv("ORBIT_SECRETS_KEK"); v != "" {
-		b, err := base64.StdEncoding.DecodeString(v)
-		if err != nil || len(b) != 32 {
-			return c, fmt.Errorf("ORBIT_SECRETS_KEK must be base64 of 32 bytes")
-		}
-		c.SecretsKEKs[c.SecretsKeyVersion] = b
-	}
-	if v := os.Getenv("ORBIT_SECRETS_KEK_PREVIOUS"); v != "" {
-		for pair := range strings.SplitSeq(v, ",") {
-			version, encoded, ok := strings.Cut(pair, ":")
-			n, err := strconv.Atoi(version)
-			b, decodeErr := base64.StdEncoding.DecodeString(encoded)
-			if !ok || err != nil || n < 1 || decodeErr != nil || len(b) != 32 || c.SecretsKEKs[n] != nil {
-				return c, fmt.Errorf("ORBIT_SECRETS_KEK_PREVIOUS must contain distinct version:base64 32-byte keys")
-			}
-			c.SecretsKEKs[n] = b
-		}
+	if err := c.loadSecretsEnvironment(); err != nil {
+		return c, err
 	}
 	if s := os.Getenv("ORBIT_CORS_ORIGINS"); s != "" {
 		c.CORS = strings.Split(s, ",")
 	}
-	if c.AuthMode != "dev" && c.AuthMode != "oidc" {
-		return c, fmt.Errorf("ORBIT_AUTH_MODE must be oidc or dev")
-	}
-	if c.LogFormat != "json" && c.LogFormat != "text" {
-		return c, fmt.Errorf("ORBIT_LOG_FORMAT must be json or text")
-	}
-	origins := append([]string{}, c.CORS...)
-	if c.PublicOrigin != "" {
-		origins = append(origins, c.PublicOrigin)
-	}
-	for _, s := range origins {
-		u, e := url.Parse(s)
-		if e != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
-			return c, fmt.Errorf("ORBIT_PUBLIC_ORIGIN / ORBIT_CORS_ORIGINS must contain exact HTTP origins")
-		}
+	if err := c.validateOrigins(); err != nil {
+		return c, err
 	}
 	return c, nil
 }
@@ -183,7 +79,9 @@ func (c Config) ValidateAPI() error {
 	}
 	ip := net.ParseIP(host)
 	if c.AuthMode == "dev" && !(host == "localhost" || ip != nil && ip.IsLoopback()) && !c.AllowDevNetwork {
-		return fmt.Errorf("ORBIT_ALLOW_DEV_AUTH_ON_NETWORK=1 is required for ORBIT_AUTH_MODE=dev on non-loopback ORBIT_HTTP_ADDR")
+		return fmt.Errorf(
+			"ORBIT_ALLOW_DEV_AUTH_ON_NETWORK=1 is required for ORBIT_AUTH_MODE=dev on non-loopback ORBIT_HTTP_ADDR",
+		)
 	}
 	if c.AuthMode == "oidc" {
 		u, e := url.Parse(c.Issuer)
@@ -229,7 +127,21 @@ func env(k, d string) string {
 }
 
 func (c Config) ValidateAssets() error {
-	for _, v := range []struct{ name, value string }{{"ORBIT_OBJECT_ENDPOINT", c.ObjectEndpoint}, {"ORBIT_OBJECT_BUCKET", c.ObjectBucket}, {"ORBIT_OBJECT_ACCESS_KEY", c.ObjectAccessKey}, {"ORBIT_OBJECT_SECRET_KEY", c.ObjectSecretKey}, {"ORBIT_ASSET_SIGNING_KEY_FILE", c.AssetKeyFile}, {"ORBIT_ASSET_SIGNING_KEY_ID", c.AssetKeyID}} {
+	for _, v := range []struct {
+		name,
+		value string
+	}{{name: "ORBIT_OBJECT_ENDPOINT",
+		value: c.ObjectEndpoint},
+		{name: "ORBIT_OBJECT_BUCKET",
+			value: c.ObjectBucket},
+		{name: "ORBIT_OBJECT_ACCESS_KEY",
+			value: c.ObjectAccessKey},
+		{name: "ORBIT_OBJECT_SECRET_KEY",
+			value: c.ObjectSecretKey},
+		{name: "ORBIT_ASSET_SIGNING_KEY_FILE",
+			value: c.AssetKeyFile},
+		{name: "ORBIT_ASSET_SIGNING_KEY_ID",
+			value: c.AssetKeyID}} {
 		if v.value == "" {
 			return fmt.Errorf("%s is required", v.name)
 		}
@@ -275,6 +187,159 @@ func (c Config) ValidateRuns(api bool) error {
 		}
 		if len(c.WorkerServiceTokenSHA256) != 64 || strings.Trim(c.WorkerServiceTokenSHA256, "0123456789abcdef") != "" {
 			return fmt.Errorf("ORBIT_WORKER_SERVICE_TOKEN_SHA256 must be sha256 hex")
+		}
+	}
+	return nil
+}
+
+func (c *Config) loadRunEnvironment() error {
+	c.InternalAddr = env("ORBIT_INTERNAL_ADDR", "127.0.0.1:8081")
+	c.NATSURL = env("ORBIT_NATS_URL", "nats://127.0.0.1:4222")
+	c.WorkerServiceTokenSHA256 = os.Getenv("ORBIT_WORKER_SERVICE_TOKEN_SHA256")
+	c.Environment = env("ORBIT_ENV", "dev")
+	if c.Environment != "dev" && c.Environment != "prod" {
+		return fmt.Errorf("ORBIT_ENV must be dev or prod")
+	}
+	c.DefaultRunBudget = 200000
+	if value := os.Getenv("ORBIT_DEFAULT_RUN_BUDGET_MILLICREDITS"); value != "" {
+		n, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || n < 1 || n > 9007199254740991 {
+			return fmt.Errorf("ORBIT_DEFAULT_RUN_BUDGET_MILLICREDITS must be a positive safe integer")
+		}
+		c.DefaultRunBudget = n
+	}
+	c.AssetUploadConcurrency = 2
+	if value := os.Getenv("ORBIT_ASSET_UPLOAD_CONCURRENCY"); value != "" {
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 1 || n > 32 {
+			return fmt.Errorf("ORBIT_ASSET_UPLOAD_CONCURRENCY must be between 1 and 32")
+		}
+		c.AssetUploadConcurrency = n
+	}
+	return nil
+}
+
+func (c *Config) loadStorageEnvironment() error {
+	c.TemporalAddress = env("ORBIT_TEMPORAL_ADDRESS", "127.0.0.1:7233")
+	c.TemporalNamespace = env("ORBIT_TEMPORAL_NAMESPACE", "default")
+	for _, name := range []string{"ORBIT_TEMPORAL_TLS", "ORBIT_OBJECT_TLS"} {
+		if v := os.Getenv(name); v != "" && v != "true" && v != "false" {
+			return fmt.Errorf("%s must be true or false", name)
+		}
+	}
+	c.TemporalTLS = os.Getenv("ORBIT_TEMPORAL_TLS") == "true"
+	c.TemporalCAFile = os.Getenv("ORBIT_TEMPORAL_TLS_CA_FILE")
+	c.TemporalCertFile = os.Getenv("ORBIT_TEMPORAL_TLS_CERT_FILE")
+	c.TemporalKeyFile = os.Getenv("ORBIT_TEMPORAL_TLS_KEY_FILE")
+	c.TemporalServerName = os.Getenv("ORBIT_TEMPORAL_TLS_SERVER_NAME")
+	c.ObjectEndpoint = env("ORBIT_S3_ENDPOINT", os.Getenv("ORBIT_OBJECT_ENDPOINT"))
+	c.ObjectBucket = env("ORBIT_S3_BUCKET", env("ORBIT_OBJECT_BUCKET", "orbit"))
+	c.ObjectAccessKey = env("ORBIT_S3_ACCESS_KEY", os.Getenv("ORBIT_OBJECT_ACCESS_KEY"))
+	c.ObjectSecretKey = env("ORBIT_S3_SECRET_KEY", os.Getenv("ORBIT_OBJECT_SECRET_KEY"))
+	c.ObjectTLS = env("ORBIT_S3_USE_TLS", os.Getenv("ORBIT_OBJECT_TLS")) == "true"
+	c.AssetKeyFile = env("ORBIT_ASSET_SIGNING_KEY_FILE", ".orbit-data/assets.key")
+	c.AssetKeyID = env("ORBIT_ASSET_SIGNING_KEY_ID", "1")
+	c.AssetPublicKeys = map[string][]byte{}
+	for pair := range strings.SplitSeq(os.Getenv("ORBIT_ASSET_PUBLIC_KEYS"), ",") {
+		if pair == "" {
+			continue
+		}
+		id, encoded, ok := strings.Cut(pair, ":")
+		b, e := base64.StdEncoding.DecodeString(encoded)
+		if !ok || id == "" || e != nil || len(b) != 32 || c.AssetPublicKeys[id] != nil {
+			return fmt.Errorf("ORBIT_ASSET_PUBLIC_KEYS must contain distinct kid:base64 Ed25519 keys")
+		}
+		c.AssetPublicKeys[id] = b
+	}
+	return nil
+}
+
+func (c *Config) loadCapabilityEnvironment() error {
+	c.CapabilityKeyFile = env("ORBIT_CAPABILITY_KEY_FILE", ".orbit-data/capability.key")
+	c.CapabilityKeyID = env("ORBIT_CAPABILITY_KEY_ID", "1")
+	c.CapabilityPublicKeys = map[string][]byte{}
+	// Rotation keys are kid:base64(raw Ed25519 public key), comma-separated.
+	if v := os.Getenv("ORBIT_CAPABILITY_PUBLIC_KEYS"); v != "" {
+		for pair := range strings.SplitSeq(v, ",") {
+			id, encoded, ok := strings.Cut(pair, ":")
+			b, err := base64.StdEncoding.DecodeString(encoded)
+			if !ok || id == "" || err != nil || len(b) != 32 {
+				return fmt.Errorf("ORBIT_CAPABILITY_PUBLIC_KEYS must contain kid:base64 Ed25519 keys")
+			}
+			if _, ok := c.CapabilityPublicKeys[id]; ok {
+				return fmt.Errorf("ORBIT_CAPABILITY_PUBLIC_KEYS duplicate kid")
+			}
+			c.CapabilityPublicKeys[id] = b
+		}
+	}
+	return nil
+}
+
+func (c *Config) loadSecretsEnvironment() error {
+	c.SecretsKeyVersion = 1
+	if v := os.Getenv("ORBIT_SECRETS_KEY_VERSION"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			return fmt.Errorf("ORBIT_SECRETS_KEY_VERSION must be positive")
+		}
+		c.SecretsKeyVersion = n
+	}
+	c.SecretsKEKs = map[int][]byte{}
+	if file := os.Getenv("ORBIT_KEK_FILE"); file != "" {
+		info, err := os.Stat(file)
+		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
+			return fmt.Errorf("ORBIT_KEK_FILE must be a regular file with mode 0600")
+		}
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			return fmt.Errorf("ORBIT_KEK_FILE cannot be read")
+		}
+		key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(raw)))
+		if err != nil || len(key) != 32 {
+			return fmt.Errorf("ORBIT_KEK_FILE must contain base64 of 32 bytes")
+		}
+		c.SecretsKEKs[c.SecretsKeyVersion] = key
+	}
+
+	if v := os.Getenv("ORBIT_SECRETS_KEK"); v != "" {
+		b, err := base64.StdEncoding.DecodeString(v)
+		if err != nil || len(b) != 32 {
+			return fmt.Errorf("ORBIT_SECRETS_KEK must be base64 of 32 bytes")
+		}
+		c.SecretsKEKs[c.SecretsKeyVersion] = b
+	}
+	if v := os.Getenv("ORBIT_SECRETS_KEK_PREVIOUS"); v != "" {
+		for pair := range strings.SplitSeq(v, ",") {
+			version, encoded, ok := strings.Cut(pair, ":")
+			n, err := strconv.Atoi(version)
+			b, decodeErr := base64.StdEncoding.DecodeString(encoded)
+			if !ok || err != nil || n < 1 || decodeErr != nil || len(b) != 32 || c.SecretsKEKs[n] != nil {
+				return fmt.Errorf("ORBIT_SECRETS_KEK_PREVIOUS must contain distinct version:base64 32-byte keys")
+			}
+			c.SecretsKEKs[n] = b
+		}
+	}
+	return nil
+}
+
+func (c *Config) validateOrigins() error {
+	if c.AuthMode != "dev" && c.AuthMode != "oidc" {
+		return fmt.Errorf("ORBIT_AUTH_MODE must be oidc or dev")
+	}
+	if c.LogFormat != "json" && c.LogFormat != "text" {
+		return fmt.Errorf("ORBIT_LOG_FORMAT must be json or text")
+	}
+	origins := append([]string{}, c.CORS...)
+	if c.PublicOrigin != "" {
+		origins = append(origins, c.PublicOrigin)
+	}
+	for _, s := range origins {
+		u, e := url.Parse(s)
+		if e != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Path != "" ||
+			u.RawQuery != "" ||
+			u.Fragment != "" ||
+			u.User != nil {
+			return fmt.Errorf("ORBIT_PUBLIC_ORIGIN / ORBIT_CORS_ORIGINS must contain exact HTTP origins")
 		}
 	}
 	return nil

@@ -33,7 +33,21 @@ func archive(t *testing.T, names []string, data []byte, mode fs.FileMode) []byte
 	return out.Bytes()
 }
 func TestMaliciousArchives(t *testing.T) {
-	for name, names := range map[string][]string{"slip": {"../escaped"}, "absolute": {"/tmp/file"}, "windows": {"C:/file"}, "backslash": {"a\\..\\b"}, "dot": {"a/./b"}, "deep": {strings.Repeat("a/", 33) + "f"}, "duplicate": {"same", "same"}, "case": {"Name", "name"}, "prefix": {"a", "a/b"}, "newline": {"bad\nname"}} {
+	for name, names := range map[string][]string{"slip": {"../escaped"},
+		"absolute":  {"/tmp/file"},
+		"windows":   {"C:/file"},
+		"backslash": {"a\\..\\b"},
+		"dot":       {"a/./b"},
+		"deep": {strings.Repeat("a/",
+			33) +
+			"f"},
+		"duplicate": {"same",
+			"same"},
+		"case": {"Name",
+			"name"},
+		"prefix": {"a",
+			"a/b"},
+		"newline": {"bad\nname"}} {
 		t.Run(name, func(t *testing.T) {
 			if _, e := Parse(archive(t, names, []byte("x"), 0644), DefaultLimits); e == nil {
 				t.Fatal("accepted malicious archive")
@@ -48,7 +62,34 @@ func TestMaliciousArchives(t *testing.T) {
 	if _, e := Parse(archive(t, []string{"bomb"}, bytes.Repeat([]byte("0"), 1<<20), 0644), DefaultLimits); e == nil {
 		t.Fatal("accepted zip bomb")
 	}
-	for name, l := range map[string]Limits{"count": {1, 100, 100, 100, 100, 10, 200}, "file": {5, 1, 100, 100, 100, 10, 200}, "total": {5, 100, 1, 100, 100, 10, 200}, "text": {5, 100, 100, 1, 100, 10, 200}} {
+	for name, l := range map[string]Limits{"count": {Files: 1,
+		FileBytes:  100,
+		TotalBytes: 100,
+		TextBytes:  100,
+		TextTotal:  100,
+		Depth:      10,
+		Ratio:      200},
+		"file": {Files: 5,
+			FileBytes:  1,
+			TotalBytes: 100,
+			TextBytes:  100,
+			TextTotal:  100,
+			Depth:      10,
+			Ratio:      200},
+		"total": {Files: 5,
+			FileBytes:  100,
+			TotalBytes: 1,
+			TextBytes:  100,
+			TextTotal:  100,
+			Depth:      10,
+			Ratio:      200},
+		"text": {Files: 5,
+			FileBytes:  100,
+			TotalBytes: 100,
+			TextBytes:  1,
+			TextTotal:  100,
+			Depth:      10,
+			Ratio:      200}} {
 		t.Run(name, func(t *testing.T) {
 			if _, e := Parse(archive(t, []string{"a", "b"}, []byte("hello"), 0644), l); e == nil {
 				t.Fatal("accepted over limit")
@@ -70,7 +111,14 @@ func TestTarSafetyAndDeterminism(t *testing.T) {
 			t.Fatal("accepted tar link/device")
 		}
 	}
-	raw, e := Pack(map[string][]byte{"b": []byte("second"), "a": []byte("first"), ".git/config": []byte("excluded"), "x.pyc": []byte("excluded")})
+	raw, e := Pack(
+		map[string][]byte{
+			"b":           []byte("second"),
+			"a":           []byte("first"),
+			".git/config": []byte("excluded"),
+			"x.pyc":       []byte("excluded"),
+		},
+	)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -163,7 +211,8 @@ func TestPAXGlobalHeader(t *testing.T) {
 	var out bytes.Buffer
 	gz := gzip.NewWriter(&out)
 	tw := tar.NewWriter(gz)
-	if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeXGlobalHeader, PAXRecords: map[string]string{"comment": "git archive"}}); err != nil {
+	if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeXGlobalHeader,
+		PAXRecords: map[string]string{"comment": "git archive"}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := tw.WriteHeader(&tar.Header{Name: "AGENTS.md", Mode: 0644, Size: 1}); err != nil {

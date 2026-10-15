@@ -8,13 +8,102 @@ import (
 
 func TestEveryRoleAndAction(t *testing.T) {
 	expected := map[string][]string{
-		"tenant.owner":         {"tenant.read", "tenant.manage", "member.read", "member.manage", "role.manage", "workspace.create", "workspace.read", "workspace.update", "workspace.members", "project.manage", "group.manage", "asset.read", "asset.create", "asset.update", "asset.publish", "asset.review", "asset.use", "session.read", "session.create", "session.update", "session.share", "run.create", "run.control", "audit.read", "apikey.read", "apikey.manage", "model.manage", "secret.manage", "policy.manage", "quota.manage"},
-		"tenant.admin":         {"tenant.read", "member.read", "member.manage", "role.manage", "workspace.create", "workspace.read", "workspace.update", "workspace.members", "project.manage", "group.manage", "asset.read", "asset.create", "asset.update", "asset.publish", "asset.review", "asset.use", "session.read", "session.create", "session.update", "session.share", "run.create", "run.control", "audit.read", "apikey.read", "apikey.manage", "model.manage", "secret.manage", "policy.manage", "quota.manage"},
-		"tenant.auditor":       {"tenant.read", "audit.read"},
-		"tenant.reviewer":      {"tenant.read", "asset.read", "asset.review"},
-		"tenant.member":        {"tenant.read", "workspace.create"},
-		"ws.admin":             {"workspace.read", "workspace.update", "workspace.members", "project.manage", "asset.read", "asset.create", "asset.update", "asset.publish", "asset.use", "session.read", "session.create", "session.update", "session.share", "run.create", "run.control"},
-		"ws.editor":            {"workspace.read", "asset.read", "asset.create", "asset.update", "asset.publish", "asset.use", "session.read", "session.create", "session.update", "run.create", "run.control"},
+		"tenant.owner": {
+			"tenant.read",
+			"tenant.manage",
+			"member.read",
+			"member.manage",
+			"role.manage",
+			"workspace.create",
+			"workspace.read",
+			"workspace.update",
+			"workspace.members",
+			"project.manage",
+			"group.manage",
+			"asset.read",
+			"asset.create",
+			"asset.update",
+			"asset.publish",
+			"asset.review",
+			"asset.use",
+			"session.read",
+			"session.create",
+			"session.update",
+			"session.share",
+			"run.create",
+			"run.control",
+			"audit.read",
+			"apikey.read",
+			"apikey.manage",
+			"model.manage",
+			"secret.manage",
+			"policy.manage",
+			"quota.manage",
+		},
+		"tenant.admin": {
+			"tenant.read",
+			"member.read",
+			"member.manage",
+			"role.manage",
+			"workspace.create",
+			"workspace.read",
+			"workspace.update",
+			"workspace.members",
+			"project.manage",
+			"group.manage",
+			"asset.read",
+			"asset.create",
+			"asset.update",
+			"asset.publish",
+			"asset.review",
+			"asset.use",
+			"session.read",
+			"session.create",
+			"session.update",
+			"session.share",
+			"run.create",
+			"run.control",
+			"audit.read",
+			"apikey.read",
+			"apikey.manage",
+			"model.manage",
+			"secret.manage",
+			"policy.manage",
+			"quota.manage",
+		},
+		"tenant.auditor":  {"tenant.read", "audit.read"},
+		"tenant.reviewer": {"tenant.read", "asset.read", "asset.review"},
+		"tenant.member":   {"tenant.read", "workspace.create"},
+		"ws.admin": {
+			"workspace.read",
+			"workspace.update",
+			"workspace.members",
+			"project.manage",
+			"asset.read",
+			"asset.create",
+			"asset.update",
+			"asset.publish",
+			"asset.use",
+			"session.read",
+			"session.create",
+			"session.update",
+			"session.share",
+			"run.create",
+			"run.control",
+		},
+		"ws.editor": {
+			"workspace.read",
+			"asset.read",
+			"asset.create",
+			"asset.update",
+			"asset.publish",
+			"asset.use",
+			"session.read",
+			"session.create",
+			"session.update",
+			"run.create",
+			"run.control",
+		},
 		"ws.member":            {"workspace.read", "asset.read", "asset.use", "session.create", "run.create"},
 		"ws.viewer":            {"workspace.read", "asset.read", "session.read"},
 		"asset.owner":          {"asset.read", "asset.update", "asset.publish", "asset.use", "asset.share"},
@@ -45,7 +134,7 @@ func TestEveryRoleAndAction(t *testing.T) {
 		cases = append(cases, struct {
 			role            string
 			allowed, denied []string
-		}{role, allowed, denied})
+		}{role: role, allowed: allowed, denied: denied})
 		actual := slices.Clone(Matrix[role])
 		want := slices.Clone(allowed)
 		slices.Sort(actual)
@@ -64,7 +153,7 @@ func TestEveryRoleAndAction(t *testing.T) {
 				scope = "workspace"
 			}
 			resource := Resource{Type: scope, ID: "scope"}
-			binding := []Binding{{c.role, scope, "scope"}}
+			binding := []Binding{{Role: c.role, ScopeType: scope, ScopeID: "scope"}}
 			tenant := "tenant"
 			if scope == "tenant" {
 				tenant = "scope"
@@ -86,7 +175,7 @@ func TestEveryRoleAndAction(t *testing.T) {
 	}
 }
 func TestWorkspaceInheritanceAndDefaultDeny(t *testing.T) {
-	b := []Binding{{"ws.admin", "workspace", "w"}}
+	b := []Binding{{Role: "ws.admin", ScopeType: "workspace", ScopeID: "w"}}
 	if !Allows(b, "session.update", Resource{Type: "session", ID: "s", WorkspaceID: "w"}, "t") {
 		t.Fatal("no workspace inheritance")
 	}
@@ -106,10 +195,10 @@ func TestKeyIssuanceOnlyCountsTenantBindings(t *testing.T) {
 		b    Binding
 		want bool
 	}{
-		{Binding{"tenant.admin", "tenant", "t"}, true},
-		{Binding{"tenant.admin", "tenant", "other"}, false},
-		{Binding{"ws.admin", "workspace", "w"}, false},
-		{Binding{"asset.owner", "asset", "a"}, false},
+		{b: Binding{Role: "tenant.admin", ScopeType: "tenant", ScopeID: "t"}, want: true},
+		{b: Binding{Role: "tenant.admin", ScopeType: "tenant", ScopeID: "other"}, want: false},
+		{b: Binding{Role: "ws.admin", ScopeType: "workspace", ScopeID: "w"}, want: false},
+		{b: Binding{Role: "asset.owner", ScopeType: "asset", ScopeID: "a"}, want: false},
 	} {
 		if got := hasAction([]Binding{tc.b}, "asset.update", "t"); got != tc.want {
 			t.Fatalf("%+v: %v", tc.b, got)

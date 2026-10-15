@@ -6,6 +6,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/mindreon/orbit-control/internal/platform/ids"
 )
 
@@ -67,7 +68,10 @@ func OpenApp(ctx context.Context, url string) (*DB, error) {
 	e = d.Global(ctx, func(tx pgx.Tx) error {
 		var name string
 		var privileged bool
-		if e := tx.QueryRow(ctx, "SELECT rolname,rolsuper OR rolbypassrls FROM pg_roles WHERE rolname=current_user").Scan(&name, &privileged); e != nil {
+		if e := tx.QueryRow(ctx,
+			("SELECT rolname,rolsuper OR rolbypassrls FROM pg_roles WHERE "+
+				"rolname=current_user")).Scan(&name,
+			&privileged); e != nil {
 			return e
 		}
 		if name != "orbit_app" || privileged {

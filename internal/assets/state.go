@@ -3,9 +3,15 @@ package assets
 import "github.com/mindreon/orbit-control/internal/platform/httpx"
 
 var transitions = map[string][]string{
-	"draft": {"submitted"}, "submitted": {"checking", "draft"}, "checking": {"draft", "check_failed", "in_review", "approved"},
-	"check_failed": {"draft"}, "in_review": {"draft", "changes_requested", "rejected", "approved"}, "changes_requested": {"draft"},
-	"approved": {"published"}, "published": {"deprecated", "suspended"}, "suspended": {"published", "yanked"}, "deprecated": {"yanked"},
+	"draft": {
+		"submitted",
+	}, "submitted": {"checking", "draft"}, "checking": {"draft", "check_failed", "in_review", "approved"},
+	"check_failed": {
+		"draft",
+	}, "in_review": {"draft", "changes_requested", "rejected", "approved"}, "changes_requested": {"draft"},
+	"approved": {
+		"published",
+	}, "published": {"deprecated", "suspended"}, "suspended": {"published", "yanked"}, "deprecated": {"yanked"},
 }
 
 func Transition(from, to string) error {

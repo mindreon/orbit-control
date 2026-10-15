@@ -8,7 +8,14 @@ import (
 )
 
 func TestCanonicalHashAndTampering(t *testing.T) {
-	r := Record{ID: "entry", TenantID: "tenant", ActorID: "actor", Action: "role.granted", Detail: json.RawMessage(`{"b":2,"a":{"z":1,"c":2}}`), OccurredAt: time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC)}
+	r := Record{
+		ID:         "entry",
+		TenantID:   "tenant",
+		ActorID:    "actor",
+		Action:     "role.granted",
+		Detail:     json.RawMessage(`{"b":2,"a":{"z":1,"c":2}}`),
+		OccurredAt: time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC),
+	}
 	prev := make([]byte, 32)
 	h, e := Hash(prev, r)
 	if e != nil {

@@ -7,8 +7,9 @@ import (
 	"strings"
 	"sync"
 
-	contractv2 "github.com/mindreon/orbit-control/contract/v2"
 	"github.com/santhosh-tekuri/jsonschema/v6"
+
+	contractv2 "github.com/mindreon/orbit-control/contract/v2"
 )
 
 var consumerSchemas = sync.OnceValues(func() (map[string]*jsonschema.Schema, error) { return compileSchemas(false) })

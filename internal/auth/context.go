@@ -18,10 +18,13 @@ type identity struct {
 type contextKey struct{}
 
 func Context(ctx context.Context, p Principal, tenant string) context.Context {
-	return context.WithValue(ctx, contextKey{}, identity{p, tenant})
+	return context.WithValue(ctx, contextKey{}, identity{Principal: p, Tenant: tenant})
 }
 func From(ctx context.Context) Principal {
 	v, _ := ctx.Value(contextKey{}).(identity)
 	return v.Principal
 }
-func Tenant(ctx context.Context) string { v, _ := ctx.Value(contextKey{}).(identity); return v.Tenant }
+func Tenant(ctx context.Context) string {
+	v, _ := ctx.Value(contextKey{}).(identity)
+	return v.Tenant
+}

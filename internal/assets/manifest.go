@@ -43,35 +43,8 @@ func SplitRef(ref string) (string, string) {
 func ParseManifest(files []bundle.File) (Manifest, contract.EffectivePermissions, error) {
 	var m Manifest
 	p := contract.EffectivePermissions{SandboxProfile: "default"}
-	for _, f := range files {
-		var typ string
-		var dst any
-		switch f.Path {
-		case "agent.json":
-			m.Agent = new(contract.AgentManifest)
-			typ = "AgentManifest"
-			dst = m.Agent
-		case "team.json":
-			m.Team = new(contract.TeamManifest)
-			typ = "TeamManifest"
-			dst = m.Team
-		case "skills.json":
-			m.Skills = new(contract.SkillsManifest)
-			typ = "SkillsManifest"
-			dst = m.Skills
-		case "mcp.json":
-			m.MCP = new(contract.McpManifest)
-			typ = "McpManifest"
-			dst = m.MCP
-		default:
-			continue
-		}
-		if err := contract.Validate(typ, f.Data); err != nil {
-			return m, p, fmt.Errorf("%s: %w", f.Path, err)
-		}
-		if err := json.Unmarshal(f.Data, dst); err != nil {
-			return m, p, fmt.Errorf("invalid %s", f.Path)
-		}
+	if err := m.decode(files); err != nil {
+		return m, p, err
 	}
 	if m.Agent != nil {
 		p = AgentPermissions(m.Agent)
@@ -80,7 +53,7 @@ func ParseManifest(files []bundle.File) (Manifest, contract.EffectivePermissions
 		if c == "" {
 			c = "*"
 		}
-		m.Dependencies = append(m.Dependencies, Dependency{kind, ref, c})
+		m.Dependencies = append(m.Dependencies, Dependency{Kind: kind, Ref: ref, Constraint: c})
 	}
 	if m.Skills != nil {
 		for _, s := range m.Skills.Skills {
@@ -93,35 +66,8 @@ func ParseManifest(files []bundle.File) (Manifest, contract.EffectivePermissions
 			}
 		}
 	}
-	if m.MCP != nil {
-		for _, name := range slices.Sorted(maps.Keys(m.MCP.McpServers)) {
-			s := m.MCP.McpServers[name]
-			for _, tool := range slices.Sorted(maps.Keys(s.Tools)) {
-				effect := s.Tools[tool].EffectClass
-				if !slices.Contains(p.EffectClasses, effect) {
-					p.EffectClasses = append(p.EffectClasses, effect)
-				}
-			}
-			if s.Url != nil {
-				if u, err := url.Parse(*s.Url); err == nil && u.Hostname() != "" && !strings.Contains(u.Hostname(), "${") && !slices.Contains(p.Network.Egress, u.Hostname()) {
-					p.Network.Egress = append(p.Network.Egress, u.Hostname())
-				}
-			}
-			raw, err := json.Marshal(s)
-			if err != nil {
-				return m, p, err
-			}
-			for _, match := range secretReference.FindAllSubmatch(raw, -1) {
-				requirement := contract.SecretRequirement{Name: string(match[1])}
-				if !slices.Contains(p.Secrets, requirement) {
-					p.Secrets = append(p.Secrets, requirement)
-				}
-			}
-			if s.Ref != nil {
-				ref, c := SplitRef(*s.Ref)
-				add("mcp_server", ref, c)
-			}
-		}
+	if err := m.addMCPPermissions(&p, add); err != nil {
+		return m, p, err
 	}
 	if m.Team != nil {
 		for _, r := range m.Team.Roles {
@@ -183,4 +129,74 @@ func AgentPermissions(a *contract.AgentManifest) contract.EffectivePermissions {
 		}
 	}
 	return p
+}
+
+func (m *Manifest) addMCPPermissions(p *contract.EffectivePermissions, add func(contract.AssetKind, string, string)) error {
+	if m.MCP != nil {
+		for _, name := range slices.Sorted(maps.Keys(m.MCP.McpServers)) {
+			s := m.MCP.McpServers[name]
+			for _, tool := range slices.Sorted(maps.Keys(s.Tools)) {
+				effect := s.Tools[tool].EffectClass
+				if !slices.Contains(p.EffectClasses, effect) {
+					p.EffectClasses = append(p.EffectClasses, effect)
+				}
+			}
+			if s.Url != nil {
+				if u, err := url.Parse(*s.Url); err == nil && u.Hostname() != "" &&
+					!strings.Contains(u.Hostname(), "${") &&
+					!slices.Contains(p.Network.Egress, u.Hostname()) {
+					p.Network.Egress = append(p.Network.Egress, u.Hostname())
+				}
+			}
+			raw, err := json.Marshal(s)
+			if err != nil {
+				return err
+			}
+			for _, match := range secretReference.FindAllSubmatch(raw, -1) {
+				requirement := contract.SecretRequirement{Name: string(match[1])}
+				if !slices.Contains(p.Secrets, requirement) {
+					p.Secrets = append(p.Secrets, requirement)
+				}
+			}
+			if s.Ref != nil {
+				ref, c := SplitRef(*s.Ref)
+				add("mcp_server", ref, c)
+			}
+		}
+	}
+	return nil
+}
+
+func (m *Manifest) decode(files []bundle.File) error {
+	for _, f := range files {
+		var typ string
+		var dst any
+		switch f.Path {
+		case "agent.json":
+			m.Agent = new(contract.AgentManifest)
+			typ = "AgentManifest"
+			dst = m.Agent
+		case "team.json":
+			m.Team = new(contract.TeamManifest)
+			typ = "TeamManifest"
+			dst = m.Team
+		case "skills.json":
+			m.Skills = new(contract.SkillsManifest)
+			typ = "SkillsManifest"
+			dst = m.Skills
+		case "mcp.json":
+			m.MCP = new(contract.McpManifest)
+			typ = "McpManifest"
+			dst = m.MCP
+		default:
+			continue
+		}
+		if err := contract.Validate(typ, f.Data); err != nil {
+			return fmt.Errorf("%s: %w", f.Path, err)
+		}
+		if err := json.Unmarshal(f.Data, dst); err != nil {
+			return fmt.Errorf("invalid %s", f.Path)
+		}
+	}
+	return nil
 }

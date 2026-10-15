@@ -106,7 +106,8 @@ func TestSecretFormattingAndWireValues(t *testing.T) {
 		func(b *bytes.Buffer) slog.Handler { return slog.NewTextHandler(b, nil) },
 	} {
 		var buf bytes.Buffer
-		slog.New(handler(&buf)).Info("test", "secret", secret, "credentials", value, "grants", SecretGrantResponse{Grants: []SecretGrant{{Value: secret}}})
+		slog.New(handler(&buf)).
+			Info("test", "secret", secret, "credentials", value, "grants", SecretGrantResponse{Grants: []SecretGrant{{Value: secret}}})
 		if strings.Contains(buf.String(), sentinel) {
 			t.Fatalf("secret log leaked: %s", buf.String())
 		}
@@ -132,7 +133,10 @@ type wireFixture struct {
 // nonempty arrays and if/then requirements survive; optional empty arrays do not.
 func minimalValue(t *testing.T, kind string, root any) any {
 	t.Helper()
-	valid := func() bool { raw, err := json.Marshal(root); return err == nil && ValidateStrict(kind, raw) == nil }
+	valid := func() bool {
+		raw, err := json.Marshal(root)
+		return err == nil && ValidateStrict(kind, raw) == nil
+	}
 	var prune func(any)
 	prune = func(value any) {
 		switch v := value.(type) {
@@ -190,7 +194,7 @@ func TestGoWireFixtures(t *testing.T) {
 		if !valid && (name != "zero" || len(required) == 0) {
 			t.Fatalf("%s %s: %v", kind, name, ValidateStrict(kind, raw))
 		}
-		fixtures = append(fixtures, wireFixture{kind, name, valid, raw})
+		fixtures = append(fixtures, wireFixture{Kind: kind, Case: name, Valid: valid, Payload: raw})
 	}
 	for _, ex := range examples {
 		raw, err := os.ReadFile(ex.path)
@@ -244,7 +248,9 @@ func TestGoWireFixtures(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(raw, stored) {
-		t.Fatal("Go wire fixtures are stale: ORBIT_UPDATE_CONTRACT_FIXTURES=1 go test ./internal/contract -run TestGoWireFixtures")
+		t.Fatal(
+			"Go wire fixtures are stale: ORBIT_UPDATE_CONTRACT_FIXTURES=1 go test ./internal/contract -run TestGoWireFixtures",
+		)
 	}
 }
 

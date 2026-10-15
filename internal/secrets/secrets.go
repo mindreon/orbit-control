@@ -55,14 +55,28 @@ func (k Keys) Put(ctx context.Context, tenant, actor, name, scope string, plain 
 		return "", err
 	}
 	var id string
-	err = db.Tx(ctx).QueryRow(ctx, `INSERT INTO secrets(id,tenant_id,name,scope,ciphertext,key_version,created_by) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(tenant_id,name,scope) DO UPDATE SET ciphertext=EXCLUDED.ciphertext,key_version=EXCLUDED.key_version RETURNING id::text`, ids.New(), tenant, name, scope, encrypted, k.Current, actor).Scan(&id)
+	err = db.Tx(ctx).
+		QueryRow(ctx, "INSERT INTO secrets(id,tenant_id,name,scope,ciphertext,key_version,created_by) "+
+			"VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(tenant_id,name,scope) DO UPDATE SET "+
+			("ciphertext=EXCLUDED.ciphertext,key_version=EXCLUDED.key_version "+
+				"RETURNING id::text"),
+			ids.New(),
+			tenant,
+			name,
+			scope,
+			encrypted,
+			k.Current,
+			actor).
+		Scan(&id)
 	return id, err
 }
 func (k Keys) Get(ctx context.Context, tenant, id string) ([]byte, error) {
 	var name, scope string
 	var version int
 	var encrypted []byte
-	err := db.Tx(ctx).QueryRow(ctx, `SELECT name,scope,key_version,ciphertext FROM secrets WHERE tenant_id=$1 AND id=$2`, tenant, id).Scan(&name, &scope, &version, &encrypted)
+	err := db.Tx(ctx).
+		QueryRow(ctx, `SELECT name,scope,key_version,ciphertext FROM secrets WHERE tenant_id=$1 AND id=$2`, tenant, id).
+		Scan(&name, &scope, &version, &encrypted)
 	if err != nil {
 		return nil, err
 	}

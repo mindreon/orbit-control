@@ -26,30 +26,19 @@ func (a Authorizer) RequireAsset(ctx context.Context, action string, r Asset) er
 	if err != nil {
 		return err
 	}
-	workspaces := []string{}
-	for _, binding := range bindings {
-		if binding.ScopeType == "workspace" && slices.Contains(Matrix[binding.Role], "workspace.read") {
-			workspaces = append(workspaces, binding.ScopeID)
-		}
-	}
-	var member, granted, maintain bool
-	err = db.Tx(ctx).QueryRow(ctx, `SELECT
- EXISTS(SELECT 1 FROM workspace_members WHERE workspace_id=NULLIF($1,'')::uuid AND principal_id=$2),
- COALESCE(bool_or(permission IN ('use','maintain')),false),
- COALESCE(bool_or(permission='maintain'),false)
- FROM asset_grants WHERE asset_id=$3 AND (grantee_type NOT IN ('tenant','workspace') OR grantee_type='tenant' AND $7='tenant' OR grantee_type='workspace' AND ($7='tenant' OR $7='workspace' AND grantee_id=NULLIF($1,'')::uuid)) AND (
- (grantee_type IN ('user','service') AND grantee_id=$2)
- OR (grantee_type='group' AND grantee_id IN (SELECT group_id FROM group_members WHERE principal_id=$2))
- OR (grantee_type='tenant' AND grantee_id=$4)
- OR (grantee_type='workspace' AND (grantee_id IN (SELECT workspace_id FROM workspace_members WHERE principal_id=$2) OR grantee_id=ANY($5::uuid[]) OR $6)))`, r.WorkspaceID, p.ID, r.ID, tenant, workspaces, Allows(bindings, "workspace.read", Resource{}, tenant), r.Visibility).Scan(&member, &granted, &maintain)
+	member, granted, maintain, err := assetGrants(ctx, r, bindings)
 	if err != nil {
 		return err
 	}
 	resource := Resource{Type: "asset", ID: r.ID, WorkspaceID: r.WorkspaceID}
-	workspaceAccess := member || r.WorkspaceID != "" && Allows(bindings, "workspace.read", Resource{Type: "workspace", ID: r.WorkspaceID}, tenant)
+	workspaceAccess := member ||
+		r.WorkspaceID != "" &&
+			Allows(bindings, "workspace.read", Resource{Type: "workspace", ID: r.WorkspaceID}, tenant)
 	explicit := Allows(bindings, "asset.read", Resource{Type: "asset", ID: r.ID}, "")
 	reviewer := r.Reviewing && Allows(bindings, "asset.review", resource, tenant)
-	visible := p.ID == r.OwnerID || explicit || granted || r.Visibility == "tenant" || r.Visibility == "workspace" && workspaceAccess || reviewer
+	visible := p.ID == r.OwnerID || explicit || granted || r.Visibility == "tenant" ||
+		r.Visibility == "workspace" && workspaceAccess ||
+		reviewer
 	if !visible {
 		return httpx.E(404, "NOT_FOUND", "Asset not found")
 	}
@@ -72,7 +61,8 @@ func (a Authorizer) RequireAsset(ctx context.Context, action string, r Asset) er
 		if p.ID == r.OwnerID || p.ID == r.SubmitterID || p.ID == r.UploaderID {
 			return httpx.E(403, "FORBIDDEN", "Authors cannot review their own assets")
 		}
-		if r.Visibility == "workspace" && Allows(bindings, "asset.publish", Resource{Type: "workspace", ID: r.WorkspaceID}, tenant) {
+		if r.Visibility == "workspace" &&
+			Allows(bindings, "asset.publish", Resource{Type: "workspace", ID: r.WorkspaceID}, tenant) {
 			return nil
 		}
 		return a.Require(ctx, action, resource)
@@ -87,4 +77,44 @@ func (a Authorizer) RequireAsset(ctx context.Context, action string, r Asset) er
 		return nil
 	}
 	return a.Require(ctx, action, resource)
+}
+
+func assetGrants(ctx context.Context, r Asset, bindings []Binding) (bool, bool, bool, error) {
+	p, tenant := auth.From(ctx), auth.Tenant(ctx)
+	workspaces := []string{}
+	for _, binding := range bindings {
+		if binding.ScopeType == "workspace" && slices.Contains(Matrix[binding.Role], "workspace.read") {
+			workspaces = append(workspaces, binding.ScopeID)
+		}
+	}
+	var member, granted, maintain bool
+	err := db.Tx(ctx).QueryRow(ctx, `SELECT
+ EXISTS(SELECT 1 FROM workspace_members WHERE workspace_id=NULLIF($1,'')::uuid AND principal_id=$2),
+ COALESCE(bool_or(permission IN ('use','maintain')),false),
+ COALESCE(bool_or(permission='maintain'),false)
+ FROM asset_grants WHERE asset_id=$3 AND (grantee_type NOT IN ('tenant','workspace')
+ OR grantee_type='tenant' AND $7='tenant' OR grantee_type='workspace'
+ AND ($7='tenant' OR $7='workspace' AND grantee_id=NULLIF($1,'')::uuid)) AND (
+ (grantee_type IN ('user','service') AND grantee_id=$2)
+ OR (grantee_type='group' AND grantee_id IN (SELECT group_id FROM group_members WHERE principal_id=$2))
+ OR (grantee_type='tenant' AND grantee_id=$4)
+ OR (grantee_type='workspace' AND (grantee_id IN
+ (SELECT workspace_id FROM workspace_members WHERE principal_id=$2) OR grantee_id=ANY($5::uuid[]) OR $6)))`,
+
+		r.WorkspaceID,
+		p.ID,
+		r.ID,
+		tenant,
+		workspaces,
+		Allows(bindings,
+			"workspace.read",
+			Resource{},
+			tenant),
+		r.Visibility).Scan(&member,
+		&granted,
+		&maintain)
+	if err != nil {
+		return false, false, false, err
+	}
+	return member, granted, maintain, nil
 }

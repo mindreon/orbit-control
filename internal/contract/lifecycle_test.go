@@ -36,7 +36,14 @@ func TestPurposeSpecificTokenRequests(t *testing.T) {
 	}
 	value := decodeAny(t, raw).(map[string]any)
 	// Configuration has enough identity to request a sandbox token without segment metadata.
-	token, _ := json.Marshal(map[string]any{"tenant_id": value["tenant_id"], "run_id": value["run_id"], "purpose": "sandbox", "lease_id": value["isolation_key"]})
+	token, _ := json.Marshal(
+		map[string]any{
+			"tenant_id": value["tenant_id"],
+			"run_id":    value["run_id"],
+			"purpose":   "sandbox",
+			"lease_id":  value["isolation_key"],
+		},
+	)
 	if err := ValidateStrict("TokenRequest", token); err != nil {
 		t.Fatal(err)
 	}

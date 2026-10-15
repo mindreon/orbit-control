@@ -17,13 +17,102 @@ type Binding struct{ Role, ScopeType, ScopeID string }
 // Membership alone grants workspace creation; access to existing workspaces
 // requires an explicit workspace role (possibly inherited through a group).
 var Matrix = map[string][]string{
-	"tenant.owner":         {"tenant.read", "tenant.manage", "member.read", "member.manage", "role.manage", "workspace.create", "workspace.read", "workspace.update", "workspace.members", "project.manage", "group.manage", "asset.read", "asset.create", "asset.update", "asset.publish", "asset.review", "asset.use", "session.read", "session.create", "session.update", "session.share", "run.create", "run.control", "audit.read", "apikey.read", "apikey.manage", "model.manage", "secret.manage", "policy.manage", "quota.manage"},
-	"tenant.admin":         {"tenant.read", "member.read", "member.manage", "role.manage", "workspace.create", "workspace.read", "workspace.update", "workspace.members", "project.manage", "group.manage", "asset.read", "asset.create", "asset.update", "asset.publish", "asset.review", "asset.use", "session.read", "session.create", "session.update", "session.share", "run.create", "run.control", "audit.read", "apikey.read", "apikey.manage", "model.manage", "secret.manage", "policy.manage", "quota.manage"},
-	"tenant.auditor":       {"tenant.read", "audit.read"},
-	"tenant.reviewer":      {"tenant.read", "asset.read", "asset.review"},
-	"tenant.member":        {"tenant.read", "workspace.create"},
-	"ws.admin":             {"workspace.read", "workspace.update", "workspace.members", "project.manage", "asset.read", "asset.create", "asset.update", "asset.publish", "asset.use", "session.read", "session.create", "session.update", "session.share", "run.create", "run.control"},
-	"ws.editor":            {"workspace.read", "asset.read", "asset.create", "asset.update", "asset.publish", "asset.use", "session.read", "session.create", "session.update", "run.create", "run.control"},
+	"tenant.owner": {
+		"tenant.read",
+		"tenant.manage",
+		"member.read",
+		"member.manage",
+		"role.manage",
+		"workspace.create",
+		"workspace.read",
+		"workspace.update",
+		"workspace.members",
+		"project.manage",
+		"group.manage",
+		"asset.read",
+		"asset.create",
+		"asset.update",
+		"asset.publish",
+		"asset.review",
+		"asset.use",
+		"session.read",
+		"session.create",
+		"session.update",
+		"session.share",
+		"run.create",
+		"run.control",
+		"audit.read",
+		"apikey.read",
+		"apikey.manage",
+		"model.manage",
+		"secret.manage",
+		"policy.manage",
+		"quota.manage",
+	},
+	"tenant.admin": {
+		"tenant.read",
+		"member.read",
+		"member.manage",
+		"role.manage",
+		"workspace.create",
+		"workspace.read",
+		"workspace.update",
+		"workspace.members",
+		"project.manage",
+		"group.manage",
+		"asset.read",
+		"asset.create",
+		"asset.update",
+		"asset.publish",
+		"asset.review",
+		"asset.use",
+		"session.read",
+		"session.create",
+		"session.update",
+		"session.share",
+		"run.create",
+		"run.control",
+		"audit.read",
+		"apikey.read",
+		"apikey.manage",
+		"model.manage",
+		"secret.manage",
+		"policy.manage",
+		"quota.manage",
+	},
+	"tenant.auditor":  {"tenant.read", "audit.read"},
+	"tenant.reviewer": {"tenant.read", "asset.read", "asset.review"},
+	"tenant.member":   {"tenant.read", "workspace.create"},
+	"ws.admin": {
+		"workspace.read",
+		"workspace.update",
+		"workspace.members",
+		"project.manage",
+		"asset.read",
+		"asset.create",
+		"asset.update",
+		"asset.publish",
+		"asset.use",
+		"session.read",
+		"session.create",
+		"session.update",
+		"session.share",
+		"run.create",
+		"run.control",
+	},
+	"ws.editor": {
+		"workspace.read",
+		"asset.read",
+		"asset.create",
+		"asset.update",
+		"asset.publish",
+		"asset.use",
+		"session.read",
+		"session.create",
+		"session.update",
+		"run.create",
+		"run.control",
+	},
 	"ws.member":            {"workspace.read", "asset.read", "asset.use", "session.create", "run.create"},
 	"ws.viewer":            {"workspace.read", "asset.read", "session.read"},
 	"asset.owner":          {"asset.read", "asset.update", "asset.publish", "asset.use", "asset.share"},
@@ -64,7 +153,10 @@ type Authorizer struct{}
 
 func (Authorizer) Bindings(ctx context.Context) ([]Binding, error) {
 	p := auth.From(ctx)
-	rows, e := db.Tx(ctx).Query(ctx, `SELECT role,scope_type,scope_id::text FROM role_bindings WHERE (principal_type IN ('user','service') AND principal_id=$1) OR (principal_type='group' AND principal_id IN (SELECT group_id FROM group_members WHERE principal_id=$1))`, p.ID)
+	rows, e := db.Tx(ctx).
+		Query(ctx, "SELECT role,scope_type,scope_id::text FROM role_bindings WHERE (principal_type IN "+
+			"('user','service') AND principal_id=$1) OR (principal_type='group' AND principal_id IN "+
+			"(SELECT group_id FROM group_members WHERE principal_id=$1))", p.ID)
 	if e != nil {
 		return nil, e
 	}
@@ -124,7 +216,10 @@ func (a Authorizer) WorkspaceFilter(ctx context.Context) (bool, []string, error)
 func (a Authorizer) RequireKeyIssuance(ctx context.Context, target string, scopes []string) error {
 	issuer := auth.From(ctx)
 	var kind string
-	err := db.Tx(ctx).QueryRow(ctx, `SELECT p.kind FROM principals p JOIN memberships m ON m.principal_id=p.id WHERE p.id=$1 AND m.status='active' AND p.status='active'`, target).Scan(&kind)
+	err := db.Tx(ctx).
+		QueryRow(ctx, "SELECT p.kind FROM principals p JOIN memberships m ON m.principal_id=p.id WHERE p.id=$1 "+
+			"AND m.status='active' AND p.status='active'", target).
+		Scan(&kind)
 	if err != nil {
 		return err
 	}
@@ -146,7 +241,9 @@ func (a Authorizer) RequireKeyIssuance(ctx context.Context, target string, scope
 		return err
 	}
 	for _, scope := range scopes {
-		if issuer.APIKey && !slices.Contains(issuer.Scopes, scope) || !hasAction(issuerBindings, scope, auth.Tenant(ctx)) || !hasAction(recipientBindings, scope, auth.Tenant(ctx)) {
+		if issuer.APIKey && !slices.Contains(issuer.Scopes, scope) ||
+			!hasAction(issuerBindings, scope, auth.Tenant(ctx)) ||
+			!hasAction(recipientBindings, scope, auth.Tenant(ctx)) {
 			return httpx.E(403, "FORBIDDEN", "API key scopes exceed issuer or recipient permissions")
 		}
 	}

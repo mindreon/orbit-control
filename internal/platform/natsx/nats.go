@@ -2,8 +2,9 @@ package natsx
 
 import (
 	"context"
-	"github.com/nats-io/nats.go"
 	"time"
+
+	"github.com/nats-io/nats.go"
 )
 
 type Publisher interface {
@@ -24,10 +25,20 @@ func Connect(url string) (*Bus, error) {
 		c.Close()
 		return nil, e
 	}
-	return &Bus{c, js}, nil
+	return &Bus{Conn: c, JS: js}, nil
 }
 func (b *Bus) EnsureRunEventsStream() error {
-	_, e := b.JS.AddStream(&nats.StreamConfig{Name: "RUN_EVENTS", Subjects: []string{"run.>"}, Storage: nats.FileStorage, Retention: nats.LimitsPolicy, MaxAge: 7 * 24 * time.Hour, Duplicates: 24 * time.Hour, MaxMsgSize: 64 << 10})
+	_, e := b.JS.AddStream(
+		&nats.StreamConfig{
+			Name:       "RUN_EVENTS",
+			Subjects:   []string{"run.>"},
+			Storage:    nats.FileStorage,
+			Retention:  nats.LimitsPolicy,
+			MaxAge:     7 * 24 * time.Hour,
+			Duplicates: 24 * time.Hour,
+			MaxMsgSize: 64 << 10,
+		},
+	)
 	return e
 }
 func (b *Bus) Publish(ctx context.Context, subject, id string, data []byte) error {

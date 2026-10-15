@@ -2,11 +2,15 @@ package ids
 
 import (
 	"crypto/sha1"
+
 	"uuid"
 )
 
-func New() string         { return uuid.NewV7().String() }
-func Valid(s string) bool { _, err := uuid.Parse(s); return err == nil }
+func New() string { return uuid.NewV7().String() }
+func Valid(s string) bool {
+	_, err := uuid.Parse(s)
+	return err == nil
+}
 
 // Derive implements UUIDv5 with a fixed Orbit namespace; parts are unambiguous.
 func Derive(namespace, name string) string {

@@ -17,7 +17,10 @@ func (a Authorizer) RequireAssetGrantee(ctx context.Context, r Asset, kind, id s
 	principals := []string{}
 	switch kind {
 	case "user", "service":
-		err = db.Tx(ctx).QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM memberships m JOIN principals p ON p.id=m.principal_id WHERE m.principal_id=$1 AND m.status='active' AND p.kind=$2)`, id, kind).Scan(&allowed)
+		err = db.Tx(ctx).
+			QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM memberships m JOIN principals p ON p.id=m.principal_id WHERE "+
+				"m.principal_id=$1 AND m.status='active' AND p.kind=$2)", id, kind).
+			Scan(&allowed)
 		principals = append(principals, id)
 	case "group":
 		err = db.Tx(ctx).QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM groups WHERE id=$1)`, id).Scan(&allowed)
@@ -55,10 +58,15 @@ func (a Authorizer) RequireAssetGrantee(ctx context.Context, r Asset, kind, id s
 				return e
 			}
 			var member bool
-			if e = db.Tx(ctx).QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM workspace_members WHERE workspace_id=$1 AND principal_id=$2)`, r.WorkspaceID, principal).Scan(&member); e != nil {
+			if e = db.Tx(ctx).QueryRow(ctx,
+				("SELECT EXISTS(SELECT 1 FROM workspace_members WHERE workspace_id=$1 " +
+					"AND principal_id=$2)"),
+				r.WorkspaceID,
+				principal).Scan(&member); e != nil {
 				return e
 			}
-			if !member && !Allows(bindings, "workspace.read", Resource{Type: "workspace", ID: r.WorkspaceID}, auth.Tenant(ctx)) {
+			if !member &&
+				!Allows(bindings, "workspace.read", Resource{Type: "workspace", ID: r.WorkspaceID}, auth.Tenant(ctx)) {
 				allowed = false
 				break
 			}

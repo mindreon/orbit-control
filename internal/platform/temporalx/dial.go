@@ -4,9 +4,11 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"github.com/mindreon/orbit-control/internal/platform/config"
-	"go.temporal.io/sdk/client"
 	"os"
+
+	"go.temporal.io/sdk/client"
+
+	"github.com/mindreon/orbit-control/internal/platform/config"
 )
 
 func Dial(c config.Config) (client.Client, error) {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
 	"github.com/mindreon/orbit-control/internal/auth"
 	"github.com/mindreon/orbit-control/internal/platform/ids"
 	"github.com/mindreon/orbit-control/internal/platform/jcs"
@@ -41,13 +42,21 @@ func Hash(prev []byte, r Record) ([]byte, error) {
 	h.Write(b)
 	return h.Sum(nil), nil
 }
-func Append(ctx context.Context, tx pgx.Tx, p auth.Principal, tenant, action, targetType, target string, detail any) error {
+
+func Append(
+	ctx context.Context,
+	tx pgx.Tx,
+	p auth.Principal,
+	tenant, action, targetType, target string,
+	detail any,
+) error {
 	if _, e := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1,0))", tenant); e != nil {
 		return e
 	}
 	prev := make([]byte, 32)
 	var last time.Time
-	e := tx.QueryRow(ctx, "SELECT hash,occurred_at FROM audit_log WHERE tenant_id=$1 ORDER BY occurred_at DESC,id DESC LIMIT 1", tenant).Scan(&prev, &last)
+	e := tx.QueryRow(ctx, "SELECT hash,occurred_at FROM audit_log WHERE tenant_id=$1 ORDER BY occurred_at DESC,id DESC LIMIT 1", tenant).
+		Scan(&prev, &last)
 	if e != nil && !errors.Is(e, pgx.ErrNoRows) {
 		return e
 	}
@@ -64,12 +73,42 @@ func Append(ctx context.Context, tx pgx.Tx, p auth.Principal, tenant, action, ta
 		return e
 	}
 	meta, _ := ctx.Value(metadataKey{}).(metadata)
-	r := Record{IP: meta.IP, UserAgent: meta.UserAgent, ID: ids.New(), TenantID: tenant, ActorID: p.ID, ActorKind: p.Kind, Action: action, TargetType: targetType, TargetID: target, Detail: b, OccurredAt: now}
+	r := Record{
+		IP:         meta.IP,
+		UserAgent:  meta.UserAgent,
+		ID:         ids.New(),
+		TenantID:   tenant,
+		ActorID:    p.ID,
+		ActorKind:  p.Kind,
+		Action:     action,
+		TargetType: targetType,
+		TargetID:   target,
+		Detail:     b,
+		OccurredAt: now,
+	}
 	h, e := Hash(prev, r)
 	if e != nil {
 		return e
 	}
-	_, e = tx.Exec(ctx, "INSERT INTO audit_log(id,tenant_id,actor_id,actor_kind,action,target_type,target_id,detail,ip,user_agent,prev_hash,hash,occurred_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)", r.ID, tenant, p.ID, p.Kind, action, targetType, target, b, r.IP, r.UserAgent, prev, h, now)
+	_, e = tx.Exec(
+		ctx,
+		"INSERT INTO audit_log(id,tenant_id,actor_id,actor_kind,action,target_type,target_id,detail"+
+			",ip,user_agent,prev_hash,hash,occurred_at) "+
+			"VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
+		r.ID,
+		tenant,
+		p.ID,
+		p.Kind,
+		action,
+		targetType,
+		target,
+		b,
+		r.IP,
+		r.UserAgent,
+		prev,
+		h,
+		now,
+	)
 	return e
 }
 
@@ -80,7 +119,12 @@ type Head struct {
 
 func Verify(ctx context.Context, tx pgx.Tx) (Head, error) {
 	head := Head{Hash: hex.EncodeToString(make([]byte, 32))}
-	rows, e := tx.Query(ctx, "SELECT id::text,tenant_id::text,actor_id::text,actor_kind,action,target_type,target_id,detail,ip,user_agent,occurred_at,prev_hash,hash FROM audit_log WHERE tenant_id=NULLIF(current_setting('app.tenant_id',true),'')::uuid ORDER BY occurred_at,id")
+	rows, e := tx.Query(
+		ctx,
+		"SELECT id::text,tenant_id::text,actor_id::text,actor_kind,action,target_type,target_id,det"+
+			"ail,ip,user_agent,occurred_at,prev_hash,hash FROM audit_log WHERE "+
+			"tenant_id=NULLIF(current_setting('app.tenant_id',true),'')::uuid ORDER BY occurred_at,id",
+	)
 	if e != nil {
 		return head, e
 	}
@@ -89,7 +133,19 @@ func Verify(ctx context.Context, tx pgx.Tx) (Head, error) {
 	for rows.Next() {
 		var r Record
 		var ph, h []byte
-		if e = rows.Scan(&r.ID, &r.TenantID, &r.ActorID, &r.ActorKind, &r.Action, &r.TargetType, &r.TargetID, &r.Detail, &r.IP, &r.UserAgent, &r.OccurredAt, &ph, &h); e != nil {
+		if e = rows.Scan(&r.ID,
+			&r.TenantID,
+			&r.ActorID,
+			&r.ActorKind,
+			&r.Action,
+			&r.TargetType,
+			&r.TargetID,
+			&r.Detail,
+			&r.IP,
+			&r.UserAgent,
+			&r.OccurredAt,
+			&ph,
+			&h); e != nil {
 			return head, e
 		}
 		r.OccurredAt = r.OccurredAt.UTC()

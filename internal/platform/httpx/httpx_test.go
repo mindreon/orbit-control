@@ -18,7 +18,22 @@ func TestIdempotencyRequestIdentity(t *testing.T) {
 		method, path string
 		hash         []byte
 		want         bool
-	}{{"POST", "/v1/workspaces", h[:], true}, {"PATCH", "/v1/workspaces", h[:], false}, {"POST", "/other", h[:], false}, {"POST", "/v1/workspaces", other[:], false}} {
+	}{{method: "POST",
+		path: "/v1/workspaces",
+		hash: h[:],
+		want: true},
+		{method: "PATCH",
+			path: "/v1/workspaces",
+			hash: h[:],
+			want: false},
+		{method: "POST",
+			path: "/other",
+			hash: h[:],
+			want: false},
+		{method: "POST",
+			path: "/v1/workspaces",
+			hash: other[:],
+			want: false}} {
 		if got := SameRequest("POST", "/v1/workspaces", h[:], c.method, c.path, c.hash); got != c.want {
 			t.Fatal(c)
 		}
@@ -35,27 +50,69 @@ func TestRecovery(t *testing.T) {
 	if w.Code != 500 || strings.Contains(w.Body.String(), "unexpected state") || w.Header().Get("X-Request-ID") == "" {
 		t.Fatal(w)
 	}
-	if !strings.Contains(logs.String(), "stack") || !strings.Contains(logs.String(), "unexpected state") || strings.Contains(logs.String(), "credential") {
+	if !strings.Contains(logs.String(), "stack") || !strings.Contains(logs.String(), "unexpected state") ||
+		strings.Contains(logs.String(), "credential") {
 		t.Fatal(logs.String())
 	}
 }
 func TestCORS(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))
-	handler := Middleware(logger, "https://orbit.example", []string{"https://web.example"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
+	handler := Middleware(
+		logger,
+		"https://orbit.example",
+		[]string{"https://web.example"},
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }),
+	)
 	for _, c := range []struct {
 		method, origin string
 		status         int
 		acao           string
 	}{
-		{"GET", "", 200, ""}, {"POST", "https://orbit.example", 200, "https://orbit.example"}, {"PATCH", "https://web.example", 200, "https://web.example"},
-		{"GET", "https://evil.example", 200, ""}, {"HEAD", "https://evil.example", 200, ""}, {"POST", "https://evil.example", 403, ""}, {"DELETE", "https://evil.example", 403, ""}, {"OPTIONS", "https://web.example", 204, "https://web.example"}, {"OPTIONS", "https://evil.example", 200, ""},
+		{method: "GET",
+			origin: "",
+			status: 200,
+			acao:   ""},
+		{method: "POST",
+			origin: "https://orbit.example",
+			status: 200,
+			acao:   "https://orbit.example"},
+		{method: "PATCH",
+			origin: "https://web.example",
+			status: 200,
+			acao:   "https://web.example"},
+
+		{method: "GET",
+			origin: "https://evil.example",
+			status: 200,
+			acao:   ""},
+		{method: "HEAD",
+			origin: "https://evil.example",
+			status: 200,
+			acao:   ""},
+		{method: "POST",
+			origin: "https://evil.example",
+			status: 403,
+			acao:   ""},
+		{method: "DELETE",
+			origin: "https://evil.example",
+			status: 403,
+			acao:   ""},
+		{method: "OPTIONS",
+			origin: "https://web.example",
+			status: 204,
+			acao:   "https://web.example"},
+		{method: "OPTIONS",
+			origin: "https://evil.example",
+			status: 200,
+			acao:   ""},
 	} {
 		t.Run(c.method+c.origin, func(t *testing.T) {
 			r := httptest.NewRequest(c.method, "/", nil)
 			r.Header.Set("Origin", c.origin)
 			w := httptest.NewRecorder()
 			handler.ServeHTTP(w, r)
-			if w.Code != c.status || w.Header().Get("Access-Control-Allow-Origin") != c.acao || w.Header().Get("Vary") != "Origin" {
+			if w.Code != c.status || w.Header().Get("Access-Control-Allow-Origin") != c.acao ||
+				w.Header().Get("Vary") != "Origin" {
 				t.Fatal(w)
 			}
 			if c.method == "OPTIONS" && c.acao != "" && w.Header().Get("Access-Control-Max-Age") == "" {

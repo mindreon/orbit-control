@@ -10,13 +10,14 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"fmt"
-	"golang.org/x/text/unicode/norm"
 	"io"
 	"maps"
 	"path"
 	"slices"
 	"strings"
 	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 
 	"github.com/mindreon/orbit-control/internal/contract"
 )
@@ -25,7 +26,15 @@ const MaxArchive = 50 << 20
 
 type Limits struct{ Files, FileBytes, TotalBytes, TextBytes, TextTotal, Depth, Ratio int }
 
-var DefaultLimits = Limits{Files: 512, FileBytes: 20 << 20, TotalBytes: 50 << 20, TextBytes: 256 << 10, TextTotal: 4 << 20, Depth: 32, Ratio: 200}
+var DefaultLimits = Limits{
+	Files:      512,
+	FileBytes:  20 << 20,
+	TotalBytes: 50 << 20,
+	TextBytes:  256 << 10,
+	TextTotal:  4 << 20,
+	Depth:      32,
+	Ratio:      200,
+}
 
 type File struct {
 	Path, Digest string
@@ -56,12 +65,18 @@ func SafePath(raw string) (string, error) {
 }
 func excluded(name string) bool {
 	for part := range strings.SplitSeq(name, "/") {
-		if slices.Contains([]string{".git", ".archive", "__pycache__", ".pytest_cache", "node_modules", "out", ".venv"}, part) {
+		if slices.Contains(
+			[]string{".git", ".archive", "__pycache__", ".pytest_cache", "node_modules", "out", ".venv"},
+			part,
+		) {
 			return true
 		}
 	}
 	base := path.Base(name)
-	if slices.Contains([]string{"id_rsa", "id_ed25519", "credentials.json", "token.json", "tokens.json", ".DS_Store"}, base) {
+	if slices.Contains(
+		[]string{"id_rsa", "id_ed25519", "credentials.json", "token.json", "tokens.json", ".DS_Store"},
+		base,
+	) {
 		return true
 	}
 	for _, ext := range []string{".pyc", ".key", ".p12", ".pfx"} {
@@ -78,130 +93,16 @@ func Parse(raw []byte, limits Limits) (Bundle, error) {
 	if len(raw) == 0 || len(raw) > MaxArchive {
 		return b, fmt.Errorf("archive size limit exceeded")
 	}
-	seen := map[string]bool{}
-	names := map[string]bool{}
-	dirs := map[string]bool{}
-	total, textTotal, count := 0, 0, 0
-	add := func(name string, directory bool, size int64, r io.Reader) error {
-		name, err := SafePath(name)
-		if err != nil {
-			return err
-		}
-		key := strings.ToLower(norm.NFC.String(name))
-		if seen[key] {
-			return fmt.Errorf("duplicate, Unicode-normalization or case-conflicting archive path")
-		}
-		seen[key] = true
-		if strings.Count(name, "/")+1 > limits.Depth {
-			return fmt.Errorf("path depth limit exceeded")
-		}
-		for parent := path.Dir(key); parent != "."; parent = path.Dir(parent) {
-			if names[parent] {
-				return fmt.Errorf("file/directory conflict")
-			}
-			dirs[parent] = true
-		}
-		if directory {
-			if names[key] {
-				return fmt.Errorf("file/directory conflict")
-			}
-			dirs[key] = true
-			return nil
-		}
-		if dirs[key] {
-			return fmt.Errorf("file/directory conflict")
-		}
-		names[key] = true
-		count++
-		if count > limits.Files || size < 0 || size > int64(limits.FileBytes) {
-			return fmt.Errorf("archive file limit exceeded")
-		}
-		data, err := io.ReadAll(io.LimitReader(r, int64(limits.FileBytes)+1))
-		if err != nil {
-			return fmt.Errorf("invalid archive content")
-		}
-		total += len(data)
-		if len(data) > limits.FileBytes || int64(len(data)) != size || total > limits.TotalBytes || total > len(raw)*limits.Ratio {
-			return fmt.Errorf("archive expansion limit exceeded")
-		}
-		text := utf8.Valid(data) && !bytes.ContainsRune(data, 0)
-		if text {
-			textTotal += len(data)
-			if len(data) > limits.TextBytes || textTotal > limits.TextTotal {
-				return fmt.Errorf("text size limit exceeded")
-			}
-		}
-		if excluded(name) {
-			b.Excluded = append(b.Excluded, name)
-			return nil
-		}
-		b.Files = append(b.Files, File{name, fmt.Sprintf("sha256:%x", sha256.Sum256(data)), data, text})
-		return nil
-	}
+	p := &archiveReader{limits: limits, rawBytes: len(raw), seen: map[string]bool{}, names: map[string]bool{}, dirs: map[string]bool{}}
+	var readError error
 	if bytes.HasPrefix(raw, []byte("PK")) {
-		z, err := zip.NewReader(bytes.NewReader(raw), int64(len(raw)))
-		if err != nil {
-			return b, fmt.Errorf("invalid zip")
-		}
-		if len(z.File) > limits.Files*limits.Depth {
-			return b, fmt.Errorf("archive entry limit exceeded")
-		}
-		for _, f := range z.File {
-			if !f.Mode().IsRegular() && !f.FileInfo().IsDir() {
-				return b, fmt.Errorf("archive links and special files forbidden")
-			}
-			if f.UncompressedSize64 > uint64(limits.FileBytes) || f.UncompressedSize64 > max(1, f.CompressedSize64)*uint64(limits.Ratio) {
-				return b, fmt.Errorf("archive expansion limit exceeded")
-			}
-			r, err := f.Open()
-			if err != nil {
-				return b, fmt.Errorf("invalid zip member")
-			}
-			err = add(f.Name, f.FileInfo().IsDir(), int64(f.UncompressedSize64), r)
-			ce := r.Close()
-			if err != nil {
-				return b, err
-			}
-			if ce != nil {
-				return b, ce
-			}
-		}
+		readError = p.readZip(raw)
 	} else {
-		gz, err := gzip.NewReader(bytes.NewReader(raw))
-		if err != nil {
-			return b, fmt.Errorf("expected zip or tar.gz")
-		}
-		defer gz.Close()
-		// Bound headers and padding as well as file data, including trailing members.
-		budget := int64(limits.TotalBytes+limits.Files*limits.Depth*1024) + 1
-		expanded := &io.LimitedReader{R: gz, N: budget}
-		tr := tar.NewReader(expanded)
-		entries := 0
-		for {
-			h, err := tr.Next()
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				return b, fmt.Errorf("invalid tar")
-			}
-			entries++
-			if entries > limits.Files*limits.Depth {
-				return b, fmt.Errorf("archive entry limit exceeded")
-			}
-			if h.Typeflag == tar.TypeXGlobalHeader {
-				continue
-			}
-			if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeDir {
-				return b, fmt.Errorf("archive links and special files forbidden")
-			}
-			if err = add(h.Name, h.Typeflag == tar.TypeDir, h.Size, tr); err != nil {
-				return b, err
-			}
-		}
-		if _, err = io.Copy(io.Discard, expanded); err != nil || expanded.N <= 0 || budget-expanded.N > int64(len(raw)*limits.Ratio) {
-			return b, fmt.Errorf("archive expansion limit exceeded")
-		}
+		readError = p.readTar(raw)
+	}
+	b = p.bundle
+	if readError != nil {
+		return b, readError
 	}
 	if len(b.Files) == 0 {
 		return b, fmt.Errorf("empty bundle")
@@ -247,4 +148,142 @@ func Pack(files map[string][]byte) ([]byte, error) {
 		return nil, err
 	}
 	return out.Bytes(), nil
+}
+
+type archiveReader struct {
+	bundle                  Bundle
+	limits                  Limits
+	rawBytes                int
+	seen, names, dirs       map[string]bool
+	total, textTotal, count int
+}
+
+func (p *archiveReader) add(name string, directory bool, size int64, r io.Reader) error {
+	name, err := SafePath(name)
+	if err != nil {
+		return err
+	}
+	key := strings.ToLower(norm.NFC.String(name))
+	if p.seen[key] {
+		return fmt.Errorf("duplicate, Unicode-normalization or case-conflicting archive path")
+	}
+	p.seen[key] = true
+	if strings.Count(name, "/")+1 > p.limits.Depth {
+		return fmt.Errorf("path depth limit exceeded")
+	}
+	for parent := path.Dir(key); parent != "."; parent = path.Dir(parent) {
+		if p.names[parent] {
+			return fmt.Errorf("file/directory conflict")
+		}
+		p.dirs[parent] = true
+	}
+	if directory {
+		if p.names[key] {
+			return fmt.Errorf("file/directory conflict")
+		}
+		p.dirs[key] = true
+		return nil
+	}
+	if p.dirs[key] {
+		return fmt.Errorf("file/directory conflict")
+	}
+	p.names[key] = true
+	p.count++
+	if p.count > p.limits.Files || size < 0 || size > int64(p.limits.FileBytes) {
+		return fmt.Errorf("archive file limit exceeded")
+	}
+	data, err := io.ReadAll(io.LimitReader(r, int64(p.limits.FileBytes)+1))
+	if err != nil {
+		return fmt.Errorf("invalid archive content")
+	}
+	p.total += len(data)
+	if len(data) > p.limits.FileBytes || int64(len(data)) != size || p.total > p.limits.TotalBytes ||
+		p.total > p.rawBytes*p.limits.Ratio {
+		return fmt.Errorf("archive expansion limit exceeded")
+	}
+	text := utf8.Valid(data) && !bytes.ContainsRune(data, 0)
+	if text {
+		p.textTotal += len(data)
+		if len(data) > p.limits.TextBytes || p.textTotal > p.limits.TextTotal {
+			return fmt.Errorf("text size limit exceeded")
+		}
+	}
+	if excluded(name) {
+		p.bundle.Excluded = append(p.bundle.Excluded, name)
+		return nil
+	}
+	p.bundle.Files = append(
+		p.bundle.Files,
+		File{Path: name, Digest: fmt.Sprintf("sha256:%x", sha256.Sum256(data)), Data: data, Text: text},
+	)
+	return nil
+}
+func (p *archiveReader) readZip(raw []byte) error {
+	z, err := zip.NewReader(bytes.NewReader(raw), int64(len(raw)))
+	if err != nil {
+		return fmt.Errorf("invalid zip")
+	}
+	if len(z.File) > p.limits.Files*p.limits.Depth {
+		return fmt.Errorf("archive entry limit exceeded")
+	}
+	for _, f := range z.File {
+		if !f.Mode().IsRegular() && !f.FileInfo().IsDir() {
+			return fmt.Errorf("archive links and special files forbidden")
+		}
+		if f.UncompressedSize64 > uint64(p.limits.FileBytes) ||
+			f.UncompressedSize64 > max(1, f.CompressedSize64)*uint64(p.limits.Ratio) {
+			return fmt.Errorf("archive expansion limit exceeded")
+		}
+		r, err := f.Open()
+		if err != nil {
+			return fmt.Errorf("invalid zip member")
+		}
+		err = p.add(f.Name, f.FileInfo().IsDir(), int64(f.UncompressedSize64), r)
+		ce := r.Close()
+		if err != nil {
+			return err
+		}
+		if ce != nil {
+			return ce
+		}
+	}
+	return nil
+}
+func (p *archiveReader) readTar(raw []byte) error {
+	gz, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		return fmt.Errorf("expected zip or tar.gz")
+	}
+	defer gz.Close()
+	// Bound headers and padding as well as file data, including trailing members.
+	budget := int64(p.limits.TotalBytes+p.limits.Files*p.limits.Depth*1024) + 1
+	expanded := &io.LimitedReader{R: gz, N: budget}
+	tr := tar.NewReader(expanded)
+	entries := 0
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("invalid tar")
+		}
+		entries++
+		if entries > p.limits.Files*p.limits.Depth {
+			return fmt.Errorf("archive entry limit exceeded")
+		}
+		if h.Typeflag == tar.TypeXGlobalHeader {
+			continue
+		}
+		if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeDir {
+			return fmt.Errorf("archive links and special files forbidden")
+		}
+		if err = p.add(h.Name, h.Typeflag == tar.TypeDir, h.Size, tr); err != nil {
+			return err
+		}
+	}
+	if _, err = io.Copy(io.Discard, expanded); err != nil || expanded.N <= 0 || budget-expanded.N > int64(len(raw)*p.limits.Ratio) {
+		return fmt.Errorf("archive expansion limit exceeded")
+	}
+	return nil
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
+
 	"github.com/mindreon/orbit-control/internal/assets"
 	"github.com/mindreon/orbit-control/internal/assets/bundle"
 	"github.com/mindreon/orbit-control/internal/auth"
@@ -69,7 +70,14 @@ func (r *BundleResolver) Resolve(ctx context.Context, req Request) (contract.Run
 	if entry.Kind != "agent" && entry.Kind != "team" {
 		return contract.RunLock{}, assets.Invalid("Entry must be agent or team")
 	}
-	x := &resolution{r: r, ctx: ctx, scope: scope, nodes: map[string]node{}, visiting: map[string]bool{}, lock: contract.RunLock{V: 1, LockId: req.LockID}}
+	x := &resolution{
+		r:        r,
+		ctx:      ctx,
+		scope:    scope,
+		nodes:    map[string]node{},
+		visiting: map[string]bool{},
+		lock:     contract.RunLock{V: 1, LockId: req.LockID},
+	}
 	if err := x.policies(); err != nil {
 		return x.lock, err
 	}
@@ -89,7 +97,10 @@ func (r *BundleResolver) Resolve(ctx context.Context, req Request) (contract.Run
 func (x *resolution) loadInstalled() error {
 	// Installed skills form the inherited skill library. References still undergo
 	// the same signature, availability, visibility and constraint checks.
-	rows, err := db.Tx(x.ctx).Query(x.ctx, `SELECT a.publisher||'/'||a.name FROM asset_installs i JOIN assets a ON a.id=i.asset_id WHERE i.enabled AND a.kind='skill' AND ((i.scope_type='tenant' AND i.scope_id=$1) OR (i.scope_type='workspace' AND i.scope_id=NULLIF($2,'')::uuid)) ORDER BY a.publisher,a.name`, auth.Tenant(x.ctx), x.scope.WorkspaceID)
+	rows, err := db.Tx(x.ctx).
+		Query(x.ctx, "SELECT a.publisher||'/'||a.name FROM asset_installs i JOIN assets a ON a.id=i.asset_id "+
+			"WHERE i.enabled AND a.kind='skill' AND ((i.scope_type='tenant' AND i.scope_id=$1) OR "+
+			"(i.scope_type='workspace' AND i.scope_id=NULLIF($2,'')::uuid)) ORDER BY a.publisher,a.name", auth.Tenant(x.ctx), x.scope.WorkspaceID)
 	if err != nil {
 		return err
 	}
@@ -202,7 +213,10 @@ func (x *resolution) finish() (contract.RunLock, error) {
 }
 
 func (x *resolution) policies() error {
-	rows, err := db.Tx(x.ctx).Query(x.ctx, `SELECT body FROM policies WHERE status='active' AND kind='tool_rules' AND ((scope_type='tenant' AND scope_id=$1) OR (scope_type='workspace' AND scope_id=NULLIF($2,'')::uuid)) ORDER BY scope_type DESC,id`, auth.Tenant(x.ctx), x.scope.WorkspaceID)
+	rows, err := db.Tx(x.ctx).
+		Query(x.ctx, "SELECT body FROM policies WHERE status='active' AND kind='tool_rules' AND "+
+			"((scope_type='tenant' AND scope_id=$1) OR (scope_type='workspace' AND "+
+			"scope_id=NULLIF($2,'')::uuid)) ORDER BY scope_type DESC,id", auth.Tenant(x.ctx), x.scope.WorkspaceID)
 	if err != nil {
 		return err
 	}
@@ -285,7 +299,12 @@ func (x *resolution) resolve(kind contract.AssetKind, ref, constraint string) (n
 		return n, nil
 	}
 	var id string
-	if err = db.Tx(x.ctx).QueryRow(x.ctx, `SELECT id::text FROM assets WHERE tenant_id=$1 AND kind=$2 AND publisher||'/'||name=$3`, auth.Tenant(x.ctx), kind, ref).Scan(&id); err != nil {
+	if err = db.Tx(x.ctx).QueryRow(x.ctx,
+		("SELECT id::text FROM assets WHERE tenant_id=$1 AND kind=$2 AND " +
+			"publisher||'/'||name=$3"),
+		auth.Tenant(x.ctx),
+		kind,
+		ref).Scan(&id); err != nil {
 		return node{}, err
 	}
 	a, err := x.r.Assets.Get(x.ctx, id, "asset.use")
@@ -295,27 +314,7 @@ func (x *resolution) resolve(kind contract.AssetKind, ref, constraint string) (n
 	if a.Status != "active" {
 		return node{}, assets.Invalid("Asset is unavailable")
 	}
-	var pinned, channel, installedConstraint string
-	rows, err := db.Tx(x.ctx).Query(x.ctx, `SELECT COALESCE(pinned_version_id::text,''),COALESCE(channel,''),"constraint" FROM asset_installs WHERE asset_id=$1 AND enabled AND ((scope_type='tenant' AND scope_id=$2) OR (scope_type='workspace' AND scope_id=NULLIF($3,'')::uuid)) ORDER BY CASE scope_type WHEN 'workspace' THEN 0 ELSE 1 END LIMIT 1`, id, auth.Tenant(x.ctx), x.scope.WorkspaceID)
-	if err != nil {
-		return node{}, err
-	}
-	if rows.Next() {
-		err = rows.Scan(&pinned, &channel, &installedConstraint)
-	}
-	re := rows.Err()
-	rows.Close()
-	if err != nil {
-		return node{}, err
-	}
-	if re != nil {
-		return node{}, re
-	}
-	ranges := []string{constraint}
-	if installedConstraint != "" {
-		ranges = append(ranges, installedConstraint)
-	}
-	v, err := x.r.Assets.SelectVersion(x.ctx, a, ranges, pinned, channel)
+	v, err := x.selectInstalledVersion(a, constraint)
 	if err != nil {
 		return node{}, err
 	}
@@ -332,7 +331,10 @@ func (x *resolution) resolve(kind contract.AssetKind, ref, constraint string) (n
 		return node{}, assets.Invalid("Asset file digest mismatch")
 	}
 	n := node{asset: a, version: v, index: len(x.lock.Entries)}
-	x.lock.Entries = append(x.lock.Entries, contract.LockEntry{Kind: kind, Ref: ref, Version: v.Version, Digest: v.Digest, Files: files})
+	x.lock.Entries = append(
+		x.lock.Entries,
+		contract.LockEntry{Kind: kind, Ref: ref, Version: v.Version, Digest: v.Digest, Files: files},
+	)
 	x.nodes[key] = n
 	x.visiting[key] = true
 	for _, d := range v.Manifest.Dependencies {
@@ -401,7 +403,10 @@ func (x *resolution) embedded(parent node, prefix string, kind contract.AssetKin
 	n.version.Manifest = m
 	n.version.Permissions = p
 	n.version.Digest = digest
-	x.lock.Entries = append(x.lock.Entries, contract.LockEntry{Kind: kind, Ref: ref, Version: parent.version.Version, Digest: digest, Files: files})
+	x.lock.Entries = append(
+		x.lock.Entries,
+		contract.LockEntry{Kind: kind, Ref: ref, Version: parent.version.Version, Digest: digest, Files: files},
+	)
 	x.nodes[key] = n
 	for _, d := range m.Dependencies {
 		if _, err = x.resolve(d.Kind, d.Ref, d.Constraint); err != nil {
@@ -413,7 +418,9 @@ func (x *resolution) embedded(parent node, prefix string, kind contract.AssetKin
 func (x *resolution) fileVisibility(n node, name string) (Visibility, error) {
 	var v Visibility
 	var exists bool
-	err := db.Tx(x.ctx).QueryRow(x.ctx, `SELECT EXISTS(SELECT 1 FROM asset_files WHERE version_id=$1 AND path=$2)`, n.version.ID, n.prefix+name).Scan(&exists)
+	err := db.Tx(x.ctx).
+		QueryRow(x.ctx, `SELECT EXISTS(SELECT 1 FROM asset_files WHERE version_id=$1 AND path=$2)`, n.version.ID, n.prefix+name).
+		Scan(&exists)
 	if err != nil || !exists {
 		return v, err
 	}
@@ -425,7 +432,12 @@ func (x *resolution) fileVisibility(n node, name string) (Visibility, error) {
 	return v, err
 }
 func (x *resolution) member(n node, name, roleName string, role contract.MemberRole) (contract.LockMember, error) {
-	m := contract.LockMember{Name: contract.MemberName(name), Role: role, AgentEntry: n.index, EffectivePermissions: n.version.Permissions}
+	m := contract.LockMember{
+		Name:                 contract.MemberName(name),
+		Role:                 role,
+		AgentEntry:           n.index,
+		EffectivePermissions: n.version.Permissions,
+	}
 	if n.version.Manifest.Agent != nil && n.version.Manifest.Agent.Description != nil {
 		m.Description = *n.version.Manifest.Agent.Description
 	}
@@ -504,7 +516,8 @@ func (x *resolution) memberSkills(n node) ([]node, []int, error) {
 	embedded := []string{}
 	for _, f := range all {
 		rel := strings.TrimPrefix(f.Path, n.prefix)
-		if strings.HasPrefix(f.Path, n.prefix) && strings.HasPrefix(rel, "skills/") && strings.HasSuffix(rel, "/SKILL.md") {
+		if strings.HasPrefix(f.Path, n.prefix) && strings.HasPrefix(rel, "skills/") &&
+			strings.HasSuffix(rel, "/SKILL.md") {
 			dir := strings.TrimSuffix(rel, "/SKILL.md")
 			if strings.Count(dir, "/") == 1 {
 				embedded = append(embedded, dir)
@@ -555,4 +568,36 @@ func (x *resolution) skillClosure(skills []node) ([]node, []int, error) {
 		}
 	}
 	return closure, mcp, nil
+}
+
+func (x *resolution) selectInstalledVersion(a assets.Asset, constraint string) (assets.Version, error) {
+	var pinned, channel, installedConstraint string
+	rows, err := db.Tx(x.ctx).
+		Query(x.ctx, "SELECT COALESCE(pinned_version_id::text,''),COALESCE(channel,''),\"constraint\" FROM "+
+			"asset_installs WHERE asset_id=$1 AND enabled AND ((scope_type='tenant' AND scope_id=$2) "+
+			"OR (scope_type='workspace' AND scope_id=NULLIF($3,'')::uuid)) ORDER BY CASE scope_type "+
+			"WHEN 'workspace' THEN 0 ELSE 1 END LIMIT 1", a.ID, auth.Tenant(x.ctx), x.scope.WorkspaceID)
+	if err != nil {
+		return assets.Version{}, err
+	}
+	if rows.Next() {
+		err = rows.Scan(&pinned, &channel, &installedConstraint)
+	}
+	re := rows.Err()
+	rows.Close()
+	if err != nil {
+		return assets.Version{}, err
+	}
+	if re != nil {
+		return assets.Version{}, re
+	}
+	ranges := []string{constraint}
+	if installedConstraint != "" {
+		ranges = append(ranges, installedConstraint)
+	}
+	v, err := x.r.Assets.SelectVersion(x.ctx, a, ranges, pinned, channel)
+	if err != nil {
+		return assets.Version{}, err
+	}
+	return v, nil
 }

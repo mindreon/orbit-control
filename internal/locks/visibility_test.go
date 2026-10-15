@@ -12,7 +12,29 @@ func TestVisibilityComposition(t *testing.T) {
 		layers []Visibility
 		want   bool
 	}{
-		{"inherit", nil, true}, {"tenant allow", []Visibility{{Allow: []string{"skill"}}}, true}, {"author cannot widen admin ceiling", []Visibility{{Allow: []string{"other"}}, {Allow: []string{"skill"}}}, false}, {"filter", []Visibility{{Allow: []string{"other"}}}, false}, {"deny wins", []Visibility{{Deny: []string{"skill"}}, {Allow: []string{"skill"}}}, false}, {"all layers", []Visibility{{}, {}, {Allow: []string{"skill"}}, {Deny: []string{"skill"}}}, false}} {
+		{name: "inherit",
+			layers: nil,
+			want:   true},
+		{name: "tenant allow",
+			layers: []Visibility{{Allow: []string{"skill"}}},
+			want:   true},
+		{name: "author cannot widen admin ceiling",
+			layers: []Visibility{{Allow: []string{"other"}},
+				{Allow: []string{"skill"}}},
+			want: false},
+		{name: "filter",
+			layers: []Visibility{{Allow: []string{"other"}}},
+			want:   false},
+		{name: "deny wins",
+			layers: []Visibility{{Deny: []string{"skill"}},
+				{Allow: []string{"skill"}}},
+			want: false},
+		{name: "all layers",
+			layers: []Visibility{{},
+				{},
+				{Allow: []string{"skill"}},
+				{Deny: []string{"skill"}}},
+			want: false}} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := Visible("skill", tc.layers...); got != tc.want {
 				t.Fatalf("got %v", got)
@@ -21,8 +43,17 @@ func TestVisibilityComposition(t *testing.T) {
 	}
 }
 func TestPermissionIntersection(t *testing.T) {
-	p := contract.EffectivePermissions{SandboxProfile: "default", Network: contract.NetworkPermissions{Egress: []string{"api.example.com", "evil.test"}}, EffectClasses: []contract.EffectClass{"external_write", "read_only"}, Secrets: []contract.SecretRequirement{{Name: "KEY"}}}
-	cap := contract.EffectivePermissions{SandboxProfile: "default", Network: contract.NetworkPermissions{Egress: []string{"*.example.com"}}, EffectClasses: []contract.EffectClass{"read_only"}}
+	p := contract.EffectivePermissions{
+		SandboxProfile: "default",
+		Network:        contract.NetworkPermissions{Egress: []string{"api.example.com", "evil.test"}},
+		EffectClasses:  []contract.EffectClass{"external_write", "read_only"},
+		Secrets:        []contract.SecretRequirement{{Name: "KEY"}},
+	}
+	cap := contract.EffectivePermissions{
+		SandboxProfile: "default",
+		Network:        contract.NetworkPermissions{Egress: []string{"*.example.com"}},
+		EffectClasses:  []contract.EffectClass{"read_only"},
+	}
 	got := Intersect(p, cap)
 	if len(got.Network.Egress) != 1 || len(got.Secrets) != 1 || len(got.EffectClasses) != 1 {
 		t.Fatal(got)
@@ -30,10 +61,17 @@ func TestPermissionIntersection(t *testing.T) {
 }
 
 func TestUnconfiguredPermissionDimensionsAreUnrestricted(t *testing.T) {
-	p := contract.EffectivePermissions{SandboxProfile: "default", ToolsBuiltin: []string{"shell"}, DataScopes: []string{"session_files"}, Secrets: []contract.SecretRequirement{{Name: "KEY"}}, EffectClasses: []contract.EffectClass{"sandbox_write"}}
+	p := contract.EffectivePermissions{
+		SandboxProfile: "default",
+		ToolsBuiltin:   []string{"shell"},
+		DataScopes:     []string{"session_files"},
+		Secrets:        []contract.SecretRequirement{{Name: "KEY"}},
+		EffectClasses:  []contract.EffectClass{"sandbox_write"},
+	}
 	cap := contract.EffectivePermissions{Network: contract.NetworkPermissions{Egress: []string{"*.example.test"}}}
 	got := Intersect(p, cap)
-	if len(got.ToolsBuiltin) != 1 || len(got.DataScopes) != 1 || len(got.Secrets) != 1 || len(got.EffectClasses) != 1 || got.SandboxProfile != "default" {
+	if len(got.ToolsBuiltin) != 1 || len(got.DataScopes) != 1 || len(got.Secrets) != 1 || len(got.EffectClasses) != 1 ||
+		got.SandboxProfile != "default" {
 		t.Fatal("unspecified cap denied unrelated permissions", got)
 	}
 	cap.ToolsBuiltin = []string{}
@@ -45,7 +83,12 @@ func TestUnconfiguredPermissionDimensionsAreUnrestricted(t *testing.T) {
 	if Visible("skill", Visibility{Allow: []string{}}) {
 		t.Fatal("explicit empty allow ignored")
 	}
-	if Visible("skill", Visibility{Allow: []string{"skill"}}, Visibility{Allow: []string{"other"}}, Visibility{Allow: []string{"skill"}}) {
+	if Visible(
+		"skill",
+		Visibility{Allow: []string{"skill"}},
+		Visibility{Allow: []string{"other"}},
+		Visibility{Allow: []string{"skill"}},
+	) {
 		t.Fatal("author widened workspace cap")
 	}
 }

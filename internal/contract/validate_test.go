@@ -89,7 +89,8 @@ func TestBoundaryErrorsNeverRetainValues(t *testing.T) {
 	}
 	payload["base_url"] = sentinel
 	encoded, _ = json.Marshal(payload)
-	if err := Validate("ModelCredentials", encoded); err == nil || strings.Contains(err.Error(), sentinel) || !strings.Contains(err.Error(), "/base_url: pattern") {
+	if err := Validate("ModelCredentials", encoded); err == nil || strings.Contains(err.Error(), sentinel) ||
+		!strings.Contains(err.Error(), "/base_url: pattern") {
 		t.Fatalf("pattern error: %v", err)
 	}
 	// blob_url is a nested sensitive field whose pattern error previously echoed its value.
@@ -102,7 +103,8 @@ func TestBoundaryErrorsNeverRetainValues(t *testing.T) {
 	delete(content, "text")
 	content["blob_url"] = sentinel
 	encoded, _ = json.Marshal(payload)
-	if err := Validate("GetLockResponse", encoded); err == nil || strings.Contains(err.Error(), sentinel) || !strings.Contains(err.Error(), "/contents/0/blob_url: pattern") {
+	if err := Validate("GetLockResponse", encoded); err == nil || strings.Contains(err.Error(), sentinel) ||
+		!strings.Contains(err.Error(), "/contents/0/blob_url: pattern") {
 		t.Fatalf("sensitive pattern error: %v", err)
 	}
 	for _, raw := range []string{`{"api_key":"` + sentinel + `",}`, `"` + sentinel + `"`} {

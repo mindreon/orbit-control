@@ -9,9 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mindreon/orbit-control/internal/platform/ids"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+
+	"github.com/mindreon/orbit-control/internal/platform/ids"
 )
 
 type Store interface {
@@ -31,7 +32,7 @@ func New(endpoint, bucket, access, secret string, secure bool) (*S3, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid object storage configuration")
 	}
-	return &S3{c, bucket}, nil
+	return &S3{client: c, bucket: bucket}, nil
 }
 func Key(tenant, digest string) (string, error) {
 	hex := strings.TrimPrefix(digest, "sha256:")
@@ -48,7 +49,14 @@ func (s *S3) Put(ctx context.Context, tenant, digest string, data []byte) (strin
 	if err != nil {
 		return "", err
 	}
-	_, err = s.client.PutObject(ctx, s.bucket, key, bytes.NewReader(data), int64(len(data)), minio.PutObjectOptions{ContentType: "application/octet-stream"})
+	_, err = s.client.PutObject(
+		ctx,
+		s.bucket,
+		key,
+		bytes.NewReader(data),
+		int64(len(data)),
+		minio.PutObjectOptions{ContentType: "application/octet-stream"},
+	)
 	return key, err
 }
 func (s *S3) Get(ctx context.Context, tenant, digest string, limit int64) ([]byte, error) {
@@ -81,7 +89,8 @@ type ObjectStore interface {
 }
 
 func tenantKey(tenant, key string) error {
-	if !ids.Valid(tenant) || !strings.HasPrefix(key, "t/"+tenant+"/") || strings.Contains(key, "..") || strings.ContainsAny(key, "\\\x00") {
+	if !ids.Valid(tenant) || !strings.HasPrefix(key, "t/"+tenant+"/") || strings.Contains(key, "..") ||
+		strings.ContainsAny(key, "\\\x00") {
 		return fmt.Errorf("invalid tenant object key")
 	}
 	return nil
@@ -90,7 +99,14 @@ func (s *S3) PutObject(ctx context.Context, tenant, key string, data []byte, mim
 	if e := tenantKey(tenant, key); e != nil {
 		return e
 	}
-	_, e := s.client.PutObject(ctx, s.bucket, key, bytes.NewReader(data), int64(len(data)), minio.PutObjectOptions{ContentType: mime})
+	_, e := s.client.PutObject(
+		ctx,
+		s.bucket,
+		key,
+		bytes.NewReader(data),
+		int64(len(data)),
+		minio.PutObjectOptions{ContentType: mime},
+	)
 	return e
 }
 func (s *S3) GetObject(ctx context.Context, tenant, key string, limit int64) ([]byte, string, error) {

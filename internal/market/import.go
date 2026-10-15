@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+
 	"github.com/mindreon/orbit-control/internal/assets"
 	"github.com/mindreon/orbit-control/internal/assets/bundle"
 	"github.com/mindreon/orbit-control/internal/auth"
@@ -135,7 +136,8 @@ func ConvertMCP(in contract.McpManifest) (contract.McpManifest, error) {
 				return out, fmt.Errorf("remote MCP cannot include process environment")
 			}
 			u, e := url.Parse(*server.Url)
-			if e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Fragment != "" || server.Command != nil {
+			if e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Fragment != "" ||
+				server.Command != nil {
 				return out, fmt.Errorf("nonportable MCP endpoint")
 			}
 			host := strings.ToLower(u.Hostname())
@@ -150,58 +152,10 @@ func ConvertMCP(in contract.McpManifest) (contract.McpManifest, error) {
 			if portable.Transport == nil {
 				portable.Transport = new(contract.McpTransport("streamable_http"))
 			}
-		} else {
-			if len(server.Headers) > 0 {
-				return out, fmt.Errorf("stdio MCP cannot include HTTP headers")
-			}
-			if server.Command == nil || (*server.Command != "npx" && *server.Command != "uvx" && *server.Command != "python" && *server.Command != "python3") {
-				return out, fmt.Errorf("MCP command requires manual conversion")
-			}
-			portable.Command = server.Command
-			args := server.Args
-			seen := false
-			if *server.Command == "python" || *server.Command == "python3" {
-				if len(args) < 2 || args[0] != "-m" || !regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.]*$`).MatchString(args[1]) {
-					return out, fmt.Errorf("MCP module required")
-				}
-				portable.Args = append(portable.Args, args[:2]...)
-				args = args[2:]
-				seen = true
-			}
-			expect := false
-			for i, arg := range args {
-				if !seen {
-					if *server.Command == "npx" && (arg == "-y" || arg == "--yes") {
-						portable.Args = append(portable.Args, arg)
-						continue
-					}
-					if !packageName.MatchString(arg) {
-						return out, fmt.Errorf("MCP package requires manual conversion")
-					}
-					portable.Args = append(portable.Args, arg)
-					seen = true
-				} else if strings.HasPrefix(arg, "--") {
-					flag, value, has := strings.Cut(arg, "=")
-					if !regexp.MustCompile(`^--[A-Za-z][A-Za-z0-9-]*$`).MatchString(flag) {
-						return out, fmt.Errorf("unsupported MCP flag")
-					}
-					if has {
-						portable.Args = append(portable.Args, flag+"="+placeholder(fmt.Sprintf("ARG_%d", i), value))
-					} else {
-						portable.Args = append(portable.Args, flag)
-					}
-					expect = !has
-				} else if expect {
-					portable.Args = append(portable.Args, placeholder(fmt.Sprintf("ARG_%d", i), arg))
-					expect = false
-				} else {
-					return out, fmt.Errorf("unsupported MCP positional argument")
-				}
-			}
-			if !seen {
-				return out, fmt.Errorf("MCP package required")
-			}
+		} else if err := convertStdioMCP(server, &portable, placeholder); err != nil {
+			return out, err
 		}
+
 		portable.Env = contract.McpServerEnv{}
 		for key, value := range server.Env {
 			if !regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString(key) {
@@ -249,7 +203,11 @@ func Import(ctx context.Context, d *db.DB, s *assets.Service, tenant, actor, fil
 		if err != nil {
 			return result, err
 		}
-		staged, err := s.PrepareUpload(auth.Context(ctx, auth.Principal{ID: actor, Kind: "user"}, tenant), "0.1.0", archive)
+		staged, err := s.PrepareUpload(
+			auth.Context(ctx, auth.Principal{ID: actor, Kind: "user"}, tenant),
+			"0.1.0",
+			archive,
+		)
 		if err != nil {
 			return result, err
 		}
@@ -260,7 +218,12 @@ func Import(ctx context.Context, d *db.DB, s *assets.Service, tenant, actor, fil
 				return e
 			}
 			var exists bool
-			if e := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM assets WHERE tenant_id=$1 AND kind=$2 AND name=$3)`, tenant, kind, name).Scan(&exists); e != nil {
+			if e := tx.QueryRow(ctx,
+				("SELECT EXISTS(SELECT 1 FROM assets WHERE tenant_id=$1 AND kind=$2 AND " +
+					"name=$3)"),
+				tenant,
+				kind,
+				name).Scan(&exists); e != nil {
 				return e
 			}
 			if exists {
@@ -350,10 +313,81 @@ func globalEndpointIP(ip netip.Addr) bool {
 	if !ip.IsGlobalUnicast() || ip.IsPrivate() {
 		return false
 	}
-	for _, cidr := range []string{"0.0.0.0/8", "100.64.0.0/10", "192.0.0.0/24", "192.0.2.0/24", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "240.0.0.0/4", "100::/64", "2001:db8::/32", "2001::/23", "2002::/16", "3fff::/20", "5f00::/16"} {
+	for _, cidr := range []string{"0.0.0.0/8",
+		"100.64.0.0/10",
+		"192.0.0.0/24",
+		"192.0.2.0/24",
+		"198.18.0.0/15",
+		"198.51.100.0/24",
+		"203.0.113.0/24",
+		"240.0.0.0/4",
+		"100::/64",
+		"2001:db8::/32",
+		"2001::/23",
+		"2002::/16",
+		"3fff::/20",
+		"5f00::/16"} {
 		if netip.MustParsePrefix(cidr).Contains(ip) {
 			return false
 		}
 	}
 	return true
+}
+
+func convertStdioMCP(server contract.McpServer, portable *contract.McpServer, placeholder func(string, string) string) error {
+	if len(server.Headers) > 0 {
+		return fmt.Errorf("stdio MCP cannot include HTTP headers")
+	}
+	if server.Command == nil ||
+		(*server.Command != "npx" &&
+			*server.Command != "uvx" &&
+			*server.Command != "python" &&
+			*server.Command != "python3") {
+		return fmt.Errorf("MCP command requires manual conversion")
+	}
+	portable.Command = server.Command
+	args := server.Args
+	seen := false
+	if *server.Command == "python" || *server.Command == "python3" {
+		if len(args) < 2 || args[0] != "-m" || !regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.]*$`).MatchString(args[1]) {
+			return fmt.Errorf("MCP module required")
+		}
+		portable.Args = append(portable.Args, args[:2]...)
+		args = args[2:]
+		seen = true
+	}
+	expect := false
+	for i, arg := range args {
+		if !seen {
+			if *server.Command == "npx" && (arg == "-y" || arg == "--yes") {
+				portable.Args = append(portable.Args, arg)
+				continue
+			}
+			if !packageName.MatchString(arg) {
+				return fmt.Errorf("MCP package requires manual conversion")
+			}
+			portable.Args = append(portable.Args, arg)
+			seen = true
+		} else if strings.HasPrefix(arg, "--") {
+			flag, value, has := strings.Cut(arg, "=")
+			if !regexp.MustCompile(`^--[A-Za-z][A-Za-z0-9-]*$`).MatchString(flag) {
+				return fmt.Errorf("unsupported MCP flag")
+			}
+			if has {
+				portable.Args = append(portable.Args, flag+"="+placeholder(fmt.Sprintf("ARG_%d", i), value))
+			} else {
+				portable.Args = append(portable.Args, flag)
+			}
+			expect = !has
+		} else if expect {
+			portable.Args = append(portable.Args, placeholder(fmt.Sprintf("ARG_%d", i), arg))
+			expect = false
+		} else {
+			return fmt.Errorf("unsupported MCP positional argument")
+		}
+	}
+	if !seen {
+		return fmt.Errorf("MCP package required")
+	}
+	return nil
 }

@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-jose/go-jose/v4"
 	"github.com/golang-jwt/jwt/v5"
+
 	"github.com/mindreon/orbit-control/internal/platform/config"
 )
 
@@ -28,17 +29,36 @@ func TestOIDCDiscoveryVerificationAndJWKSCache(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/.well-known/openid-configuration":
-			_ = json.NewEncoder(w).Encode(map[string]any{"issuer": issuer, "jwks_uri": issuer + "/jwks", "authorization_endpoint": issuer + "/authorize", "token_endpoint": issuer + "/token", "id_token_signing_alg_values_supported": []string{"EdDSA"}})
+			_ = json.NewEncoder(w).
+				Encode(map[string]any{"issuer": issuer,
+					"jwks_uri": issuer +
+						"/jwks",
+					"authorization_endpoint": issuer +
+						"/authorize",
+					"token_endpoint": issuer +
+						"/token",
+					"id_token_signing_alg_values_supported": []string{"EdDSA"}})
 		case "/jwks":
 			fetches.Add(1)
-			_ = json.NewEncoder(w).Encode(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: key.Public(), KeyID: "key-1", Algorithm: "EdDSA", Use: "sig"}}})
+			_ = json.NewEncoder(w).
+				Encode(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: key.Public(), KeyID: "key-1", Algorithm: "EdDSA", Use: "sig"}}})
 		default:
 			http.NotFound(w, r)
 		}
 	}))
 	defer server.Close()
 	issuer = server.URL
-	c := config.Config{AuthMode: "oidc", Issuer: issuer, Audience: "orbit-api", ClientID: "web", KeyFile: t.TempDir() + "/signing.key", CapabilityKeyFile: t.TempDir() + "/capability.key", CapabilityKeyID: "1", SecretsKeyVersion: 1, SecretsKEKs: map[int][]byte{1: make([]byte, 32)}}
+	c := config.Config{
+		AuthMode:          "oidc",
+		Issuer:            issuer,
+		Audience:          "orbit-api",
+		ClientID:          "web",
+		KeyFile:           t.TempDir() + "/signing.key",
+		CapabilityKeyFile: t.TempDir() + "/capability.key",
+		CapabilityKeyID:   "1",
+		SecretsKeyVersion: 1,
+		SecretsKEKs:       map[int][]byte{1: make([]byte, 32)},
+	}
 	a, e := New(t.Context(), nil, c, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if e != nil {
 		t.Fatal(e)

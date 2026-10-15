@@ -16,6 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/mindreon/orbit-control/internal/platform/ids"
 	orbitlog "github.com/mindreon/orbit-control/internal/platform/log"
 )
@@ -137,13 +138,35 @@ func Middleware(logger *slog.Logger, publicOrigin string, origins []string, next
 				rec = NewRecorder()
 				rec.H = headers
 				WriteError(rec, E(500, "INTERNAL", "Request failed"))
-				logger.Error("request panic", "request_id", id, "panic_type", fmt.Sprintf("%T", value), "panic", orbitlog.PanicValue(value), "stack", string(debug.Stack()))
+				logger.Error(
+					"request panic",
+					"request_id",
+					id,
+					"panic_type",
+					fmt.Sprintf("%T", value),
+					"panic",
+					orbitlog.PanicValue(value),
+					"stack",
+					string(debug.Stack()),
+				)
 			}
 			if rec.Status == 0 {
 				rec.Status = 200
 			}
 			rec.FlushTo(w)
-			logger.Info("http access", "request_id", id, "method", r.Method, "path", logPath(r.URL.Path), "status", rec.Status, "duration_ms", time.Since(started).Milliseconds())
+			logger.Info(
+				"http access",
+				"request_id",
+				id,
+				"method",
+				r.Method,
+				"path",
+				logPath(r.URL.Path),
+				"status",
+				rec.Status,
+				"duration_ms",
+				time.Since(started).Milliseconds(),
+			)
 		}()
 		if o := r.Header.Get("Origin"); o != "" {
 			allowed := o == publicOrigin || slices.Contains(origins, o)
@@ -165,7 +188,8 @@ func Middleware(logger *slog.Logger, publicOrigin string, origins []string, next
 			}
 		}
 		bodyLimit := int64(1 << 20)
-		if r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/v1/assets/") && strings.HasSuffix(r.URL.Path, "/versions") {
+		if r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/v1/assets/") &&
+			strings.HasSuffix(r.URL.Path, "/versions") {
 			bodyLimit = 50 << 20
 		}
 		r.Body = http.MaxBytesReader(rec, r.Body, bodyLimit)

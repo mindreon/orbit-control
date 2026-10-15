@@ -38,7 +38,16 @@ func SigningIdentity(a Asset, version, digest string, permissions []byte) ([]byt
 	if err != nil {
 		return nil, err
 	}
-	b, err := json.Marshal(Identity{a.Kind, a.Publisher, a.Name, version, digest, d})
+	b, err := json.Marshal(
+		Identity{
+			Kind:              a.Kind,
+			Publisher:         a.Publisher,
+			Name:              a.Name,
+			Version:           version,
+			ContentDigest:     digest,
+			PermissionsDigest: d,
+		},
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +77,7 @@ func signedBytes(a Asset, v Version) ([]byte, error) {
 	current, _ := json.Marshal(struct {
 		Effective contract.EffectivePermissions            `json:"effective_permissions"`
 		Members   map[string]contract.EffectivePermissions `json:"members"`
-	}{v.Permissions, v.Manifest.MemberPermissions}, json.Deterministic(true))
+	}{Effective: v.Permissions, Members: v.Manifest.MemberPermissions}, json.Deterministic(true))
 	if !bytes.Equal(known, current) {
 		return nil, fmt.Errorf("asset permissions mismatch")
 	}
@@ -76,7 +85,12 @@ func signedBytes(a Asset, v Version) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if identity != (Identity{a.Kind, a.Publisher, a.Name, v.Version, v.Digest, digest}) {
+	if identity != (Identity{Kind: a.Kind,
+		Publisher:         a.Publisher,
+		Name:              a.Name,
+		Version:           v.Version,
+		ContentDigest:     v.Digest,
+		PermissionsDigest: digest}) {
 		return nil, fmt.Errorf("asset signing identity mismatch")
 	}
 	return v.IdentityJCS, nil
@@ -92,7 +106,8 @@ func (s *Signer) Verify(a Asset, v Version) error {
 	id, encoded, ok := strings.Cut(v.Signature, ":")
 	sig, err := base64.StdEncoding.DecodeString(encoded)
 	b, e := signedBytes(a, v)
-	if !ok || err != nil || e != nil || len(s.Public[id]) != ed25519.PublicKeySize || !ed25519.Verify(s.Public[id], b, sig) {
+	if !ok || err != nil || e != nil || len(s.Public[id]) != ed25519.PublicKeySize ||
+		!ed25519.Verify(s.Public[id], b, sig) {
 		return fmt.Errorf("asset signature verification failed")
 	}
 	return nil

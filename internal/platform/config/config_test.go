@@ -9,9 +9,19 @@ import (
 func TestDevBindGate(t *testing.T) {
 	for _, addr := range []string{"127.0.0.1:8080", "[::1]:8080", "localhost:8080", ":8080", "0.0.0.0:8080"} {
 		t.Run(addr, func(t *testing.T) {
-			c := Config{DatabaseURL: "postgres://app@localhost/orbit", Addr: addr, AuthMode: "dev", KeyFile: "key", CapabilityKeyFile: "capability", CapabilityKeyID: "1", SecretsKeyVersion: 1, SecretsKEKs: map[int][]byte{1: make([]byte, 32)}}
+			c := Config{
+				DatabaseURL:       "postgres://app@localhost/orbit",
+				Addr:              addr,
+				AuthMode:          "dev",
+				KeyFile:           "key",
+				CapabilityKeyFile: "capability",
+				CapabilityKeyID:   "1",
+				SecretsKeyVersion: 1,
+				SecretsKEKs:       map[int][]byte{1: make([]byte, 32)},
+			}
 			e := c.ValidateAPI()
-			loopback := strings.HasPrefix(addr, "127") || strings.HasPrefix(addr, "[::1]") || strings.HasPrefix(addr, "localhost")
+			loopback := strings.HasPrefix(addr, "127") || strings.HasPrefix(addr, "[::1]") ||
+				strings.HasPrefix(addr, "localhost")
 			if (e == nil) != loopback {
 				t.Fatal(e)
 			}
@@ -47,11 +57,24 @@ func TestKeyAndOriginConfiguration(t *testing.T) {
 	t.Setenv("ORBIT_SECRETS_KEK_PREVIOUS", "1:"+encoded)
 	t.Setenv("ORBIT_CAPABILITY_PUBLIC_KEYS", "previous:"+encoded)
 	c, err = Load()
-	if err != nil || !c.PersonalTenants || c.SecretsKeyVersion != 2 || len(c.SecretsKEKs) != 2 || len(c.CapabilityPublicKeys) != 1 {
+	if err != nil || !c.PersonalTenants || c.SecretsKeyVersion != 2 || len(c.SecretsKEKs) != 2 ||
+		len(c.CapabilityPublicKeys) != 1 {
 		t.Fatal(c, err)
 	}
 	for _, test := range []struct{ name, value string }{
-		{"ORBIT_PUBLIC_ORIGIN", "https://orbit.example/path"}, {"ORBIT_SECRETS_KEK", "bad"}, {"ORBIT_SECRETS_KEY_VERSION", "0"}, {"ORBIT_SECRETS_KEK_PREVIOUS", "2:" + encoded}, {"ORBIT_CAPABILITY_PUBLIC_KEYS", "kid:short"}, {"ORBIT_PERSONAL_TENANTS", "yes"},
+		{name: "ORBIT_PUBLIC_ORIGIN",
+			value: "https://orbit.example/path"},
+		{name: "ORBIT_SECRETS_KEK",
+			value: "bad"},
+		{name: "ORBIT_SECRETS_KEY_VERSION",
+			value: "0"},
+		{name: "ORBIT_SECRETS_KEK_PREVIOUS",
+			value: "2:" +
+				encoded},
+		{name: "ORBIT_CAPABILITY_PUBLIC_KEYS",
+			value: "kid:short"},
+		{name: "ORBIT_PERSONAL_TENANTS",
+			value: "yes"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Setenv(test.name, test.value)
@@ -63,7 +86,11 @@ func TestKeyAndOriginConfiguration(t *testing.T) {
 }
 
 func TestAssetWorkerConfiguration(t *testing.T) {
-	c := Config{DatabaseURL: "postgres://orbit_app@localhost/orbit", TemporalAddress: "localhost:7233", TemporalNamespace: "orbit-dev"}
+	c := Config{
+		DatabaseURL:       "postgres://orbit_app@localhost/orbit",
+		TemporalAddress:   "localhost:7233",
+		TemporalNamespace: "orbit-dev",
+	}
 	if err := c.ValidateWorker(); err != nil {
 		t.Fatal("worker should not require OIDC or HTTP credentials", err)
 	}
@@ -87,7 +114,16 @@ func TestAssetWorkerConfiguration(t *testing.T) {
 			}
 		})
 	}
-	c = Config{ObjectEndpoint: "localhost:9000", ObjectBucket: "orbit", ObjectAccessKey: "test", ObjectSecretKey: "test", AssetKeyFile: "asset.key", AssetKeyID: "1", KeyFile: "auth.key", CapabilityKeyFile: "cap.key"}
+	c = Config{
+		ObjectEndpoint:    "localhost:9000",
+		ObjectBucket:      "orbit",
+		ObjectAccessKey:   "test",
+		ObjectSecretKey:   "test",
+		AssetKeyFile:      "asset.key",
+		AssetKeyID:        "1",
+		KeyFile:           "auth.key",
+		CapabilityKeyFile: "cap.key",
+	}
 	if err := c.ValidateAssets(); err != nil {
 		t.Fatal(err)
 	}

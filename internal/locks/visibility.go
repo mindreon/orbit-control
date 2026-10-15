@@ -80,7 +80,11 @@ func Intersect(p, cap contract.EffectivePermissions) contract.EffectivePermissio
 // NarrowPermissions applies the same active tenant/workspace/principal caps used
 // during lock resolution. Release permission-diff checks use it for both sides
 // of the comparison so policy-denied declarations do not count as effective rights.
-func NarrowPermissions(ctx context.Context, p contract.EffectivePermissions, workspace string) (contract.EffectivePermissions, error) {
+func NarrowPermissions(
+	ctx context.Context,
+	p contract.EffectivePermissions,
+	workspace string,
+) (contract.EffectivePermissions, error) {
 	x := &resolution{ctx: ctx, scope: Scope{WorkspaceID: workspace}}
 	if err := x.policies(); err != nil {
 		return p, err

@@ -37,7 +37,11 @@ func loadRegistry(t *testing.T) *registry {
 	c := jsonschema.NewCompiler()
 	c.DefaultDraft(jsonschema.Draft2020)
 	c.AssertFormat()
-	r := &registry{docs: map[string]map[string]any{}, schemas: map[string]*jsonschema.Schema{}, where: map[string]string{}}
+	r := &registry{
+		docs:    map[string]map[string]any{},
+		schemas: map[string]*jsonschema.Schema{},
+		where:   map[string]string{},
+	}
 	ids := map[string]string{} // file -> $id
 	for _, file := range files {
 		raw, err := os.ReadFile(file)
@@ -263,9 +267,14 @@ var eventData = map[string]func() any{
 	"segment.started": func() any { return new(SegmentStarted) }, "segment.ended": func() any { return new(SegmentEnded) },
 	"message.delta": func() any { return new(MessageDelta) }, "message.final": func() any { return new(MessageFinal) },
 	"reasoning.delta": func() any { return new(ReasoningDelta) }, "tool.call": func() any { return new(ToolCall) },
-	"tool.result": func() any { return new(ToolResult) }, "sandbox.output": func() any { return new(SandboxOutput) }, "sandbox.restored": func() any { return new(SandboxRestored) },
+	"tool.result":      func() any { return new(ToolResult) },
+	"sandbox.output":   func() any { return new(SandboxOutput) },
+	"sandbox.restored": func() any { return new(SandboxRestored) },
+
 	"artifact.created": func() any { return new(ArtifactCreated) }, "artifact.updated": func() any { return new(ArtifactUpdated) },
-	"interaction.requested": func() any { return new(InteractionRequested) }, "interaction.resolved": func() any { return new(InteractionResolved) },
+	"interaction.requested": func() any { return new(InteractionRequested) },
+	"interaction.resolved":  func() any { return new(InteractionResolved) },
+
 	"team.task.created": func() any { return new(TeamTaskCreated) }, "team.task.updated": func() any { return new(TeamTaskUpdated) },
 	"team.member.status": func() any { return new(TeamMemberStatus) }, "team.message": func() any { return new(TeamMessage) },
 	"usage.update": func() any { return new(UsageUpdate) }, "error": func() any { return new(ErrorData) },

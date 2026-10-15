@@ -20,7 +20,10 @@ func (s *Service) List(ctx context.Context, page httpx.Page, f Filter) (Page[Ass
 	result := []Asset{}
 	cursor := page.Cursor
 	for len(result) <= page.Limit {
-		rows, e := db.Tx(ctx).Query(ctx, `SELECT id::text FROM assets WHERE ($1='' OR id>NULLIF($1,'')::uuid) AND ($2='' OR kind=$2) AND ($3='' OR visibility=$3) AND ($4='' OR name ILIKE '%'||$4||'%') AND ($5='' OR workspace_id=NULLIF($5,'')::uuid) ORDER BY id LIMIT 100`, cursor, f.Kind, f.Visibility, f.Query, f.WorkspaceID)
+		rows, e := db.Tx(ctx).
+			Query(ctx, "SELECT id::text FROM assets WHERE ($1='' OR id>NULLIF($1,'')::uuid) AND ($2='' OR "+
+				"kind=$2) AND ($3='' OR visibility=$3) AND ($4='' OR name ILIKE '%'||$4||'%') AND ($5='' "+
+				"OR workspace_id=NULLIF($5,'')::uuid) ORDER BY id LIMIT 100", cursor, f.Kind, f.Visibility, f.Query, f.WorkspaceID)
 		if e != nil {
 			return Page[Asset]{}, e
 		}
@@ -61,7 +64,7 @@ func (s *Service) List(ctx context.Context, page httpx.Page, f Filter) (Page[Ass
 		result = result[:page.Limit]
 		next = httpx.Cursor(result[len(result)-1].ID)
 	}
-	return Page[Asset]{result, next}, nil
+	return Page[Asset]{Items: result, NextCursor: next}, nil
 }
 func (s *Service) Versions(ctx context.Context, p httpx.Page, value string, review bool) (Page[Version], error) {
 	filter := "asset_id=$1"
@@ -71,7 +74,13 @@ func (s *Service) Versions(ctx context.Context, p httpx.Page, value string, revi
 	items := []Version{}
 	cursor := p.Cursor
 	for len(items) <= p.Limit {
-		rows, e := db.Tx(ctx).Query(ctx, `SELECT id::text,asset_id::text FROM asset_versions WHERE `+filter+` AND ($2='' OR id>NULLIF($2,'')::uuid) ORDER BY id LIMIT 100`, value, cursor)
+		rows, e := db.Tx(ctx).
+			Query(ctx,
+				`SELECT id::text,asset_id::text FROM asset_versions WHERE `+
+					filter+
+					(" AND ($2='' OR id>NULLIF($2,'')::uuid) ORDER BY id LIMIT 100"),
+				value,
+				cursor)
 		if e != nil {
 			return Page[Version]{}, e
 		}
@@ -117,7 +126,7 @@ func (s *Service) Versions(ctx context.Context, p httpx.Page, value string, revi
 		items = items[:p.Limit]
 		next = httpx.Cursor(items[len(items)-1].ID)
 	}
-	return Page[Version]{items, next}, nil
+	return Page[Version]{Items: items, NextCursor: next}, nil
 }
 func jsonPage(ctx context.Context, p httpx.Page, query string, arg any) (Page[jsontext.Value], error) {
 	rows, err := db.Tx(ctx).Query(ctx, query, arg, p.Cursor, p.Limit+1)
@@ -144,10 +153,17 @@ func jsonPage(ctx context.Context, p httpx.Page, query string, arg any) (Page[js
 		items = items[:p.Limit]
 		next = httpx.Cursor(keys[p.Limit-1])
 	}
-	return Page[jsontext.Value]{items, next}, nil
+	return Page[jsontext.Value]{Items: items, NextCursor: next}, nil
 }
 func (s *Service) Checks(ctx context.Context, p httpx.Page, id string) (Page[jsontext.Value], error) {
-	return jsonPage(ctx, p, `SELECT id::text,jsonb_build_object('id',id,'report',findings,'status',status) FROM asset_check_reports WHERE version_id=$1 AND ($2='' OR id>NULLIF($2,'')::uuid) ORDER BY id LIMIT $3`, id)
+	return jsonPage(
+		ctx,
+		p,
+		"SELECT id::text,jsonb_build_object('id',id,'report',findings,'status',status) FROM "+
+			"asset_check_reports WHERE version_id=$1 AND ($2='' OR id>NULLIF($2,'')::uuid) ORDER BY id "+
+			"LIMIT $3",
+		id,
+	)
 }
 
 type AssetChannel struct {
@@ -156,7 +172,8 @@ type AssetChannel struct {
 }
 
 func (s *Service) Channels(ctx context.Context, id string) ([]AssetChannel, error) {
-	rows, err := db.Tx(ctx).Query(ctx, `SELECT channel,version_id::text FROM asset_channels WHERE asset_id=$1 ORDER BY channel`, id)
+	rows, err := db.Tx(ctx).
+		Query(ctx, `SELECT channel,version_id::text FROM asset_channels WHERE asset_id=$1 ORDER BY channel`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +192,9 @@ func (s *Service) Channels(ctx context.Context, id string) ([]AssetChannel, erro
 	return items, nil
 }
 func (s *Service) Grants(ctx context.Context, id string) ([]Grant, error) {
-	rows, err := db.Tx(ctx).Query(ctx, `SELECT grantee_type,grantee_id::text,permission FROM asset_grants WHERE asset_id=$1 ORDER BY grantee_type,grantee_id,permission`, id)
+	rows, err := db.Tx(ctx).
+		Query(ctx, "SELECT grantee_type,grantee_id::text,permission FROM asset_grants WHERE asset_id=$1 ORDER "+
+			"BY grantee_type,grantee_id,permission", id)
 	if err != nil {
 		return nil, err
 	}
@@ -201,5 +220,11 @@ func (s *Service) Installs(ctx context.Context, p httpx.Page, scope, id string) 
 	if err := s.Authz.Require(ctx, action, policy.Resource{Type: scope, ID: id}); err != nil {
 		return Page[jsontext.Value]{}, err
 	}
-	return jsonPage(ctx, p, `SELECT id::text,to_jsonb(i)-'tenant_id' FROM asset_installs i WHERE scope_id=$1 AND scope_type='`+scope+`' AND ($2='' OR id>NULLIF($2,'')::uuid) ORDER BY id LIMIT $3`, id)
+	return jsonPage(
+		ctx,
+		p,
+		"SELECT id::text,to_jsonb(i)-'tenant_id' FROM asset_installs i WHERE scope_id=$1 AND "+
+			"scope_type='"+scope+`' AND ($2='' OR id>NULLIF($2,'')::uuid) ORDER BY id LIMIT $3`,
+		id,
+	)
 }

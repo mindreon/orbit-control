@@ -8,7 +8,6 @@ import (
 	"crypto/hkdf"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -61,7 +60,15 @@ func WithRequestBody(ctx context.Context, b []byte) context.Context {
 
 // Idempotent must execute inside the same tenant transaction as the handler.
 // Advisory locking prevents concurrent requests from performing duplicate writes.
-func Idempotent(ctx context.Context, tx pgx.Tx, tenant, principal string, replayKeys ReplayKeys, w http.ResponseWriter, r *http.Request, next func(http.ResponseWriter, *http.Request) error) error {
+func Idempotent(
+	ctx context.Context,
+	tx pgx.Tx,
+	tenant, principal string,
+	replayKeys ReplayKeys,
+	w http.ResponseWriter,
+	r *http.Request,
+	next func(http.ResponseWriter, *http.Request) error,
+) error {
 	key := r.Header.Get("Idempotency-Key")
 	if key == "" || r.Method == "GET" {
 		return next(w, r)
@@ -78,64 +85,29 @@ func Idempotent(ctx context.Context, tx pgx.Tx, tenant, principal string, replay
 		}
 	}
 	r.Body = io.NopCloser(bytes.NewReader(b))
-	hash := sha256.Sum256(b)
-	if _, e = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1,2))", tenant+principal+key); e != nil {
+	store := IdempotencyStore{Keys: replayKeys}
+	cached, e := store.Lookup(ctx, tx, tenant, principal, r, b)
+	if e != nil {
 		return e
 	}
-	var method, path string
-	var savedHash, body []byte
-	var status, version int
-	var headers []byte
-	e = tx.QueryRow(ctx, "SELECT method,path,request_hash,status,headers,response,key_version FROM idempotency_keys WHERE principal_id=$1 AND key=$2 AND expires_at>now()", principal, key).Scan(&method, &path, &savedHash, &status, &headers, &body, &version)
-	if e == nil {
-		if !SameRequest(method, path, savedHash, r.Method, replayPath(r), hash[:]) {
-			return E(422, "IDEMPOTENCY_MISMATCH", "Idempotency-Key was used with a different request")
-		}
-		var h http.Header
-		if e = json.Unmarshal(headers, &h); e != nil {
-			return e
-		}
-		for k, v := range h {
-			w.Header()[k] = v
-		}
-		gcm, e := replayKeys.cipher(version)
-		if e != nil {
-			return e
-		}
-		plain, e := gcm.Open(nil, nil, body, []byte(tenant+principal+key))
-		if e != nil {
-			return e
-		}
-		w.WriteHeader(status)
-		_, e = w.Write(plain)
-		return e
-	}
-	if e != pgx.ErrNoRows {
-		return e
+	if cached != nil {
+		cached.FlushTo(w)
+		return nil
 	}
 	rec := NewRecorder()
 	if e = next(rec, r); e != nil {
 		return e
 	}
 	if rec.Status == 0 {
-		rec.Status = 200
+		rec.Status = http.StatusOK
 	}
-	gcm, e := replayKeys.cipher(replayKeys.Current)
-	if e != nil {
-		return e
-	}
-	body = gcm.Seal(nil, nil, rec.Body, []byte(tenant+principal+key))
-	h, e := json.Marshal(rec.H)
-	if e != nil {
-		return e
-	}
-	_, e = tx.Exec(ctx, `INSERT INTO idempotency_keys(tenant_id,principal_id,key,method,path,request_hash,status,headers,response,key_version,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now()+interval '24 hours') ON CONFLICT(tenant_id,principal_id,key) DO UPDATE SET method=EXCLUDED.method,path=EXCLUDED.path,request_hash=EXCLUDED.request_hash,status=EXCLUDED.status,headers=EXCLUDED.headers,response=EXCLUDED.response,key_version=EXCLUDED.key_version,created_at=now(),expires_at=EXCLUDED.expires_at`, tenant, principal, key, r.Method, replayPath(r), hash[:], rec.Status, h, body, replayKeys.Current)
-	if e != nil {
+	if e = store.Save(ctx, tx, tenant, principal, r, rec); e != nil {
 		return e
 	}
 	rec.FlushTo(w)
 	return nil
 }
+
 func SameRequest(method, path string, hash []byte, newMethod, newPath string, newHash []byte) bool {
 	return method == newMethod && path == newPath && bytes.Equal(hash, newHash)
 }
