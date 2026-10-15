@@ -451,3 +451,15 @@ fixtures (approval, rejection, multiple reviewers, withdrawal and compensation).
 no history export, so the replay fixture comes from the real-server Go harness.
 `go test ./...` replays all checked-in fixtures offline. `workflowcheck v0.6.0` supports the
 pinned Go toolchain; v0.3.0's old x/tools cannot compile on Go 1.27.
+
+## WP6 run configuration
+
+`orbit-control worker` and `all` connect to Temporal (`ORBIT_TEMPORAL_ADDRESS`,
+`ORBIT_TEMPORAL_NAMESPACE`) and NATS (`ORBIT_NATS_URL`). The API also exposes the
+private kernel listener at `ORBIT_INTERNAL_ADDR`; worker bearer authentication
+uses only `ORBIT_WORKER_SERVICE_TOKEN_SHA256`. Run budgets default to
+`ORBIT_DEFAULT_RUN_BUDGET_MILLICREDITS=200000`. `ORBIT_ENV=prod` rejects the
+`local` sandbox provider. Object storage may be configured with the existing
+`ORBIT_OBJECT_*` variables or the `ORBIT_S3_*` aliases. `orbit-admin seed-dev`
+uses `ORBIT_SEED_MODEL_BASE_URL`, `ORBIT_SEED_MODEL_API_KEY`, and
+`ORBIT_SEED_MODEL_NAME`; unset values select the local mock model.

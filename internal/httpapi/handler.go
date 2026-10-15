@@ -18,15 +18,21 @@ import (
 	"github.com/mindreon/orbit-control/internal/assets"
 	"github.com/mindreon/orbit-control/internal/audit"
 	"github.com/mindreon/orbit-control/internal/auth"
+	"github.com/mindreon/orbit-control/internal/locks"
 	"github.com/mindreon/orbit-control/internal/platform/config"
 	"github.com/mindreon/orbit-control/internal/platform/db"
 	"github.com/mindreon/orbit-control/internal/platform/httpx"
 	"github.com/mindreon/orbit-control/internal/platform/ids"
+	"github.com/mindreon/orbit-control/internal/platform/objstore"
+	"github.com/mindreon/orbit-control/internal/platform/temporalx"
 	"github.com/mindreon/orbit-control/internal/policy"
 	"github.com/mindreon/orbit-control/internal/tenancy"
 )
 
 type Handler struct {
+	Temporal        temporalx.Client
+	Objects         objstore.ObjectStore
+	Locks           locks.Resolver
 	uploadOnce      sync.Once
 	uploadSemaphore chan struct{}
 	Assets          *assets.Service
@@ -44,6 +50,27 @@ type route struct {
 }
 
 var routes = []route{
+	{"POST /v1/sessions", false, func(h *Handler) endpoint { return h.createSession }},
+	{"GET /v1/sessions", false, func(h *Handler) endpoint { return h.listSessions }},
+	{"GET /v1/sessions/{s}", false, func(h *Handler) endpoint { return h.getSession }},
+	{"PATCH /v1/sessions/{s}", false, func(h *Handler) endpoint { return h.patchSession }},
+	{"POST /v1/sessions/{s}/archive", false, func(h *Handler) endpoint { return h.archiveSession }},
+	{"POST /v1/sessions/{s}/messages", false, func(h *Handler) endpoint { return h.submitMessage }},
+	{"GET /v1/sessions/{s}/messages", false, func(h *Handler) endpoint { return h.sessionChildren }},
+	{"GET /v1/sessions/{s}/runs", false, func(h *Handler) endpoint { return h.sessionChildren }},
+	{"GET /v1/sessions/{s}/artifacts", false, func(h *Handler) endpoint { return h.sessionChildren }},
+	{"GET /v1/artifacts/{a}", false, func(h *Handler) endpoint { return h.getArtifact }},
+	{"GET /v1/runs/{r}", false, func(h *Handler) endpoint { return h.getRun }},
+	{"GET /v1/runs/{r}/segments", false, func(h *Handler) endpoint { return h.runSegments }},
+	{"GET /v1/runs/{r}/stream-token", false, func(h *Handler) endpoint { return h.streamToken }},
+	{"POST /v1/runs/{r}/cancel", false, func(h *Handler) endpoint { return h.controlRun }},
+	{"POST /v1/runs/{r}/pause", false, func(h *Handler) endpoint { return h.controlRun }},
+	{"POST /v1/runs/{r}/resume", false, func(h *Handler) endpoint { return h.controlRun }},
+	{"POST /v1/runs/{r}/steer", false, func(h *Handler) endpoint { return h.controlRun }},
+	{"GET /v1/interactions", false, func(h *Handler) endpoint { return h.listInteractions }},
+	{"GET /v1/interactions/{i}", false, func(h *Handler) endpoint { return h.getInteraction }},
+	{"POST /v1/interactions/{i}/resolve", false, func(h *Handler) endpoint { return h.resolveInteraction }},
+
 	{"GET /v1/assets", false, func(h *Handler) endpoint { return h.listAssets }},
 	{"POST /v1/assets", false, func(h *Handler) endpoint { return h.createAsset }},
 	{"GET /v1/assets/{a}", false, func(h *Handler) endpoint { return h.getAsset }},
@@ -226,6 +253,10 @@ func (h *Handler) protected(w http.ResponseWriter, r *http.Request, fn endpoint)
 		}
 		ctx = r.Context()
 	}
+
+	if isRunWrite(r) {
+		return fn(w, r)
+	}
 	return h.DB.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
 		if e := tenancy.Active(ctx, tx, p.ID); e != nil {
 			return e
@@ -393,4 +424,9 @@ func (h *Handler) provisionIdentity(ctx context.Context, tx pgx.Tx, p auth.Princ
 		return audit.Append(ctx, tx, p, tenant, "login", "principal", p.ID, map[string]any{"mode": "oidc", "jit": true})
 	}
 	return nil
+}
+
+func isRunWrite(r *http.Request) bool {
+	p := r.URL.Path
+	return (r.Method == "PATCH" && strings.HasPrefix(p, "/v1/sessions/")) || (r.Method == "POST" && (strings.HasPrefix(p, "/v1/runs/") || strings.HasPrefix(p, "/v1/interactions/") || strings.HasPrefix(p, "/v1/sessions/")))
 }

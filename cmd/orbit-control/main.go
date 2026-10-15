@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -9,13 +10,19 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mindreon/orbit-control/internal/activities/ctl"
 	"github.com/mindreon/orbit-control/internal/assets"
 	"github.com/mindreon/orbit-control/internal/auth"
 	"github.com/mindreon/orbit-control/internal/httpapi"
+	"github.com/mindreon/orbit-control/internal/kernelapi"
 	"github.com/mindreon/orbit-control/internal/platform/config"
 	"github.com/mindreon/orbit-control/internal/platform/db"
 	orbitlog "github.com/mindreon/orbit-control/internal/platform/log"
+	"github.com/mindreon/orbit-control/internal/platform/natsx"
 	"github.com/mindreon/orbit-control/internal/platform/objstore"
+	"github.com/mindreon/orbit-control/internal/platform/temporalx"
+	"github.com/mindreon/orbit-control/internal/runworker"
+	"github.com/mindreon/orbit-control/internal/secrets"
 	"github.com/mindreon/orbit-control/internal/workflows/assetrelease"
 )
 
@@ -46,6 +53,9 @@ func run() error {
 	if e = c.ValidateAssets(); e != nil {
 		return e
 	}
+	if e = c.ValidateRuns(os.Args[1] != "worker"); e != nil {
+		return e
+	}
 	l := orbitlog.New(os.Stdout, c.LogFormat)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -65,13 +75,22 @@ func run() error {
 		return e
 	}
 	assetService := &assets.Service{Store: store, Signer: signer}
+	tc, err := temporalx.Dial(c)
+	if err != nil {
+		return err
+	}
+	defer tc.Close()
+	bus, err := natsx.Connect(c.NATSURL)
+	if err != nil {
+		return err
+	}
+	defer bus.Close()
 	if os.Args[1] == "worker" || os.Args[1] == "all" {
-		tc, err := assetrelease.Dial(c)
-		if err != nil {
+		if err = bus.EnsureRunEventsStream(); err != nil {
 			return err
 		}
-		defer tc.Close()
-		worker := assetrelease.NewWorker(tc, &assetrelease.Activities{DB: d, Assets: assetService})
+		worker := runworker.New(tc, &ctl.Activities{DB: d, Obj: store, NATS: bus, Temporal: tc, Environment: c.Environment})
+		assetrelease.Register(worker, &assetrelease.Activities{DB: d, Assets: assetService})
 		if err = worker.Start(); err != nil {
 			return err
 		}
@@ -94,9 +113,17 @@ func run() error {
 		return e
 	}
 	defer a.Close()
-	h := &httpapi.Handler{DB: d, Auth: a, Config: c, Logger: l, Assets: assetService}
+	h := &httpapi.Handler{DB: d, Auth: a, Config: c, Logger: l, Assets: assetService, Objects: store, Temporal: temporalx.Service{Client: tc}}
 	server := &http.Server{Addr: c.Addr, Handler: h.Router(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
-	done := make(chan error, 1)
+	internal := &http.Server{Addr: c.InternalAddr, Handler: (&kernelapi.Handler{DB: d, Signer: a.Capability, Secrets: secrets.Keys{Current: c.SecretsKeyVersion, KEKs: c.SecretsKEKs}, Obj: store, ServiceTokenSHA256: c.WorkerServiceTokenSHA256}).Router(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+	defer func() {
+		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = internal.Shutdown(shutdown)
+		_ = server.Shutdown(shutdown)
+	}()
+	done := make(chan error, 2)
+	go func() { done <- internal.ListenAndServe() }()
 	go func() { done <- server.ListenAndServe() }()
 	l.Info("API listening", "address", c.Addr)
 	select {
@@ -108,6 +135,6 @@ func run() error {
 	case <-ctx.Done():
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		return server.Shutdown(shutdown)
+		return errors.Join(server.Shutdown(shutdown), internal.Shutdown(shutdown))
 	}
 }

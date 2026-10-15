@@ -1,0 +1,1 @@
+{"schema":"orbit.agent/v2","name":"echo-agent","model":"default","permissions":{"effectClasses":["read_only","sandbox_write"]}}

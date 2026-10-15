@@ -1,0 +1,1 @@
+{"schema":"orbit.agent/v2","name":"notify-agent","model":"default","permissions":{"effectClasses":["read_only","sandbox_write","external_write"]}}

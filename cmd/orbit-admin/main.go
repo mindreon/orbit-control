@@ -38,6 +38,9 @@ func run(args []string) error {
 		return e
 	}
 	duration := time.Minute
+	if args[0] == "seed-dev" {
+		duration = 5 * time.Minute
+	}
 	if args[0] == "market" {
 		duration = 2 * time.Hour
 	}
@@ -59,6 +62,9 @@ func run(args []string) error {
 	}
 	if args[0] == "asset" {
 		return retryAssetRelease(ctx, d, args[1:])
+	}
+	if args[0] == "put-secret" || args[0] == "put-model-profile" || args[0] == "seed-dev" {
+		return runAdmin(ctx, d, c, args)
 	}
 	f := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	tenant := f.String("tenant", "", "tenant UUID")

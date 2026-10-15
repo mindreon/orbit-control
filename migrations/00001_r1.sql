@@ -64,7 +64,7 @@ CREATE TABLE model_profiles (
   id uuid PRIMARY KEY, tenant_id uuid NOT NULL REFERENCES tenants(id), name text NOT NULL, provider text NOT NULL, base_url text NOT NULL, model text NOT NULL, secret_id uuid, params jsonb NOT NULL DEFAULT '{}', pricing jsonb NOT NULL DEFAULT '{}', context_window int, is_default boolean NOT NULL DEFAULT false, created_at timestamptz NOT NULL DEFAULT now(), FOREIGN KEY(tenant_id,secret_id) REFERENCES secrets(tenant_id,id), UNIQUE(tenant_id,name)
 );
 CREATE TABLE sessions (
-  id uuid PRIMARY KEY, tenant_id uuid NOT NULL, workspace_id uuid NOT NULL, project_id uuid, owner_id uuid NOT NULL, title text NOT NULL, entry_kind text NOT NULL CHECK(entry_kind IN ('agent','team')), entry_ref text NOT NULL, message_policy text NOT NULL CHECK(message_policy IN ('queue','steer','interrupt')), pinned_lock_id uuid, sandbox_id text, status text NOT NULL CHECK(status IN ('active','idle','archived')), created_at timestamptz NOT NULL DEFAULT now(), last_activity_at timestamptz NOT NULL DEFAULT now(), UNIQUE(tenant_id,id), FOREIGN KEY(tenant_id,workspace_id) REFERENCES workspaces(tenant_id,id), FOREIGN KEY(tenant_id,project_id) REFERENCES projects(tenant_id,id), FOREIGN KEY(tenant_id,owner_id) REFERENCES memberships(tenant_id,principal_id)
+  id uuid PRIMARY KEY, tenant_id uuid NOT NULL, workspace_id uuid NOT NULL, project_id uuid, owner_id uuid NOT NULL, title text NOT NULL, entry_kind text NOT NULL CHECK(entry_kind IN ('agent','team')), entry_ref text NOT NULL, message_policy text NOT NULL CHECK(message_policy IN ('queue','steer','interrupt')), pinned boolean NOT NULL DEFAULT false, pinned_lock_id uuid, sandbox_id text, status text NOT NULL CHECK(status IN ('active','idle','archived')), created_at timestamptz NOT NULL DEFAULT now(), last_activity_at timestamptz NOT NULL DEFAULT now(), UNIQUE(tenant_id,id), FOREIGN KEY(tenant_id,workspace_id) REFERENCES workspaces(tenant_id,id), FOREIGN KEY(tenant_id,project_id) REFERENCES projects(tenant_id,id), FOREIGN KEY(tenant_id,owner_id) REFERENCES memberships(tenant_id,principal_id)
 );
 CREATE TABLE runs (
   id uuid PRIMARY KEY, tenant_id uuid NOT NULL, session_id uuid NOT NULL, trigger text NOT NULL CHECK(trigger IN ('user_message','schedule','api','channel','resume')), status text NOT NULL CHECK(status IN ('queued','running','waiting_input','waiting_approval','paused','succeeded','failed','cancelled','budget_exhausted','timed_out')), lock_id uuid, created_by uuid REFERENCES principals(id), message_id uuid, budget_millicredits bigint NOT NULL DEFAULT 0, used_millicredits bigint NOT NULL DEFAULT 0, temporal_workflow_id text, started_at timestamptz, ended_at timestamptz, error_code text, summary text, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(tenant_id,id), FOREIGN KEY(tenant_id,session_id) REFERENCES sessions(tenant_id,id)
@@ -201,7 +201,7 @@ CREATE INDEX runs_session_created ON runs (tenant_id, session_id, created_at);
 CREATE INDEX runs_active ON runs (tenant_id, status) WHERE status NOT IN ('succeeded','failed','cancelled','budget_exhausted','timed_out');
 CREATE INDEX usage_ledger_run ON usage_ledger (tenant_id, run_id);
 CREATE INDEX interactions_pending ON interactions (tenant_id, status) WHERE status IN ('pending','escalated');
-CREATE UNIQUE INDEX permission_grants_interaction ON permission_grants (tenant_id, interaction_id);
+CREATE UNIQUE INDEX permission_grants_interaction ON permission_grants (tenant_id, interaction_id, tool);
 CREATE UNIQUE INDEX artifacts_session_path ON artifacts (tenant_id, session_id, path);
 CREATE TABLE audit_log (
   id uuid NOT NULL, tenant_id uuid NOT NULL REFERENCES tenants(id), actor_id uuid NOT NULL REFERENCES principals(id), actor_kind text NOT NULL CHECK(actor_kind IN ('user','service')), action text NOT NULL, target_type text NOT NULL, target_id text NOT NULL, detail jsonb NOT NULL, ip text NOT NULL DEFAULT '', user_agent text NOT NULL DEFAULT '', prev_hash bytea NOT NULL, hash bytea NOT NULL, occurred_at timestamptz NOT NULL, PRIMARY KEY(tenant_id,id,occurred_at)
@@ -210,6 +210,14 @@ CREATE TABLE audit_log_default PARTITION OF audit_log DEFAULT;
 CREATE TABLE idempotency_keys (
   tenant_id uuid NOT NULL REFERENCES tenants(id), principal_id uuid NOT NULL REFERENCES principals(id), key text NOT NULL, method text NOT NULL, path text NOT NULL, request_hash bytea NOT NULL, status int NOT NULL, headers jsonb NOT NULL, response bytea NOT NULL, key_version int NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), expires_at timestamptz NOT NULL, PRIMARY KEY(tenant_id,principal_id,key)
 );
+-- Activity events survive commit-before-publish failures without changing their payload.
+CREATE TABLE control_events (
+ tenant_id uuid NOT NULL, run_id uuid NOT NULL, event_id text NOT NULL, operation bigint NOT NULL, payload jsonb NOT NULL, PRIMARY KEY(tenant_id,run_id,event_id), FOREIGN KEY(tenant_id,run_id) REFERENCES runs(tenant_id,id)
+);
+ALTER TABLE control_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE control_events FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON control_events USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+GRANT SELECT, INSERT ON control_events TO orbit_app;
 ALTER TABLE runs ADD FOREIGN KEY(tenant_id,lock_id) REFERENCES run_locks(tenant_id,id);
 ALTER TABLE sessions ADD FOREIGN KEY(tenant_id,pinned_lock_id) REFERENCES run_locks(tenant_id,id);
 CREATE INDEX ON memberships(principal_id);
@@ -574,6 +582,7 @@ DROP TABLE agent_checkpoints CASCADE;
 DROP TABLE team_runs CASCADE;
 DROP TABLE artifacts CASCADE;
 DROP TABLE interactions CASCADE;
+DROP TABLE control_events CASCADE;
 DROP TABLE run_events CASCADE;
 DROP TABLE run_segments CASCADE;
 DROP TABLE messages CASCADE;

@@ -2,12 +2,11 @@ package assetrelease
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
+
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
+
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -15,6 +14,7 @@ import (
 	"github.com/mindreon/orbit-control/internal/contract"
 	"github.com/mindreon/orbit-control/internal/platform/config"
 	"github.com/mindreon/orbit-control/internal/platform/db"
+	"github.com/mindreon/orbit-control/internal/platform/temporalx"
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/activity"
@@ -25,33 +25,14 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
-func Dial(c config.Config) (client.Client, error) {
-	options := client.Options{HostPort: c.TemporalAddress, Namespace: c.TemporalNamespace}
-	if c.TemporalTLS {
-		tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: c.TemporalServerName}
-		if c.TemporalCAFile != "" {
-			b, e := os.ReadFile(c.TemporalCAFile)
-			if e != nil {
-				return nil, fmt.Errorf("cannot read ORBIT_TEMPORAL_TLS_CA_FILE")
-			}
-			tlsConfig.RootCAs = x509.NewCertPool()
-			if !tlsConfig.RootCAs.AppendCertsFromPEM(b) {
-				return nil, fmt.Errorf("invalid Temporal CA")
-			}
-		}
-		if c.TemporalCertFile != "" || c.TemporalKeyFile != "" {
-			cert, e := tls.LoadX509KeyPair(c.TemporalCertFile, c.TemporalKeyFile)
-			if e != nil {
-				return nil, fmt.Errorf("invalid Temporal client certificate/key")
-			}
-			tlsConfig.Certificates = []tls.Certificate{cert}
-		}
-		options.ConnectionOptions.TLS = tlsConfig
-	}
-	return client.Dial(options)
-}
+func Dial(c config.Config) (client.Client, error) { return temporalx.Dial(c) }
+
 func NewWorker(c client.Client, a *Activities) worker.Worker {
 	w := worker.New(c, contract.TaskQueueCtl, worker.Options{})
+	Register(w, a)
+	return w
+}
+func Register(w worker.Worker, a *Activities) {
 	w.RegisterWorkflowWithOptions(Run, workflow.RegisterOptions{Name: Name})
 	w.RegisterActivityWithOptions(a.SnapshotAssetRelease, activity.RegisterOptions{Name: "SnapshotAssetRelease"})
 	w.RegisterActivityWithOptions(a.AssetCheckPermissionDiff, activity.RegisterOptions{Name: contract.ActivityAssetCheckPermissionDiff})
@@ -65,7 +46,6 @@ func NewWorker(c client.Client, a *Activities) worker.Worker {
 	w.RegisterActivity(a.CompensateAssetPublish)
 	w.RegisterActivity(a.NotifyAuthor)
 	w.RegisterActivity(a.AbortAssetRelease)
-	return w
 }
 
 // Dispatch scans only tenant-local outbox fields through WithTenant. The global
