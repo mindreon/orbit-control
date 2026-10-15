@@ -36,27 +36,14 @@ func Credentials(ctx context.Context, tenant, profile string, expires time.Time,
 	var id string
 	var secret *string
 	var params, pricing []byte
-	err := db.Tx(ctx).QueryRow(
-		ctx,
-		`SELECT id::text,base_url,model,secret_id::text,params,pricing,context_window
+	err := db.Tx(ctx).QueryRow(ctx, `SELECT id::text,base_url,model,secret_id::text,params,pricing,context_window
  FROM model_profiles
  WHERE tenant_id=$1
  AND (($2=''
  AND is_default)
  OR name=$2)
  ORDER BY id
- LIMIT 1`,
-		tenant,
-		profile,
-	).Scan(
-		&id,
-		&c.BaseUrl,
-		&c.Model,
-		&secret,
-		&params,
-		&pricing,
-		&c.ContextWindow,
-	)
+ LIMIT 1`, tenant, profile).Scan(&id, &c.BaseUrl, &c.Model, &secret, &params, &pricing, &c.ContextWindow)
 	if err != nil {
 		return c, id, err
 	}

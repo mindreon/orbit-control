@@ -72,8 +72,7 @@ func OpenApp(ctx context.Context, url string) (*DB, error) {
 			(`SELECT rolname,rolsuper
  OR rolbypassrls
  FROM pg_roles
- WHERE rolname=current_user`)).Scan(&name,
-			&privileged); e != nil {
+ WHERE rolname=current_user`)).Scan(&name, &privileged); e != nil {
 			return e
 		}
 		if name != "orbit_app" || privileged {

@@ -26,8 +26,8 @@ func validateSegmentIdentity(ctx context.Context, tx pgx.Tx, in w.RecordSegmentI
  AND s.member=$4
  AND s.seq=$5
  AND (s.status='running'
- OR s.checkpoint_version=$6))`,
-		in.TenantID, in.RunID, in.SessionID, in.Member, in.Seq, in.Result.CheckpointVersion).Scan(&valid)
+ OR s.checkpoint_version=$6))`, in.TenantID, in.RunID, in.SessionID, in.Member, in.Seq,
+		in.Result.CheckpointVersion).Scan(&valid)
 	if err != nil {
 		return err
 	}

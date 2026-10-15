@@ -44,15 +44,8 @@ func (a *Activities) transaction(ctx context.Context, in Input, fn func(context.
  FROM assets
  WHERE tenant_id=$1
  AND id=$2`, in.Tenant, assetID).
-			Scan(&asset.ID,
-				&asset.Publisher,
-				&asset.Kind,
-				&asset.Name,
-				&asset.Visibility,
-				&asset.WorkspaceID,
-				&asset.OwnerID,
-				&asset.Status,
-				&asset.CreatedAt)
+			Scan(&asset.ID, &asset.Publisher, &asset.Kind, &asset.Name, &asset.Visibility, &asset.WorkspaceID,
+				&asset.OwnerID, &asset.Status, &asset.CreatedAt)
 		if err != nil {
 			return err
 		}
@@ -133,7 +126,8 @@ func (a *Activities) AssetCheckPermissionDiff(ctx context.Context, input contrac
 		var manifestRaw []byte
 		var workspace, submitter string
 		var previous contract.EffectivePermissions
-		if err := tx.QueryRow(ctx, `SELECT v.permissions,v.manifest,COALESCE(a.workspace_id::text,''),v.submitted_by::text
+		if err := tx.QueryRow(ctx,
+			`SELECT v.permissions,v.manifest,COALESCE(a.workspace_id::text,''),v.submitted_by::text
  FROM asset_versions v
  JOIN assets a ON a.id=v.asset_id
  WHERE v.tenant_id=$1
@@ -293,7 +287,8 @@ func (a *Activities) AggregateAssetChecks(ctx context.Context, in Aggregate) err
 				Exec(ctx, `INSERT INTO asset_check_reports(id,tenant_id,version_id,"check",status,findings)
  VALUES($1,$2,$3,$4,$5,$6)
  ON CONFLICT(tenant_id,version_id,"check")
- DO UPDATE SET status=EXCLUDED.status,findings=EXCLUDED.findings`, ids.New(), in.Input.Tenant, v.ID, report.Check, status, raw)
+ DO UPDATE SET status=EXCLUDED.status,findings=EXCLUDED.findings`, ids.New(), in.Input.Tenant, v.ID,
+					report.Check, status, raw)
 			if err != nil {
 				return err
 			}
@@ -340,13 +335,7 @@ func (a *Activities) LoadAssetReview(ctx context.Context, review Review) (Review
  AND version_id=$2
  AND generation=$3
  AND id=$4`,
-			review.Input.Tenant,
-			v.ID,
-			review.Input.Generation,
-			review.ID).Scan(&out.ID,
-			&out.Reviewer,
-			&out.Decision,
-			&out.Comment); err != nil {
+			review.Input.Tenant, v.ID, review.Input.Generation, review.ID).Scan(&out.ID, &out.Reviewer, &out.Decision, &out.Comment); err != nil {
 			return err
 		}
 		if out.Reviewer == asset.OwnerID || out.Reviewer == auth.From(ctx).ID || out.Reviewer == v.UploadedBy {
@@ -370,24 +359,19 @@ func (a *Activities) DecideAssetReview(ctx context.Context, in Aggregate) (Resul
 			(`SELECT withdraw_requested,review_required
  FROM asset_versions
  WHERE id=$1`),
-			v.ID).Scan(&withdrawn,
-			&required); err != nil {
+			v.ID).Scan(&withdrawn, &required); err != nil {
 			return err
 		}
 		if withdrawn {
 			return temporal.NewNonRetryableApplicationError("withdrawn", "Withdrawn", nil)
 		}
-		if err := db.Tx(ctx).QueryRow(ctx, `SELECT count(*) FILTER(WHERE decision='approve'),COALESCE(bool_or(decision='reject'),false),
+		if err := db.Tx(ctx).QueryRow(ctx,
+			`SELECT count(*) FILTER(WHERE decision='approve'),COALESCE(bool_or(decision='reject'),false),
  COALESCE(bool_or(decision='request_changes'),false)
  FROM asset_reviews
  WHERE tenant_id=$1
  AND version_id=$2
- AND generation=$3`,
-			in.Input.Tenant,
-			v.ID,
-			in.Input.Generation).Scan(&approvals,
-			&rejected,
-			&changes); err != nil {
+ AND generation=$3`, in.Input.Tenant, v.ID, in.Input.Generation).Scan(&approvals, &rejected, &changes); err != nil {
 			return err
 		}
 		switch {
@@ -465,8 +449,7 @@ func (a *Activities) CompensateAssetPublish(ctx context.Context, in Input) error
 			(`SELECT release_channel,previous_channel_id::text
  FROM asset_versions
  WHERE id=$1`),
-			v.ID).Scan(&channel,
-			&previous); err != nil {
+			v.ID).Scan(&channel, &previous); err != nil {
 			return err
 		}
 		if previous == nil {

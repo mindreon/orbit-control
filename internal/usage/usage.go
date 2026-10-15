@@ -38,25 +38,12 @@ func RecordUsage(ctx context.Context, tx pgx.Tx, e Entry) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	_, err = tx.Exec(
-		ctx,
+	_, err = tx.Exec(ctx,
 		`INSERT INTO usage_ledger(id,tenant_id,workspace_id,principal_id,run_id,segment_seq,source,meter,quantity,
  unit_price,millicredits,idempotency_key,occurred_at)
- VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-		ids.New(),
-		e.TenantID,
-		e.WorkspaceID,
-		e.PrincipalID,
-		e.RunID,
-		e.SegmentSeq,
-		e.Source,
-		e.Meter,
-		e.Quantity,
-		e.UnitPrice,
-		e.Millicredits,
-		e.IdempotencyKey,
-		e.OccurredAt,
-	)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, ids.New(), e.TenantID, e.WorkspaceID, e.PrincipalID,
+		e.RunID, e.SegmentSeq, e.Source, e.Meter, e.Quantity, e.UnitPrice, e.Millicredits, e.IdempotencyKey,
+		e.OccurredAt)
 	return err == nil, err
 }
 
@@ -119,9 +106,7 @@ func Admit(ctx context.Context, tenant, workspace, principal string, budget int6
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,7))`, tenant); err != nil {
 		return err
 	}
-	rows, err := tx.Query(
-		ctx,
-		`SELECT scope_type,scope_id::text,metric,"limit"::bigint,period
+	rows, err := tx.Query(ctx, `SELECT scope_type,scope_id::text,metric,"limit"::bigint,period
  FROM quota_policies
  WHERE tenant_id=$1
  AND action='block'
@@ -132,11 +117,7 @@ func Admit(ctx context.Context, tenant, workspace, principal string, budget int6
  AND scope_id=$2)
  OR (scope_type='user'
  AND scope_id=$3))
- ORDER BY id`,
-		tenant,
-		workspace,
-		principal,
-	)
+ ORDER BY id`, tenant, workspace, principal)
 	if err != nil {
 		return err
 	}

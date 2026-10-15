@@ -98,20 +98,11 @@ func Bind(ctx context.Context, tx pgx.Tx, p auth.Principal, tenant, subjectType,
 	if !exists {
 		return httpx.E(422, "INVALID_INPUT", "Role scope must belong to tenant")
 	}
-	_, e = tx.Exec(
-		ctx,
+	_, e = tx.Exec(ctx,
 		`INSERT INTO role_bindings(id,tenant_id,principal_type,principal_id,role,scope_type,scope_id,created_by)
  VALUES($1,$2,$3,$4,$5,$6,$7,$8)
- ON CONFLICT(tenant_id,principal_type,principal_id,role,scope_type,scope_id) DO NOTHING`,
-		ids.New(),
-		tenant,
-		subjectType,
-		subject,
-		role,
-		scopeType,
-		scope,
-		p.ID,
-	)
+ ON CONFLICT(tenant_id,principal_type,principal_id,role,scope_type,scope_id) DO NOTHING`, ids.New(), tenant,
+		subjectType, subject, role, scopeType, scope, p.ID)
 	if e != nil {
 		return e
 	}
@@ -136,14 +127,8 @@ func AddMember(ctx context.Context, tx pgx.Tx, p auth.Principal, tenant, pid, st
 	if !policy.ValidRole(role, "tenant") {
 		return httpx.E(422, "INVALID_ROLE", "Invalid tenant role")
 	}
-	_, e := tx.Exec(
-		ctx,
-		`INSERT INTO memberships(tenant_id,principal_id,status,source) VALUES($1,$2,$3,$4)`,
-		tenant,
-		pid,
-		status,
-		source,
-	)
+	_, e := tx.Exec(ctx, `INSERT INTO memberships(tenant_id,principal_id,status,source) VALUES($1,$2,$3,$4)`,
+		tenant, pid, status, source)
 	if e != nil {
 		return e
 	}

@@ -48,21 +48,10 @@ func (svc Service) Create(ctx context.Context, in CreateInput) (Session, error) 
 		return Session{}, httpx.E(422, "LOCK_RESOLUTION_FAILED", "Agent cannot be resolved")
 	}
 	id, tx := ids.New(), db.Tx(ctx)
-	_, err = tx.Exec(
-		ctx,
-		`INSERT INTO sessions(id,tenant_id,workspace_id,project_id,owner_id,title,entry_kind,
+	_, err = tx.Exec(ctx, `INSERT INTO sessions(id,tenant_id,workspace_id,project_id,owner_id,title,entry_kind,
  entry_ref,message_policy,status,pinned)
- VALUES($1,$2,$3,$4,$5,$6,'agent',$7,$8,'idle',$9)`,
-		id,
-		auth.Tenant(ctx),
-		in.WorkspaceID,
-		in.ProjectID,
-		auth.From(ctx).ID,
-		in.Title,
-		in.EntryRef,
-		in.MessagePolicy,
-		in.Pinned,
-	)
+ VALUES($1,$2,$3,$4,$5,$6,'agent',$7,$8,'idle',$9)`, id, auth.Tenant(ctx), in.WorkspaceID, in.ProjectID,
+		auth.From(ctx).ID, in.Title, in.EntryRef, in.MessagePolicy, in.Pinned)
 	if err != nil {
 		return Session{}, err
 	}

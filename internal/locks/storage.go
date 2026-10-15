@@ -36,20 +36,11 @@ func Save(ctx context.Context, tx pgx.Tx, runID string, lock contract.RunLock) e
 	if err != nil {
 		return err
 	}
-	n, err := tx.Exec(
-		ctx,
+	n, err := tx.Exec(ctx,
 		`INSERT INTO run_locks(id,tenant_id,run_id,digest,entries,effective_permissions,lock) SELECT $1,$2,id,$4,$5,$6,$7
  FROM runs
  WHERE tenant_id=$2
- AND id=$3`,
-		lock.LockId,
-		auth.Tenant(ctx),
-		runID,
-		lock.Digest,
-		entries,
-		permissions,
-		raw,
-	)
+ AND id=$3`, lock.LockId, auth.Tenant(ctx), runID, lock.Digest, entries, permissions, raw)
 	if err != nil {
 		return err
 	}

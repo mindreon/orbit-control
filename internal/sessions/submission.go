@@ -131,8 +131,8 @@ func saveSubmissionRun(ctx context.Context, s Session, runID, messageID string, 
 	tx, tenant := db.Tx(ctx), auth.Tenant(ctx)
 	_, err := tx.Exec(ctx, `INSERT INTO runs(id,tenant_id,session_id,trigger,status,created_by,message_id,
  budget_millicredits,temporal_workflow_id)
- VALUES($1,$2,$3,'user_message','queued',$4,$5,$6,$7)`,
-		runID, tenant, s.ID, auth.From(ctx).ID, messageID, budget, w.AgentRunWorkflowID(tenant, runID))
+ VALUES($1,$2,$3,'user_message','queued',$4,$5,$6,$7)`, runID, tenant, s.ID, auth.From(ctx).ID, messageID,
+		budget, w.AgentRunWorkflowID(tenant, runID))
 	if err != nil {
 		return err
 	}
@@ -157,7 +157,8 @@ func (svc Service) saveSubmissionMessage(ctx context.Context, session, run, mess
 	if err = svc.Objects.PutObject(ctx, tenant, ref, content, "application/json"); err != nil {
 		return err
 	}
-	_, err = db.Tx(ctx).Exec(ctx, `INSERT INTO messages(id,tenant_id,session_id,run_id,role,author_id,content,content_ref)
+	_, err = db.Tx(ctx).Exec(ctx,
+		`INSERT INTO messages(id,tenant_id,session_id,run_id,role,author_id,content,content_ref)
  VALUES($1,$2,$3,$4,'user',$5,$6,$7)`, message, tenant, session, run, auth.From(ctx).ID, content, ref)
 	return err
 }

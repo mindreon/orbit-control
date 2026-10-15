@@ -120,15 +120,12 @@ func releaseDeliveries(ctx context.Context, d *db.DB, tenant string) ([]releaseD
 	releases := []releaseDelivery{}
 	reviews := []Review{}
 	err := d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
-		rows, err := tx.Query(
-			ctx,
-			`SELECT id::text,release_generation,withdraw_requested,withdraw_delivered
+		rows, err := tx.Query(ctx, `SELECT id::text,release_generation,withdraw_requested,withdraw_delivered
  FROM asset_versions
  WHERE (release_retryable
  OR withdraw_requested)
  AND state IN ('submitted','checking','in_review','approved')
- ORDER BY id`,
-		)
+ ORDER BY id`)
 		if err != nil {
 			return err
 		}
@@ -145,17 +142,14 @@ func releaseDeliveries(ctx context.Context, d *db.DB, tenant string) ([]releaseD
 		if err != nil {
 			return err
 		}
-		rows, err = tx.Query(
-			ctx,
-			`SELECT r.id::text,r.version_id::text,r.generation
+		rows, err = tx.Query(ctx, `SELECT r.id::text,r.version_id::text,r.generation
  FROM asset_reviews r
  JOIN asset_versions v ON v.id=r.version_id
  WHERE v.release_retryable
  AND NOT r.delivered
  AND r.generation=v.release_generation
  AND v.state='in_review'
- ORDER BY r.id`,
-		)
+ ORDER BY r.id`)
 		if err != nil {
 			return err
 		}
@@ -213,13 +207,9 @@ func dispatchRelease(ctx context.Context, d *db.DB, c client.Client, row release
 			return err
 		}
 		return d.WithTenant(ctx, in.Tenant, func(tx pgx.Tx) error {
-			_, err := tx.Exec(
-				ctx,
+			_, err := tx.Exec(ctx,
 				`UPDATE asset_versions SET withdraw_delivered=true WHERE tenant_id=$1 AND id=$2 AND release_generation=$3`,
-				in.Tenant,
-				in.VersionID,
-				in.Generation,
-			)
+				in.Tenant, in.VersionID, in.Generation)
 			return err
 		})
 	}
@@ -259,13 +249,9 @@ func startRelease(ctx context.Context, d *db.DB, c client.Client, in Input) erro
 		}
 	}
 	return d.WithTenant(ctx, in.Tenant, func(tx pgx.Tx) error {
-		_, err := tx.Exec(
-			ctx,
+		_, err := tx.Exec(ctx,
 			`UPDATE asset_versions SET release_started=true WHERE tenant_id=$1 AND id=$2 AND release_generation=$3`,
-			in.Tenant,
-			in.VersionID,
-			in.Generation,
-		)
+			in.Tenant, in.VersionID, in.Generation)
 		return err
 	})
 }
@@ -298,13 +284,9 @@ func dispatchReview(ctx context.Context, d *db.DB, c client.Client, review Revie
 		return err
 	}
 	return d.WithTenant(ctx, review.Input.Tenant, func(tx pgx.Tx) error {
-		_, err := tx.Exec(
-			ctx,
+		_, err := tx.Exec(ctx,
 			`UPDATE asset_reviews SET delivered=true WHERE tenant_id=$1 AND id=$2 AND generation=$3`,
-			review.Input.Tenant,
-			review.ID,
-			review.Input.Generation,
-		)
+			review.Input.Tenant, review.ID, review.Input.Generation)
 		return err
 	})
 }

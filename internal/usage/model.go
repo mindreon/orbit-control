@@ -20,19 +20,11 @@ func ReportModelUsage(ctx context.Context, c auth.CapabilityClaims, req contract
 	tx := db.Tx(ctx)
 	prefix := fmt.Sprintf("model:%s:%s:%d:%d:", c.Run, c.Member, c.Seq, c.Attempt)
 	var workspace, principal string
-	if err := tx.QueryRow(
-		ctx,
-		`SELECT s.workspace_id::text,r.created_by::text
+	if err := tx.QueryRow(ctx, `SELECT s.workspace_id::text,r.created_by::text
  FROM runs r
  JOIN sessions s ON s.id=r.session_id
  WHERE r.tenant_id=$1
- AND r.id=$2`,
-		c.Tenant,
-		c.Run,
-	).Scan(
-		&workspace,
-		&principal,
-	); err != nil {
+ AND r.id=$2`, c.Tenant, c.Run).Scan(&workspace, &principal); err != nil {
 		return out, err
 	}
 	for _, item := range req.Items {
@@ -61,17 +53,10 @@ func ReportModelUsage(ctx context.Context, c auth.CapabilityClaims, req contract
 		}
 
 	}
-	if err := tx.QueryRow(
-		ctx,
-		`SELECT COALESCE(sum(millicredits),0)::bigint
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(sum(millicredits),0)::bigint
  FROM usage_ledger
  WHERE tenant_id=$1
- AND run_id=$2`,
-		c.Tenant,
-		c.Run,
-	).Scan(
-		&out.RunUsedMillicredits,
-	); err != nil {
+ AND run_id=$2`, c.Tenant, c.Run).Scan(&out.RunUsedMillicredits); err != nil {
 		return out, err
 	}
 	return out, nil

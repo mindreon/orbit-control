@@ -119,17 +119,8 @@ func assetGrants(ctx context.Context, r Asset, bindings []Binding) (bool, bool, 
  FROM workspace_members
  WHERE principal_id=$2)
  OR grantee_id=ANY($5::uuid[])
- OR $6)))`,
-
-		r.WorkspaceID,
-		p.ID,
-		r.ID,
-		tenant,
-		workspaces,
-		Allows(bindings, "workspace.read", Resource{}, tenant),
-		r.Visibility).Scan(&member,
-		&granted,
-		&maintain)
+ OR $6)))`, r.WorkspaceID, p.ID, r.ID, tenant, workspaces,
+		Allows(bindings, "workspace.read", Resource{}, tenant), r.Visibility).Scan(&member, &granted, &maintain)
 	if err != nil {
 		return false, false, false, err
 	}

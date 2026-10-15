@@ -52,14 +52,8 @@ func Get(ctx context.Context, id, action string) (Session, error) {
 		return s, httpx.E(404, "NOT_FOUND", "Session not found")
 	}
 	var raw []byte
-	if err := db.Tx(ctx).QueryRow(
-		ctx,
-		`SELECT to_jsonb(s) FROM sessions s WHERE tenant_id=$1 AND id=$2`,
-		auth.Tenant(ctx),
-		id,
-	).Scan(
-		&raw,
-	); err != nil {
+	if err := db.Tx(ctx).QueryRow(ctx, `SELECT to_jsonb(s) FROM sessions s WHERE tenant_id=$1 AND id=$2`,
+		auth.Tenant(ctx), id).Scan(&raw); err != nil {
 		return s, err
 	}
 	if err := json.Unmarshal(raw, &s); err != nil {
@@ -82,9 +76,7 @@ func GetRun(ctx context.Context, id, action string) (Run, Session, error) {
 		return r, s, httpx.E(404, "NOT_FOUND", "Run not found")
 	}
 	var raw []byte
-	err := db.Tx(ctx).QueryRow(
-		ctx,
-		`SELECT to_jsonb(r)||jsonb_build_object('pending_interaction_id',(SELECT i.id
+	err := db.Tx(ctx).QueryRow(ctx, `SELECT to_jsonb(r)||jsonb_build_object('pending_interaction_id',(SELECT i.id
  FROM interactions i
  WHERE i.tenant_id=r.tenant_id
  AND i.run_id=r.id
@@ -96,12 +88,7 @@ func GetRun(ctx context.Context, id, action string) (Run, Session, error) {
  AND g.run_id=r.id))
  FROM runs r
  WHERE tenant_id=$1
- AND id=$2`,
-		auth.Tenant(ctx),
-		id,
-	).Scan(
-		&raw,
-	)
+ AND id=$2`, auth.Tenant(ctx), id).Scan(&raw)
 	if err != nil {
 		return r, s, err
 	}

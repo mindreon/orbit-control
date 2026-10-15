@@ -136,8 +136,8 @@ func Segments(ctx context.Context, run string) (Page[Segment], error) {
 }
 func ArtifactRef(ctx context.Context, id string) (string, error) {
 	var session, ref string
-	if err := db.Tx(ctx).QueryRow(ctx, `SELECT session_id::text,object_ref FROM artifacts WHERE tenant_id=$1 AND id=$2`,
-		auth.Tenant(ctx), id).Scan(&session, &ref); err != nil {
+	if err := db.Tx(ctx).QueryRow(ctx,
+		`SELECT session_id::text,object_ref FROM artifacts WHERE tenant_id=$1 AND id=$2`, auth.Tenant(ctx), id).Scan(&session, &ref); err != nil {
 		return "", err
 	}
 	_, err := Get(ctx, session, "session.read")
@@ -147,8 +147,7 @@ func AddSteer(ctx context.Context, session, run, message, ref string, content []
 	_, err := db.Tx(ctx).
 		Exec(ctx, `INSERT INTO messages(id,tenant_id,session_id,run_id,role,author_id,content,content_ref)
  VALUES($1,$2,$3,$4,'user',$5,$6,$7)
- ON CONFLICT DO NOTHING`, message, auth.Tenant(ctx), session, run,
-			auth.From(ctx).ID, content, ref)
+ ON CONFLICT DO NOTHING`, message, auth.Tenant(ctx), session, run, auth.From(ctx).ID, content, ref)
 	if err != nil {
 		return err
 	}

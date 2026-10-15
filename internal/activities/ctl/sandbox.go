@@ -109,8 +109,8 @@ func (a *Activities) recordSandbox(ctx context.Context, tx pgx.Tx, in w.SandboxS
  DO UPDATE SET provider=EXCLUDED.provider,sandbox_id=EXCLUDED.sandbox_id,
  state=EXCLUDED.state,profile=EXCLUDED.profile,session_id=EXCLUDED.session_id,snapshot_id=EXCLUDED.snapshot_id,
  expires_at=EXCLUDED.expires_at,lease_gen=EXCLUDED.lease_gen,updated_at=now()
- WHERE sandboxes.lease_gen<=EXCLUDED.lease_gen`, in.TenantID, in.IsolationKey, provider, sandboxID,
-		state, profile, in.SessionID, in.SnapshotID, expires, in.Gen)
+ WHERE sandboxes.lease_gen<=EXCLUDED.lease_gen`, in.TenantID, in.IsolationKey, provider, sandboxID, state,
+		profile, in.SessionID, in.SnapshotID, expires, in.Gen)
 	return err
 }
 

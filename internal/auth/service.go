@@ -104,7 +104,8 @@ func (a *Service) JIT(ctx context.Context, issuer, subject, email, name string, 
 		err := tx.QueryRow(ctx, `INSERT INTO principals(id,kind,email,display_name,idp_subject,email_verified)
  VALUES($1,'user',$2,$3,$4,$5)
  ON CONFLICT(idp_subject) DO NOTHING
- RETURNING id::text,kind,email,display_name,email_verified`, p.ID, email, p.DisplayName, issuer+"|"+subject, verified).
+ RETURNING id::text,kind,email,display_name,email_verified`, p.ID, email, p.DisplayName, issuer+"|"+subject,
+			verified).
 			Scan(&p.ID, &p.Kind, &p.Email, &p.DisplayName, &p.EmailVerified)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return lookup(tx)
@@ -183,7 +184,8 @@ func (a *Service) apiKey(ctx context.Context, token, tenant string) (Principal, 
 	var p Principal
 	var keyID string
 	e := a.DB.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT p.id::text,p.kind,p.email,p.display_name,k.scopes,k.id::text,p.email_verified
+		return tx.QueryRow(ctx,
+			`SELECT p.id::text,p.kind,p.email,p.display_name,k.scopes,k.id::text,p.email_verified
  FROM api_keys k
  JOIN principals p ON p.id=k.principal_id
  JOIN memberships m ON m.principal_id=p.id
@@ -213,15 +215,11 @@ func (a *Service) apiKey(ctx context.Context, token, tenant string) (Principal, 
 			c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			e := a.DB.WithTenant(c, tenant, func(tx pgx.Tx) error {
-				_, e := tx.Exec(
-					c,
-					`UPDATE api_keys
+				_, e := tx.Exec(c, `UPDATE api_keys
  SET last_used_at=now()
  WHERE id=$1
  AND (last_used_at IS NULL
- OR last_used_at<now()-interval '1 minute')`,
-					keyID,
-				)
+ OR last_used_at<now()-interval '1 minute')`, keyID)
 				return e
 			})
 			if e != nil {

@@ -37,7 +37,8 @@ func Get(ctx context.Context, tenant, id string) (Interaction, error) {
 		return i, httpx.E(404, "NOT_FOUND", "Interaction not found")
 	}
 	err := db.Tx(ctx).
-		QueryRow(ctx, `SELECT id::text,run_id::text,session_id::text,member,kind,request,status,approvers,decision,decided_by::text,
+		QueryRow(ctx,
+			`SELECT id::text,run_id::text,session_id::text,member,kind,request,status,approvers,decision,decided_by::text,
  expires_at,created_at
  FROM interactions
  WHERE tenant_id=$1
@@ -90,19 +91,12 @@ func Grant(ctx context.Context, tenant, workspace, session, actor string, i Inte
 		}
 	}
 	for _, call := range i.Request.Calls {
-		if _, err := db.Tx(ctx).Exec(ctx, `INSERT INTO permission_grants(id,tenant_id,scope_type,scope_id,interaction_id,tool,
+		if _, err := db.Tx(ctx).Exec(ctx,
+			`INSERT INTO permission_grants(id,tenant_id,scope_type,scope_id,interaction_id,tool,
  arg_pattern,decision,granted_by,expires_at)
  VALUES($1,$2,$3,$4,$5,$6,$7,'allow',$8,$9)
- ON CONFLICT DO NOTHING`,
-			ids.Derive(i.ID, "grant:"+call.Name),
-			tenant,
-			scope,
-			id,
-			i.ID,
-			call.Name,
-			d.ArgPattern,
-			actor,
-			time.Now().Add(365*24*time.Hour)); err != nil {
+ ON CONFLICT DO NOTHING`, ids.Derive(i.ID, "grant:"+call.Name), tenant, scope, id, i.ID, call.Name,
+			d.ArgPattern, actor, time.Now().Add(365*24*time.Hour)); err != nil {
 			return "", err
 		}
 	}

@@ -65,18 +65,12 @@ func (a *Activities) change(ctx context.Context, in w.RunOp, fn func(context.Con
 			if err := persistEvents(ctx, tx, in, evs); err != nil {
 				return err
 			}
-			rows, err := tx.Query(
-				ctx,
-				`SELECT payload
+			rows, err := tx.Query(ctx, `SELECT payload
  FROM control_events
  WHERE tenant_id=$1
  AND run_id=$2
  AND operation=$3
- ORDER BY event_id`,
-				in.TenantID,
-				in.RunID,
-				in.EventN,
-			)
+ ORDER BY event_id`, in.TenantID, in.RunID, in.EventN)
 			if err != nil {
 				return err
 			}
@@ -113,19 +107,11 @@ func (a *Activities) change(ctx context.Context, in w.RunOp, fn func(context.Con
 }
 func runActor(ctx context.Context, tx pgx.Tx, in w.RunOp) (auth.Principal, error) {
 	var p auth.Principal
-	err := tx.QueryRow(
-		ctx,
-		`SELECT p.id::text,p.kind
+	err := tx.QueryRow(ctx, `SELECT p.id::text,p.kind
  FROM runs r
  JOIN principals p ON p.id=r.created_by
  WHERE r.tenant_id=$1
- AND r.id=$2`,
-		in.TenantID,
-		in.RunID,
-	).Scan(
-		&p.ID,
-		&p.Kind,
-	)
+ AND r.id=$2`, in.TenantID, in.RunID).Scan(&p.ID, &p.Kind)
 	return p, err
 }
 func auditRun(ctx context.Context, tx pgx.Tx, in w.RunOp, action, target string, detail any) error {
@@ -140,66 +126,34 @@ func (a *Activities) PrepareRun(ctx context.Context, in w.PrepareInput) (w.Prepa
 	err := a.change(ctx, in.RunOp, func(ctx context.Context, tx pgx.Tx) ([]event, error) {
 		var lock string
 		var kind string
-		if err := tx.QueryRow(
-			ctx,
-			`SELECT r.lock_id::text,s.entry_kind
+		if err := tx.QueryRow(ctx, `SELECT r.lock_id::text,s.entry_kind
  FROM runs r
  JOIN sessions s ON s.id=r.session_id
  WHERE r.tenant_id=$1
- AND r.id=$2`,
-			in.TenantID,
-			in.RunID,
-		).Scan(
-			&lock,
-			&kind,
-		); err != nil {
+ AND r.id=$2`, in.TenantID, in.RunID).Scan(&lock, &kind); err != nil {
 			return nil, err
 		}
-		if _, err := tx.Exec(
-			ctx,
-			`UPDATE runs
+		if _, err := tx.Exec(ctx, `UPDATE runs
  SET status='running',started_at=COALESCE(started_at,now())
  WHERE tenant_id=$1
  AND id=$2
- AND status IN ('queued','running')`,
-			in.TenantID,
-			in.RunID,
-		); err != nil {
+ AND status IN ('queued','running')`, in.TenantID, in.RunID); err != nil {
 			return nil, err
 		}
-		if _, err := tx.Exec(
-			ctx,
+		if _, err := tx.Exec(ctx,
 			`INSERT INTO budget_reservations(id,tenant_id,run_id,millicredits,status,expires_at)
  VALUES($1,$2,$3,$4,'held',now()+interval '7 days')
- ON CONFLICT DO NOTHING`,
-			ids.Derive(in.RunID, "reservation"),
-			in.TenantID,
-			in.RunID,
-			in.Budget,
-		); err != nil {
+ ON CONFLICT DO NOTHING`, ids.Derive(in.RunID, "reservation"), in.TenantID, in.RunID, in.Budget); err != nil {
 			return nil, err
 		}
-		if err := tx.QueryRow(
-			ctx,
-			`SELECT COALESCE(max(version),0)
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(max(version),0)
  FROM agent_checkpoints
  WHERE tenant_id=$1
- AND session_key=$2`,
-			in.TenantID,
-			in.SessionKey,
-		).Scan(
-			&out.CheckpointVersion,
-		); err != nil {
+ AND session_key=$2`, in.TenantID, in.SessionKey).Scan(&out.CheckpointVersion); err != nil {
 			return nil, err
 		}
-		if err := tx.QueryRow(
-			ctx,
-			`SELECT started_at FROM runs WHERE tenant_id=$1 AND id=$2`,
-			in.TenantID,
-			in.RunID,
-		).Scan(
-			&out.StartedAt,
-		); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT started_at FROM runs WHERE tenant_id=$1 AND id=$2`,
+			in.TenantID, in.RunID).Scan(&out.StartedAt); err != nil {
 			return nil, err
 		}
 		return []event{
@@ -210,28 +164,15 @@ func (a *Activities) PrepareRun(ctx context.Context, in w.PrepareInput) (w.Prepa
 }
 func (a *Activities) StartSegment(ctx context.Context, in w.StartSegmentInput) error {
 	return a.change(ctx, in.RunOp, func(ctx context.Context, tx pgx.Tx) ([]event, error) {
-		_, err := tx.Exec(
-			ctx,
-			`INSERT INTO run_segments(tenant_id,run_id,member,seq,status,checkpoint_version)
+		_, err := tx.Exec(ctx, `INSERT INTO run_segments(tenant_id,run_id,member,seq,status,checkpoint_version)
  VALUES($1,$2,$3,$4,'running',$5)
  ON CONFLICT(tenant_id,run_id,member,seq)
  DO UPDATE SET started_at=now()
- WHERE run_segments.status='running'`,
-			in.TenantID,
-			in.RunID,
-			in.Member,
-			in.Seq,
-			in.ExpectedVersion,
-		)
+ WHERE run_segments.status='running'`, in.TenantID, in.RunID, in.Member, in.Seq, in.ExpectedVersion)
 		if err != nil {
 			return nil, err
 		}
-		_, err = tx.Exec(
-			ctx,
-			`UPDATE runs SET status='running' WHERE tenant_id=$1 AND id=$2 AND ended_at IS NULL`,
-			in.TenantID,
-			in.RunID,
-		)
+		_, err = tx.Exec(ctx, `UPDATE runs SET status='running' WHERE tenant_id=$1 AND id=$2 AND ended_at IS NULL`, in.TenantID, in.RunID)
 		return nil, err
 	})
 }
@@ -248,24 +189,14 @@ func (a *Activities) RecordSegment(ctx context.Context, in w.RecordSegmentInput)
 		if err != nil {
 			return nil, err
 		}
-		n, err := tx.Exec(
-			ctx,
-			`UPDATE run_segments
+		n, err := tx.Exec(ctx, `UPDATE run_segments
  SET status=$5,checkpoint_version=$6,iterations=$7,usage=$8,ended_at=now()
  WHERE tenant_id=$1
  AND run_id=$2
  AND member=$3
  AND seq=$4
- AND status='running'`,
-			in.TenantID,
-			in.RunID,
-			in.Member,
-			in.Seq,
-			in.Result.Status,
-			in.Result.CheckpointVersion,
-			in.Result.Progress.Iterations,
-			usage,
-		)
+ AND status='running'`, in.TenantID, in.RunID, in.Member, in.Seq, in.Result.Status,
+			in.Result.CheckpointVersion, in.Result.Progress.Iterations, usage)
 		if err != nil {
 			return nil, err
 		}
@@ -273,39 +204,22 @@ func (a *Activities) RecordSegment(ctx context.Context, in w.RecordSegmentInput)
 		if err != nil {
 			return nil, err
 		}
-		if err = tx.QueryRow(
-			ctx,
-			`SELECT COALESCE(sum(millicredits),0)::bigint
+		if err = tx.QueryRow(ctx, `SELECT COALESCE(sum(millicredits),0)::bigint
  FROM usage_ledger
  WHERE tenant_id=$1
- AND run_id=$2`,
-			in.TenantID,
-			in.RunID,
-		).Scan(
-			&out.RunUsedMillicredits,
-		); err != nil {
+ AND run_id=$2`, in.TenantID, in.RunID).Scan(&out.RunUsedMillicredits); err != nil {
 			return nil, err
 		}
-		_, err = tx.Exec(
-			ctx,
-			`UPDATE runs SET used_millicredits=$3 WHERE tenant_id=$1 AND id=$2`,
-			in.TenantID,
-			in.RunID,
-			out.RunUsedMillicredits,
-		)
+		_, err = tx.Exec(ctx, `UPDATE runs SET used_millicredits=$3 WHERE tenant_id=$1 AND id=$2`, in.TenantID,
+			in.RunID, out.RunUsedMillicredits)
 		return evs, err
 	})
 	return out, err
 }
 func (a *Activities) SetRunStatus(ctx context.Context, in w.StatusInput) error {
 	return a.change(ctx, in.RunOp, func(ctx context.Context, tx pgx.Tx) ([]event, error) {
-		_, err := tx.Exec(
-			ctx,
-			`UPDATE runs SET status=$3 WHERE tenant_id=$1 AND id=$2 AND ended_at IS NULL`,
-			in.TenantID,
-			in.RunID,
-			in.Status,
-		)
+		_, err := tx.Exec(ctx, `UPDATE runs SET status=$3 WHERE tenant_id=$1 AND id=$2 AND ended_at IS NULL`,
+			in.TenantID, in.RunID, in.Status)
 		return []event{
 			{
 				typ:  "run.status",
@@ -318,21 +232,12 @@ func (a *Activities) ReconcileCheckpoint(ctx context.Context, in w.ReconcileInpu
 	var out w.ReconcileOutput
 	err := a.DB.WithTenant(ctx, in.TenantID, func(tx pgx.Tx) error {
 		var raw []byte
-		err := tx.QueryRow(
-			ctx,
-			`SELECT result
+		err := tx.QueryRow(ctx, `SELECT result
  FROM segment_results
  WHERE tenant_id=$1
  AND run_id=$2
  AND member=$3
- AND seq=$4`,
-			in.TenantID,
-			in.RunID,
-			in.Member,
-			in.Seq,
-		).Scan(
-			&raw,
-		)
+ AND seq=$4`, in.TenantID, in.RunID, in.Member, in.Seq).Scan(&raw)
 		if err == nil {
 			var result contract.SegmentResult
 			if err = json.Unmarshal(raw, &result); err != nil {
@@ -342,50 +247,27 @@ func (a *Activities) ReconcileCheckpoint(ctx context.Context, in w.ReconcileInpu
 		} else if !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
-		return tx.QueryRow(
-			ctx,
-			`SELECT COALESCE(max(version),0)
+		return tx.QueryRow(ctx, `SELECT COALESCE(max(version),0)
  FROM agent_checkpoints
  WHERE tenant_id=$1
- AND session_key=$2`,
-			in.TenantID,
-			in.SessionKey,
-		).Scan(
-			&out.LatestVersion,
-		)
+ AND session_key=$2`, in.TenantID, in.SessionKey).Scan(&out.LatestVersion)
 	})
 	return out, err
 }
 func (a *Activities) FinalizeRun(ctx context.Context, in w.FinalizeInput) error {
 	return a.change(ctx, in.RunOp, func(ctx context.Context, tx pgx.Tx) ([]event, error) {
 		var used int64
-		if err := tx.QueryRow(
-			ctx,
-			`SELECT COALESCE(sum(millicredits),0)::bigint
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(sum(millicredits),0)::bigint
  FROM usage_ledger
  WHERE tenant_id=$1
- AND run_id=$2`,
-			in.TenantID,
-			in.RunID,
-		).Scan(
-			&used,
-		); err != nil {
+ AND run_id=$2`, in.TenantID, in.RunID).Scan(&used); err != nil {
 			return nil, err
 		}
-		n, err := tx.Exec(
-			ctx,
-			`UPDATE runs
+		n, err := tx.Exec(ctx, `UPDATE runs
  SET status=$3,error_code=NULLIF($4,''),summary=NULLIF($5,''),ended_at=now(),used_millicredits=$6
  WHERE tenant_id=$1
  AND id=$2
- AND ended_at IS NULL`,
-			in.TenantID,
-			in.RunID,
-			in.Status,
-			in.ErrorCode,
-			in.Reason,
-			used,
-		)
+ AND ended_at IS NULL`, in.TenantID, in.RunID, in.Status, in.ErrorCode, in.Reason, used)
 		if err != nil {
 			return nil, err
 		}
@@ -395,12 +277,8 @@ func (a *Activities) FinalizeRun(ctx context.Context, in w.FinalizeInput) error 
 		if err = settleRun(ctx, tx, in, used); err != nil {
 			return nil, err
 		}
-		if _, err = tx.Exec(
-			ctx,
-			`UPDATE sessions SET last_activity_at=now() WHERE tenant_id=$1 AND id=$2`,
-			in.TenantID,
-			in.SessionID,
-		); err != nil {
+		if _, err = tx.Exec(ctx, `UPDATE sessions SET last_activity_at=now() WHERE tenant_id=$1 AND id=$2`,
+			in.TenantID, in.SessionID); err != nil {
 			return nil, err
 		}
 		if err = auditRun(
@@ -476,17 +354,9 @@ func persistEvents(ctx context.Context, tx pgx.Tx, in w.RunOp, evs []event) erro
 		if err = contract.Validate("RunEvent", raw); err != nil {
 			return fmt.Errorf("control event %s: %w", e.typ, err)
 		}
-		if _, err = tx.Exec(
-			ctx,
-			`INSERT INTO control_events(tenant_id,run_id,event_id,operation,payload)
+		if _, err = tx.Exec(ctx, `INSERT INTO control_events(tenant_id,run_id,event_id,operation,payload)
  VALUES($1,$2,$3,$4,$5)
- ON CONFLICT DO NOTHING`,
-			in.TenantID,
-			in.RunID,
-			msg.Id,
-			in.EventN,
-			raw,
-		); err != nil {
+ ON CONFLICT DO NOTHING`, in.TenantID, in.RunID, msg.Id, in.EventN, raw); err != nil {
 			return err
 		}
 	}
@@ -502,18 +372,9 @@ func recordOutput(ctx context.Context, tx pgx.Tx, in w.RecordSegmentInput, chang
 			if err != nil {
 				return nil, err
 			}
-			if _, err = tx.Exec(
-				ctx,
-				`INSERT INTO messages(id,tenant_id,session_id,run_id,role,content,content_ref)
+			if _, err = tx.Exec(ctx, `INSERT INTO messages(id,tenant_id,session_id,run_id,role,content,content_ref)
  VALUES($1,$2,$3,$4,'assistant',$5,$6)
- ON CONFLICT DO NOTHING`,
-				f.MessageId,
-				in.TenantID,
-				in.SessionID,
-				in.RunID,
-				content,
-				f.ContentRef,
-			); err != nil {
+ ON CONFLICT DO NOTHING`, f.MessageId, in.TenantID, in.SessionID, in.RunID, content, f.ContentRef); err != nil {
 				return nil, err
 			}
 		}
@@ -522,36 +383,19 @@ func recordOutput(ctx context.Context, tx pgx.Tx, in w.RecordSegmentInput, chang
 				return nil, temporal.NewNonRetryableApplicationError("invalid artifact reference", contract.ErrorInvalidSpec, nil)
 			}
 			var old string
-			err = tx.QueryRow(
-				ctx,
-				`SELECT digest FROM artifacts WHERE tenant_id=$1 AND session_id=$2 AND path=$3`,
-				in.TenantID,
-				in.SessionID,
-				artifact.Path,
-			).Scan(
-				&old,
-			)
+			err = tx.QueryRow(ctx, `SELECT digest FROM artifacts WHERE tenant_id=$1 AND session_id=$2 AND path=$3`,
+				in.TenantID, in.SessionID, artifact.Path).Scan(&old)
 			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 				return nil, err
 			}
-			_, err = tx.Exec(
-				ctx,
+			_, err = tx.Exec(ctx,
 				`INSERT INTO artifacts(id,tenant_id,session_id,run_id,path,mime,size,digest,object_ref,status)
  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'final')
  ON CONFLICT(tenant_id,session_id,path)
  DO UPDATE SET run_id=EXCLUDED.run_id,mime=EXCLUDED.mime,size=EXCLUDED.size,digest=EXCLUDED.digest,
  object_ref=EXCLUDED.object_ref,updated_at=now()
- WHERE artifacts.digest<>EXCLUDED.digest`,
-				ids.Derive(in.SessionID, artifact.Path),
-				in.TenantID,
-				in.SessionID,
-				in.RunID,
-				artifact.Path,
-				artifact.Mime,
-				artifact.SizeBytes,
-				artifact.Digest,
-				artifact.ObjectRef,
-			)
+ WHERE artifacts.digest<>EXCLUDED.digest`, ids.Derive(in.SessionID, artifact.Path), in.TenantID, in.SessionID,
+				in.RunID, artifact.Path, artifact.Mime, artifact.SizeBytes, artifact.Digest, artifact.ObjectRef)
 			if err != nil {
 				return nil, err
 			}
@@ -589,17 +433,10 @@ func settleRun(ctx context.Context, tx pgx.Tx, in w.FinalizeInput, used int64) e
 	if in.NeverStarted {
 		reservation = "released"
 	}
-	if _, err = tx.Exec(
-		ctx,
-		`UPDATE budget_reservations
+	if _, err = tx.Exec(ctx, `UPDATE budget_reservations
  SET status=$3,millicredits=$4
  WHERE tenant_id=$1
- AND run_id=$2`,
-		in.TenantID,
-		in.RunID,
-		reservation,
-		used,
-	); err != nil {
+ AND run_id=$2`, in.TenantID, in.RunID, reservation, used); err != nil {
 		return err
 	}
 	return nil

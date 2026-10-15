@@ -64,8 +64,10 @@ func (h *Handler) createInvitation(w http.ResponseWriter, r *http.Request) error
 	token := base64.RawURLEncoding.EncodeToString(secret)
 	hash := sha256.Sum256([]byte(token))
 	id := ids.New()
-	if _, err := db.Tx(ctx).Exec(ctx, `INSERT INTO invitations(id,tenant_id,email,role,token_hash,expires_at,created_by)
- VALUES($1,$2,$3,$4,$5,$6,$7)`, id, auth.Tenant(ctx), in.Email, in.Role, hash[:], in.ExpiresAt, auth.From(ctx).ID); err != nil {
+	if _, err := db.Tx(ctx).Exec(ctx,
+		`INSERT INTO invitations(id,tenant_id,email,role,token_hash,expires_at,created_by)
+ VALUES($1,$2,$3,$4,$5,$6,$7)`, id, auth.Tenant(ctx), in.Email, in.Role, hash[:], in.ExpiresAt,
+		auth.From(ctx).ID); err != nil {
 		return err
 	}
 	if err := h.logWrite(ctx,
@@ -195,11 +197,7 @@ func (h *Handler) acceptInvitation(w http.ResponseWriter, r *http.Request) error
 				if err := tx.QueryRow(ctx, "SELECT id::text,email,role,expires_at,status FROM invitations WHERE tenant_id=$1 AND "+
 					("token_hash=$2 AND status='pending' AND expires_at>now() FOR UPDATE"),
 					tenant,
-					hash[:]).Scan(&i.ID,
-					&i.Email,
-					&i.Role,
-					&i.ExpiresAt,
-					&i.Status); err != nil {
+					hash[:]).Scan(&i.ID, &i.Email, &i.Role, &i.ExpiresAt, &i.Status); err != nil {
 					return err
 				}
 				if !strings.EqualFold(i.Email, p.Email) {

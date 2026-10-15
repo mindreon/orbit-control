@@ -88,9 +88,8 @@ func (s *Service) Upload(ctx context.Context, a Asset, u *Upload) (Version, erro
 		return Version{}, Invalid("Upload tenant mismatch")
 	}
 	// Serialize with status/visibility updates; do not trust a stale preflight read.
-	if err := db.Tx(ctx).QueryRow(
-		ctx, ("SELECT status FROM assets WHERE tenant_id=$1 AND id=$2 FOR SHARE"), auth.Tenant(ctx), a.ID,
-	).Scan(&a.Status); err != nil {
+	if err := db.Tx(ctx).QueryRow(ctx, ("SELECT status FROM assets WHERE tenant_id=$1 AND id=$2 FOR SHARE"),
+		auth.Tenant(ctx), a.ID).Scan(&a.Status); err != nil {
 		return Version{}, err
 	}
 	if a.Status != "active" {
@@ -122,20 +121,11 @@ func (s *Service) Upload(ctx context.Context, a Asset, u *Upload) (Version, erro
 	}
 	id := ids.New()
 	_, err = db.Tx(ctx).
-		Exec(ctx, `INSERT INTO asset_versions(id,tenant_id,asset_id,version,manifest,content_digest,blob_index_ref,permissions,compat,
+		Exec(ctx,
+			`INSERT INTO asset_versions(id,tenant_id,asset_id,version,manifest,content_digest,blob_index_ref,permissions,compat,
  state,uploaded_by,permissions_jcs,identity_jcs)
- VALUES($1,$2,$3,$4,$5,$6,$7,$8,'{}','draft',$9,$10,$11)`,
-			id,
-			auth.Tenant(ctx),
-			a.ID,
-			version,
-			mb,
-			b.Digest,
-			ref,
-			pb,
-			auth.From(ctx).ID,
-			permissionsJCS,
-			identityJCS)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8,'{}','draft',$9,$10,$11)`, id, auth.Tenant(ctx), a.ID, version, mb, b.Digest,
+			ref, pb, auth.From(ctx).ID, permissionsJCS, identityJCS)
 	if err != nil {
 		return Version{}, err
 	}

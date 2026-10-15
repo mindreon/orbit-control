@@ -84,25 +84,11 @@ func Append(ctx context.Context, tx pgx.Tx, p auth.Principal, tenant, action, ta
 	if e != nil {
 		return e
 	}
-	_, e = tx.Exec(
-		ctx,
+	_, e = tx.Exec(ctx,
 		`INSERT INTO audit_log(id,tenant_id,actor_id,actor_kind,action,target_type,target_id,detail,ip,user_agent,prev_hash,
  hash,occurred_at)
- VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-		r.ID,
-		tenant,
-		p.ID,
-		p.Kind,
-		action,
-		targetType,
-		target,
-		b,
-		r.IP,
-		r.UserAgent,
-		prev,
-		h,
-		now,
-	)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, r.ID, tenant, p.ID, p.Kind, action, targetType, target,
+		b, r.IP, r.UserAgent, prev, h, now)
 	return e
 }
 
@@ -113,14 +99,12 @@ type Head struct {
 
 func Verify(ctx context.Context, tx pgx.Tx) (Head, error) {
 	head := Head{Hash: hex.EncodeToString(make([]byte, 32))}
-	rows, e := tx.Query(
-		ctx,
+	rows, e := tx.Query(ctx,
 		`SELECT id::text,tenant_id::text,actor_id::text,actor_kind,action,target_type,target_id,detail,ip,user_agent,
  occurred_at,prev_hash,hash
  FROM audit_log
  WHERE tenant_id=NULLIF(current_setting('app.tenant_id',true),'')::uuid
- ORDER BY occurred_at,id`,
-	)
+ ORDER BY occurred_at,id`)
 	if e != nil {
 		return head, e
 	}
@@ -129,19 +113,8 @@ func Verify(ctx context.Context, tx pgx.Tx) (Head, error) {
 	for rows.Next() {
 		var r Record
 		var ph, h []byte
-		if e = rows.Scan(&r.ID,
-			&r.TenantID,
-			&r.ActorID,
-			&r.ActorKind,
-			&r.Action,
-			&r.TargetType,
-			&r.TargetID,
-			&r.Detail,
-			&r.IP,
-			&r.UserAgent,
-			&r.OccurredAt,
-			&ph,
-			&h); e != nil {
+		if e = rows.Scan(&r.ID, &r.TenantID, &r.ActorID, &r.ActorKind, &r.Action, &r.TargetType, &r.TargetID,
+			&r.Detail, &r.IP, &r.UserAgent, &r.OccurredAt, &ph, &h); e != nil {
 			return head, e
 		}
 		r.OccurredAt = r.OccurredAt.UTC()

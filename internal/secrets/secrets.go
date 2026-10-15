@@ -60,14 +60,7 @@ func (k Keys) Put(ctx context.Context, tenant, actor, name, scope string, plain 
  VALUES($1,$2,$3,$4,$5,$6,$7)
  ON CONFLICT(tenant_id,name,scope)
  DO UPDATE SET ciphertext=EXCLUDED.ciphertext,key_version=EXCLUDED.key_version
- RETURNING id::text`,
-			ids.New(),
-			tenant,
-			name,
-			scope,
-			encrypted,
-			k.Current,
-			actor).
+ RETURNING id::text`, ids.New(), tenant, name, scope, encrypted, k.Current, actor).
 		Scan(&id)
 	return id, err
 }

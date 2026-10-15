@@ -22,14 +22,8 @@ func (a *Activities) CreateInteraction(ctx context.Context, in w.InteractionInpu
 	}
 	err := a.change(ctx, in.RunOp, func(ctx context.Context, tx pgx.Tx) ([]event, error) {
 		var owner string
-		if err := tx.QueryRow(
-			ctx,
-			`SELECT owner_id::text FROM sessions WHERE tenant_id=$1 AND id=$2`,
-			in.TenantID,
-			in.SessionID,
-		).Scan(
-			&owner,
-		); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT owner_id::text FROM sessions WHERE tenant_id=$1 AND id=$2`,
+			in.TenantID, in.SessionID).Scan(&owner); err != nil {
 			return nil, err
 		}
 		out.Approvers = []string{owner}
@@ -41,26 +35,12 @@ func (a *Activities) CreateInteraction(ctx context.Context, in w.InteractionInpu
 		if err != nil {
 			return nil, err
 		}
-		n, err := tx.Exec(
-			ctx,
+		n, err := tx.Exec(ctx,
 			`INSERT INTO interactions(id,tenant_id,run_id,session_id,member,seq,kind,request,approvers,status,remind_at,due_at,
  expires_at,created_at)
  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10,$11,$12,$13)
- ON CONFLICT DO NOTHING`,
-			in.Request.InteractionId,
-			in.TenantID,
-			in.RunID,
-			in.SessionID,
-			in.Member,
-			in.Seq,
-			in.Request.Kind,
-			req,
-			approvers,
-			in.RemindAt,
-			in.EscalateAt,
-			in.ExpiresAt,
-			in.EventAt,
-		)
+ ON CONFLICT DO NOTHING`, in.Request.InteractionId, in.TenantID, in.RunID, in.SessionID, in.Member, in.Seq,
+			in.Request.Kind, req, approvers, in.RemindAt, in.EscalateAt, in.ExpiresAt, in.EventAt)
 		if err != nil {
 			return nil, err
 		}
@@ -71,13 +51,8 @@ func (a *Activities) CreateInteraction(ctx context.Context, in w.InteractionInpu
 		if in.Request.Kind == "ask_user" {
 			status = "waiting_input"
 		}
-		if _, err = tx.Exec(
-			ctx,
-			`UPDATE runs SET status=$3 WHERE tenant_id=$1 AND id=$2 AND ended_at IS NULL`,
-			in.TenantID,
-			in.RunID,
-			status,
-		); err != nil {
+		if _, err = tx.Exec(ctx, `UPDATE runs SET status=$3 WHERE tenant_id=$1 AND id=$2 AND ended_at IS NULL`,
+			in.TenantID, in.RunID, status); err != nil {
 			return nil, err
 		}
 		return []event{
@@ -91,16 +66,11 @@ func (a *Activities) CreateInteraction(ctx context.Context, in w.InteractionInpu
 }
 func (a *Activities) CancelInteraction(ctx context.Context, in w.NotifyInput) error {
 	return a.change(ctx, in.RunOp, func(ctx context.Context, tx pgx.Tx) ([]event, error) {
-		_, err := tx.Exec(
-			ctx,
-			`UPDATE interactions
+		_, err := tx.Exec(ctx, `UPDATE interactions
  SET status='cancelled',resolved_at=now()
  WHERE tenant_id=$1
  AND id=$2
- AND status IN ('pending','escalated')`,
-			in.TenantID,
-			in.InteractionID,
-		)
+ AND status IN ('pending','escalated')`, in.TenantID, in.InteractionID)
 		return nil, err
 	})
 }
@@ -115,14 +85,8 @@ func (a *Activities) NotifyInteraction(ctx context.Context, in w.NotifyInput) er
 		}
 		if in.Kind == "escalate" {
 			var workspace string
-			if err = tx.QueryRow(
-				ctx,
-				`SELECT workspace_id::text FROM sessions WHERE tenant_id=$1 AND id=$2`,
-				in.TenantID,
-				i.SessionID,
-			).Scan(
-				&workspace,
-			); err != nil {
+			if err = tx.QueryRow(ctx, `SELECT workspace_id::text FROM sessions WHERE tenant_id=$1 AND id=$2`,
+				in.TenantID, i.SessionID).Scan(&workspace); err != nil {
 				return nil, err
 			}
 			admins, e := interactions.WorkspaceAdmins(ctx, workspace)
@@ -136,16 +100,10 @@ func (a *Activities) NotifyInteraction(ctx context.Context, in w.NotifyInput) er
 			if e != nil {
 				return nil, e
 			}
-			if _, err = tx.Exec(
-				ctx,
-				`UPDATE interactions
+			if _, err = tx.Exec(ctx, `UPDATE interactions
  SET approvers=$3,status='escalated',escalated_at=COALESCE(escalated_at,now())
  WHERE tenant_id=$1
- AND id=$2`,
-				in.TenantID,
-				i.ID,
-				raw,
-			); err != nil {
+ AND id=$2`, in.TenantID, i.ID, raw); err != nil {
 				return nil, err
 			}
 		}
@@ -173,14 +131,8 @@ func (a *Activities) ApplyDecision(ctx context.Context, in w.DecisionInput) erro
 			return nil, temporalInvalid("Decision kind mismatch")
 		}
 		var workspace string
-		if err = tx.QueryRow(
-			ctx,
-			`SELECT workspace_id::text FROM sessions WHERE tenant_id=$1 AND id=$2`,
-			in.TenantID,
-			in.SessionID,
-		).Scan(
-			&workspace,
-		); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT workspace_id::text FROM sessions WHERE tenant_id=$1 AND id=$2`,
+			in.TenantID, in.SessionID).Scan(&workspace); err != nil {
 			return nil, err
 		}
 		scope := ""
@@ -204,29 +156,17 @@ func (a *Activities) ApplyDecision(ctx context.Context, in w.DecisionInput) erro
 		if err != nil {
 			return nil, err
 		}
-		if _, err = tx.Exec(
-			ctx,
-			`UPDATE interactions
+		if _, err = tx.Exec(ctx, `UPDATE interactions
  SET status=$3,decision=$4,decided_by=$5,resolved_at=now()
  WHERE tenant_id=$1
- AND id=$2`,
-			in.TenantID,
-			i.ID,
-			status,
-			raw,
-			actor,
-		); err != nil {
+ AND id=$2`, in.TenantID, i.ID, status, raw, actor); err != nil {
 			return nil, err
 		}
 		if err = auditDecision(ctx, tx, in, i.ID, scope); err != nil {
 			return nil, err
 		}
-		if _, err = tx.Exec(
-			ctx,
-			`UPDATE runs SET status='running' WHERE tenant_id=$1 AND id=$2 AND ended_at IS NULL`,
-			in.TenantID,
-			in.RunID,
-		); err != nil {
+		if _, err = tx.Exec(ctx,
+			`UPDATE runs SET status='running' WHERE tenant_id=$1 AND id=$2 AND ended_at IS NULL`, in.TenantID, in.RunID); err != nil {
 			return nil, err
 		}
 		return []event{

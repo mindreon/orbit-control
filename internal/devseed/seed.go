@@ -110,8 +110,7 @@ func WaitPublished(ctx context.Context, d *db.DB, result Result) error {
  WHERE tenant_id=$1
  AND id=$2`),
 					result.TenantID,
-					id).Scan(&state,
-					&failure); err != nil {
+					id).Scan(&state, &failure); err != nil {
 					return err
 				}
 				if state == "check_failed" || state == "rejected" || failure != nil {
@@ -164,17 +163,13 @@ func seedWorkspaceModel(ctx context.Context, tx pgx.Tx, p auth.Principal, out Re
 	if _, e = tx.Exec(ctx, `UPDATE model_profiles SET is_default=false WHERE tenant_id=$1 AND name<>'default'`, out.TenantID); e != nil {
 		return e
 	}
-	if _, e = tx.Exec(ctx, `INSERT INTO model_profiles(id,tenant_id,name,provider,base_url,model,secret_id,pricing,context_window,is_default)
+	if _, e = tx.Exec(ctx,
+		`INSERT INTO model_profiles(id,tenant_id,name,provider,base_url,model,secret_id,pricing,context_window,is_default)
  VALUES($1,$2,'default','openai',$3,$4,$5,$6,32768,true)
  ON CONFLICT(tenant_id,name)
  DO UPDATE SET base_url=EXCLUDED.base_url,model=EXCLUDED.model,secret_id=EXCLUDED.secret_id,
- pricing=EXCLUDED.pricing,is_default=true`,
-		ids.Derive(out.TenantID, "model:default"),
-		out.TenantID,
-		model.BaseURL,
-		model.Name,
-		secretID,
-		pricing); e != nil {
+ pricing=EXCLUDED.pricing,is_default=true`, ids.Derive(out.TenantID, "model:default"), out.TenantID,
+		model.BaseURL, model.Name, secretID, pricing); e != nil {
 		return e
 	}
 	return nil

@@ -22,7 +22,8 @@ func (h *Handler) listMembers(w http.ResponseWriter, r *http.Request) error {
 		return e
 	}
 	rows, e := db.Tx(ctx).
-		Query(ctx, `SELECT p.id::text,p.kind,p.email,p.display_name,m.status,m.source,COALESCE((SELECT jsonb_agg(role
+		Query(ctx,
+			`SELECT p.id::text,p.kind,p.email,p.display_name,m.status,m.source,COALESCE((SELECT jsonb_agg(role
  ORDER BY role)
  FROM role_bindings rb
  WHERE rb.principal_type IN ('user','service')
@@ -273,7 +274,8 @@ func (h *Handler) createKey(w http.ResponseWriter, r *http.Request) error {
 	id := ids.New()
 	_, e = db.Tx(ctx).
 		Exec(ctx, `INSERT INTO api_keys(id,tenant_id,principal_id,name,prefix,hash,scopes,expires_at)
- VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, id, auth.Tenant(ctx), in.PrincipalID, in.Name, prefix, hash, in.Scopes, in.ExpiresAt)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, id, auth.Tenant(ctx), in.PrincipalID, in.Name, prefix, hash, in.Scopes,
+			in.ExpiresAt)
 	if e != nil {
 		return e
 	}
@@ -315,7 +317,8 @@ func (h *Handler) listAudit(w http.ResponseWriter, r *http.Request) error {
 		return e
 	}
 	rows, e := db.Tx(ctx).
-		Query(ctx, `SELECT id::text,actor_id::text,actor_kind,action,target_type,target_id,detail,encode(prev_hash,'hex'),encode(hash,
+		Query(ctx,
+			`SELECT id::text,actor_id::text,actor_kind,action,target_type,target_id,detail,encode(prev_hash,'hex'),encode(hash,
  'hex'),occurred_at
  FROM audit_log
  WHERE ($1=''

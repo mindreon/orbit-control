@@ -116,9 +116,7 @@ func (h *Handler) Router() http.Handler {
 func check(ctx context.Context, c auth.CapabilityClaims) error {
 	var valid bool
 	if c.Purpose == "segment" && c.Member != "" && c.Seq > 0 && c.Attempt > 0 {
-		if err := db.Tx(ctx).QueryRow(
-			ctx,
-			`SELECT EXISTS(SELECT 1
+		if err := db.Tx(ctx).QueryRow(ctx, `SELECT EXISTS(SELECT 1
  FROM runs r
  JOIN run_segments s ON s.tenant_id=r.tenant_id
  AND s.run_id=r.id
@@ -127,21 +125,12 @@ func check(ctx context.Context, c auth.CapabilityClaims) error {
  AND r.ended_at IS NULL
  AND s.member=$3
  AND s.seq=$4
- AND s.status='running')`,
-			c.Tenant,
-			c.Run,
-			c.Member,
-			c.Seq,
-		).Scan(
-			&valid,
-		); err != nil {
+ AND s.status='running')`, c.Tenant, c.Run, c.Member, c.Seq).Scan(&valid); err != nil {
 			return err
 		}
 	}
 	if c.Purpose == "sandbox" && c.LeaseID != "" {
-		if err := db.Tx(ctx).QueryRow(
-			ctx,
-			`SELECT EXISTS(SELECT 1
+		if err := db.Tx(ctx).QueryRow(ctx, `SELECT EXISTS(SELECT 1
  FROM runs r
  JOIN sandboxes s ON s.tenant_id=r.tenant_id
  AND s.session_id=r.session_id
@@ -150,13 +139,7 @@ func check(ctx context.Context, c auth.CapabilityClaims) error {
  AND r.ended_at IS NULL
  AND s.isolation_key=$3
  AND s.isolation_key='t-'||r.tenant_id||'-s-'||r.session_id
- AND s.state NOT IN ('destroyed','failed'))`,
-			c.Tenant,
-			c.Run,
-			c.LeaseID,
-		).Scan(
-			&valid,
-		); err != nil {
+ AND s.state NOT IN ('destroyed','failed'))`, c.Tenant, c.Run, c.LeaseID).Scan(&valid); err != nil {
 			return err
 		}
 	}
@@ -228,19 +211,12 @@ func (h *Handler) tokens(w http.ResponseWriter, r *http.Request) error {
 func getLock(ctx context.Context, c auth.CapabilityClaims) (contract.RunLock, error) {
 	var lock contract.RunLock
 	var raw []byte
-	err := db.Tx(ctx).QueryRow(
-		ctx,
-		`SELECT l.lock
+	err := db.Tx(ctx).QueryRow(ctx, `SELECT l.lock
  FROM run_locks l
  JOIN runs r ON r.lock_id=l.id
  AND r.tenant_id=l.tenant_id
  WHERE r.tenant_id=$1
- AND r.id=$2`,
-		c.Tenant,
-		c.Run,
-	).Scan(
-		&raw,
-	)
+ AND r.id=$2`, c.Tenant, c.Run).Scan(&raw)
 	if err != nil {
 		return lock, err
 	}
@@ -355,14 +331,8 @@ func (h *Handler) secretGrants(w http.ResponseWriter, r *http.Request, c auth.Ca
 	out := contract.SecretGrantResponse{}
 	for _, name := range req.Names {
 		var id string
-		if err = db.Tx(r.Context()).QueryRow(
-			r.Context(),
-			`SELECT id::text FROM secrets WHERE tenant_id=$1 AND name=$2 AND scope='tenant'`,
-			c.Tenant,
-			name,
-		).Scan(
-			&id,
-		); err != nil {
+		if err = db.Tx(r.Context()).QueryRow(r.Context(),
+			`SELECT id::text FROM secrets WHERE tenant_id=$1 AND name=$2 AND scope='tenant'`, c.Tenant, name).Scan(&id); err != nil {
 			return err
 		}
 		plain, e := h.Secrets.Get(r.Context(), c.Tenant, id)
@@ -372,19 +342,11 @@ func (h *Handler) secretGrants(w http.ResponseWriter, r *http.Request, c auth.Ca
 		out.Grants = append(out.Grants, contract.SecretGrant{Name: name, Value: contract.Secret(plain), ExpiresAt: c.ExpiresAt.Time})
 	}
 	var actor, kind string
-	if err = db.Tx(r.Context()).QueryRow(
-		r.Context(),
-		`SELECT p.id::text,p.kind
+	if err = db.Tx(r.Context()).QueryRow(r.Context(), `SELECT p.id::text,p.kind
  FROM runs r
  JOIN principals p ON p.id=r.created_by
  WHERE r.tenant_id=$1
- AND r.id=$2`,
-		c.Tenant,
-		c.Run,
-	).Scan(
-		&actor,
-		&kind,
-	); err != nil {
+ AND r.id=$2`, c.Tenant, c.Run).Scan(&actor, &kind); err != nil {
 		return err
 	}
 	if err = audit.Append(
@@ -405,25 +367,15 @@ func (h *Handler) secretGrants(w http.ResponseWriter, r *http.Request, c auth.Ca
 func (h *Handler) policy(w http.ResponseWriter, r *http.Request, c auth.CapabilityClaims) error {
 	out := contract.PolicySnapshot{}
 	var session, workspace, principal string
-	if err := db.Tx(r.Context()).QueryRow(
-		r.Context(),
+	if err := db.Tx(r.Context()).QueryRow(r.Context(),
 		`SELECT r.session_id::text,s.workspace_id::text,r.created_by::text
  FROM runs r
  JOIN sessions s ON s.id=r.session_id
  WHERE r.tenant_id=$1
- AND r.id=$2`,
-		c.Tenant,
-		c.Run,
-	).Scan(
-		&session,
-		&workspace,
-		&principal,
-	); err != nil {
+ AND r.id=$2`, c.Tenant, c.Run).Scan(&session, &workspace, &principal); err != nil {
 		return err
 	}
-	rows, err := db.Tx(r.Context()).Query(
-		r.Context(),
-		`SELECT body
+	rows, err := db.Tx(r.Context()).Query(r.Context(), `SELECT body
  FROM policies
  WHERE tenant_id=$1
  AND kind='tool_rules'
@@ -432,10 +384,7 @@ func (h *Handler) policy(w http.ResponseWriter, r *http.Request, c auth.Capabili
  AND scope_id=$1)
  OR (scope_type='workspace'
  AND scope_id=$2))
- ORDER BY CASE scope_type WHEN 'tenant' THEN 0 ELSE 1 END,version,id`,
-		c.Tenant,
-		workspace,
-	)
+ ORDER BY CASE scope_type WHEN 'tenant' THEN 0 ELSE 1 END,version,id`, c.Tenant, workspace)
 	if err != nil {
 		return err
 	}
@@ -459,8 +408,7 @@ func (h *Handler) policy(w http.ResponseWriter, r *http.Request, c auth.Capabili
 	if err != nil {
 		return err
 	}
-	rows, err = db.Tx(r.Context()).Query(
-		r.Context(),
+	rows, err = db.Tx(r.Context()).Query(r.Context(),
 		`SELECT tool,arg_pattern,scope_type,interaction_id::text,expires_at
  FROM permission_grants
  WHERE tenant_id=$1
@@ -472,12 +420,7 @@ func (h *Handler) policy(w http.ResponseWriter, r *http.Request, c auth.Capabili
  AND scope_id=$3)
  OR (scope_type='workspace'
  AND scope_id=$4))
- ORDER BY created_at,id`,
-		c.Tenant,
-		session,
-		principal,
-		workspace,
-	)
+ ORDER BY created_at,id`, c.Tenant, session, principal, workspace)
 	if err != nil {
 		return err
 	}

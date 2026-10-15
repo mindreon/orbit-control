@@ -128,16 +128,11 @@ func (s *Service) Review(ctx context.Context, id, decision, comment string) (str
 	}
 	var assetID, submitter, uploader, state string
 	var generation int
-	if err := db.Tx(ctx).QueryRow(ctx, `SELECT asset_id::text,COALESCE(submitted_by::text,''),uploaded_by::text,state,release_generation
+	if err := db.Tx(ctx).QueryRow(ctx,
+		`SELECT asset_id::text,COALESCE(submitted_by::text,''),uploaded_by::text,state,release_generation
  FROM asset_versions
  WHERE tenant_id=$2
- AND id=$1 FOR UPDATE`,
-		id,
-		auth.Tenant(ctx)).Scan(&assetID,
-		&submitter,
-		&uploader,
-		&state,
-		&generation); err != nil {
+ AND id=$1 FOR UPDATE`, id, auth.Tenant(ctx)).Scan(&assetID, &submitter, &uploader, &state, &generation); err != nil {
 		return "", err
 	}
 	a, err := s.Get(ctx, assetID, "asset.review")
@@ -159,8 +154,10 @@ func (s *Service) Review(ctx context.Context, id, decision, comment string) (str
 		return "", httpx.E(409, "INVALID_ASSET_STATE", "Version is not awaiting review")
 	}
 	reviewID := ids.New()
-	if _, err = db.Tx(ctx).Exec(ctx, `INSERT INTO asset_reviews(id,tenant_id,version_id,reviewer_id,decision,comment,generation)
- VALUES($1,$2,$3,$4,$5,$6,$7)`, reviewID, auth.Tenant(ctx), id, auth.From(ctx).ID, decision, comment, generation); err != nil {
+	if _, err = db.Tx(ctx).Exec(ctx,
+		`INSERT INTO asset_reviews(id,tenant_id,version_id,reviewer_id,decision,comment,generation)
+ VALUES($1,$2,$3,$4,$5,$6,$7)`, reviewID, auth.Tenant(ctx), id, auth.From(ctx).ID, decision, comment,
+		generation); err != nil {
 		return "", err
 	}
 	return reviewID, Log(
@@ -173,9 +170,8 @@ func (s *Service) Review(ctx context.Context, id, decision, comment string) (str
 }
 func (s *Service) ChangeGrant(ctx context.Context, a Asset, g Grant, revoke bool) error {
 	// Serialize grants with visibility changes; re-read the ceiling after locking.
-	if err := db.Tx(ctx).QueryRow(
-		ctx, "SELECT visibility FROM assets WHERE tenant_id=$1 AND id=$2 FOR UPDATE", auth.Tenant(ctx), a.ID,
-	).Scan(&a.Visibility); err != nil {
+	if err := db.Tx(ctx).QueryRow(ctx, "SELECT visibility FROM assets WHERE tenant_id=$1 AND id=$2 FOR UPDATE",
+		auth.Tenant(ctx), a.ID).Scan(&a.Visibility); err != nil {
 		return err
 	}
 	if !ids.Valid(g.ID) || !slices.Contains([]string{"user", "service", "group", "workspace", "tenant"}, g.Type) ||
@@ -203,7 +199,8 @@ func (s *Service) ChangeGrant(ctx context.Context, a Asset, g Grant, revoke bool
  AND grantee_id=$3
  AND permission=$4`, a.ID, g.Type, g.ID, g.Permission)
 	} else {
-		_, err = db.Tx(ctx).Exec(ctx, `INSERT INTO asset_grants(tenant_id,asset_id,grantee_type,grantee_id,permission)
+		_, err = db.Tx(ctx).Exec(ctx,
+			`INSERT INTO asset_grants(tenant_id,asset_id,grantee_type,grantee_id,permission)
  VALUES($1,$2,$3,$4,$5)
  ON CONFLICT DO NOTHING`, auth.Tenant(ctx), a.ID, g.Type, g.ID, g.Permission)
 	}
@@ -221,14 +218,10 @@ func (s *Service) Uninstall(ctx context.Context, id string) error {
 		return Invalid("Invalid install")
 	}
 	var scope, scopeID string
-	if err := db.Tx(ctx).QueryRow(ctx,
-		`SELECT scope_type,scope_id::text
+	if err := db.Tx(ctx).QueryRow(ctx, `SELECT scope_type,scope_id::text
  FROM asset_installs
  WHERE tenant_id=$2
- AND id=$1`,
-		id,
-		auth.Tenant(ctx)).Scan(&scope,
-		&scopeID); err != nil {
+ AND id=$1`, id, auth.Tenant(ctx)).Scan(&scope, &scopeID); err != nil {
 		return err
 	}
 	if err := s.requireInstall(ctx, scope, scopeID); err != nil {
@@ -271,13 +264,10 @@ func (s *Service) RetryRelease(ctx context.Context, id string) error {
 // Withdraw is the author action, distinct from a reviewer rejection.
 func (s *Service) Withdraw(ctx context.Context, id string) error {
 	var state string
-	if err := db.Tx(ctx).QueryRow(ctx,
-		`SELECT state
+	if err := db.Tx(ctx).QueryRow(ctx, `SELECT state
  FROM asset_versions
  WHERE tenant_id=$1
- AND id=$2 FOR UPDATE`,
-		auth.Tenant(ctx),
-		id).Scan(&state); err != nil {
+ AND id=$2 FOR UPDATE`, auth.Tenant(ctx), id).Scan(&state); err != nil {
 		return err
 	}
 	if state == "draft" {

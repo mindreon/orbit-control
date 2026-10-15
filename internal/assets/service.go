@@ -130,7 +130,8 @@ func (s *Service) Create(ctx context.Context, kind contract.AssetKind, name, vis
 	p := auth.From(ctx)
 	_, err := db.Tx(ctx).
 		Exec(ctx, `INSERT INTO assets(id,tenant_id,publisher,kind,name,visibility,workspace_id,owner_id,status)
- VALUES($1,$2,$3,$4,$5,$6,NULLIF($7,'')::uuid,$8,'active')`, id, auth.Tenant(ctx), publisher, kind, name, visibility, workspace, p.ID)
+ VALUES($1,$2,$3,$4,$5,$6,NULLIF($7,'')::uuid,$8,'active')`, id, auth.Tenant(ctx), publisher, kind, name,
+			visibility, workspace, p.ID)
 	if err != nil {
 		return Asset{}, err
 	}
@@ -155,20 +156,8 @@ func (s *Service) Version(ctx context.Context, asset, id string) (Version, error
  WHERE tenant_id=$1
  AND asset_id=$2
  AND id=$3`, auth.Tenant(ctx), asset, id).
-		Scan(&v.ID,
-			&v.AssetID,
-			&v.Version,
-			&m,
-			&v.Digest,
-			&v.BlobRef,
-			&p,
-			&v.State,
-			&v.Signature,
-			&v.CreatedAt,
-			&v.ReleaseError,
-			&v.UploadedBy,
-			&v.PermissionsJCS,
-			&v.IdentityJCS)
+		Scan(&v.ID, &v.AssetID, &v.Version, &m, &v.Digest, &v.BlobRef, &p, &v.State, &v.Signature, &v.CreatedAt,
+			&v.ReleaseError, &v.UploadedBy, &v.PermissionsJCS, &v.IdentityJCS)
 	if err != nil {
 		return v, err
 	}
@@ -199,9 +188,8 @@ func SetState(ctx context.Context, id, to string) error {
 }
 func (s *Service) Submit(ctx context.Context, a Asset, id, channel string) error {
 	var visibility string
-	if err := db.Tx(ctx).QueryRow(
-		ctx, ("SELECT visibility FROM assets WHERE tenant_id=$1 AND id=$2 FOR UPDATE"), auth.Tenant(ctx), a.ID,
-	).Scan(&visibility); err != nil {
+	if err := db.Tx(ctx).QueryRow(ctx, ("SELECT visibility FROM assets WHERE tenant_id=$1 AND id=$2 FOR UPDATE"),
+		auth.Tenant(ctx), a.ID).Scan(&visibility); err != nil {
 		return err
 	}
 	if visibility != a.Visibility {
@@ -306,8 +294,7 @@ func (s *Service) File(ctx context.Context, id, name string) ([]byte, string, er
  WHERE version_id=$1
  AND path=$2`),
 		id,
-		name).Scan(&digest,
-		&size); err != nil {
+		name).Scan(&digest, &size); err != nil {
 		return nil, "", err
 	}
 	if size > 20<<20 {
@@ -335,8 +322,7 @@ func (s *Service) Install(ctx context.Context, a Asset, scope, scopeID, constrai
  WHERE tenant_id=$1
  AND id=$2 FOR SHARE`),
 		auth.Tenant(ctx),
-		a.ID).Scan(&a.Visibility,
-		&a.Status); err != nil {
+		a.ID).Scan(&a.Visibility, &a.Status); err != nil {
 		return "", err
 	}
 	if a.Visibility != "tenant" && (scope == "tenant" || a.Visibility != "workspace" || a.WorkspaceID != scopeID) {
@@ -362,7 +348,8 @@ func (s *Service) Install(ctx context.Context, a Asset, scope, scopeID, constrai
 	}
 	id := ids.New()
 	err := db.Tx(ctx).
-		QueryRow(ctx, `INSERT INTO asset_installs(id,tenant_id,scope_type,scope_id,asset_id,"constraint",channel,pinned_version_id,enabled)
+		QueryRow(ctx,
+			`INSERT INTO asset_installs(id,tenant_id,scope_type,scope_id,asset_id,"constraint",channel,pinned_version_id,enabled)
  VALUES($1,$2,$3,$4,$5,$6,NULLIF($7,''),NULLIF($8,'')::uuid,true)
  ON CONFLICT(tenant_id,scope_type,scope_id,asset_id)
  DO UPDATE SET "constraint"=EXCLUDED."constraint",channel=EXCLUDED.channel,
