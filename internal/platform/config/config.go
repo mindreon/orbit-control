@@ -11,6 +11,8 @@ import (
 )
 
 type Config struct {
+	InternalAddr, WorkerServiceTokenSHA256, NATSURL, Environment                                              string
+	DefaultRunBudget                                                                                          int64
 	AssetUploadConcurrency                                                                                    int
 	TemporalAddress, TemporalNamespace, TemporalCAFile, TemporalCertFile, TemporalKeyFile, TemporalServerName string
 	TemporalTLS                                                                                               bool
@@ -31,6 +33,21 @@ type Config struct {
 
 func Load() (Config, error) {
 	c := Config{DatabaseURL: os.Getenv("ORBIT_DATABASE_URL"), AdminDatabaseURL: os.Getenv("ORBIT_ADMIN_DATABASE_URL"), Addr: env("ORBIT_HTTP_ADDR", "127.0.0.1:8080"), AuthMode: env("ORBIT_AUTH_MODE", "oidc"), Issuer: os.Getenv("ORBIT_OIDC_ISSUER"), ClientID: os.Getenv("ORBIT_OIDC_CLIENT_ID"), Audience: os.Getenv("ORBIT_OIDC_AUDIENCE"), KeyFile: env("ORBIT_SIGNING_KEY_FILE", ".orbit-data/signing.key"), LogFormat: env("ORBIT_LOG_FORMAT", "json"), AllowDevNetwork: os.Getenv("ORBIT_ALLOW_DEV_AUTH_ON_NETWORK") == "1"}
+	c.InternalAddr = env("ORBIT_INTERNAL_ADDR", "127.0.0.1:8081")
+	c.NATSURL = env("ORBIT_NATS_URL", "nats://127.0.0.1:4222")
+	c.WorkerServiceTokenSHA256 = os.Getenv("ORBIT_WORKER_SERVICE_TOKEN_SHA256")
+	c.Environment = env("ORBIT_ENV", "dev")
+	if c.Environment != "dev" && c.Environment != "prod" {
+		return c, fmt.Errorf("ORBIT_ENV must be dev or prod")
+	}
+	c.DefaultRunBudget = 200000
+	if value := os.Getenv("ORBIT_DEFAULT_RUN_BUDGET_MILLICREDITS"); value != "" {
+		n, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || n < 1 || n > 9007199254740991 {
+			return c, fmt.Errorf("ORBIT_DEFAULT_RUN_BUDGET_MILLICREDITS must be a positive safe integer")
+		}
+		c.DefaultRunBudget = n
+	}
 	c.AssetUploadConcurrency = 2
 	if value := os.Getenv("ORBIT_ASSET_UPLOAD_CONCURRENCY"); value != "" {
 		n, err := strconv.Atoi(value)
@@ -51,11 +68,11 @@ func Load() (Config, error) {
 	c.TemporalCertFile = os.Getenv("ORBIT_TEMPORAL_TLS_CERT_FILE")
 	c.TemporalKeyFile = os.Getenv("ORBIT_TEMPORAL_TLS_KEY_FILE")
 	c.TemporalServerName = os.Getenv("ORBIT_TEMPORAL_TLS_SERVER_NAME")
-	c.ObjectEndpoint = os.Getenv("ORBIT_OBJECT_ENDPOINT")
-	c.ObjectBucket = env("ORBIT_OBJECT_BUCKET", "orbit")
-	c.ObjectAccessKey = os.Getenv("ORBIT_OBJECT_ACCESS_KEY")
-	c.ObjectSecretKey = os.Getenv("ORBIT_OBJECT_SECRET_KEY")
-	c.ObjectTLS = os.Getenv("ORBIT_OBJECT_TLS") == "true"
+	c.ObjectEndpoint = env("ORBIT_S3_ENDPOINT", os.Getenv("ORBIT_OBJECT_ENDPOINT"))
+	c.ObjectBucket = env("ORBIT_S3_BUCKET", env("ORBIT_OBJECT_BUCKET", "orbit"))
+	c.ObjectAccessKey = env("ORBIT_S3_ACCESS_KEY", os.Getenv("ORBIT_OBJECT_ACCESS_KEY"))
+	c.ObjectSecretKey = env("ORBIT_S3_SECRET_KEY", os.Getenv("ORBIT_OBJECT_SECRET_KEY"))
+	c.ObjectTLS = env("ORBIT_S3_USE_TLS", os.Getenv("ORBIT_OBJECT_TLS")) == "true"
 	c.AssetKeyFile = env("ORBIT_ASSET_SIGNING_KEY_FILE", ".orbit-data/assets.key")
 	c.AssetKeyID = env("ORBIT_ASSET_SIGNING_KEY_ID", "1")
 	c.AssetPublicKeys = map[string][]byte{}
@@ -101,6 +118,22 @@ func Load() (Config, error) {
 		c.SecretsKeyVersion = n
 	}
 	c.SecretsKEKs = map[int][]byte{}
+	if file := os.Getenv("ORBIT_KEK_FILE"); file != "" {
+		info, err := os.Stat(file)
+		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
+			return c, fmt.Errorf("ORBIT_KEK_FILE must be a regular file with mode 0600")
+		}
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			return c, fmt.Errorf("ORBIT_KEK_FILE cannot be read")
+		}
+		key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(raw)))
+		if err != nil || len(key) != 32 {
+			return c, fmt.Errorf("ORBIT_KEK_FILE must contain base64 of 32 bytes")
+		}
+		c.SecretsKEKs[c.SecretsKeyVersion] = key
+	}
+
 	if v := os.Getenv("ORBIT_SECRETS_KEK"); v != "" {
 		b, err := base64.StdEncoding.DecodeString(v)
 		if err != nil || len(b) != 32 {
@@ -224,6 +257,25 @@ func (c Config) ValidateWorker() error {
 	}
 	if !c.TemporalTLS && (c.TemporalCertFile != "" || c.TemporalCAFile != "" || c.TemporalServerName != "") {
 		return fmt.Errorf("ORBIT_TEMPORAL_TLS=true is required for TLS options")
+	}
+	return nil
+}
+
+func (c Config) ValidateRuns(api bool) error {
+	if err := c.ValidateWorker(); err != nil {
+		return err
+	}
+	u, e := url.Parse(c.NATSURL)
+	if e != nil || u.Host == "" || (u.Scheme != "nats" && u.Scheme != "tls") {
+		return fmt.Errorf("ORBIT_NATS_URL must be a NATS URL")
+	}
+	if api {
+		if _, _, err := net.SplitHostPort(c.InternalAddr); err != nil {
+			return fmt.Errorf("ORBIT_INTERNAL_ADDR must be host:port")
+		}
+		if len(c.WorkerServiceTokenSHA256) != 64 || strings.Trim(c.WorkerServiceTokenSHA256, "0123456789abcdef") != "" {
+			return fmt.Errorf("ORBIT_WORKER_SERVICE_TOKEN_SHA256 must be sha256 hex")
+		}
 	}
 	return nil
 }

@@ -15,7 +15,7 @@ import (
 )
 
 const DevIssuer = "orbit:dev"
-const CapabilityIssuer = "orbit:control"
+const CapabilityIssuer = "orbit-capability"
 
 type Signer struct{ key ed25519.PrivateKey }
 
@@ -108,13 +108,13 @@ func (s *Signer) VerifyDev(token string) (DevClaims, error) {
 // state after verification. It is deliberately independent of public dev claims.
 type CapabilityClaims struct {
 	jwt.RegisteredClaims
-	Tenant  string `json:"tenant"`
-	Run     string `json:"run"`
+	Tenant  string `json:"tenant_id"`
+	Run     string `json:"run_id"`
 	Member  string `json:"member,omitempty"`
 	Seq     int    `json:"seq,omitempty"`
 	Attempt int    `json:"attempt,omitempty"`
 	Purpose string `json:"purpose"`
-	LeaseID string `json:"lease_id,omitempty"`
+	LeaseID string `json:"lease,omitempty"`
 }
 type CapabilitySigner struct {
 	key        ed25519.PrivateKey
@@ -161,9 +161,28 @@ func (s *CapabilitySigner) VerifyCapability(token string) (CapabilityClaims, err
 			return nil, fmt.Errorf("unknown capability kid")
 		}
 		return key, nil
-	}, jwt.WithValidMethods([]string{"EdDSA"}), jwt.WithAudience("kernel"), jwt.WithExpirationRequired())
-	if err != nil || c.NotBefore == nil {
+	}, jwt.WithValidMethods([]string{"EdDSA"}), jwt.WithIssuer(CapabilityIssuer), jwt.WithAudience("kernel"), jwt.WithExpirationRequired(), jwt.WithIssuedAt())
+	if err != nil || c.NotBefore == nil || c.Subject != "run:"+c.Run || !ids.Valid(c.Tenant) || !ids.Valid(c.Run) || (c.Purpose != "segment" && c.Purpose != "sandbox") {
 		return c, fmt.Errorf("invalid or expired capability")
 	}
 	return c, nil
+}
+
+type StreamClaims struct {
+	jwt.RegisteredClaims
+	TenantID  string `json:"tenant_id"`
+	RunID     string `json:"run_id"`
+	SessionID string `json:"session_id"`
+}
+
+func (s *Signer) IssueStream(tenant, run, session string) (string, error) {
+	if !ids.Valid(tenant) || !ids.Valid(run) || !ids.Valid(session) {
+		return "", fmt.Errorf("invalid stream identity")
+	}
+	return jwt.NewWithClaims(jwt.SigningMethodEdDSA, StreamClaims{registered("orbit-stream", "run:"+run, "stream", 15*time.Minute), tenant, run, session}).SignedString(s.key)
+}
+func (s *Signer) VerifyStream(token string) (StreamClaims, error) {
+	var c StreamClaims
+	_, err := jwt.ParseWithClaims(token, &c, func(t *jwt.Token) (any, error) { return s.key.Public(), nil }, jwt.WithValidMethods([]string{"EdDSA"}), jwt.WithIssuer("orbit-stream"), jwt.WithAudience("stream"), jwt.WithExpirationRequired())
+	return c, err
 }
