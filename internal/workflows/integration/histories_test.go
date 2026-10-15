@@ -1,0 +1,492 @@
+//go:build temporal_integration
+
+package integration
+
+import (
+	"context"
+	"flag"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+	"go.temporal.io/api/enums/v1"
+	historypb "go.temporal.io/api/history/v1"
+	"go.temporal.io/api/serviceerror"
+	"go.temporal.io/api/workflowservice/v1"
+	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/temporal"
+	"go.temporal.io/sdk/worker"
+	"go.temporal.io/sdk/workflow"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/types/known/durationpb"
+
+	"github.com/mindreon/orbit-control/internal/contract"
+	w "github.com/mindreon/orbit-control/internal/workflows"
+	"github.com/mindreon/orbit-control/internal/workflows/agentrun"
+	"github.com/mindreon/orbit-control/internal/workflows/sandboxlease"
+	"github.com/mindreon/orbit-control/internal/workflows/session"
+)
+
+var update = flag.Bool("update", false, "write real dev-stack histories")
+
+type fixtures struct {
+	sync.Mutex
+	calls map[string]int
+}
+
+func (f *fixtures) segment(ctx context.Context, in contract.SegmentInput) (contract.SegmentResult, error) {
+	f.Lock()
+	n := f.calls[in.RunId] + 1
+	f.calls[in.RunId] = n
+	f.Unlock()
+	res := contract.SegmentResult{V: 1, Status: "completed", CheckpointVersion: in.ExpectedCheckpointVersion + 1,
+		Progress: contract.SegmentProgress{NewOutput: true}}
+	name := in.RunId
+	if strings.HasSuffix(name, "pause") {
+		name = "pause"
+	}
+	switch name {
+	case "yield", "can":
+		threshold := 3
+		if name == "can" {
+			threshold = 4
+		}
+		if in.Seq < threshold {
+			res.Status = "yielded"
+			res.YieldReason = new(contract.YieldReason("iteration_cap"))
+		}
+	case "approval", "expiry":
+		if in.Seq == 1 {
+			res.Status = "interrupted"
+			res.Interaction = &contract.InteractionRequest{InteractionId: "approval", Kind: "tool_approval"}
+		}
+	case "cancel", "pause", "steer":
+		if n == 1 {
+			timer := time.NewTimer(time.Second)
+			defer timer.Stop()
+			select {
+			case <-ctx.Done():
+				return res, ctx.Err()
+			case <-timer.C:
+			}
+			if in.RunId == "pause" {
+				res.Status = "yielded"
+				res.YieldReason = new(contract.YieldReason("iteration_cap"))
+			}
+		}
+	case "sandbox":
+		if n == 1 {
+			return res, temporal.NewNonRetryableApplicationError("lost", contract.ErrorSandboxUnavailable, nil)
+		}
+	case "compact":
+		if n == 1 {
+			return res, temporal.NewNonRetryableApplicationError("context", contract.ErrorContextLengthExceeded, nil)
+		}
+		if in.Input.Kind == "compact" {
+			res.Status = "yielded"
+			res.YieldReason = new(contract.YieldReason("compacted"))
+		}
+	}
+	return res, nil
+}
+func registerFixtures(reg worker.Worker, f *fixtures) {
+	reg.RegisterWorkflowWithOptions(
+		agentrun.Run,
+		workflow.RegisterOptions{Name: w.AgentRunWorkflow},
+	)
+	reg.RegisterWorkflowWithOptions(session.Run, workflow.RegisterOptions{Name: w.SessionWorkflow})
+	reg.RegisterWorkflowWithOptions(
+		sandboxlease.Run,
+		workflow.RegisterOptions{Name: w.SandboxLeaseWorkflow},
+	)
+	reg.RegisterActivityWithOptions(
+		f.segment,
+		activity.RegisterOptions{Name: contract.ActivityRunAgentSegment},
+	)
+	reg.RegisterActivityWithOptions(func(context.Context, w.PrepareInput) (w.PrepareOutput, error) {
+		return w.PrepareOutput{}, nil
+	}, activity.RegisterOptions{Name: "PrepareRun"})
+	reg.RegisterActivityWithOptions(func(context.Context, w.AcquireSandboxInput) (contract.SandboxLease, error) {
+		return contract.SandboxLease{Provider: "local", SandboxId: "fixture"}, nil
+	}, activity.RegisterOptions{Name: "AcquireSandbox"})
+	reg.RegisterActivityWithOptions(func(context.Context, w.RecordSegmentInput) (w.RecordSegmentOutput, error) {
+		return w.RecordSegmentOutput{}, nil
+	}, activity.RegisterOptions{Name: "RecordSegment"})
+	reg.RegisterActivityWithOptions(func(_ context.Context, in w.InteractionInput) (w.InteractionOutput, error) {
+		return w.InteractionOutput{CreatedAt: in.EventAt}, nil
+	}, activity.RegisterOptions{Name: "CreateInteraction"})
+	reg.RegisterActivityWithOptions(
+		func(context.Context, w.StartSegmentInput) error {
+			return nil
+		},
+		activity.RegisterOptions{Name: "StartSegment"},
+	)
+	reg.RegisterActivityWithOptions(
+		func(context.Context, w.FinalizeInput) error {
+			return nil
+		},
+		activity.RegisterOptions{Name: "FinalizeRun"},
+	)
+	reg.RegisterActivityWithOptions(
+		func(context.Context, w.StatusInput) error {
+			return nil
+		},
+		activity.RegisterOptions{Name: "SetRunStatus"},
+	)
+	reg.RegisterActivityWithOptions(
+		func(context.Context, w.NotifyInput) error {
+			return nil
+		},
+		activity.RegisterOptions{Name: "NotifyInteraction"},
+	)
+	reg.RegisterActivityWithOptions(
+		func(context.Context, w.DecisionInput) error {
+			return nil
+		},
+		activity.RegisterOptions{Name: "ApplyDecision"},
+	)
+	reg.RegisterActivityWithOptions(
+		func(context.Context, w.SandboxStateInput) error {
+			return nil
+		},
+		activity.RegisterOptions{Name: "RecordSandboxState"},
+	)
+	lease := func() contract.SandboxLease {
+		return contract.SandboxLease{
+			Provider: "opensandbox", SandboxId: "fixture", ExpiresAt: time.Now().Add(time.Hour)}
+	}
+	reg.RegisterActivityWithOptions(
+		func(context.Context, contract.SandboxAcquireInput) (
+			contract.SandboxLease,
+			error,
+		) {
+			return lease(), nil
+		},
+		activity.RegisterOptions{Name: contract.ActivitySandboxCreate},
+	)
+	reg.RegisterActivityWithOptions(
+		func(context.Context, contract.SandboxConfigureInput) (
+			contract.SandboxLease,
+			error,
+		) {
+			return lease(), nil
+		},
+		activity.RegisterOptions{Name: contract.ActivitySandboxConfigure},
+	)
+	reg.RegisterActivityWithOptions(
+		func(context.Context, contract.SandboxOpInput) (
+			contract.SandboxInspectResult,
+			error,
+		) {
+			return contract.SandboxInspectResult{Exists: true}, nil
+		},
+		activity.RegisterOptions{Name: contract.ActivitySandboxInspect},
+	)
+	reg.RegisterActivityWithOptions(
+		func(context.Context, contract.SandboxOpInput) (
+			contract.SandboxSnapshotResult,
+			error,
+		) {
+			return contract.SandboxSnapshotResult{SnapshotId: "snapshot"}, nil
+		},
+		activity.RegisterOptions{Name: contract.ActivitySandboxSnapshot},
+	)
+	for _, name := range []string{contract.ActivitySandboxPause, contract.ActivitySandboxDestroy} {
+		reg.RegisterActivityWithOptions(
+			func(context.Context, contract.SandboxOpInput) error {
+				return nil
+			},
+			activity.RegisterOptions{Name: name},
+		)
+	}
+	reg.RegisterActivityWithOptions(func(context.Context, contract.SandboxSnapshotDeleteInput) error {
+		return nil
+	},
+		activity.RegisterOptions{Name: contract.ActivitySandboxSnapshotDelete})
+}
+func devClient(t *testing.T) client.Client {
+	t.Helper()
+	address := os.Getenv("ORBIT_TEST_TEMPORAL_ADDRESS")
+	if address == "" {
+		address = "127.0.0.1:57233"
+	}
+	ns := "orbit-v2-wp6b-histories"
+	c, err := client.Dial(client.Options{HostPort: address, Namespace: ns})
+	require.NoError(t, err)
+	t.Cleanup(c.Close)
+	_, err = c.WorkflowService().RegisterNamespace(t.Context(), &workflowservice.RegisterNamespaceRequest{
+		Namespace: ns, WorkflowExecutionRetentionPeriod: durationpb.New(24 * time.Hour),
+	})
+	if _, exists := err.(*serviceerror.NamespaceAlreadyExists); !exists {
+		require.NoError(t, err)
+	}
+	return c
+}
+func runInput(name string) w.RunInput {
+	limits := w.DefaultLimits(200000)
+	limits.RemindAfter = 100 * time.Millisecond
+	limits.EscalateAfter = 200 * time.Millisecond
+	limits.ExpireAfter = 400 * time.Millisecond
+	return w.RunInput{
+		V:                  1,
+		TenantID:           "tenant",
+		WorkspaceID:        "workspace",
+		SessionID:          "session",
+		RunID:              name,
+		Member:             "main",
+		Lock:               contract.SegmentLockRef{Id: "lock", Digest: "sha256:" + strings.Repeat("0", 64)},
+		AgentSessionKey:    "sess:session:000000000000",
+		InputRef:           "t/tenant/runs/" + name + "/input/message.json",
+		EventSubject:       "run.tenant." + name,
+		BudgetMillicredits: 200000,
+		Limits:             limits,
+		Sandbox:            w.SandboxSpec{IsolationKey: "isolation", Profile: "default", TTLSeconds: 1800},
+		Tier:               "standard",
+	}
+}
+func TestRecordHistories(t *testing.T) {
+	c := devClient(t)
+	queue := "orbit-v2-wp6b-" + time.Now().Format("150405.000000")
+	f := &fixtures{calls: map[string]int{}}
+	ctl := worker.New(c, queue, worker.Options{})
+	registerFixtures(ctl, f)
+	// Child workflows and Activities retain their public, cross-language task queues in the isolated namespace.
+	runWorker := worker.New(c, contract.TaskQueueCtl, worker.Options{})
+	registerFixtures(runWorker, f)
+	agent := worker.New(c, contract.TaskQueueAgentStandard, worker.Options{})
+	agent.RegisterActivityWithOptions(
+		f.segment,
+		activity.RegisterOptions{Name: contract.ActivityRunAgentSegment},
+	)
+	sandbox := worker.New(c, contract.TaskQueueSandbox, worker.Options{})
+	registerFixtures(sandbox, f)
+	for _, reg := range []worker.Worker{ctl, runWorker, agent, sandbox} {
+		require.NoError(t, reg.Start())
+		t.Cleanup(reg.Stop)
+	}
+	for _, name := range []string{
+		"complete",
+		"yield",
+		"approval",
+		"expiry",
+		"cancel",
+		"pause",
+		"steer",
+		"can",
+		"sandbox",
+		"compact",
+	} {
+		t.Run(name, func(t *testing.T) {
+			recordRun(t, c, queue, name)
+		})
+	}
+	t.Run("session", func(t *testing.T) {
+		recordSession(t, c, queue)
+	})
+	t.Run("lease", func(t *testing.T) {
+		recordLease(t, c, queue)
+	})
+}
+func recordRun(t *testing.T, c client.Client, queue, name string) {
+	in := runInput(name)
+	run, err := c.ExecuteWorkflow(
+		t.Context(),
+		client.StartWorkflowOptions{ID: queue + ":" + name, TaskQueue: queue},
+		w.AgentRunWorkflow,
+		in,
+	)
+	require.NoError(t, err)
+	switch name {
+	case "approval":
+		waitProgress(
+			t,
+			c,
+			run.GetID(),
+			func(p w.RunProgress) bool {
+				return p.PendingInteractionID != ""
+			},
+		)
+		var out w.ResolveInteractionOutput
+		updateWorkflow(
+			t,
+			c,
+			run.GetID(),
+			w.ResolveInteraction,
+			"approval",
+			w.ResolveInteractionInput{
+				InteractionID: "approval",
+				ActorID:       "owner",
+				Decision: contract.Decision{
+					Kind: "tool_approval",
+					Choice: new(
+						contract.DecisionChoice(
+							"allow_once",
+						),
+					),
+				},
+			},
+			&out,
+		)
+	case "cancel", "pause", "steer":
+		waitProgress(t, c, run.GetID(), func(p w.RunProgress) bool {
+			return p.Status == "running"
+		})
+		if name == "cancel" {
+			require.NoError(
+				t,
+				c.SignalWorkflow(t.Context(), run.GetID(), "", w.Cancel, w.CancelInput{Reason: "user"}),
+			)
+		}
+		if name == "pause" {
+			require.NoError(t, c.SignalWorkflow(t.Context(), run.GetID(), "", w.Pause, w.ActorInput{}))
+			waitProgress(t, c, run.GetID(), func(p w.RunProgress) bool {
+				return p.Status == "paused"
+			})
+			require.NoError(t, c.SignalWorkflow(t.Context(), run.GetID(), "", w.Resume, w.ActorInput{}))
+		}
+		if name == "steer" {
+			updateWorkflow(
+				t,
+				c,
+				run.GetID(),
+				w.Steer,
+				"steer",
+				w.SteerInput{ContentRef: "t/tenant/runs/steer/steer/message"},
+				nil,
+			)
+		}
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	require.NoError(t, run.Get(ctx, nil))
+	save(t, c, run.GetID(), run.GetRunID(), name)
+}
+func waitProgress(t *testing.T, c client.Client, id string, ready func(w.RunProgress) bool) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		value, err := c.QueryWorkflow(t.Context(), id, "", w.Progress)
+		if err != nil {
+			return false
+		}
+		var p w.RunProgress
+		return value.Get(&p) == nil && ready(p)
+	}, 10*time.Second, 20*time.Millisecond)
+}
+func updateWorkflow(t *testing.T, c client.Client, id, name, key string, in, out any) {
+	t.Helper()
+	handle, err := c.UpdateWorkflow(
+		t.Context(),
+		client.UpdateWorkflowOptions{WorkflowID: id, UpdateName: name, UpdateID: key,
+			WaitForStage: client.WorkflowUpdateStageCompleted, Args: []any{in}},
+	)
+	require.NoError(t, err)
+	require.NoError(t, handle.Get(t.Context(), out))
+}
+func recordSession(t *testing.T, c client.Client, queue string) {
+	run, err := c.ExecuteWorkflow(
+		t.Context(),
+		client.StartWorkflowOptions{ID: queue + ":session", TaskQueue: queue},
+		w.SessionWorkflow,
+		w.SessionInput{
+			V:           1,
+			TenantID:    "tenant",
+			WorkspaceID: "workspace",
+			SessionID:   queue,
+			Policy:      "queue",
+		},
+	)
+	require.NoError(t, err)
+	for _, name := range []string{"pause", "complete"} {
+		in := runInput(name)
+		msg := w.SubmitMessageInput{V: 1, RunID: queue + name, Lock: in.Lock, BudgetMillicredits: in.BudgetMillicredits,
+			Limits: in.Limits, Sandbox: in.Sandbox}
+		updateWorkflow(t, c, run.GetID(), w.SubmitMessage, name, msg, nil)
+	}
+	require.Eventually(t, func() bool {
+		value, err := c.QueryWorkflow(t.Context(), run.GetID(), "", w.State)
+		if err != nil {
+			return false
+		}
+		var state w.SessionState
+		return value.Get(&state) == nil && state.ActiveRunID == "" && state.QueueLen == 0
+	}, 15*time.Second, 20*time.Millisecond)
+	require.NoError(t, c.SignalWorkflow(t.Context(), run.GetID(), "", w.Archive, w.ArchiveInput{}))
+	require.NoError(t, run.Get(t.Context(), nil))
+	save(t, c, run.GetID(), run.GetRunID(), "session")
+}
+func recordLease(t *testing.T, c client.Client, queue string) {
+	run, err := c.ExecuteWorkflow(
+		t.Context(),
+		client.StartWorkflowOptions{ID: queue + ":lease", TaskQueue: queue},
+		w.SandboxLeaseWorkflow,
+		w.LeaseInput{TenantID: "tenant", IsolationKey: "isolation"},
+	)
+	require.NoError(t, err)
+	ac := w.AcquireInput{
+		RunID:      "lease-run",
+		SessionID:  "session",
+		Profile:    "default",
+		TTLSeconds: 3600,
+		SpecDigest: "digest",
+	}
+	updateWorkflow(t, c, run.GetID(), w.Acquire, "one", ac, nil)
+	require.NoError(
+		t,
+		c.SignalWorkflow(
+			t.Context(),
+			run.GetID(),
+			"",
+			w.Touch,
+			w.TouchInput{RunID: ac.RunID, InUse: false},
+		),
+	)
+	require.Eventually(t, func() bool {
+		value, err := c.QueryWorkflow(t.Context(), run.GetID(), "", w.Lease)
+		if err != nil {
+			return false
+		}
+		var state w.LeaseCarry
+		return value.Get(&state) == nil && state.State == "snapshotted"
+	}, 16*time.Minute, time.Second)
+	updateWorkflow(t, c, run.GetID(), w.Acquire, "restore", ac, nil)
+	require.NoError(t, c.SignalWorkflow(t.Context(), run.GetID(), "", w.Archive, w.ArchiveInput{}))
+	require.NoError(t, run.Get(t.Context(), nil))
+	save(t, c, run.GetID(), run.GetRunID(), "lease")
+}
+func save(t *testing.T, c client.Client, id, runID, name string) {
+	t.Helper()
+	iterator := c.GetWorkflowHistory(t.Context(), id, runID, false, enums.HISTORY_EVENT_FILTER_TYPE_ALL_EVENT)
+	history := &historypb.History{}
+	for iterator.HasNext() {
+		ev, err := iterator.Next()
+		require.NoError(t, err)
+		history.Events = append(history.Events, ev)
+	}
+	require.NotEmpty(t, history.Events)
+	replayer := worker.NewWorkflowReplayer()
+	replayer.RegisterWorkflowWithOptions(
+		agentrun.Run,
+		workflow.RegisterOptions{Name: w.AgentRunWorkflow},
+	)
+	replayer.RegisterWorkflowWithOptions(
+		session.Run,
+		workflow.RegisterOptions{Name: w.SessionWorkflow},
+	)
+	replayer.RegisterWorkflowWithOptions(
+		sandboxlease.Run,
+		workflow.RegisterOptions{Name: w.SandboxLeaseWorkflow},
+	)
+	require.NoError(t, replayer.ReplayWorkflowHistory(nil, history))
+	if *update {
+		raw, err := protojson.MarshalOptions{Indent: "  "}.Marshal(history)
+		require.NoError(t, err)
+		path := filepath.Join("..", "testdata", "histories", name+".json")
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0755))
+		require.NoError(t, os.WriteFile(path, raw, 0644))
+	}
+}

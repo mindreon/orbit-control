@@ -1,152 +1,255 @@
 package session
 
 import (
+	"errors"
 	"fmt"
+	"time"
+
+	"go.temporal.io/api/enums/v1"
+	"go.temporal.io/api/serviceerror"
+	"go.temporal.io/sdk/temporal"
+	"go.temporal.io/sdk/workflow"
+
 	"github.com/mindreon/orbit-control/internal/contract"
 	w "github.com/mindreon/orbit-control/internal/workflows"
-	"go.temporal.io/api/enums/v1"
-	"go.temporal.io/sdk/workflow"
-	"time"
 )
 
+type sessionWorkflow struct {
+	in       w.SessionInput
+	queue    []w.SubmitMessageInput
+	policy   string
+	active   string
+	child    workflow.ChildWorkflowFuture
+	external bool
+	archived bool
+	runs     int
+	limit    int
+}
+
 func Run(ctx workflow.Context, in w.SessionInput) error {
-	queue := []w.SubmitMessageInput{}
-	policy := in.Policy
-	if in.Carry != nil {
-		queue = in.Carry.Queue
-		policy = in.Carry.Policy
-	}
-	var active string
-	var child workflow.ChildWorkflowFuture
-	archived := false
-	runs := 0
-	finalize := func(msg w.SubmitMessageInput, reason string) error {
-		dc, _ := workflow.NewDisconnectedContext(ctx)
-		return workflow.ExecuteActivity(w.Ctl(dc, "FinalizeRun"), "FinalizeRun", w.FinalizeInput{RunOp: w.RunOp{TenantID: in.TenantID, SessionID: in.SessionID, RunID: msg.RunID, Member: "main", EventAt: workflow.Now(ctx), EventN: 1}, Status: "cancelled", Reason: reason, NeverStarted: true}).Get(dc, nil)
-	}
-	if err := workflow.SetUpdateHandlerWithOptions(ctx, w.SubmitMessage, func(ctx workflow.Context, msg w.SubmitMessageInput) (w.SubmitMessageOutput, error) {
-		if policy == "interrupt" && active != "" {
-			if err := child.SignalChildWorkflow(ctx, w.Cancel, w.CancelInput{Reason: "interrupted_by_new_message"}).Get(ctx, nil); err != nil {
-				return w.SubmitMessageOutput{}, err
-			}
-			queue = append([]w.SubmitMessageInput{msg}, queue...)
-			return w.SubmitMessageOutput{RunID: msg.RunID, Disposition: "queued"}, nil
-		}
-		pos := len(queue)
-		disposition := "started"
-		if active != "" {
-			pos++
-			disposition = "queued"
-		}
-		queue = append(queue, msg)
-		return w.SubmitMessageOutput{RunID: msg.RunID, Position: pos, Disposition: disposition}, nil
-	}, workflow.UpdateHandlerOptions{Validator: func(msg w.SubmitMessageInput) error {
-		if archived || len(queue) >= 20 || msg.V != 1 || msg.RunID == "" || msg.RunID == active {
-			return fmt.Errorf("session unavailable or invalid message")
-		}
-		for _, q := range queue {
-			if q.RunID == msg.RunID {
-				return fmt.Errorf("duplicate run")
-			}
-		}
-		return nil
-	}}); err != nil {
+	limit, err := w.ContinueThreshold(ctx, w.SessionContinueAfter)
+	if err != nil {
 		return err
 	}
-	if err := workflow.SetUpdateHandlerWithOptions(ctx, w.CancelRun, func(ctx workflow.Context, c w.CancelRunInput) (w.CancelRunOutput, error) {
-		if active == c.RunID {
-			err := child.SignalChildWorkflow(ctx, w.Cancel, w.CancelInput{ActorID: c.ActorID, Reason: c.Reason}).Get(ctx, nil)
-			return w.CancelRunOutput{Disposition: "cancelling"}, err
+	s := &sessionWorkflow{in: in, policy: in.Policy, limit: limit}
+	if in.Carry != nil {
+		s.queue = in.Carry.Queue
+		s.policy = in.Carry.Policy
+	}
+	if err := s.register(ctx); err != nil {
+		return err
+	}
+	for {
+		ok, err := workflow.AwaitWithTimeout(ctx, 7*24*time.Hour, func() bool {
+			return s.archived || (s.active == "" && (len(s.queue) > 0 || s.shouldContinue(ctx)))
+		})
+		if err != nil {
+			return err
 		}
-		for i, q := range queue {
-			if q.RunID == c.RunID {
-				queue = append(queue[:i], queue[i+1:]...)
-				return w.CancelRunOutput{Disposition: "dequeued"}, finalize(q, c.Reason)
-			}
+		if s.archived {
+			return s.drain(ctx)
 		}
-		return w.CancelRunOutput{}, fmt.Errorf("run missing")
-	}, workflow.UpdateHandlerOptions{Validator: func(c w.CancelRunInput) error {
-		if active == c.RunID && active != "" {
-			return nil
+		if s.shouldContinue(ctx) {
+			in.Carry = &w.SessionCarry{Queue: s.queue, Policy: s.policy}
+			return workflow.NewContinueAsNewError(ctx, w.SessionWorkflow, in)
 		}
-		for _, q := range queue {
-			if q.RunID == c.RunID {
-				return nil
-			}
+		if !ok && s.active == "" && len(s.queue) == 0 {
+			return archiveLease(ctx, in)
 		}
-		return fmt.Errorf("RUN_FINISHED")
-	}}); err != nil {
+		if s.active == "" && len(s.queue) > 0 {
+			s.startNext(ctx)
+		}
+	}
+}
+func (s *sessionWorkflow) shouldContinue(ctx workflow.Context) bool {
+	return s.active == "" && workflow.AllHandlersFinished(ctx) &&
+		(s.runs >= s.limit || workflow.GetInfo(ctx).GetContinueAsNewSuggested())
+}
+func (s *sessionWorkflow) register(ctx workflow.Context) error {
+	if err := workflow.SetUpdateHandlerWithOptions(ctx, w.SubmitMessage, s.submit,
+		workflow.UpdateHandlerOptions{Validator: s.validateSubmit}); err != nil {
+		return err
+	}
+	if err := workflow.SetUpdateHandlerWithOptions(ctx, w.CancelRun, s.cancel,
+		workflow.UpdateHandlerOptions{Validator: s.validateCancel}); err != nil {
 		return err
 	}
 	if err := workflow.SetQueryHandler(ctx, w.State, func() (w.SessionState, error) {
 		status := "idle"
-		if active != "" {
+		if s.active != "" {
 			status = "active"
 		}
-		if archived {
+		if s.archived {
 			status = "archived"
 		}
-		return w.SessionState{ActiveRunID: active, QueueLen: len(queue), Status: status}, nil
+		return w.SessionState{ActiveRunID: s.active, QueueLen: len(s.queue), Status: status}, nil
 	}); err != nil {
 		return err
 	}
 	workflow.Go(ctx, func(ctx workflow.Context) {
 		ch := workflow.GetSignalChannel(ctx, w.SetPolicy)
 		for {
-			var s w.SetPolicyInput
-			ch.Receive(ctx, &s)
-			policy = s.Policy
+			var in w.SetPolicyInput
+			ch.Receive(ctx, &in)
+			s.policy = in.Policy
 		}
 	})
 	workflow.Go(ctx, func(ctx workflow.Context) {
-		var a w.ArchiveInput
-		workflow.GetSignalChannel(ctx, w.Archive).Receive(ctx, &a)
-		archived = true
+		workflow.GetSignalChannel(ctx, w.Archive).Receive(ctx, nil)
+		s.archived = true
 	})
-	for {
-		ok, err := workflow.AwaitWithTimeout(ctx, 7*24*time.Hour, func() bool { return archived || (active == "" && len(queue) > 0) })
-		if err != nil {
-			return err
-		}
-		if archived {
-			if active != "" {
-				if err = child.SignalChildWorkflow(ctx, w.Cancel, w.CancelInput{Reason: "session_archived"}).Get(ctx, nil); err != nil {
-					return err
-				}
-				if err = workflow.Await(ctx, func() bool { return active == "" }); err != nil {
-					return err
-				}
-			}
-			for _, q := range queue {
-				if err = finalize(q, "session_archived"); err != nil {
-					return err
-				}
-			}
-			_ = workflow.SignalExternalWorkflow(ctx, w.LeaseWorkflowID(in.TenantID, w.IsolationKey(in.TenantID, in.SessionID)), "", w.Archive, w.ArchiveInput{}).Get(ctx, nil)
-			return nil
-		}
-		if !ok && active == "" && len(queue) == 0 {
-			return nil
-		}
-		if active == "" && workflow.AllHandlersFinished(ctx) && (runs >= 100 || workflow.GetInfo(ctx).GetContinueAsNewSuggested()) {
-			in.Carry = &w.SessionCarry{Queue: queue, Policy: policy}
-			return workflow.NewContinueAsNewError(ctx, w.SessionWorkflow, in)
-		}
-		if active == "" && len(queue) > 0 {
-			msg := queue[0]
-			queue = queue[1:]
-			active = msg.RunID
-			ri := w.RunInput{V: 1, TenantID: in.TenantID, WorkspaceID: in.WorkspaceID, SessionID: in.SessionID, RunID: msg.RunID, PrincipalID: msg.PrincipalID, MessageID: msg.MessageID, Member: "main", Lock: msg.Lock, AgentSessionKey: w.AgentSessionKey(in.SessionID, msg.Lock.Digest), EventSubject: w.EventSubject(in.TenantID, msg.RunID), InputRef: msg.InputRef, BudgetMillicredits: msg.BudgetMillicredits, Limits: msg.Limits, Sandbox: msg.Sandbox, Tier: "standard"}
-			cc := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{WorkflowID: w.AgentRunWorkflowID(in.TenantID, msg.RunID), TaskQueue: contract.TaskQueueCtl, ParentClosePolicy: enums.PARENT_CLOSE_POLICY_REQUEST_CANCEL, WaitForCancellation: true, WorkflowIDReusePolicy: enums.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE})
-			child = workflow.ExecuteChildWorkflow(cc, w.AgentRunWorkflow, ri)
-			future := child
-			workflow.Go(ctx, func(ctx workflow.Context) {
-				if e := future.Get(ctx, nil); e != nil {
-					workflow.GetLogger(ctx).Error("agent child failed", "error", e)
-				}
-				active = ""
-				runs++
-			})
+	return nil
+}
+func (s *sessionWorkflow) validateSubmit(in w.SubmitMessageInput) error {
+	if s.archived || len(s.queue) >= 20 || in.V != 1 || in.RunID == "" || in.RunID == s.active {
+		return fmt.Errorf("session unavailable or invalid message")
+	}
+	for _, q := range s.queue {
+		if q.RunID == in.RunID {
+			return fmt.Errorf("duplicate run")
 		}
 	}
+	return nil
+}
+func (s *sessionWorkflow) submit(ctx workflow.Context, msg w.SubmitMessageInput) (w.SubmitMessageOutput, error) {
+	if s.policy == "interrupt" && s.active != "" {
+		if err := s.signalActive(ctx, w.CancelInput{Reason: "interrupted_by_new_message"}); err != nil {
+			return w.SubmitMessageOutput{}, err
+		}
+		s.queue = append([]w.SubmitMessageInput{msg}, s.queue...)
+		return w.SubmitMessageOutput{RunID: msg.RunID, Disposition: "queued"}, nil
+	}
+	pos, disposition := len(s.queue), "started"
+	if s.active != "" {
+		pos++
+		disposition = "queued"
+	}
+	s.queue = append(s.queue, msg)
+	return w.SubmitMessageOutput{RunID: msg.RunID, Position: pos, Disposition: disposition}, nil
+}
+func (s *sessionWorkflow) validateCancel(in w.CancelRunInput) error {
+	if s.active == in.RunID && s.active != "" {
+		return nil
+	}
+	for _, q := range s.queue {
+		if q.RunID == in.RunID {
+			return nil
+		}
+	}
+	return fmt.Errorf("RUN_FINISHED")
+}
+func (s *sessionWorkflow) cancel(ctx workflow.Context, in w.CancelRunInput) (w.CancelRunOutput, error) {
+	if s.active == in.RunID {
+		err := s.signalActive(ctx, w.CancelInput{ActorID: in.ActorID, Reason: in.Reason})
+		return w.CancelRunOutput{Disposition: "cancelling"}, err
+	}
+	for i, q := range s.queue {
+		if q.RunID == in.RunID {
+			// Remove admission before blocking so the main loop cannot start a run
+			// whose queued cancellation is already being finalized.
+			s.queue = append(s.queue[:i], s.queue[i+1:]...)
+			if err := s.finalize(ctx, q, in.Reason); err != nil {
+				s.queue = append([]w.SubmitMessageInput{q}, s.queue...)
+				return w.CancelRunOutput{}, err
+			}
+			return w.CancelRunOutput{Disposition: "dequeued"}, nil
+		}
+	}
+	return w.CancelRunOutput{}, fmt.Errorf("run missing")
+}
+func (s *sessionWorkflow) signalActive(ctx workflow.Context, in w.CancelInput) error {
+	if s.external {
+		return workflow.SignalExternalWorkflow(ctx, w.AgentRunWorkflowID(s.in.TenantID, s.active), "", w.Cancel, in).
+			Get(ctx, nil)
+	}
+	return s.child.SignalChildWorkflow(ctx, w.Cancel, in).Get(ctx, nil)
+}
+func (s *sessionWorkflow) finalize(ctx workflow.Context, msg w.SubmitMessageInput, reason string) error {
+	dc, _ := workflow.NewDisconnectedContext(ctx)
+	input := w.FinalizeInput{RunOp: w.RunOp{
+		TenantID: s.in.TenantID, SessionID: s.in.SessionID, RunID: msg.RunID, Member: "main", EventAt: workflow.Now(ctx), EventN: 1,
+	}, Status: "cancelled", ErrorCode: "CANCELLED", Reason: reason, NeverStarted: true}
+	return workflow.ExecuteActivity(w.Ctl(dc, "FinalizeRun"), "FinalizeRun", input).Get(dc, nil)
+}
+func (s *sessionWorkflow) drain(ctx workflow.Context) error {
+	if s.active != "" {
+		if err := s.signalActive(ctx, w.CancelInput{Reason: "session_archived"}); err != nil {
+			return err
+		}
+		if err := workflow.Await(ctx, func() bool { return s.active == "" }); err != nil {
+			return err
+		}
+	}
+	for _, q := range s.queue {
+		if err := s.finalize(ctx, q, "session_archived"); err != nil {
+			return err
+		}
+	}
+	return archiveLease(ctx, s.in)
+}
+func archiveLease(ctx workflow.Context, in w.SessionInput) error {
+	err := workflow.SignalExternalWorkflow(
+		ctx,
+		w.LeaseWorkflowID(
+			in.TenantID,
+			w.IsolationKey(in.TenantID, in.SessionID),
+		),
+		"",
+		w.Archive,
+		w.ArchiveInput{},
+	).Get(ctx, nil)
+	if _, ok := errors.AsType[*temporal.UnknownExternalWorkflowExecutionError](err); ok {
+		return nil
+	}
+	return err
+}
+func (s *sessionWorkflow) runInput(msg w.SubmitMessageInput) w.RunInput {
+	return w.RunInput{V: 1, TenantID: s.in.TenantID, WorkspaceID: s.in.WorkspaceID, SessionID: s.in.SessionID,
+		RunID: msg.RunID, PrincipalID: msg.PrincipalID, MessageID: msg.MessageID, Member: "main", Lock: msg.Lock,
+		AgentSessionKey: w.AgentSessionKey(
+			s.in.SessionID,
+			msg.Lock.Digest,
+		), EventSubject: w.EventSubject(s.in.TenantID, msg.RunID),
+		InputRef: msg.InputRef, BudgetMillicredits: msg.BudgetMillicredits, Limits: msg.Limits, Sandbox: msg.Sandbox, Tier: "standard"}
+}
+func (s *sessionWorkflow) startNext(ctx workflow.Context) {
+	msg := s.queue[0]
+	s.queue = s.queue[1:]
+	s.active = msg.RunID
+	s.external = false
+	cc := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+		WorkflowID: w.AgentRunWorkflowID(s.in.TenantID, msg.RunID), TaskQueue: contract.TaskQueueCtl,
+		ParentClosePolicy: enums.PARENT_CLOSE_POLICY_REQUEST_CANCEL, WaitForCancellation: true,
+		WorkflowIDReusePolicy: enums.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
+		TypedSearchAttributes: temporal.NewSearchAttributes(
+			temporal.NewSearchAttributeKeyKeyword("TenantId").ValueSet(s.in.TenantID),
+			temporal.NewSearchAttributeKeyKeyword("WorkspaceId").ValueSet(s.in.WorkspaceID),
+			temporal.NewSearchAttributeKeyKeyword("RunKind").ValueSet("agent")),
+	})
+	s.child = workflow.ExecuteChildWorkflow(cc, w.AgentRunWorkflow, s.runInput(msg))
+	future := s.child
+	workflow.Go(ctx, func(ctx workflow.Context) { s.waitChild(ctx, future, msg.RunID) })
+}
+func (s *sessionWorkflow) waitChild(ctx workflow.Context, future workflow.ChildWorkflowFuture, runID string) {
+	var execution workflow.Execution
+	err := future.GetChildWorkflowExecution().Get(ctx, &execution)
+	if err == nil {
+		err = future.Get(ctx, nil)
+	}
+	_, sdkStarted := errors.AsType[*temporal.ChildWorkflowExecutionAlreadyStartedError](err)
+	_, serviceStarted := errors.AsType[*serviceerror.WorkflowExecutionAlreadyStarted](err)
+	if sdkStarted || serviceStarted {
+		s.external = true
+		// Temporal does not expose an external ChildWorkflowFuture. Wait on the
+		// existing stable workflow ID with a heartbeat Activity; signal it directly.
+		err = workflow.ExecuteActivity(w.Ctl(ctx, "WaitForRun"), "WaitForRun", w.RunOp{
+			TenantID: s.in.TenantID, RunID: runID,
+		}).Get(ctx, nil)
+	}
+
+	if err != nil {
+		workflow.GetLogger(ctx).Error("agent child failed", "error", err)
+	}
+	s.active = ""
+	s.runs++
 }

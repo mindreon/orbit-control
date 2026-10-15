@@ -24,14 +24,24 @@ const (
 	Lease                = "Lease"
 )
 
-func SessionWorkflowID(tenant, session string) string { return "sess:" + tenant + ":" + session }
-func AgentRunWorkflowID(tenant, run string) string    { return "run:" + tenant + ":" + run }
-func LeaseWorkflowID(tenant, key string) string       { return "sbx:" + tenant + ":" + key }
-func IsolationKey(tenant, session string) string      { return "t-" + tenant + "-s-" + session }
+func SessionWorkflowID(tenant, session string) string {
+	return "sess:" + tenant + ":" + session
+}
+func AgentRunWorkflowID(tenant, run string) string {
+	return "run:" + tenant + ":" + run
+}
+func LeaseWorkflowID(tenant, key string) string {
+	return "sbx:" + tenant + ":" + key
+}
+func IsolationKey(tenant, session string) string {
+	return "t-" + tenant + "-s-" + session
+}
 func AgentSessionKey(session, digest string) string {
 	return "sess:" + session + ":" + strings.TrimPrefix(digest, "sha256:")[:12]
 }
-func EventSubject(tenant, run string) string { return "run." + tenant + "." + run }
+func EventSubject(tenant, run string) string {
+	return "run." + tenant + "." + run
+}
 func Terminal(status string) bool {
 	switch status {
 	case "succeeded", "failed", "cancelled", "budget_exhausted", "timed_out":

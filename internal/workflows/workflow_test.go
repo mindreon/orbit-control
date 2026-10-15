@@ -7,17 +7,20 @@ import (
 	"testing"
 	"time"
 
+	"errors"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/converter"
+	"go.temporal.io/sdk/temporal"
+	"go.temporal.io/sdk/testsuite"
+	"go.temporal.io/sdk/workflow"
+
 	"github.com/mindreon/orbit-control/internal/contract"
 	w "github.com/mindreon/orbit-control/internal/workflows"
 	"github.com/mindreon/orbit-control/internal/workflows/agentrun"
 	"github.com/mindreon/orbit-control/internal/workflows/sandboxlease"
 	"github.com/mindreon/orbit-control/internal/workflows/session"
-	"github.com/stretchr/testify/mock"
-	"github.com/stretchr/testify/require"
-	"go.temporal.io/sdk/activity"
-	"go.temporal.io/sdk/temporal"
-	"go.temporal.io/sdk/testsuite"
-	"go.temporal.io/sdk/workflow"
 )
 
 type harness struct {
@@ -29,6 +32,7 @@ type harness struct {
 	statuses  []string
 	notices   []string
 	decisions []w.DecisionInput
+	touches   []bool
 	acquires  int
 	used      int64
 	reconcile *contract.SegmentResult
@@ -39,13 +43,43 @@ func newHarness(t *testing.T) *harness {
 	t.Helper()
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
-	h := &harness{env: env, input: w.RunInput{V: 1, TenantID: "tenant", WorkspaceID: "workspace", SessionID: "session", RunID: "run", PrincipalID: "actor", MessageID: "message", Member: "main", Lock: contract.SegmentLockRef{Id: "lock", Digest: "sha256:" + strings.Repeat("0", 64)}, AgentSessionKey: "sess:session:000000000000", InputRef: "t/tenant/runs/run/input/message.json", EventSubject: "run.tenant.run", BudgetMillicredits: 200000, Limits: w.DefaultLimits(200000), Sandbox: w.SandboxSpec{IsolationKey: "t-tenant-s-session", Profile: "default", TTLSeconds: 1800}, Tier: "standard"}}
-	env.RegisterActivityWithOptions(func(context.Context, w.PrepareInput) (w.PrepareOutput, error) { return w.PrepareOutput{}, nil }, activity.RegisterOptions{Name: "PrepareRun"})
+	h := &harness{
+		env: env,
+		input: w.RunInput{
+			V:                  1,
+			TenantID:           "tenant",
+			WorkspaceID:        "workspace",
+			SessionID:          "session",
+			RunID:              "run",
+			PrincipalID:        "actor",
+			MessageID:          "message",
+			Member:             "main",
+			Lock:               contract.SegmentLockRef{Id: "lock", Digest: "sha256:" + strings.Repeat("0", 64)},
+			AgentSessionKey:    "sess:session:000000000000",
+			InputRef:           "t/tenant/runs/run/input/message.json",
+			EventSubject:       "run.tenant.run",
+			BudgetMillicredits: 200000,
+			Limits:             w.DefaultLimits(200000),
+			Sandbox:            w.SandboxSpec{IsolationKey: "t-tenant-s-session", Profile: "default", TTLSeconds: 1800},
+			Tier:               "standard",
+		},
+	}
+	env.RegisterActivityWithOptions(
+		func(context.Context, w.PrepareInput) (w.PrepareOutput, error) {
+			return w.PrepareOutput{}, nil
+		},
+		activity.RegisterOptions{Name: "PrepareRun"},
+	)
 	env.RegisterActivityWithOptions(func(context.Context, w.AcquireSandboxInput) (contract.SandboxLease, error) {
 		h.acquires++
 		return contract.SandboxLease{Provider: "local", SandboxId: "box"}, nil
 	}, activity.RegisterOptions{Name: "AcquireSandbox"})
-	env.RegisterActivityWithOptions(func(context.Context, w.StartSegmentInput) error { return nil }, activity.RegisterOptions{Name: "StartSegment"})
+	env.RegisterActivityWithOptions(
+		func(context.Context, w.StartSegmentInput) error {
+			return nil
+		},
+		activity.RegisterOptions{Name: "StartSegment"},
+	)
 	env.RegisterActivityWithOptions(func(_ context.Context, in contract.SegmentInput) (contract.SegmentResult, error) {
 		h.segments = append(h.segments, in)
 		if h.run != nil {
@@ -57,7 +91,13 @@ func newHarness(t *testing.T) *harness {
 		h.records = append(h.records, in)
 		return w.RecordSegmentOutput{RunUsedMillicredits: h.used}, nil
 	}, activity.RegisterOptions{Name: "RecordSegment"})
-	env.RegisterActivityWithOptions(func(_ context.Context, in w.FinalizeInput) error { h.finished = append(h.finished, in); return nil }, activity.RegisterOptions{Name: "FinalizeRun"})
+	env.RegisterActivityWithOptions(
+		func(_ context.Context, in w.FinalizeInput) error {
+			h.finished = append(h.finished, in)
+			return nil
+		},
+		activity.RegisterOptions{Name: "FinalizeRun"},
+	)
 	env.RegisterActivityWithOptions(func(_ context.Context, in w.StatusInput) error {
 		h.statuses = append(h.statuses, in.Status)
 		return nil
@@ -65,20 +105,43 @@ func newHarness(t *testing.T) *harness {
 	env.RegisterActivityWithOptions(func(_ context.Context, in w.InteractionInput) (w.InteractionOutput, error) {
 		return w.InteractionOutput{CreatedAt: in.EventAt, Approvers: []string{"owner"}}, nil
 	}, activity.RegisterOptions{Name: "CreateInteraction"})
-	env.RegisterActivityWithOptions(func(_ context.Context, in w.NotifyInput) error { h.notices = append(h.notices, in.Kind); return nil }, activity.RegisterOptions{Name: "NotifyInteraction"})
+	env.RegisterActivityWithOptions(
+		func(_ context.Context, in w.NotifyInput) error {
+			h.notices = append(h.notices, in.Kind)
+			return nil
+		},
+		activity.RegisterOptions{Name: "NotifyInteraction"},
+	)
 	env.RegisterActivityWithOptions(func(_ context.Context, in w.NotifyInput) error {
 		h.notices = append(h.notices, "cancelled")
 		return nil
 	}, activity.RegisterOptions{Name: "CancelInteraction"})
-	env.RegisterActivityWithOptions(func(_ context.Context, in w.DecisionInput) error { h.decisions = append(h.decisions, in); return nil }, activity.RegisterOptions{Name: "ApplyDecision"})
+	env.RegisterActivityWithOptions(
+		func(_ context.Context, in w.DecisionInput) error {
+			h.decisions = append(h.decisions, in)
+			return nil
+		},
+		activity.RegisterOptions{Name: "ApplyDecision"},
+	)
 	env.RegisterActivityWithOptions(func(context.Context, w.ReconcileInput) (w.ReconcileOutput, error) {
 		return w.ReconcileOutput{Result: h.reconcile}, nil
 	}, activity.RegisterOptions{Name: "ReconcileCheckpoint"})
-	env.OnSignalExternalWorkflow(mock.Anything, w.LeaseWorkflowID("tenant", "t-tenant-s-session"), "", w.Touch, mock.Anything).Return(nil)
+	env.OnSignalExternalWorkflow(
+		mock.Anything,
+		w.LeaseWorkflowID("tenant", "t-tenant-s-session"),
+		"",
+		w.Touch,
+		mock.Anything,
+	).Run(func(args mock.Arguments) { h.touches = append(h.touches, args.Get(4).(w.TouchInput).InUse) }).Return(nil)
 	return h
 }
 func completed(in contract.SegmentInput) contract.SegmentResult {
-	return contract.SegmentResult{V: 1, Status: "completed", CheckpointVersion: in.ExpectedCheckpointVersion + 1, Progress: contract.SegmentProgress{NewOutput: true}}
+	return contract.SegmentResult{
+		V:                 1,
+		Status:            "completed",
+		CheckpointVersion: in.ExpectedCheckpointVersion + 1,
+		Progress:          contract.SegmentProgress{NewOutput: true},
+	}
 }
 func yielded(in contract.SegmentInput, progress bool) contract.SegmentResult {
 	r := completed(in)
@@ -126,7 +189,9 @@ func TestAgentSegments(t *testing.T) {
 	})
 	t.Run("stuck", func(t *testing.T) {
 		h := newHarness(t)
-		h.run = func(in contract.SegmentInput) (contract.SegmentResult, error) { return yielded(in, false), nil }
+		h.run = func(in contract.SegmentInput) (contract.SegmentResult, error) {
+			return yielded(in, false), nil
+		}
 		h.execute(t, "failed", "STUCK")
 		require.Len(t, h.segments, 3)
 	})
@@ -138,9 +203,29 @@ func TestAgentSegments(t *testing.T) {
 			}
 			return yielded(in, in.Seq == 3), nil
 		}
-		h.execute(t, "succeeded", "")
+		h.env.ExecuteWorkflow(agentrun.Run, h.input)
+		if can, ok := errors.AsType[*workflow.ContinueAsNewError](h.env.GetWorkflowError()); ok {
+			var in w.RunInput
+			require.NoError(t, converter.GetDefaultDataConverter().FromPayloads(can.Input, &in))
+			require.Zero(t, in.Carry.NoProgress)
+			next := newHarness(t)
+			next.input, next.run = in, h.run
+			next.execute(t, "succeeded", "")
+		} else {
+			require.NoError(t, h.env.GetWorkflowError())
+			require.Equal(t, "succeeded", h.finished[0].Status)
+		}
 	})
-	for _, tc := range []struct{ typ, code, status string }{{contract.ErrorBudgetExhausted, "", "budget_exhausted"}, {contract.ErrorPolicyDenied, "POLICY_DENIED", "failed"}, {contract.ErrorInvalidSpec, "INVALID_SPEC", "failed"}, {contract.ErrorInvalidSegmentInput, "INVALID_SEGMENT_INPUT", "failed"}, {contract.ErrorLockVerificationFailed, "LOCK_VERIFICATION_FAILED", "failed"}, {contract.ErrorCheckpointUnreadable, "CHECKPOINT_UNREADABLE", "failed"}, {contract.ErrorSegmentSuperseded, "SEGMENT_SUPERSEDED", "failed"}, {"other", "SEGMENT_FAILED", "failed"}} {
+	for _, tc := range []struct{ typ, code, status string }{
+		{typ: contract.ErrorBudgetExhausted, code: "", status: "budget_exhausted"},
+		{typ: contract.ErrorPolicyDenied, code: "POLICY_DENIED", status: "failed"},
+		{typ: contract.ErrorInvalidSpec, code: "INVALID_SPEC", status: "failed"},
+		{typ: contract.ErrorInvalidSegmentInput, code: "INVALID_SEGMENT_INPUT", status: "failed"},
+		{typ: contract.ErrorLockVerificationFailed, code: "LOCK_VERIFICATION_FAILED", status: "failed"},
+		{typ: contract.ErrorCheckpointUnreadable, code: "CHECKPOINT_UNREADABLE", status: "failed"},
+		{typ: contract.ErrorSegmentSuperseded, code: "SEGMENT_SUPERSEDED", status: "failed"},
+		{typ: "other", code: "SEGMENT_FAILED", status: "failed"},
+	} {
 		t.Run(tc.typ, func(t *testing.T) {
 			h := newHarness(t)
 			h.run = func(contract.SegmentInput) (contract.SegmentResult, error) {
@@ -150,66 +235,91 @@ func TestAgentSegments(t *testing.T) {
 		})
 	}
 	for _, has := range []bool{true, false} {
-		t.Run(fmt.Sprintf("checkpoint reconcile %t", has), func(t *testing.T) {
-			h := newHarness(t)
-			if has {
-				r := completed(contract.SegmentInput{})
-				h.reconcile = &r
-			}
-			h.run = func(contract.SegmentInput) (contract.SegmentResult, error) {
-				return contract.SegmentResult{}, temporal.NewNonRetryableApplicationError("conflict", contract.ErrorCheckpointConflict, nil)
-			}
-			if has {
-				h.execute(t, "succeeded", "")
-			} else {
-				h.execute(t, "failed", "CHECKPOINT_CONFLICT")
-			}
-		})
+		t.Run(
+			fmt.Sprintf("checkpoint reconcile %t", has),
+			func(t *testing.T) {
+				h := newHarness(t)
+				if has {
+					r := completed(contract.SegmentInput{})
+					h.reconcile = &r
+				}
+				h.run = func(contract.SegmentInput) (contract.SegmentResult, error) {
+					return contract.SegmentResult{}, temporal.NewNonRetryableApplicationError(
+						"conflict",
+						contract.ErrorCheckpointConflict,
+						nil,
+					)
+				}
+				if has {
+					h.execute(t, "succeeded", "")
+				} else {
+					h.execute(t, "failed", "CHECKPOINT_CONFLICT")
+				}
+			},
+		)
 	}
 	for _, fails := range []int{1, 3} {
-		t.Run(fmt.Sprintf("sandbox retry %d", fails), func(t *testing.T) {
-			h := newHarness(t)
-			attempt := 0
-			h.run = func(in contract.SegmentInput) (contract.SegmentResult, error) {
-				attempt++
-				if attempt <= fails {
-					return contract.SegmentResult{}, temporal.NewNonRetryableApplicationError("lost", contract.ErrorSandboxUnavailable, nil)
+		t.Run(
+			fmt.Sprintf("sandbox retry %d", fails),
+			func(t *testing.T) {
+				h := newHarness(t)
+				attempt := 0
+				h.run = func(in contract.SegmentInput) (contract.SegmentResult, error) {
+					attempt++
+					if attempt <= fails {
+						return contract.SegmentResult{}, temporal.NewNonRetryableApplicationError(
+							"lost",
+							contract.ErrorSandboxUnavailable,
+							nil,
+						)
+					}
+					return completed(in), nil
 				}
-				return completed(in), nil
-			}
-			if fails == 1 {
-				h.execute(t, "succeeded", "")
-				require.Equal(t, 2, h.acquires)
-				require.Equal(t, h.segments[0].Seq, h.segments[1].Seq)
-			} else {
-				h.execute(t, "failed", "SANDBOX_UNAVAILABLE")
-			}
-		})
+				if fails == 1 {
+					h.execute(t, "succeeded", "")
+					require.Equal(t, 2, h.acquires)
+					require.Equal(t, h.segments[0].Seq, h.segments[1].Seq)
+				} else {
+					h.execute(t, "failed", "SANDBOX_UNAVAILABLE")
+				}
+			},
+		)
 	}
 	for _, repeat := range []bool{false, true} {
-		t.Run(fmt.Sprintf("compact %t", repeat), func(t *testing.T) {
-			h := newHarness(t)
-			calls := 0
-			h.run = func(in contract.SegmentInput) (contract.SegmentResult, error) {
-				calls++
-				if calls == 1 || (repeat && calls == 2) {
-					return contract.SegmentResult{}, temporal.NewNonRetryableApplicationError("context", contract.ErrorContextLengthExceeded, nil)
+		t.Run(
+			fmt.Sprintf("compact %t", repeat),
+			func(t *testing.T) {
+				h := newHarness(t)
+				calls := 0
+				h.run = func(in contract.SegmentInput) (contract.SegmentResult, error) {
+					calls++
+					if calls == 1 || (repeat && calls == 2) {
+						return contract.SegmentResult{}, temporal.NewNonRetryableApplicationError(
+							"context",
+							contract.ErrorContextLengthExceeded,
+							nil,
+						)
+					}
+					if in.Input.Kind == "compact" {
+						r := yielded(in, true)
+						r.YieldReason = new(contract.YieldReason("compacted"))
+						return r, nil
+					}
+					return completed(in), nil
 				}
-				if in.Input.Kind == "compact" {
-					r := yielded(in, true)
-					r.YieldReason = new(contract.YieldReason("compacted"))
-					return r, nil
+				if repeat {
+					h.execute(t, "failed", "CONTEXT_TOO_LARGE")
+				} else {
+					h.execute(t, "succeeded", "")
+					require.Equal(
+						t,
+						[]int{1, 1, 2},
+						[]int{h.segments[0].Seq, h.segments[1].Seq, h.segments[2].Seq},
+					)
+					require.Equal(t, h.segments[0].Input, h.segments[2].Input)
 				}
-				return completed(in), nil
-			}
-			if repeat {
-				h.execute(t, "failed", "CONTEXT_TOO_LARGE")
-			} else {
-				h.execute(t, "succeeded", "")
-				require.Equal(t, []int{1, 1, 2}, []int{h.segments[0].Seq, h.segments[1].Seq, h.segments[2].Seq})
-				require.Equal(t, h.segments[0].Input, h.segments[2].Input)
-			}
-		})
+			},
+		)
 	}
 	t.Run("budget warning and exhausted", func(t *testing.T) {
 		h := newHarness(t)
@@ -228,12 +338,13 @@ func TestAgentSegments(t *testing.T) {
 	t.Run("segment limit", func(t *testing.T) {
 		h := newHarness(t)
 		h.input.Limits.MaxSegments = 1
-		h.run = func(in contract.SegmentInput) (contract.SegmentResult, error) { return yielded(in, true), nil }
+		h.run = func(in contract.SegmentInput) (contract.SegmentResult, error) {
+			return yielded(in, true), nil
+		}
 		h.execute(t, "failed", "SEGMENT_LIMIT")
 	})
 }
 func TestInteractions(t *testing.T) {
-	t.Skip("HITL timer callbacks require a running Temporal test server; covered by integration replay")
 	for _, kind := range []contract.InteractionKind{"tool_approval", "ask_user", "effect_uncertain"} {
 		for _, expire := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s expire=%t", kind, expire), func(t *testing.T) {
@@ -256,7 +367,14 @@ func TestInteractions(t *testing.T) {
 						} else {
 							d.Answer = new("answer")
 						}
-						h.env.UpdateWorkflow(w.ResolveInteraction, "resolve", &testsuite.TestUpdateCallback{OnComplete: func(_ any, err error) { require.NoError(t, err) }}, w.ResolveInteractionInput{InteractionID: "approval", ActorID: "owner", Decision: d})
+						h.env.UpdateWorkflow(
+							w.ResolveInteraction,
+							"resolve",
+							&testsuite.TestUpdateCallback{OnComplete: func(_ any, err error) {
+								require.NoError(t, err)
+							}},
+							w.ResolveInteractionInput{InteractionID: "approval", ActorID: "owner", Decision: d},
+						)
 					}, time.Second)
 				}
 				h.execute(t, "succeeded", "")
@@ -276,8 +394,19 @@ func TestInteractions(t *testing.T) {
 		}
 		rejects := 0
 		h.env.RegisterDelayedCallback(func() {
-			for _, in := range []w.ResolveInteractionInput{{InteractionID: "wrong", Decision: contract.Decision{Kind: "tool_approval"}}, {InteractionID: "approval", Decision: contract.Decision{Kind: "ask_user"}}} {
-				h.env.UpdateWorkflow(w.ResolveInteraction, fmt.Sprint(rejects), &testsuite.TestUpdateCallback{OnReject: func(err error) { require.Error(t, err); rejects++ }}, in)
+			for _, in := range []w.ResolveInteractionInput{
+				{InteractionID: "wrong", Decision: contract.Decision{Kind: "tool_approval"}},
+				{InteractionID: "approval", Decision: contract.Decision{Kind: "ask_user"}},
+			} {
+				h.env.UpdateWorkflow(
+					w.ResolveInteraction,
+					in.InteractionID+string(in.Decision.Kind),
+					&testsuite.TestUpdateCallback{OnReject: func(err error) {
+						require.Error(t, err)
+						rejects++
+					}},
+					in,
+				)
 			}
 			h.env.SignalWorkflow(w.Cancel, w.CancelInput{Reason: "user"})
 		}, time.Second)
@@ -287,11 +416,15 @@ func TestInteractions(t *testing.T) {
 	})
 }
 func TestControls(t *testing.T) {
-	t.Skip("control signal timing is covered by Temporal integration histories")
 	for _, signal := range []string{w.Cancel, w.AssetSuspended} {
 		t.Run(signal, func(t *testing.T) {
 			h := newHarness(t)
-			h.env.OnActivity(contract.ActivityRunAgentSegment, mock.Anything, mock.Anything).Return(contract.SegmentResult{}, temporal.NewCanceledError()).After(10 * time.Second)
+			h.env.OnActivity(contract.ActivityRunAgentSegment, mock.Anything, mock.Anything).Return(
+				contract.SegmentResult{},
+				temporal.NewCanceledError(),
+			).After(
+				10 * time.Second,
+			)
 			h.env.RegisterDelayedCallback(func() {
 				if signal == w.Cancel {
 					h.env.SignalWorkflow(signal, w.CancelInput{Reason: "user_cancel"})
@@ -299,7 +432,7 @@ func TestControls(t *testing.T) {
 					h.env.SignalWorkflow(signal, w.AssetSuspendedInput{AssetRef: "agent"})
 				}
 			}, time.Second)
-			code := "user_cancel"
+			code := "CANCELLED"
 			if signal == w.AssetSuspended {
 				code = "ASSET_SUSPENDED"
 			}
@@ -308,19 +441,55 @@ func TestControls(t *testing.T) {
 	}
 	t.Run("pause after segment resume", func(t *testing.T) {
 		h := newHarness(t)
-		h.run = func(in contract.SegmentInput) (contract.SegmentResult, error) { return yielded(in, true), nil }
-		h.env.RegisterDelayedCallback(func() { h.env.SignalWorkflow(w.Pause, w.ActorInput{}) }, time.Second)
-		h.env.RegisterDelayedCallback(func() { require.Contains(t, h.statuses, "paused"); h.env.SignalWorkflow(w.Resume, w.ActorInput{}) }, 3*time.Second)
+		h.env.OnActivity(contract.ActivityRunAgentSegment, mock.Anything, mock.Anything).
+			Return(yielded(contract.SegmentInput{}, true), nil).After(2 * time.Second).Once()
+		h.env.OnActivity(contract.ActivityRunAgentSegment, mock.Anything, mock.Anything).
+			Return(func(_ context.Context, in contract.SegmentInput) (contract.SegmentResult, error) {
+				h.segments = append(h.segments, in)
+				return completed(in), nil
+			})
+		h.env.RegisterDelayedCallback(
+			func() {
+				h.env.SignalWorkflow(w.Pause, w.ActorInput{})
+			},
+			time.Second,
+		)
+		h.env.RegisterDelayedCallback(
+			func() {
+				require.Contains(t, h.statuses, "paused")
+				h.env.SignalWorkflow(w.Resume, w.ActorInput{})
+			},
+			3*time.Second,
+		)
 		h.execute(t, "succeeded", "")
 		require.Equal(t, []string{"paused", "running"}, h.statuses)
 	})
 	t.Run("steer follow up and bounded queue", func(t *testing.T) {
 		h := newHarness(t)
-		h.run = func(in contract.SegmentInput) (contract.SegmentResult, error) { return completed(in), nil }
+		h.env.OnActivity(contract.ActivityRunAgentSegment, mock.Anything, mock.Anything).
+			Return(func(_ context.Context, in contract.SegmentInput) (contract.SegmentResult, error) {
+				h.segments = append(h.segments, in)
+				return completed(in), nil
+			}).After(2 * time.Second).Once()
+		h.env.OnActivity(contract.ActivityRunAgentSegment, mock.Anything, mock.Anything).
+			Return(func(_ context.Context, in contract.SegmentInput) (contract.SegmentResult, error) {
+				h.segments = append(h.segments, in)
+				return completed(in), nil
+			})
 		rejected := 0
 		h.env.RegisterDelayedCallback(func() {
 			for i := range 21 {
-				h.env.UpdateWorkflow(w.Steer, fmt.Sprint(i), &testsuite.TestUpdateCallback{OnReject: func(err error) { rejected++ }}, w.SteerInput{MessageID: fmt.Sprint(i), ContentRef: fmt.Sprintf("t/tenant/runs/run/steer/%d", i)})
+				h.env.UpdateWorkflow(
+					w.Steer,
+					fmt.Sprint(i),
+					&testsuite.TestUpdateCallback{OnReject: func(err error) {
+						rejected++
+					}},
+					w.SteerInput{
+						MessageID:  fmt.Sprint(i),
+						ContentRef: fmt.Sprintf("t/tenant/runs/run/steer/%d", i),
+					},
+				)
 			}
 		}, time.Second)
 		h.execute(t, "succeeded", "")
@@ -332,128 +501,277 @@ func TestControls(t *testing.T) {
 	t.Run("active time limit", func(t *testing.T) {
 		h := newHarness(t)
 		h.input.Limits.MaxActiveSeconds = 1
-		h.env.OnActivity(contract.ActivityRunAgentSegment, mock.Anything, mock.Anything).Return(yielded(contract.SegmentInput{}, true), nil).After(2 * time.Second)
+		h.env.OnActivity(contract.ActivityRunAgentSegment, mock.Anything, mock.Anything).Return(
+			yielded(contract.SegmentInput{}, true),
+			nil,
+		).After(
+			2 * time.Second,
+		)
 		h.execute(t, "timed_out", "")
 	})
 	t.Run("continue as new carry", func(t *testing.T) {
 		h := newHarness(t)
-		h.input.Carry = &w.RunCarry{Status: "running", CommittedSeq: 200, CheckpointVersion: 203, UsedMillicredits: 12, PendingTurn: contract.SegmentTurn{Kind: "continue"}}
+		h.input.Carry = &w.RunCarry{
+			Status:            "running",
+			CommittedSeq:      200,
+			CheckpointVersion: 203,
+			UsedMillicredits:  12,
+			PendingTurn:       contract.SegmentTurn{Kind: "continue"},
+		}
 		h.env.ExecuteWorkflow(agentrun.Run, h.input)
 		require.Empty(t, h.finished)
 	})
 }
 func TestSessionQueue(t *testing.T) {
-	t.Skip("child workflow update scheduling is covered by Temporal integration histories")
 	for _, mode := range []string{"queue", "interrupt", "cancel_queued", "archive", "full", "idle"} {
-		t.Run(mode, func(t *testing.T) {
-			var suite testsuite.WorkflowTestSuite
-			env := suite.NewTestWorkflowEnvironment()
-			env.RegisterWorkflowWithOptions(func(ctx workflow.Context, in w.RunInput) error { return workflow.Sleep(ctx, 10*time.Second) }, workflow.RegisterOptions{Name: w.AgentRunWorkflow})
-			var finished []w.FinalizeInput
-			env.RegisterActivityWithOptions(func(_ context.Context, in w.FinalizeInput) error { finished = append(finished, in); return nil }, activity.RegisterOptions{Name: "FinalizeRun"})
-			env.OnSignalExternalWorkflow(mock.Anything, mock.Anything, "", mock.Anything, mock.Anything).Return(nil)
-			if mode != "idle" {
-				env.RegisterDelayedCallback(func() {
-					msg := w.SubmitMessageInput{V: 1, RunID: "one", Lock: contract.SegmentLockRef{Digest: strings.Repeat("0", 64)}}
-					env.UpdateWorkflow(w.SubmitMessage, "one", &testsuite.TestUpdateCallback{OnComplete: func(v any, e error) {
-						require.NoError(t, e)
-						require.Equal(t, "started", v.(w.SubmitMessageOutput).Disposition)
-					}}, msg)
-				}, 0)
-				env.RegisterDelayedCallback(func() {
-					n := 1
-					if mode == "full" {
-						n = 21
-					}
-					for i := range n {
-						env.UpdateWorkflow(w.SubmitMessage, fmt.Sprintf("second-%d", i), &testsuite.TestUpdateCallback{OnReject: func(err error) { require.Equal(t, "full", mode) }, OnComplete: func(v any, e error) {
-							require.NoError(t, e)
-							if mode == "queue" {
-								require.Equal(t, 1, v.(w.SubmitMessageOutput).Position)
-							}
-						}}, w.SubmitMessageInput{V: 1, RunID: fmt.Sprintf("second-%d", i), Lock: contract.SegmentLockRef{Digest: strings.Repeat("0", 64)}})
-					}
-				}, time.Second)
-				if mode == "cancel_queued" {
+		t.Run(
+			mode,
+			func(t *testing.T) {
+				var suite testsuite.WorkflowTestSuite
+				env := suite.NewTestWorkflowEnvironment()
+				env.RegisterWorkflowWithOptions(
+					func(ctx workflow.Context, in w.RunInput) error {
+						return workflow.Sleep(ctx, 10*time.Second)
+					},
+					workflow.RegisterOptions{Name: w.AgentRunWorkflow},
+				)
+				var finished []w.FinalizeInput
+				env.RegisterActivityWithOptions(
+					func(_ context.Context, in w.FinalizeInput) error {
+						finished = append(finished, in)
+						return nil
+					},
+					activity.RegisterOptions{Name: "FinalizeRun"},
+				)
+				env.OnSignalExternalWorkflow(mock.Anything, mock.Anything, "", mock.Anything, mock.Anything).Return(
+					nil,
+				)
+				if mode != "idle" {
 					env.RegisterDelayedCallback(func() {
-						env.UpdateWorkflow(w.CancelRun, "cancel", &testsuite.TestUpdateCallback{OnComplete: func(v any, e error) {
-							require.NoError(t, e)
-							require.Equal(t, "dequeued", v.(w.CancelRunOutput).Disposition)
-						}}, w.CancelRunInput{RunID: "second-0"})
-					}, 2*time.Second)
+						msg := w.SubmitMessageInput{
+							V:     1,
+							RunID: "one",
+							Lock:  contract.SegmentLockRef{Id: "lock", Digest: "sha256:" + strings.Repeat("0", 64)},
+						}
+						env.UpdateWorkflow(
+							w.SubmitMessage,
+							"one",
+							&testsuite.TestUpdateCallback{OnComplete: func(v any, e error) {
+								require.NoError(t, e)
+								require.Equal(t, "started", v.(w.SubmitMessageOutput).Disposition)
+							}},
+							msg,
+						)
+					}, 0)
+					env.RegisterDelayedCallback(
+						func() {
+							n := 1
+							if mode == "full" {
+								n = 21
+							}
+							for i := range n {
+								env.UpdateWorkflow(
+									w.SubmitMessage,
+									fmt.Sprintf("second-%d", i),
+									&testsuite.TestUpdateCallback{OnReject: func(
+										err error,
+									) {
+										require.Equal(t, "full", mode)
+									}, OnComplete: func(v any, e error) {
+										require.NoError(t, e)
+										if mode == "queue" {
+											require.Equal(t, 1, v.(w.SubmitMessageOutput).Position)
+										}
+									}},
+									w.SubmitMessageInput{
+										V:     1,
+										RunID: fmt.Sprintf("second-%d", i),
+										Lock: contract.SegmentLockRef{
+											Id:     "lock",
+											Digest: "sha256:" + strings.Repeat("0", 64),
+										},
+									},
+								)
+							}
+						},
+						time.Second,
+					)
+					if mode == "cancel_queued" {
+						env.RegisterDelayedCallback(func() {
+							env.UpdateWorkflow(
+								w.CancelRun,
+								"cancel",
+								&testsuite.TestUpdateCallback{OnComplete: func(v any, e error) {
+									require.NoError(t, e)
+									require.Equal(t, "dequeued", v.(w.CancelRunOutput).Disposition)
+								}},
+								w.CancelRunInput{RunID: "second-0"},
+							)
+						}, 2*time.Second)
+					}
+					if mode == "archive" || mode == "full" {
+						env.RegisterDelayedCallback(
+							func() {
+								env.SignalWorkflow(w.Archive, w.ArchiveInput{})
+							},
+							2*time.Second,
+						)
+					}
 				}
-				if mode == "archive" {
-					env.RegisterDelayedCallback(func() { env.SignalWorkflow(w.Archive, w.ArchiveInput{}) }, 2*time.Second)
+				policy := "queue"
+				if mode == "interrupt" {
+					policy = "interrupt"
 				}
-			}
-			policy := "queue"
-			if mode == "interrupt" {
-				policy = "interrupt"
-			}
-			env.ExecuteWorkflow(session.Run, w.SessionInput{V: 1, TenantID: "tenant", SessionID: "session", Policy: policy})
-			require.NoError(t, env.GetWorkflowError())
-			if mode == "cancel_queued" || mode == "archive" {
-				require.NotEmpty(t, finished)
-				require.True(t, finished[0].NeverStarted)
-			}
-		})
+				env.ExecuteWorkflow(
+					session.Run,
+					w.SessionInput{V: 1, TenantID: "tenant", SessionID: "session", Policy: policy},
+				)
+				require.NoError(t, env.GetWorkflowError())
+				if mode == "cancel_queued" || mode == "archive" {
+					require.NotEmpty(t, finished)
+					require.True(t, finished[0].NeverStarted)
+				}
+			},
+		)
 	}
 }
 func TestLeaseLifecycle(t *testing.T) {
-	t.Skip("sandbox provider lifecycle is covered by Temporal integration histories")
 	for _, provider := range []contract.SandboxProvider{"local", "opensandbox"} {
-		t.Run(string(provider), func(t *testing.T) {
-			var suite testsuite.WorkflowTestSuite
-			env := suite.NewTestWorkflowEnvironment()
-			calls := []string{}
-			lease := contract.SandboxLease{Provider: provider, SandboxId: "sandbox", ExpiresAt: time.Now().Add(time.Hour)}
-			env.RegisterActivityWithOptions(func(context.Context, contract.SandboxAcquireInput) (contract.SandboxLease, error) {
-				calls = append(calls, "create")
-				return lease, nil
-			}, activity.RegisterOptions{Name: contract.ActivitySandboxCreate})
-			env.RegisterActivityWithOptions(func(context.Context, contract.SandboxConfigureInput) (contract.SandboxLease, error) {
-				calls = append(calls, "configure")
-				return lease, nil
-			}, activity.RegisterOptions{Name: contract.ActivitySandboxConfigure})
-			env.RegisterActivityWithOptions(func(context.Context, contract.SandboxOpInput) (contract.SandboxLease, error) {
-				calls = append(calls, "resume")
-				return lease, nil
-			}, activity.RegisterOptions{Name: contract.ActivitySandboxResume})
-			env.RegisterActivityWithOptions(func(context.Context, contract.SandboxOpInput) (contract.SandboxInspectResult, error) {
-				return contract.SandboxInspectResult{Exists: true}, nil
-			}, activity.RegisterOptions{Name: contract.ActivitySandboxInspect})
-			env.RegisterActivityWithOptions(func(context.Context, contract.SandboxRenewInput) (contract.SandboxLease, error) {
-				calls = append(calls, "renew")
-				return lease, nil
-			}, activity.RegisterOptions{Name: contract.ActivitySandboxRenew})
-			env.RegisterActivityWithOptions(func(context.Context, contract.SandboxOpInput) (contract.SandboxSnapshotResult, error) {
-				calls = append(calls, "snapshot")
-				return contract.SandboxSnapshotResult{SnapshotId: "snapshot"}, nil
-			}, activity.RegisterOptions{Name: contract.ActivitySandboxSnapshot})
-			for _, name := range []string{contract.ActivitySandboxPause, contract.ActivitySandboxDestroy} {
-				env.RegisterActivityWithOptions(func(context.Context, contract.SandboxOpInput) error { calls = append(calls, name); return nil }, activity.RegisterOptions{Name: name})
-			}
-			env.RegisterActivityWithOptions(func(context.Context, contract.SandboxSnapshotDeleteInput) error {
-				calls = append(calls, "delete_snapshot")
-				return nil
-			}, activity.RegisterOptions{Name: contract.ActivitySandboxSnapshotDelete})
-			env.RegisterActivityWithOptions(func(context.Context, w.SandboxStateInput) error { return nil }, activity.RegisterOptions{Name: "RecordSandboxState"})
-			acquire := func(id string) {
-				env.UpdateWorkflow(w.Acquire, id, &testsuite.TestUpdateCallback{OnComplete: func(_ any, err error) { require.NoError(t, err) }}, w.AcquireInput{RunID: "run", SessionID: "session", TTLSeconds: 1800, SpecDigest: "digest"})
-			}
-			env.RegisterDelayedCallback(func() { acquire("one"); acquire("two") }, 0)
-			env.RegisterDelayedCallback(func() { env.SignalWorkflow(w.Touch, w.TouchInput{RunID: "run", InUse: false}) }, time.Second)
-			env.RegisterDelayedCallback(func() { acquire("three") }, 16*time.Minute)
-			env.RegisterDelayedCallback(func() { env.SignalWorkflow(w.Archive, w.ArchiveInput{}) }, 17*time.Minute)
-			env.ExecuteWorkflow(sandboxlease.Run, w.LeaseInput{TenantID: "tenant", IsolationKey: "isolation"})
-			require.NoError(t, env.GetWorkflowError())
-			if provider == "local" {
-				require.Equal(t, []string{"create", "configure", contract.ActivitySandboxDestroy}, calls)
-			} else {
-				require.Contains(t, calls, contract.ActivitySandboxPause)
-				require.Contains(t, calls, "snapshot")
-				require.Contains(t, calls, "delete_snapshot")
-			}
-		})
+		t.Run(
+			string(provider),
+			func(t *testing.T) {
+				var suite testsuite.WorkflowTestSuite
+				env := suite.NewTestWorkflowEnvironment()
+				calls := []string{}
+				lease := contract.SandboxLease{
+					Provider:  provider,
+					SandboxId: "sandbox",
+					ExpiresAt: time.Now().Add(time.Hour),
+				}
+				env.RegisterActivityWithOptions(
+					func(context.Context, contract.SandboxAcquireInput) (
+						contract.SandboxLease,
+						error,
+					) {
+						calls = append(calls, "create")
+						return lease, nil
+					},
+					activity.RegisterOptions{Name: contract.ActivitySandboxCreate},
+				)
+				env.RegisterActivityWithOptions(
+					func(context.Context, contract.SandboxConfigureInput) (
+						contract.SandboxLease,
+						error,
+					) {
+						calls = append(calls, "configure")
+						return lease, nil
+					},
+					activity.RegisterOptions{Name: contract.ActivitySandboxConfigure},
+				)
+				env.RegisterActivityWithOptions(
+					func(context.Context, contract.SandboxOpInput) (contract.SandboxLease, error) {
+						calls = append(calls, "resume")
+						return lease, nil
+					},
+					activity.RegisterOptions{Name: contract.ActivitySandboxResume},
+				)
+				env.RegisterActivityWithOptions(
+					func(context.Context, contract.SandboxOpInput) (
+						contract.SandboxInspectResult,
+						error,
+					) {
+						return contract.SandboxInspectResult{Exists: true}, nil
+					},
+					activity.RegisterOptions{Name: contract.ActivitySandboxInspect},
+				)
+				env.RegisterActivityWithOptions(func(context.Context, contract.SandboxRenewInput) (
+					contract.SandboxLease,
+					error,
+				) {
+					calls = append(calls, "renew")
+					return lease, nil
+				}, activity.RegisterOptions{Name: contract.ActivitySandboxRenew})
+				env.RegisterActivityWithOptions(
+					func(context.Context, contract.SandboxOpInput) (
+						contract.SandboxSnapshotResult,
+						error,
+					) {
+						calls = append(calls, "snapshot")
+						return contract.SandboxSnapshotResult{SnapshotId: "snapshot"}, nil
+					},
+					activity.RegisterOptions{Name: contract.ActivitySandboxSnapshot},
+				)
+				for _, name := range []string{contract.ActivitySandboxPause, contract.ActivitySandboxDestroy} {
+					env.RegisterActivityWithOptions(
+						func(context.Context, contract.SandboxOpInput) error {
+							calls = append(calls, name)
+							return nil
+						},
+						activity.RegisterOptions{Name: name},
+					)
+				}
+				env.RegisterActivityWithOptions(func(context.Context, contract.SandboxSnapshotDeleteInput) error {
+					calls = append(calls, "delete_snapshot")
+					return nil
+				}, activity.RegisterOptions{Name: contract.ActivitySandboxSnapshotDelete})
+				env.RegisterActivityWithOptions(
+					func(context.Context, w.SandboxStateInput) error {
+						return nil
+					},
+					activity.RegisterOptions{Name: "RecordSandboxState"},
+				)
+				acquire := func(id string) {
+					env.UpdateWorkflow(
+						w.Acquire,
+						id,
+						&testsuite.TestUpdateCallback{OnComplete: func(_ any, err error) {
+							require.NoError(t, err)
+						}},
+						w.AcquireInput{
+							RunID:      "run",
+							SessionID:  "session",
+							Profile:    "default",
+							TTLSeconds: 1800,
+							SpecDigest: "digest",
+						},
+					)
+				}
+				env.RegisterDelayedCallback(func() {
+					acquire("one")
+					acquire("two")
+				}, 0)
+				env.RegisterDelayedCallback(
+					func() {
+						env.SignalWorkflow(w.Touch, w.TouchInput{RunID: "run", InUse: false})
+					},
+					time.Second,
+				)
+				env.RegisterDelayedCallback(func() {
+					acquire("three")
+				}, 16*time.Minute)
+				env.RegisterDelayedCallback(
+					func() {
+						env.SignalWorkflow(w.Archive, w.ArchiveInput{})
+					},
+					17*time.Minute,
+				)
+				env.ExecuteWorkflow(
+					sandboxlease.Run,
+					w.LeaseInput{TenantID: "tenant", IsolationKey: "isolation"},
+				)
+				require.NoError(t, env.GetWorkflowError())
+				if provider == "local" {
+					require.Equal(
+						t,
+						[]string{"create", "configure", "renew", contract.ActivitySandboxDestroy},
+						calls,
+					)
+				} else {
+					require.Contains(t, calls, contract.ActivitySandboxPause)
+					require.Contains(t, calls, "snapshot")
+					require.Contains(t, calls, "delete_snapshot")
+				}
+			},
+		)
 	}
 }

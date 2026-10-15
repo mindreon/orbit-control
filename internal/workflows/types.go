@@ -1,8 +1,9 @@
 package workflows
 
 import (
-	"github.com/mindreon/orbit-control/internal/contract"
 	"time"
+
+	"github.com/mindreon/orbit-control/internal/contract"
 )
 
 type SessionInput struct {
@@ -56,7 +57,11 @@ type RunLimits struct {
 }
 
 func DefaultLimits(budget int64) RunLimits {
-	return RunLimits{25, 600, max(1000, budget/4), 14400, 1000, time.Hour, 24 * time.Hour, 72 * time.Hour, 3}
+	return RunLimits{
+		MaxIterations: 25, MaxWallSeconds: 600, SegmentBudgetMillicredits: max(1000, budget/4),
+		MaxActiveSeconds: 14400, MaxSegments: 1000, RemindAfter: time.Hour,
+		EscalateAfter: 24 * time.Hour, ExpireAfter: 72 * time.Hour, NoProgressLimit: 3,
+	}
 }
 
 type SandboxSpec struct {
@@ -109,6 +114,7 @@ type RunCarry struct {
 	Lease             contract.SandboxLease `json:"lease"`
 	EventN            int64                 `json:"event_n"`
 	CompactedFor      int                   `json:"compacted_for"`
+	Acquisitions      int                   `json:"acquisitions"`
 	SandboxRetries    int                   `json:"sandbox_retries"`
 	ResumeTurn        *contract.SegmentTurn `json:"resume_turn,omitempty"`
 }
@@ -170,6 +176,8 @@ type LeaseInput struct {
 	Carry        *LeaseCarry `json:"carry,omitempty"`
 }
 type LeaseCarry struct {
+	NextRenew  time.Time              `json:"next_renew"`
+	EventN     int64                  `json:"event_n"`
 	State      string                 `json:"state"`
 	Lease      *contract.SandboxLease `json:"lease,omitempty"`
 	SnapshotID string                 `json:"snapshot_id"`
@@ -182,6 +190,8 @@ type LeaseCarry struct {
 	Spec       AcquireInput           `json:"spec"`
 }
 type AcquireInput struct {
+	EventN      int64                   `json:"event_n"`
+	EventAt     time.Time               `json:"event_at"`
 	SpecDigest  string                  `json:"spec_digest"`
 	RunID       string                  `json:"run_id"`
 	SessionID   string                  `json:"session_id"`
@@ -275,6 +285,10 @@ type FinalizeInput struct {
 	NeverStarted   bool   `json:"never_started"`
 }
 type SandboxStateInput struct {
+	RunID        string                 `json:"run_id"`
+	Restored     *bool                  `json:"restored,omitempty"`
+	EventN       int64                  `json:"event_n"`
+	EventAt      time.Time              `json:"event_at"`
 	TenantID     string                 `json:"tenant_id"`
 	IsolationKey string                 `json:"isolation_key"`
 	SessionID    string                 `json:"session_id"`
