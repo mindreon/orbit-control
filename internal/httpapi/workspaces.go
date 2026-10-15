@@ -34,7 +34,9 @@ func (h *Handler) workspace(ctx context.Context, id string, action string) (Work
 		}
 		return ws, e
 	}
-	e := db.Tx(ctx).QueryRow(ctx, "SELECT id::text,name,default_agent_ref,settings,created_at FROM workspaces WHERE id=$1", id).Scan(&ws.ID, &ws.Name, &ws.DefaultAgentRef, &ws.Settings, &ws.CreatedAt)
+	e := db.Tx(ctx).
+		QueryRow(ctx, "SELECT id::text,name,default_agent_ref,settings,created_at FROM workspaces WHERE id=$1", id).
+		Scan(&ws.ID, &ws.Name, &ws.DefaultAgentRef, &ws.Settings, &ws.CreatedAt)
 	if e != nil {
 		return ws, e
 	}
@@ -50,7 +52,9 @@ func (h *Handler) listWorkspaces(w http.ResponseWriter, r *http.Request) error {
 	if e != nil {
 		return e
 	}
-	rows, e := db.Tx(ctx).Query(ctx, `SELECT id::text,name,default_agent_ref,settings,created_at FROM workspaces WHERE ($1='' OR id>NULLIF($1,'')::uuid) AND ($2 OR id=ANY($3::uuid[])) ORDER BY id LIMIT $4`, page.Cursor, all, visible, page.Limit+1)
+	rows, e := db.Tx(ctx).
+		Query(ctx, "SELECT id::text,name,default_agent_ref,settings,created_at FROM workspaces WHERE ($1='' "+
+			"OR id>NULLIF($1,'')::uuid) AND ($2 OR id=ANY($3::uuid[])) ORDER BY id LIMIT $4", page.Cursor, all, visible, page.Limit+1)
 	if e != nil {
 		return e
 	}
@@ -102,7 +106,8 @@ func (h *Handler) createWorkspace(w http.ResponseWriter, r *http.Request) error 
 	tenant := auth.Tenant(ctx)
 	tx := db.Tx(ctx)
 	p := auth.From(ctx)
-	if _, e = tx.Exec(ctx, "INSERT INTO workspaces(id,tenant_id,name,settings,default_agent_ref) VALUES($1,$2,$3,$4,$5)", id, tenant, input.Name, settings, input.DefaultAgentRef); e != nil {
+	if _, e = tx.Exec(ctx, "INSERT INTO workspaces(id,tenant_id,name,settings,default_agent_ref) "+
+		"VALUES($1,$2,$3,$4,$5)", id, tenant, input.Name, settings, input.DefaultAgentRef); e != nil {
 		return e
 	}
 	if _, e = tx.Exec(ctx, "INSERT INTO workspace_members(tenant_id,workspace_id,principal_id) VALUES($1,$2,$3)", tenant, id, p.ID); e != nil {
@@ -159,7 +164,8 @@ func (h *Handler) patchWorkspace(w http.ResponseWriter, r *http.Request) error {
 			return e
 		}
 	}
-	if _, e = db.Tx(ctx).Exec(ctx, "UPDATE workspaces SET name=COALESCE($2,name),settings=COALESCE($3::jsonb,settings),default_agent_ref=COALESCE($4,default_agent_ref) WHERE id=$1", id, input.Name, s, input.DefaultAgentRef); e != nil {
+	if _, e = db.Tx(ctx).Exec(ctx, "UPDATE workspaces SET name=COALESCE($2,name),settings=COALESCE($3::jsonb,settings),default"+
+		"_agent_ref=COALESCE($4,default_agent_ref) WHERE id=$1", id, input.Name, s, input.DefaultAgentRef); e != nil {
 		return e
 	}
 	if e = h.logWrite(ctx, "workspace.updated", "workspace", id, input); e != nil {
@@ -182,7 +188,10 @@ func (h *Handler) listWorkspaceMembers(w http.ResponseWriter, r *http.Request) e
 	if e != nil {
 		return e
 	}
-	rows, e := db.Tx(ctx).Query(ctx, `SELECT p.id::text,p.kind,p.email,p.display_name FROM workspace_members wm JOIN principals p ON p.id=wm.principal_id WHERE wm.workspace_id=$1 AND ($2='' OR p.id>NULLIF($2,'')::uuid) ORDER BY p.id LIMIT $3`, id, page.Cursor, page.Limit+1)
+	rows, e := db.Tx(ctx).
+		Query(ctx, "SELECT p.id::text,p.kind,p.email,p.display_name FROM workspace_members wm JOIN principals "+
+			"p ON p.id=wm.principal_id WHERE wm.workspace_id=$1 AND ($2='' OR "+
+			"p.id>NULLIF($2,'')::uuid) ORDER BY p.id LIMIT $3", id, page.Cursor, page.Limit+1)
 	if e != nil {
 		return e
 	}
@@ -227,10 +236,17 @@ func (h *Handler) addWorkspaceMember(w http.ResponseWriter, r *http.Request) err
 	}
 	tx := db.Tx(ctx)
 	var kind string
-	if e := tx.QueryRow(ctx, "SELECT p.kind FROM principals p JOIN memberships m ON m.principal_id=p.id WHERE p.id=$1 AND m.status='active'", input.PrincipalID).Scan(&kind); e != nil {
+	if e := tx.QueryRow(ctx, "SELECT p.kind FROM principals p JOIN memberships m ON m.principal_id=p.id WHERE p.id=$1 "+
+		"AND m.status='active'", input.PrincipalID).Scan(&kind); e != nil {
 		return e
 	}
-	if _, e := tx.Exec(ctx, "INSERT INTO workspace_members(tenant_id,workspace_id,principal_id) VALUES($1,$2,$3)", auth.Tenant(ctx), id, input.PrincipalID); e != nil {
+	if _,
+		e := tx.Exec(ctx,
+		("INSERT INTO workspace_members(tenant_id,workspace_id,principal_id) " +
+			"VALUES($1,$2,$3)"),
+		auth.Tenant(ctx),
+		id,
+		input.PrincipalID); e != nil {
 		return e
 	}
 	if e := tenancy.Bind(ctx, tx, auth.From(ctx), auth.Tenant(ctx), kind, input.PrincipalID, input.Role, "workspace", id); e != nil {
@@ -259,7 +275,8 @@ func (h *Handler) deleteWorkspaceMember(w http.ResponseWriter, r *http.Request) 
 	if n.RowsAffected() == 0 {
 		return httpx.E(404, "NOT_FOUND", "Member not found")
 	}
-	if _, e = tx.Exec(ctx, "DELETE FROM role_bindings WHERE scope_type='workspace' AND scope_id=$1 AND principal_type IN ('user','service') AND principal_id=$2", id, pid); e != nil {
+	if _, e = tx.Exec(ctx, "DELETE FROM role_bindings WHERE scope_type='workspace' AND scope_id=$1 AND principal_type "+
+		"IN ('user','service') AND principal_id=$2", id, pid); e != nil {
 		return e
 	}
 	if e = h.logWrite(ctx, "workspace.member_removed", "workspace", id, map[string]string{"principal_id": pid}); e != nil {

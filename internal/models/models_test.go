@@ -9,7 +9,21 @@ func TestPrice(t *testing.T) {
 	for _, tc := range []struct {
 		tokens     int
 		rate, want int64
-	}{{0, 1, 0}, {1, 1000, 1}, {1001, 1000, 2}, {1000000, 2000, 2000}, {1000000, math.MaxInt64, math.MaxInt64}} {
+	}{{tokens: 0,
+		rate: 1,
+		want: 0},
+		{tokens: 1,
+			rate: 1000,
+			want: 1},
+		{tokens: 1001,
+			rate: 1000,
+			want: 2},
+		{tokens: 1000000,
+			rate: 2000,
+			want: 2000},
+		{tokens: 1000000,
+			rate: math.MaxInt64,
+			want: math.MaxInt64}} {
 		got, e := Price(tc.tokens, tc.rate)
 		if e != nil || got != tc.want {
 			t.Fatalf("%+v: %d %v", tc, got, e)

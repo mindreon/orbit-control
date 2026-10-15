@@ -15,7 +15,7 @@ paths:
       summary: Check process health
       security: []
       responses:
-        '200':
+        "200":
           $ref: '#/components/responses/Health'
         default:
           $ref: '#/components/responses/Error'
@@ -25,9 +25,9 @@ paths:
       summary: Check PostgreSQL readiness
       security: []
       responses:
-        '200':
+        "200":
           $ref: '#/components/responses/Health'
-        '503':
+        "503":
           $ref: '#/components/responses/Error'
         default:
           $ref: '#/components/responses/Error'
@@ -37,7 +37,7 @@ paths:
       summary: Get the public OIDC or development login configuration
       security: []
       responses:
-        '200':
+        "200":
           description: Browser login configuration
           content:
             application/json:
@@ -61,7 +61,7 @@ paths:
             schema:
               $ref: '#/components/schemas/DevTokenInput'
       responses:
-        '200':
+        "200":
           description: One-hour development access token
           content:
             application/json:
@@ -76,7 +76,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/OptionalTenant'
       responses:
-        '200':
+        "200":
           description: Current identity and memberships
           content:
             application/json:
@@ -92,7 +92,7 @@ paths:
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
       responses:
-        '200':
+        "200":
           description: Tenant page
           content:
             application/json:
@@ -110,7 +110,7 @@ paths:
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
       responses:
-        '200':
+        "200":
           description: Workspace page filtered by RBAC and API key scopes
           content:
             application/json:
@@ -130,7 +130,7 @@ paths:
             schema:
               $ref: '#/components/schemas/CreateWorkspace'
       responses:
-        '201':
+        "201":
           $ref: '#/components/responses/Workspace'
         default:
           $ref: '#/components/responses/Error'
@@ -143,7 +143,7 @@ paths:
       summary: Get a readable workspace
       description: Missing workspace.read returns 404, including for existing resources.
       responses:
-        '200':
+        "200":
           $ref: '#/components/responses/Workspace'
         default:
           $ref: '#/components/responses/Error'
@@ -160,7 +160,7 @@ paths:
             schema:
               $ref: '#/components/schemas/PatchWorkspace'
       responses:
-        '200':
+        "200":
           $ref: '#/components/responses/Workspace'
         default:
           $ref: '#/components/responses/Error'
@@ -175,7 +175,7 @@ paths:
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
       responses:
-        '200':
+        "200":
           description: Workspace member page
           content:
             application/json:
@@ -195,7 +195,7 @@ paths:
             schema:
               $ref: '#/components/schemas/WorkspaceMemberInput'
       responses:
-        '201':
+        "201":
           description: Membership and role granted
           content:
             application/json:
@@ -214,7 +214,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       responses:
-        '204':
+        "204":
           $ref: '#/components/responses/NoContent'
         default:
           $ref: '#/components/responses/Error'
@@ -228,7 +228,7 @@ paths:
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
       responses:
-        '200':
+        "200":
           description: Tenant member page
           content:
             application/json:
@@ -249,7 +249,7 @@ paths:
             schema:
               $ref: '#/components/schemas/MemberInput'
       responses:
-        '201':
+        "201":
           description: Member added
           content:
             application/json:
@@ -274,7 +274,7 @@ paths:
             schema:
               $ref: '#/components/schemas/MemberPatch'
       responses:
-        '200':
+        "200":
           description: Updated membership fields
           content:
             application/json:
@@ -292,7 +292,7 @@ paths:
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
       responses:
-        '200':
+        "200":
           description: API key page; plaintext keys are never listed
           content:
             application/json:
@@ -303,11 +303,7 @@ paths:
     post:
       operationId: createApiKey
       summary: Issue an API key for yourself or an authorized service principal
-      description: >-
-        Requires apikey.manage. Other human principals are forbidden. A different
-        service principal requires tenant.manage. Scopes must be a subset of both
-        issuer and recipient effective tenant permissions, including issuer API key
-        scopes. Violations return 403. The plaintext key is returned only here.
+      description: Requires apikey.manage. Other human principals are forbidden. A different service principal requires tenant.manage. Scopes must be a subset of both issuer and recipient effective tenant permissions, including issuer API key scopes. Violations return 403. The plaintext key is returned only here.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -317,7 +313,7 @@ paths:
             schema:
               $ref: '#/components/schemas/APIKeyInput'
       responses:
-        '201':
+        "201":
           description: Newly issued API key
           content:
             application/json:
@@ -331,14 +327,16 @@ paths:
       - name: k
         in: path
         required: true
-        schema: {type: string, format: uuid}
+        schema:
+          type: string
+          format: uuid
     delete:
       operationId: deleteApiKey
       summary: Revoke an API key
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       responses:
-        '204':
+        "204":
           $ref: '#/components/responses/NoContent'
         default:
           $ref: '#/components/responses/Error'
@@ -353,7 +351,7 @@ paths:
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
       responses:
-        '200':
+        "200":
           description: Service principal page
           content:
             application/json:
@@ -374,7 +372,7 @@ paths:
             schema:
               $ref: '#/components/schemas/ServicePrincipalInput'
       responses:
-        '201':
+        "201":
           description: Created service principal
           content:
             application/json:
@@ -392,7 +390,7 @@ paths:
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
       responses:
-        '200':
+        "200":
           description: Invitation page; expiration is determined by expires_at
           content:
             application/json:
@@ -413,7 +411,7 @@ paths:
             schema:
               $ref: '#/components/schemas/InvitationInput'
       responses:
-        '201':
+        "201":
           description: Invitation with its one-time bearer token
           content:
             application/json:
@@ -427,14 +425,16 @@ paths:
       - name: i
         in: path
         required: true
-        schema: {type: string, format: uuid}
+        schema:
+          type: string
+          format: uuid
     delete:
       operationId: revokeInvitation
       summary: Revoke a pending invitation
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       responses:
-        '204':
+        "204":
           $ref: '#/components/responses/NoContent'
         default:
           $ref: '#/components/responses/Error'
@@ -442,27 +442,29 @@ paths:
     post:
       operationId: acceptInvitation
       summary: Accept an invitation using a matching verified email
-      description: >-
-        Requires a logged-in human user; API keys are forbidden. X-Orbit-Tenant is
-        unnecessary. Email matching ignores case. Expired, revoked or already
-        accepted tokens return 404 unless replaying the same Idempotency-Key.
-        Existing memberships are never reactivated or escalated by invitations.
+      description: Requires a logged-in human user; API keys are forbidden. X-Orbit-Tenant is unnecessary. Email matching ignores case. Expired, revoked or already accepted tokens return 404 unless replaying the same Idempotency-Key. Existing memberships are never reactivated or escalated by invitations.
       parameters:
         - name: token
           in: path
           required: true
-          schema: {type: string, minLength: 43, maxLength: 43}
+          schema:
+            type: string
+            minLength: 43
+            maxLength: 43
         - $ref: '#/components/parameters/IdempotencyKey'
       responses:
-        '200':
+        "200":
           description: Active tenant membership created
           content:
             application/json:
               schema:
                 type: object
-                required: [tenant_id]
+                required:
+                  - tenant_id
                 properties:
-                  tenant_id: {type: string, format: uuid}
+                  tenant_id:
+                    type: string
+                    format: uuid
         default:
           $ref: '#/components/responses/Error'
   /v1/admin/audit:
@@ -475,7 +477,7 @@ paths:
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
       responses:
-        '200':
+        "200":
           description: Audit page
           content:
             application/json:
@@ -488,657 +490,1333 @@ paths:
       operationId: listAssets
       summary: List visible assets
       parameters:
-        - $ref: "#/components/parameters/Tenant"
-        - $ref: "#/components/parameters/Cursor"
-        - $ref: "#/components/parameters/Limit"
+        - $ref: '#/components/parameters/Tenant'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
         - name: kind
           in: query
-          schema: {type: string}
+          schema:
+            type: string
         - name: visibility
           in: query
-          schema: {type: string}
+          schema:
+            type: string
         - name: q
           in: query
-          schema: {type: string}
+          schema:
+            type: string
         - name: workspace_id
           in: query
-          schema: {type: string}
+          schema:
+            type: string
       responses:
-        '200':
+        "200":
           description: Successful operation
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/AssetPage" }
+              schema:
+                $ref: '#/components/schemas/AssetPage'
         default:
-          $ref: "#/components/responses/Error"
+          $ref: '#/components/responses/Error'
     post:
       operationId: createAsset
       summary: Register an asset
       parameters:
-        - $ref: "#/components/parameters/Tenant"
-        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: '#/components/parameters/Tenant'
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/AssetInput" }
+            schema:
+              $ref: '#/components/schemas/AssetInput'
       responses:
-        '201':
+        "201":
           description: Successful operation
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Asset" }
+              schema:
+                $ref: '#/components/schemas/Asset'
         default:
-          $ref: "#/components/responses/Error"
+          $ref: '#/components/responses/Error'
   /v1/assets/{a}:
     get:
       operationId: getAsset
       summary: Read an asset
       parameters:
-        - $ref: "#/components/parameters/Tenant"
+        - $ref: '#/components/parameters/Tenant'
         - name: a
           in: path
           required: true
-          schema: {type: string}
+          schema:
+            type: string
       responses:
-        '200':
+        "200":
           description: Successful operation
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Asset" }
+              schema:
+                $ref: '#/components/schemas/Asset'
         default:
-          $ref: "#/components/responses/Error"
+          $ref: '#/components/responses/Error'
     patch:
       operationId: patchAsset
       summary: Change asset visibility
       parameters:
-        - $ref: "#/components/parameters/Tenant"
+        - $ref: '#/components/parameters/Tenant'
         - name: a
           in: path
           required: true
-          schema: {type: string}
-        - $ref: "#/components/parameters/IdempotencyKey"
+          schema:
+            type: string
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/AssetPatch" }
+            schema:
+              $ref: '#/components/schemas/AssetPatch'
       responses:
-        '200':
+        "200":
           description: Successful operation
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Asset" }
+              schema:
+                $ref: '#/components/schemas/Asset'
         default:
-          $ref: "#/components/responses/Error"
+          $ref: '#/components/responses/Error'
     delete:
       operationId: archiveAsset
       summary: Archive an asset
       parameters:
-        - $ref: "#/components/parameters/Tenant"
+        - $ref: '#/components/parameters/Tenant'
         - name: a
           in: path
           required: true
-          schema: {type: string}
-        - $ref: "#/components/parameters/IdempotencyKey"
+          schema:
+            type: string
+        - $ref: '#/components/parameters/IdempotencyKey'
       responses:
-        '204':
+        "204":
           description: Successful operation
         default:
-          $ref: "#/components/responses/Error"
+          $ref: '#/components/responses/Error'
   /v1/assets/{a}/versions:
     post:
       operationId: uploadAssetVersion
       summary: Upload a ZIP or tar.gz immutable version
       parameters:
-        - $ref: "#/components/parameters/Tenant"
+        - $ref: '#/components/parameters/Tenant'
         - name: a
           in: path
           required: true
-          schema: {type: string}
+          schema:
+            type: string
         - name: version
           in: query
           required: true
-          schema: {type: string}
-        - $ref: "#/components/parameters/IdempotencyKey"
+          schema:
+            type: string
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
           application/octet-stream:
-            schema: {type: string, format: binary}
+            schema:
+              type: string
+              format: binary
           multipart/form-data:
             schema:
               type: object
-              required: [archive]
+              required:
+                - archive
               additionalProperties: false
               properties:
-                archive: {type: string, format: binary}
+                archive:
+                  type: string
+                  format: binary
       responses:
-        '201':
+        "201":
           description: Successful operation
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/AssetVersion" }
+              schema:
+                $ref: '#/components/schemas/AssetVersion'
         default:
-          $ref: "#/components/responses/Error"
+          $ref: '#/components/responses/Error'
     get:
       operationId: listAssetVersions
       summary: List versions
       parameters:
-        - $ref: "#/components/parameters/Tenant"
+        - $ref: '#/components/parameters/Tenant'
         - name: a
           in: path
           required: true
-          schema: {type: string}
-        - $ref: "#/components/parameters/Cursor"
-        - $ref: "#/components/parameters/Limit"
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
       responses:
-        '200':
+        "200":
           description: Successful operation
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/AssetVersionPage" }
+              schema:
+                $ref: '#/components/schemas/AssetVersionPage'
         default:
-          $ref: "#/components/responses/Error"
+          $ref: '#/components/responses/Error'
   /v1/assets/{a}/versions/{v}:
     get:
       operationId: getAssetVersion
       summary: Read a version
       parameters:
-        - $ref: "#/components/parameters/Tenant"
+        - $ref: '#/components/parameters/Tenant'
         - name: a
           in: path
           required: true
-          schema: {type: string}
+          schema:
+            type: string
         - name: v
           in: path
           required: true
-          schema: {type: string}
+          schema:
+            type: string
       responses:
-        '200':
+        "200":
           description: Successful operation
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/AssetVersion" }
+              schema:
+                $ref: '#/components/schemas/AssetVersion'
         default:
-          $ref: "#/components/responses/Error"
+          $ref: '#/components/responses/Error'
   /v1/assets/{a}/versions/{v}/files:
     get:
       operationId: listAssetFiles
       summary: List files
       parameters:
-        - $ref: "#/components/parameters/Tenant"
+        - $ref: '#/components/parameters/Tenant'
         - name: a
           in: path
           required: true
-          schema: {type: string}
+          schema:
+            type: string
         - name: v
           in: path
           required: true
-          schema: {type: string}
-        - $ref: "#/components/parameters/Cursor"
-        - $ref: "#/components/parameters/Limit"
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
       responses:
-        '200':
+        "200":
           description: Successful operation
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/AssetFilePage" }
+              schema:
+                $ref: '#/components/schemas/AssetFilePage'
         default:
-          $ref: "#/components/responses/Error"
+          $ref: '#/components/responses/Error'
   /v1/assets/{a}/versions/{v}/file:
     get:
       operationId: getAssetFile
       summary: Read one file (maximum 20 MiB)
       parameters:
-        - $ref: "#/components/parameters/Tenant"
+        - $ref: '#/components/parameters/Tenant'
         - name: a
           in: path
           required: true
-          schema: {type: string}
+          schema:
+            type: string
         - name: v
           in: path
           required: true
-          schema: {type: string}
+          schema:
+            type: string
         - name: path
           in: query
           required: true
-          schema: {type: string}
+          schema:
+            type: string
       responses:
-        '200':
+        "200":
           description: Successful operation
           content:
             application/octet-stream:
-              schema: {type: string, format: binary}
+              schema:
+                type: string
+                format: binary
         default:
-          $ref: "#/components/responses/Error"
+          $ref: '#/components/responses/Error'
   /v1/assets/{a}/versions/{v}:submit:
     post:
       operationId: submitAssetVersion
       summary: Submit the immutable version for release
       parameters:
-        - $ref: "#/components/parameters/Tenant"
+        - $ref: '#/components/parameters/Tenant'
         - name: a
           in: path
           required: true
-          schema: {type: string}
+          schema:
+            type: string
         - name: v
           in: path
           required: true
-          schema: {type: string}
-        - $ref: "#/components/parameters/IdempotencyKey"
+          schema:
+            type: string
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/SubmitAssetInput" }
+            schema:
+              $ref: '#/components/schemas/SubmitAssetInput'
       responses:
-        '202':
+        "202":
           description: Successful operation
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Accepted" }
+              schema:
+                $ref: '#/components/schemas/Accepted'
         default:
-          $ref: "#/components/responses/Error"
+          $ref: '#/components/responses/Error'
   /v1/assets/{a}/versions/{v}:withdraw:
     post:
       operationId: withdrawAssetVersion
       summary: Withdraw a pending release
       parameters:
-        - $ref: "#/components/parameters/Tenant"
+        - $ref: '#/components/parameters/Tenant'
         - name: a
           in: path
           required: true
-          schema: {type: string}
+          schema:
+            type: string
         - name: v
           in: path
           required: true
-          schema: {type: string}
-        - $ref: "#/components/parameters/IdempotencyKey"
+          schema:
+            type: string
+        - $ref: '#/components/parameters/IdempotencyKey'
       responses:
-        '202':
+        "202":
           description: Successful operation
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Accepted" }
+              schema:
+                $ref: '#/components/schemas/Accepted'
         default:
-          $ref: "#/components/responses/Error"
+          $ref: '#/components/responses/Error'
   /v1/assets/{a}/versions/{v}:transition:
     post:
       operationId: transitionAssetVersion
       summary: Deprecate, suspend, yank or restore a version
       parameters:
-        - $ref: "#/components/parameters/Tenant"
+        - $ref: '#/components/parameters/Tenant'
         - name: a
           in: path
           required: true
-          schema: {type: string}
+          schema:
+            type: string
         - name: v
           in: path
           required: true
-          schema: {type: string}
-        - $ref: "#/components/parameters/IdempotencyKey"
+          schema:
+            type: string
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/TransitionInput" }
+            schema:
+              $ref: '#/components/schemas/TransitionInput'
       responses:
-        '200':
+        "200":
           description: Successful operation
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/AssetVersion" }
+              schema:
+                $ref: '#/components/schemas/AssetVersion'
         default:
-          $ref: "#/components/responses/Error"
+          $ref: '#/components/responses/Error'
   /v1/assets/{a}/versions/{v}/checks:
     get:
       operationId: listAssetChecks
       summary: List checker reports
       parameters:
-        - $ref: "#/components/parameters/Tenant"
+        - $ref: '#/components/parameters/Tenant'
         - name: a
           in: path
           required: true
-          schema: {type: string}
+          schema:
+            type: string
         - name: v
           in: path
           required: true
-          schema: {type: string}
-        - $ref: "#/components/parameters/Cursor"
-        - $ref: "#/components/parameters/Limit"
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
       responses:
-        '200':
+        "200":
           description: Successful operation
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/CheckPage" }
+              schema:
+                $ref: '#/components/schemas/CheckPage'
         default:
-          $ref: "#/components/responses/Error"
+          $ref: '#/components/responses/Error'
   /v1/assets/{a}/channels:
     get:
       operationId: listAssetChannels
       summary: List release channels
       parameters:
-        - $ref: "#/components/parameters/Tenant"
+        - $ref: '#/components/parameters/Tenant'
         - name: a
           in: path
           required: true
-          schema: {type: string}
-        - $ref: "#/components/parameters/Cursor"
-        - $ref: "#/components/parameters/Limit"
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
       responses:
-        '200':
+        "200":
           description: Successful operation
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ChannelPage" }
+              schema:
+                $ref: '#/components/schemas/ChannelPage'
         default:
-          $ref: "#/components/responses/Error"
+          $ref: '#/components/responses/Error'
   /v1/assets/{a}/channels/{c}:
     post:
       operationId: setAssetChannel
       summary: Set or roll back a channel
       parameters:
-        - $ref: "#/components/parameters/Tenant"
+        - $ref: '#/components/parameters/Tenant'
         - name: a
           in: path
           required: true
-          schema: {type: string}
+          schema:
+            type: string
         - name: c
           in: path
           required: true
-          schema: {type: string}
-        - $ref: "#/components/parameters/IdempotencyKey"
+          schema:
+            type: string
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/ChannelInput" }
+            schema:
+              $ref: '#/components/schemas/ChannelInput'
       responses:
-        '202':
+        "202":
           description: Successful operation
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Accepted" }
+              schema:
+                $ref: '#/components/schemas/Accepted'
         default:
-          $ref: "#/components/responses/Error"
+          $ref: '#/components/responses/Error'
   /v1/assets/{a}:suspend:
     post:
       operationId: suspendAsset
       summary: Suspend an asset
       parameters:
-        - $ref: "#/components/parameters/Tenant"
+        - $ref: '#/components/parameters/Tenant'
         - name: a
           in: path
           required: true
-          schema: {type: string}
-        - $ref: "#/components/parameters/IdempotencyKey"
+          schema:
+            type: string
+        - $ref: '#/components/parameters/IdempotencyKey'
       responses:
-        '202':
+        "202":
           description: Successful operation
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Accepted" }
+              schema:
+                $ref: '#/components/schemas/Accepted'
         default:
-          $ref: "#/components/responses/Error"
+          $ref: '#/components/responses/Error'
   /v1/assets/{a}:restore:
     post:
       operationId: restoreAsset
       summary: Restore an asset
       parameters:
-        - $ref: "#/components/parameters/Tenant"
+        - $ref: '#/components/parameters/Tenant'
         - name: a
           in: path
           required: true
-          schema: {type: string}
-        - $ref: "#/components/parameters/IdempotencyKey"
+          schema:
+            type: string
+        - $ref: '#/components/parameters/IdempotencyKey'
       responses:
-        '202':
+        "202":
           description: Successful operation
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Accepted" }
+              schema:
+                $ref: '#/components/schemas/Accepted'
         default:
-          $ref: "#/components/responses/Error"
+          $ref: '#/components/responses/Error'
   /v1/assets/{a}/grants:
     get:
       operationId: listAssetGrants
       summary: List sharing grants
       parameters:
-        - $ref: "#/components/parameters/Tenant"
+        - $ref: '#/components/parameters/Tenant'
         - name: a
           in: path
           required: true
-          schema: {type: string}
-        - $ref: "#/components/parameters/Cursor"
-        - $ref: "#/components/parameters/Limit"
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
       responses:
-        '200':
+        "200":
           description: Successful operation
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/GrantPage" }
+              schema:
+                $ref: '#/components/schemas/GrantPage'
         default:
-          $ref: "#/components/responses/Error"
+          $ref: '#/components/responses/Error'
     post:
       operationId: grantAsset
       summary: Share within the visibility boundary
       parameters:
-        - $ref: "#/components/parameters/Tenant"
+        - $ref: '#/components/parameters/Tenant'
         - name: a
           in: path
           required: true
-          schema: {type: string}
-        - $ref: "#/components/parameters/IdempotencyKey"
+          schema:
+            type: string
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/GrantInput" }
+            schema:
+              $ref: '#/components/schemas/GrantInput'
       responses:
-        '202':
+        "202":
           description: Successful operation
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Accepted" }
+              schema:
+                $ref: '#/components/schemas/Accepted'
         default:
-          $ref: "#/components/responses/Error"
+          $ref: '#/components/responses/Error'
     delete:
       operationId: revokeAssetGrant
       summary: Revoke a sharing grant
       parameters:
-        - $ref: "#/components/parameters/Tenant"
+        - $ref: '#/components/parameters/Tenant'
         - name: a
           in: path
           required: true
-          schema: {type: string}
-        - $ref: "#/components/parameters/IdempotencyKey"
+          schema:
+            type: string
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/GrantInput" }
+            schema:
+              $ref: '#/components/schemas/GrantInput'
       responses:
-        '204':
+        "204":
           description: Successful operation
         default:
-          $ref: "#/components/responses/Error"
+          $ref: '#/components/responses/Error'
   /v1/reviews:
     get:
       operationId: listAssetReviews
       summary: List versions awaiting review
       parameters:
-        - $ref: "#/components/parameters/Tenant"
-        - $ref: "#/components/parameters/Cursor"
-        - $ref: "#/components/parameters/Limit"
+        - $ref: '#/components/parameters/Tenant'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
       responses:
-        '200':
+        "200":
           description: Successful operation
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/AssetVersionPage" }
+              schema:
+                $ref: '#/components/schemas/AssetVersionPage'
         default:
-          $ref: "#/components/responses/Error"
+          $ref: '#/components/responses/Error'
   /v1/reviews/{v}:decide:
     post:
       operationId: decideAssetReview
       summary: Submit an independent reviewer decision
       parameters:
-        - $ref: "#/components/parameters/Tenant"
+        - $ref: '#/components/parameters/Tenant'
         - name: v
           in: path
           required: true
-          schema: {type: string}
-        - $ref: "#/components/parameters/IdempotencyKey"
+          schema:
+            type: string
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/ReviewInput" }
+            schema:
+              $ref: '#/components/schemas/ReviewInput'
       responses:
-        '202':
+        "202":
           description: Successful operation
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Accepted" }
+              schema:
+                $ref: '#/components/schemas/Accepted'
         default:
-          $ref: "#/components/responses/Error"
+          $ref: '#/components/responses/Error'
   /v1/workspaces/{w}/installs:
     post:
       operationId: installWorkspaceAsset
       summary: Install an asset in a workspace
       parameters:
-        - $ref: "#/components/parameters/Tenant"
+        - $ref: '#/components/parameters/Tenant'
         - name: w
           in: path
           required: true
-          schema: {type: string}
-        - $ref: "#/components/parameters/IdempotencyKey"
+          schema:
+            type: string
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/InstallInput" }
+            schema:
+              $ref: '#/components/schemas/InstallInput'
       responses:
-        '202':
+        "202":
           description: Successful operation
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Accepted" }
+              schema:
+                $ref: '#/components/schemas/Accepted'
         default:
-          $ref: "#/components/responses/Error"
+          $ref: '#/components/responses/Error'
     get:
       operationId: listWorkspaceInstalls
       summary: List workspace installations
       parameters:
-        - $ref: "#/components/parameters/Tenant"
+        - $ref: '#/components/parameters/Tenant'
         - name: w
           in: path
           required: true
-          schema: {type: string}
-        - $ref: "#/components/parameters/Cursor"
-        - $ref: "#/components/parameters/Limit"
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
       responses:
-        '200':
+        "200":
           description: Successful operation
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/InstallPage" }
+              schema:
+                $ref: '#/components/schemas/InstallPage'
         default:
-          $ref: "#/components/responses/Error"
+          $ref: '#/components/responses/Error'
   /v1/installs:
     post:
       operationId: installTenantAsset
       summary: Install an asset for the tenant
       parameters:
-        - $ref: "#/components/parameters/Tenant"
-        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: '#/components/parameters/Tenant'
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/InstallInput" }
+            schema:
+              $ref: '#/components/schemas/InstallInput'
       responses:
-        '202':
+        "202":
           description: Successful operation
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Accepted" }
+              schema:
+                $ref: '#/components/schemas/Accepted'
         default:
-          $ref: "#/components/responses/Error"
+          $ref: '#/components/responses/Error'
     get:
       operationId: listTenantInstalls
       summary: List tenant installations
       parameters:
-        - $ref: "#/components/parameters/Tenant"
-        - $ref: "#/components/parameters/Cursor"
-        - $ref: "#/components/parameters/Limit"
+        - $ref: '#/components/parameters/Tenant'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
       responses:
-        '200':
+        "200":
           description: Successful operation
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/InstallPage" }
+              schema:
+                $ref: '#/components/schemas/InstallPage'
         default:
-          $ref: "#/components/responses/Error"
+          $ref: '#/components/responses/Error'
   /v1/installs/{i}:
     delete:
       operationId: uninstallAsset
       summary: Remove an installation
       parameters:
-        - $ref: "#/components/parameters/Tenant"
+        - $ref: '#/components/parameters/Tenant'
         - name: i
           in: path
           required: true
-          schema: {type: string}
-        - $ref: "#/components/parameters/IdempotencyKey"
+          schema:
+            type: string
+        - $ref: '#/components/parameters/IdempotencyKey'
       responses:
-        '204':
+        "204":
           description: Successful operation
         default:
-          $ref: "#/components/responses/Error"
+          $ref: '#/components/responses/Error'
   /v1/workspaces/{w}/locks:preview:
     post:
       operationId: previewAssetLock
       summary: Resolve and verify a run lock without persisting
       parameters:
-        - $ref: "#/components/parameters/Tenant"
+        - $ref: '#/components/parameters/Tenant'
         - name: w
           in: path
           required: true
-          schema: {type: string}
-        - $ref: "#/components/parameters/IdempotencyKey"
+          schema:
+            type: string
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/LockPreviewInput" }
+            schema:
+              $ref: '#/components/schemas/LockPreviewInput'
       responses:
-        '200':
+        "200":
           description: Successful operation
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/RunLock" }
+              schema:
+                $ref: '#/components/schemas/RunLock'
         default:
-          $ref: "#/components/responses/Error"
-  /v1/sessions: {"post": {"operationId": "createSession", "summary": "createSession", "parameters": [{"$ref": "#/components/parameters/Tenant"}, {"$ref": "#/components/parameters/IdempotencyKey"}], "responses": {"201": {"description": "Successful response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Session"}}}}, "default": {"$ref": "#/components/responses/Error"}}, "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "properties": {"workspace_id": {"type": "string", "format": "uuid"}, "entry_ref": {"type": "string"}, "title": {"type": "string"}, "message_policy": {"type": "string", "enum": ["queue", "steer", "interrupt"]}, "project_id": {"type": "string", "format": "uuid"}, "pinned": {"type": "boolean", "default": false}}, "required": ["workspace_id", "entry_ref"]}}}}}, "get": {"operationId": "listSessions", "summary": "listSessions", "parameters": [{"$ref": "#/components/parameters/Tenant"}, {"$ref": "#/components/parameters/Cursor"}, {"$ref": "#/components/parameters/Limit"}, {"name": "workspace_id", "in": "query", "schema": {"type": "string"}}, {"name": "status", "in": "query", "schema": {"type": "string"}}], "responses": {"200": {"description": "Successful response", "content": {"application/json": {"schema": {"type": "object", "properties": {"items": {"type": "array", "items": {"$ref": "#/components/schemas/Session"}}, "next_cursor": {"type": "string"}}, "required": ["items", "next_cursor"]}}}}, "default": {"$ref": "#/components/responses/Error"}}}}
-  /v1/sessions/{s}: {"get": {"operationId": "getSession", "summary": "getSession", "parameters": [{"$ref": "#/components/parameters/Tenant"}, {"name": "s", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}], "responses": {"200": {"description": "Successful response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Session"}}}}, "default": {"$ref": "#/components/responses/Error"}}}, "patch": {"operationId": "updateSession", "summary": "updateSession", "parameters": [{"$ref": "#/components/parameters/Tenant"}, {"name": "s", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}, {"$ref": "#/components/parameters/IdempotencyKey"}], "responses": {"200": {"description": "Successful response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Session"}}}}, "default": {"$ref": "#/components/responses/Error"}}, "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "properties": {"title": {"type": "string"}, "message_policy": {"type": "string", "enum": ["queue", "steer", "interrupt"]}}}}}}}}
-  /v1/sessions/{s}/archive: {"post": {"operationId": "archiveSession", "summary": "archiveSession", "parameters": [{"$ref": "#/components/parameters/Tenant"}, {"name": "s", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}, {"$ref": "#/components/parameters/IdempotencyKey"}], "responses": {"202": {"description": "Accepted", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Session"}}}}, "default": {"$ref": "#/components/responses/Error"}}}}
-  /v1/sessions/{s}/messages: {"post": {"operationId": "submitMessage", "summary": "submitMessage", "parameters": [{"$ref": "#/components/parameters/Tenant"}, {"name": "s", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}, {"$ref": "#/components/parameters/IdempotencyKey"}], "responses": {"202": {"description": "Accepted", "content": {"application/json": {"schema": {"type": "object", "properties": {"run_id": {"type": "string", "format": "uuid"}, "message_id": {"type": "string", "format": "uuid"}, "disposition": {"type": "string", "enum": ["queued", "started", "steered"]}, "position": {"type": "integer", "format": "int64"}, "stream_token": {"type": "string"}}}}}}, "default": {"$ref": "#/components/responses/Error"}}, "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "properties": {"text": {"type": "string", "minLength": 1, "maxLength": 32768}, "budget_millicredits": {"type": "integer", "minimum": 1}}, "required": ["text"]}}}}}, "get": {"operationId": "listSessionMessages", "summary": "listSessionMessages", "parameters": [{"$ref": "#/components/parameters/Tenant"}, {"name": "s", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}, {"$ref": "#/components/parameters/Cursor"}, {"$ref": "#/components/parameters/Limit"}], "responses": {"200": {"description": "Successful response", "content": {"application/json": {"schema": {"type": "object", "properties": {"items": {"type": "array", "items": {"$ref": "#/components/schemas/Message"}}, "next_cursor": {"type": "string"}}, "required": ["items", "next_cursor"]}}}}, "default": {"$ref": "#/components/responses/Error"}}}}
-  /v1/sessions/{s}/runs: {"get": {"operationId": "listSessionRuns", "summary": "listSessionRuns", "parameters": [{"$ref": "#/components/parameters/Tenant"}, {"name": "s", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}, {"$ref": "#/components/parameters/Cursor"}, {"$ref": "#/components/parameters/Limit"}], "responses": {"200": {"description": "Successful response", "content": {"application/json": {"schema": {"type": "object", "properties": {"items": {"type": "array", "items": {"$ref": "#/components/schemas/Run"}}, "next_cursor": {"type": "string"}}, "required": ["items", "next_cursor"]}}}}, "default": {"$ref": "#/components/responses/Error"}}}}
-  /v1/sessions/{s}/artifacts: {"get": {"operationId": "listSessionArtifacts", "summary": "listSessionArtifacts", "parameters": [{"$ref": "#/components/parameters/Tenant"}, {"name": "s", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}, {"$ref": "#/components/parameters/Cursor"}, {"$ref": "#/components/parameters/Limit"}], "responses": {"200": {"description": "Successful response", "content": {"application/json": {"schema": {"type": "object", "properties": {"items": {"type": "array", "items": {"$ref": "#/components/schemas/Artifact"}}, "next_cursor": {"type": "string"}}, "required": ["items", "next_cursor"]}}}}, "default": {"$ref": "#/components/responses/Error"}}}}
-  /v1/artifacts/{a}: {"get": {"operationId": "getArtifact", "summary": "getArtifact", "parameters": [{"$ref": "#/components/parameters/Tenant"}, {"name": "a", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}], "responses": {"302": {"description": "Successful response", "headers": {"Location": {"schema": {"type": "string", "format": "uri"}, "description": "Five-minute signed artifact URL"}}}, "default": {"$ref": "#/components/responses/Error"}}}}
-  /v1/runs/{r}: {"get": {"operationId": "getRun", "summary": "getRun", "parameters": [{"$ref": "#/components/parameters/Tenant"}, {"name": "r", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}], "responses": {"200": {"description": "Successful response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Run"}}}}, "default": {"$ref": "#/components/responses/Error"}}}}
-  /v1/runs/{r}/segments: {"get": {"operationId": "listRunSegments", "summary": "listRunSegments", "parameters": [{"$ref": "#/components/parameters/Tenant"}, {"name": "r", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}, {"$ref": "#/components/parameters/Cursor"}, {"$ref": "#/components/parameters/Limit"}], "responses": {"200": {"description": "Successful response", "content": {"application/json": {"schema": {"type": "object", "properties": {"items": {"type": "array", "items": {"$ref": "#/components/schemas/Segment"}}, "next_cursor": {"type": "string"}}, "required": ["items", "next_cursor"]}}}}, "default": {"$ref": "#/components/responses/Error"}}}}
-  /v1/runs/{r}/cancel: {"post": {"operationId": "cancelRun", "summary": "cancelRun", "parameters": [{"$ref": "#/components/parameters/Tenant"}, {"name": "r", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}, {"$ref": "#/components/parameters/IdempotencyKey"}], "responses": {"202": {"description": "Accepted", "content": {"application/json": {"schema": {"type": "object", "properties": {"disposition": {"type": "string"}}}}}}, "default": {"$ref": "#/components/responses/Error"}}, "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "properties": {"reason": {"type": "string"}}}}}}}}
-  /v1/runs/{r}/pause: {"post": {"operationId": "pauseRun", "summary": "pauseRun", "parameters": [{"$ref": "#/components/parameters/Tenant"}, {"name": "r", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}, {"$ref": "#/components/parameters/IdempotencyKey"}], "responses": {"202": {"description": "Accepted"}, "default": {"$ref": "#/components/responses/Error"}}}}
-  /v1/runs/{r}/resume: {"post": {"operationId": "resumeRun", "summary": "resumeRun", "parameters": [{"$ref": "#/components/parameters/Tenant"}, {"name": "r", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}, {"$ref": "#/components/parameters/IdempotencyKey"}], "responses": {"202": {"description": "Accepted"}, "default": {"$ref": "#/components/responses/Error"}}}}
-  /v1/runs/{r}/steer: {"post": {"operationId": "steerRun", "summary": "steerRun", "parameters": [{"$ref": "#/components/parameters/Tenant"}, {"name": "r", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}, {"$ref": "#/components/parameters/IdempotencyKey"}], "responses": {"202": {"description": "Accepted", "content": {"application/json": {"schema": {"type": "object", "properties": {"message_id": {"type": "string", "format": "uuid"}, "queued": {"type": "integer", "format": "int64"}}}}}}, "default": {"$ref": "#/components/responses/Error"}}, "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "properties": {"text": {"type": "string", "minLength": 1, "maxLength": 8192}}, "required": ["text"]}}}}}}
-  /v1/runs/{r}/stream-token: {"get": {"operationId": "getStreamToken", "summary": "getStreamToken", "parameters": [{"$ref": "#/components/parameters/Tenant"}, {"name": "r", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}], "responses": {"200": {"description": "Successful response", "content": {"application/json": {"schema": {"type": "object", "properties": {"stream_token": {"type": "string"}, "expires_in": {"type": "integer", "format": "int64"}}}}}}, "default": {"$ref": "#/components/responses/Error"}}}}
-  /v1/interactions: {"get": {"operationId": "listInteractions", "summary": "listInteractions", "parameters": [{"$ref": "#/components/parameters/Tenant"}, {"$ref": "#/components/parameters/Cursor"}, {"$ref": "#/components/parameters/Limit"}, {"name": "status", "in": "query", "schema": {"type": "string"}}, {"name": "assignee", "in": "query", "schema": {"type": "string"}}], "responses": {"200": {"description": "Successful response", "content": {"application/json": {"schema": {"type": "object", "properties": {"items": {"type": "array", "items": {"$ref": "#/components/schemas/Interaction"}}, "next_cursor": {"type": "string"}}, "required": ["items", "next_cursor"]}}}}, "default": {"$ref": "#/components/responses/Error"}}}}
-  /v1/interactions/{i}: {"get": {"operationId": "getInteraction", "summary": "getInteraction", "parameters": [{"$ref": "#/components/parameters/Tenant"}, {"name": "i", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}], "responses": {"200": {"description": "Successful response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Interaction"}}}}, "default": {"$ref": "#/components/responses/Error"}}}}
-  /v1/interactions/{i}/resolve: {"post": {"operationId": "resolveInteraction", "summary": "resolveInteraction", "parameters": [{"$ref": "#/components/parameters/Tenant"}, {"name": "i", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}, {"$ref": "#/components/parameters/IdempotencyKey"}], "responses": {"200": {"description": "Successful response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Interaction"}}}}, "default": {"$ref": "#/components/responses/Error"}}, "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Decision"}}}}}}
+          $ref: '#/components/responses/Error'
+  /v1/sessions:
+    post:
+      operationId: createSession
+      summary: createSession
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        default:
+          $ref: '#/components/responses/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                workspace_id:
+                  type: string
+                  format: uuid
+                entry_ref:
+                  type: string
+                title:
+                  type: string
+                message_policy:
+                  type: string
+                  enum:
+                    - queue
+                    - steer
+                    - interrupt
+                project_id:
+                  type: string
+                  format: uuid
+                pinned:
+                  type: boolean
+                  default: false
+              required:
+                - workspace_id
+                - entry_ref
+    get:
+      operationId: listSessions
+      summary: listSessions
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: workspace_id
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Session'
+                  next_cursor:
+                    type: string
+                required:
+                  - items
+                  - next_cursor
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/sessions/{s}:
+    get:
+      operationId: getSession
+      summary: getSession
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - name: s
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        default:
+          $ref: '#/components/responses/Error'
+    patch:
+      operationId: updateSession
+      summary: updateSession
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - name: s
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        default:
+          $ref: '#/components/responses/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                message_policy:
+                  type: string
+                  enum:
+                    - queue
+                    - steer
+                    - interrupt
+  /v1/sessions/{s}/archive:
+    post:
+      operationId: archiveSession
+      summary: archiveSession
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - name: s
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        "202":
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/sessions/{s}/messages:
+    post:
+      operationId: submitMessage
+      summary: submitMessage
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - name: s
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        "202":
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  run_id:
+                    type: string
+                    format: uuid
+                  message_id:
+                    type: string
+                    format: uuid
+                  disposition:
+                    type: string
+                    enum:
+                      - queued
+                      - started
+                      - steered
+                  position:
+                    type: integer
+                    format: int64
+                  stream_token:
+                    type: string
+        default:
+          $ref: '#/components/responses/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text:
+                  type: string
+                  minLength: 1
+                  maxLength: 32768
+                budget_millicredits:
+                  type: integer
+                  minimum: 1
+              required:
+                - text
+    get:
+      operationId: listSessionMessages
+      summary: listSessionMessages
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - name: s
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Message'
+                  next_cursor:
+                    type: string
+                required:
+                  - items
+                  - next_cursor
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/sessions/{s}/runs:
+    get:
+      operationId: listSessionRuns
+      summary: listSessionRuns
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - name: s
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Run'
+                  next_cursor:
+                    type: string
+                required:
+                  - items
+                  - next_cursor
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/sessions/{s}/artifacts:
+    get:
+      operationId: listSessionArtifacts
+      summary: listSessionArtifacts
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - name: s
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Artifact'
+                  next_cursor:
+                    type: string
+                required:
+                  - items
+                  - next_cursor
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/artifacts/{a}:
+    get:
+      operationId: getArtifact
+      summary: getArtifact
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - name: a
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "302":
+          description: Successful response
+          headers:
+            Location:
+              schema:
+                type: string
+                format: uri
+              description: Five-minute signed artifact URL
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/runs/{r}:
+    get:
+      operationId: getRun
+      summary: getRun
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - name: r
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/runs/{r}/segments:
+    get:
+      operationId: listRunSegments
+      summary: listRunSegments
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - name: r
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Segment'
+                  next_cursor:
+                    type: string
+                required:
+                  - items
+                  - next_cursor
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/runs/{r}/cancel:
+    post:
+      operationId: cancelRun
+      summary: cancelRun
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - name: r
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        "202":
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  disposition:
+                    type: string
+        default:
+          $ref: '#/components/responses/Error'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+  /v1/runs/{r}/pause:
+    post:
+      operationId: pauseRun
+      summary: pauseRun
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - name: r
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        "202":
+          description: Accepted
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/runs/{r}/resume:
+    post:
+      operationId: resumeRun
+      summary: resumeRun
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - name: r
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        "202":
+          description: Accepted
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/runs/{r}/steer:
+    post:
+      operationId: steerRun
+      summary: steerRun
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - name: r
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        "202":
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message_id:
+                    type: string
+                    format: uuid
+                  queued:
+                    type: integer
+                    format: int64
+        default:
+          $ref: '#/components/responses/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text:
+                  type: string
+                  minLength: 1
+                  maxLength: 8192
+              required:
+                - text
+  /v1/runs/{r}/stream-token:
+    get:
+      operationId: getStreamToken
+      summary: getStreamToken
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - name: r
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  stream_token:
+                    type: string
+                  expires_in:
+                    type: integer
+                    format: int64
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/interactions:
+    get:
+      operationId: listInteractions
+      summary: listInteractions
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: assignee
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Interaction'
+                  next_cursor:
+                    type: string
+                required:
+                  - items
+                  - next_cursor
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/interactions/{i}:
+    get:
+      operationId: getInteraction
+      summary: getInteraction
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - name: i
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Interaction'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/interactions/{i}/resolve:
+    post:
+      operationId: resolveInteraction
+      summary: resolveInteraction
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - name: i
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Interaction'
+        default:
+          $ref: '#/components/responses/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Decision'
 components:
   securitySchemes:
     bearerAuth:
@@ -1150,45 +1828,54 @@ components:
       name: X-Orbit-Tenant
       in: header
       required: true
-      schema: {type: string, format: uuid}
+      schema:
+        type: string
+        format: uuid
     OptionalTenant:
       name: X-Orbit-Tenant
       in: header
       required: false
-      schema: {type: string, format: uuid}
+      schema:
+        type: string
+        format: uuid
     Cursor:
       name: cursor
       in: query
-      schema: {type: string}
+      schema:
+        type: string
       description: Opaque cursor from the previous page; omit for the first page.
     Limit:
       name: limit
       in: query
-      schema: {type: integer, minimum: 1, maximum: 100, default: 50}
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 50
     IdempotencyKey:
       name: Idempotency-Key
       in: header
-      schema: {type: string, maxLength: 256}
-      description: >-
-        Optional 24-hour encrypted replay within a tenant. Reuse with different
-        method, URI or body returns 422. Available for dev login when a tenant exists.
+      schema:
+        type: string
+        maxLength: 256
+      description: Optional 24-hour encrypted replay within a tenant. Reuse with different method, URI or body returns 422. Available for dev login when a tenant exists.
     WorkspaceId:
       name: w
       in: path
       required: true
-      schema: {type: string, format: uuid}
+      schema:
+        type: string
+        format: uuid
     PrincipalId:
       name: p
       in: path
       required: true
-      schema: {type: string, format: uuid}
+      schema:
+        type: string
+        format: uuid
   responses:
     Error:
-      description: >-
-        Structured error. 400 invalid JSON/cursor/limit/tenant; 401 invalid credentials;
-        403 forbidden; 404 absent or unreadable resource; 409 conflict; 413 body too
-        large; 422 invalid input or idempotency mismatch; 500 transient internal failure;
-        503 database unavailable. retryable indicates whether retrying may succeed.
+      description: Structured error. 400 invalid JSON/cursor/limit/tenant; 401 invalid credentials; 403 forbidden; 404 absent or unreadable resource; 409 conflict; 413 body too large; 422 invalid input or idempotency mismatch; 500 transient internal failure; 503 database unavailable. retryable indicates whether retrying may succeed.
       content:
         application/json:
           schema:
@@ -1208,782 +1895,1280 @@ components:
           schema:
             $ref: '#/components/schemas/Workspace'
   schemas:
-
     AssetInput:
       type: object
       additionalProperties: false
-      required: [kind, name, visibility]
+      required:
+        - kind
+        - name
+        - visibility
       properties:
-        kind: {type: string, enum: [agent, skill, mcp_server, team]}
-        name: {type: string, pattern: '^[a-z0-9][a-z0-9-]{2,63}$'}
-        visibility: {type: string, enum: [private, workspace, tenant]}
-        workspace_id: {type: string, format: uuid}
+        kind:
+          type: string
+          enum:
+            - agent
+            - skill
+            - mcp_server
+            - team
+        name:
+          type: string
+          pattern: ^[a-z0-9][a-z0-9-]{2,63}$
+        visibility:
+          type: string
+          enum:
+            - private
+            - workspace
+            - tenant
+        workspace_id:
+          type: string
+          format: uuid
     AssetPatch:
       type: object
       additionalProperties: false
-      required: [visibility]
+      required:
+        - visibility
       properties:
-        visibility: {type: string, enum: [private, workspace, tenant]}
+        visibility:
+          type: string
+          enum:
+            - private
+            - workspace
+            - tenant
     Asset:
       type: object
-      required: [id, publisher, kind, name, visibility, owner_id, status, created_at]
+      required:
+        - id
+        - publisher
+        - kind
+        - name
+        - visibility
+        - owner_id
+        - status
+        - created_at
       properties:
-        id: {type: string, format: uuid}
-        publisher: {type: string}
-        kind: {type: string, enum: [agent, skill, mcp_server, team]}
-        name: {type: string}
-        visibility: {type: string, enum: [private, workspace, tenant]}
-        workspace_id: {type: string, format: uuid}
-        owner_id: {type: string, format: uuid}
-        status: {type: string, enum: [active, suspended, archived]}
-        created_at: {type: string, format: date-time}
+        id:
+          type: string
+          format: uuid
+        publisher:
+          type: string
+        kind:
+          type: string
+          enum:
+            - agent
+            - skill
+            - mcp_server
+            - team
+        name:
+          type: string
+        visibility:
+          type: string
+          enum:
+            - private
+            - workspace
+            - tenant
+        workspace_id:
+          type: string
+          format: uuid
+        owner_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+            - active
+            - suspended
+            - archived
+        created_at:
+          type: string
+          format: date-time
     AssetVersion:
       type: object
-      required: [id, asset_id, version, manifest, content_digest, permissions, state, created_at]
+      required:
+        - id
+        - asset_id
+        - version
+        - manifest
+        - content_digest
+        - permissions
+        - state
+        - created_at
       properties:
-        id: {type: string, format: uuid}
-        asset_id: {type: string, format: uuid}
-        version: {type: string}
+        id:
+          type: string
+          format: uuid
+        asset_id:
+          type: string
+          format: uuid
+        version:
+          type: string
         manifest:
           type: object
           properties:
-            agent: {$ref: '../contract/v2/schema/agent_manifest.json#/$defs/AgentManifest'}
-            team: {$ref: '../contract/v2/schema/team_manifest.json#/$defs/TeamManifest'}
-            skills: {$ref: '../contract/v2/schema/skills_manifest.json#/$defs/SkillsManifest'}
-            mcp: {$ref: '../contract/v2/schema/mcp_manifest.json#/$defs/McpManifest'}
+            agent:
+              $ref: ../contract/v2/schema/agent_manifest.json#/$defs/AgentManifest
+            team:
+              $ref: ../contract/v2/schema/team_manifest.json#/$defs/TeamManifest
+            skills:
+              $ref: ../contract/v2/schema/skills_manifest.json#/$defs/SkillsManifest
+            mcp:
+              $ref: ../contract/v2/schema/mcp_manifest.json#/$defs/McpManifest
             member_permissions:
               type: object
-              additionalProperties: {$ref: '../contract/v2/schema/lock.json#/$defs/EffectivePermissions'}
+              additionalProperties:
+                $ref: ../contract/v2/schema/lock.json#/$defs/EffectivePermissions
             dependencies:
               type: array
               items:
                 type: object
-                required: [kind, ref, constraint]
+                required:
+                  - kind
+                  - ref
+                  - constraint
                 properties:
-                  kind: {$ref: '../contract/v2/schema/lock.json#/$defs/AssetKind'}
-                  ref: {type: string}
-                  constraint: {type: string}
-        content_digest: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
-        blob_ref: {type: string}
-        permissions: {$ref: '../contract/v2/schema/lock.json#/$defs/EffectivePermissions'}
-        state: {type: string, enum: [draft, submitted, checking, check_failed, in_review, changes_requested, approved, published, deprecated, suspended, yanked, rejected]}
-        signature: {type: string}
-        uploaded_by: {type: string, format: uuid}
-        release_error: {type: string}
-        created_at: {type: string, format: date-time}
+                  kind:
+                    $ref: ../contract/v2/schema/lock.json#/$defs/AssetKind
+                  ref:
+                    type: string
+                  constraint:
+                    type: string
+        content_digest:
+          type: string
+          pattern: ^sha256:[0-9a-f]{64}$
+        blob_ref:
+          type: string
+        permissions:
+          $ref: ../contract/v2/schema/lock.json#/$defs/EffectivePermissions
+        state:
+          type: string
+          enum:
+            - draft
+            - submitted
+            - checking
+            - check_failed
+            - in_review
+            - changes_requested
+            - approved
+            - published
+            - deprecated
+            - suspended
+            - yanked
+            - rejected
+        signature:
+          type: string
+        uploaded_by:
+          type: string
+          format: uuid
+        release_error:
+          type: string
+        created_at:
+          type: string
+          format: date-time
     Accepted:
       type: object
       properties:
-        id: {type: string}
-        status: {type: string}
+        id:
+          type: string
+        status:
+          type: string
     SubmitAssetInput:
       type: object
       additionalProperties: false
       properties:
-        channel: {type: string, default: stable}
+        channel:
+          type: string
+          default: stable
     TransitionInput:
       type: object
       additionalProperties: false
-      required: [state]
+      required:
+        - state
       properties:
-        state: {type: string, enum: [draft, deprecated, suspended, yanked, published]}
+        state:
+          type: string
+          enum:
+            - draft
+            - deprecated
+            - suspended
+            - yanked
+            - published
     ChannelInput:
       type: object
       additionalProperties: false
-      required: [version_id]
+      required:
+        - version_id
       properties:
-        version_id: {type: string, format: uuid}
+        version_id:
+          type: string
+          format: uuid
     GrantInput:
       type: object
       additionalProperties: false
-      required: [grantee_type, grantee_id, permission]
+      required:
+        - grantee_type
+        - grantee_id
+        - permission
       properties:
-        grantee_type: {type: string, enum: [user, service, group, workspace, tenant]}
-        grantee_id: {type: string, format: uuid}
-        permission: {type: string, enum: [use, maintain]}
+        grantee_type:
+          type: string
+          enum:
+            - user
+            - service
+            - group
+            - workspace
+            - tenant
+        grantee_id:
+          type: string
+          format: uuid
+        permission:
+          type: string
+          enum:
+            - use
+            - maintain
     ReviewInput:
       type: object
       additionalProperties: false
-      required: [decision]
+      required:
+        - decision
       properties:
-        decision: {type: string, enum: [approve, reject, request_changes]}
-        comment: {type: string, maxLength: 4000}
+        decision:
+          type: string
+          enum:
+            - approve
+            - reject
+            - request_changes
+        comment:
+          type: string
+          maxLength: 4000
     InstallInput:
       type: object
       additionalProperties: false
-      required: [asset_id]
+      required:
+        - asset_id
       properties:
-        asset_id: {type: string, format: uuid}
-        version_constraint: {type: string, default: '*'}
-        channel: {type: string}
-        pinned_version_id: {type: string, format: uuid}
+        asset_id:
+          type: string
+          format: uuid
+        version_constraint:
+          type: string
+          default: '*'
+        channel:
+          type: string
+        pinned_version_id:
+          type: string
+          format: uuid
     LockPreviewInput:
       type: object
       additionalProperties: false
-      required: [kind, ref]
+      required:
+        - kind
+        - ref
       properties:
-        kind: {type: string, enum: [agent, team]}
-        ref: {type: string}
-        version: {type: string}
+        kind:
+          type: string
+          enum:
+            - agent
+            - team
+        ref:
+          type: string
+        version:
+          type: string
     RunLock:
-      $ref: '../contract/v2/schema/lock.json#/$defs/RunLock'
+      $ref: ../contract/v2/schema/lock.json#/$defs/RunLock
     AssetFile:
       type: object
-      required: [path, sha256, size_bytes]
+      required:
+        - path
+        - sha256
+        - size_bytes
       properties:
-        path: {type: string}
-        sha256: {type: string}
-        size_bytes: {type: integer, minimum: 0}
+        path:
+          type: string
+        sha256:
+          type: string
+        size_bytes:
+          type: integer
+          minimum: 0
     AssetPage:
       type: object
-      required: [items, next_cursor]
+      required:
+        - items
+        - next_cursor
       properties:
         items:
           type: array
-          items: { $ref: "#/components/schemas/Asset" }
-        next_cursor: {type: string}
+          items:
+            $ref: '#/components/schemas/Asset'
+        next_cursor:
+          type: string
     AssetVersionPage:
       type: object
-      required: [items, next_cursor]
+      required:
+        - items
+        - next_cursor
       properties:
         items:
           type: array
-          items: { $ref: "#/components/schemas/AssetVersion" }
-        next_cursor: {type: string}
+          items:
+            $ref: '#/components/schemas/AssetVersion'
+        next_cursor:
+          type: string
     AssetFilePage:
       type: object
-      required: [items, next_cursor]
+      required:
+        - items
+        - next_cursor
       properties:
         items:
           type: array
-          items: { $ref: "#/components/schemas/AssetFile" }
-        next_cursor: {type: string}
+          items:
+            $ref: '#/components/schemas/AssetFile'
+        next_cursor:
+          type: string
     CheckPage:
       type: object
-      required: [items, next_cursor]
+      required:
+        - items
+        - next_cursor
       properties:
         items:
           type: array
           items:
             type: object
-            required: [id, report, status]
+            required:
+              - id
+              - report
+              - status
             properties:
-              id: {type: string, format: uuid}
-              report: {$ref: '../contract/v2/schema/asset_check.json#/$defs/AssetCheckReport'}
-              status: {type: string, enum: [pass, warn, fail]}
-        next_cursor: {type: string}
+              id:
+                type: string
+                format: uuid
+              report:
+                $ref: ../contract/v2/schema/asset_check.json#/$defs/AssetCheckReport
+              status:
+                type: string
+                enum:
+                  - pass
+                  - warn
+                  - fail
+        next_cursor:
+          type: string
     ChannelPage:
       type: object
-      required: [items, next_cursor]
+      required:
+        - items
+        - next_cursor
       properties:
         items:
           type: array
-          items: {type: object}
-        next_cursor: {type: string}
+          items:
+            type: object
+        next_cursor:
+          type: string
     GrantPage:
       type: object
-      required: [items, next_cursor]
+      required:
+        - items
+        - next_cursor
       properties:
         items:
           type: array
-          items: {type: object}
-        next_cursor: {type: string}
+          items:
+            type: object
+        next_cursor:
+          type: string
     InstallPage:
       type: object
-      required: [items, next_cursor]
+      required:
+        - items
+        - next_cursor
       properties:
         items:
           type: array
-          items: {type: object}
-        next_cursor: {type: string}
+          items:
+            type: object
+        next_cursor:
+          type: string
     APIKey:
-        additionalProperties: false
-        properties:
-            expires_at:
-                format: date-time
-                type: string
-            id:
-                format: uuid
-                type: string
-            last_used_at:
-                format: date-time
-                type:
-                    - string
-                    - "null"
-            name:
-                type: string
-            prefix:
-                type: string
-            principal_id:
-                format: uuid
-                type: string
-            scopes:
-                items:
-                    type: string
-                type: array
-        required:
-            - id
-            - principal_id
-            - name
-            - prefix
-            - scopes
-            - expires_at
-            - last_used_at
-        type: object
+      additionalProperties: false
+      properties:
+        expires_at:
+          format: date-time
+          type: string
+        id:
+          format: uuid
+          type: string
+        last_used_at:
+          format: date-time
+          type:
+            - string
+            - "null"
+        name:
+          type: string
+        prefix:
+          type: string
+        principal_id:
+          format: uuid
+          type: string
+        scopes:
+          items:
+            type: string
+          type: array
+      required:
+        - id
+        - principal_id
+        - name
+        - prefix
+        - scopes
+        - expires_at
+        - last_used_at
+      type: object
     APIKeyCreated:
-        additionalProperties: false
-        properties:
-            expires_at:
-                format: date-time
-                type: string
-            id:
-                format: uuid
-                type: string
-            key:
-                type: string
-            prefix:
-                type: string
-            scopes:
-                items:
-                    type: string
-                type: array
-        required:
-            - id
-            - key
-            - prefix
-            - scopes
-            - expires_at
-        type: object
+      additionalProperties: false
+      properties:
+        expires_at:
+          format: date-time
+          type: string
+        id:
+          format: uuid
+          type: string
+        key:
+          type: string
+        prefix:
+          type: string
+        scopes:
+          items:
+            type: string
+          type: array
+      required:
+        - id
+        - key
+        - prefix
+        - scopes
+        - expires_at
+      type: object
     APIKeyInput:
-        additionalProperties: false
-        properties:
-            expires_at:
-                format: date-time
-                type: string
-            name:
-                type: string
-            principal_id:
-                format: uuid
-                type: string
-            scopes:
-                items:
-                    type: string
-                type: array
-        required:
-            - name
-            - scopes
-            - expires_at
-        type: object
+      additionalProperties: false
+      properties:
+        expires_at:
+          format: date-time
+          type: string
+        name:
+          type: string
+        principal_id:
+          format: uuid
+          type: string
+        scopes:
+          items:
+            type: string
+          type: array
+      required:
+        - name
+        - scopes
+        - expires_at
+      type: object
     APIKeyPage:
-        additionalProperties: false
-        properties:
-            items:
-                items:
-                    $ref: '#/components/schemas/APIKey'
-                type: array
-            next_cursor:
-                type: string
-        required:
-            - items
-            - next_cursor
-        type: object
+      additionalProperties: false
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/APIKey'
+          type: array
+        next_cursor:
+          type: string
+      required:
+        - items
+        - next_cursor
+      type: object
     AuditEntry:
-        additionalProperties: false
-        properties:
-            action:
-                type: string
-            actor_id:
-                format: uuid
-                type: string
-            actor_kind:
-                enum:
-                    - user
-                    - service
-            detail:
-                additionalProperties: true
-                type: object
-            hash:
-                type: string
-            id:
-                format: uuid
-                type: string
-            occurred_at:
-                format: date-time
-                type: string
-            prev_hash:
-                type: string
-            target_id:
-                type: string
-            target_type:
-                type: string
-        required:
-            - id
-            - actor_id
-            - actor_kind
-            - action
-            - target_type
-            - target_id
-            - detail
-            - prev_hash
-            - hash
-            - occurred_at
-        type: object
+      additionalProperties: false
+      properties:
+        action:
+          type: string
+        actor_id:
+          format: uuid
+          type: string
+        actor_kind:
+          enum:
+            - user
+            - service
+        detail:
+          additionalProperties: true
+          type: object
+        hash:
+          type: string
+        id:
+          format: uuid
+          type: string
+        occurred_at:
+          format: date-time
+          type: string
+        prev_hash:
+          type: string
+        target_id:
+          type: string
+        target_type:
+          type: string
+      required:
+        - id
+        - actor_id
+        - actor_kind
+        - action
+        - target_type
+        - target_id
+        - detail
+        - prev_hash
+        - hash
+        - occurred_at
+      type: object
     AuditEntryPage:
-        additionalProperties: false
-        properties:
-            items:
-                items:
-                    $ref: '#/components/schemas/AuditEntry'
-                type: array
-            next_cursor:
-                type: string
-        required:
-            - items
-            - next_cursor
-        type: object
+      additionalProperties: false
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/AuditEntry'
+          type: array
+        next_cursor:
+          type: string
+      required:
+        - items
+        - next_cursor
+      type: object
     AuthConfig:
-        additionalProperties: false
-        properties:
-            audience:
-                type: string
-            client_id:
-                type: string
-            issuer:
-                type: string
-            mode:
-                enum:
-                    - dev
-                    - oidc
-            scopes:
-                items:
-                    type: string
-                type: array
-        required:
-            - mode
-        type: object
+      additionalProperties: false
+      properties:
+        audience:
+          type: string
+        client_id:
+          type: string
+        issuer:
+          type: string
+        mode:
+          enum:
+            - dev
+            - oidc
+        scopes:
+          items:
+            type: string
+          type: array
+      required:
+        - mode
+      type: object
     CreateWorkspace:
-        additionalProperties: false
-        properties:
-            default_agent_ref:
-                type:
-                    - string
-                    - "null"
-            name:
-                maxLength: 256
-                minLength: 1
-                type: string
-            settings:
-                additionalProperties: true
-                type: object
-        required:
-            - name
-        type: object
+      additionalProperties: false
+      properties:
+        default_agent_ref:
+          type:
+            - string
+            - "null"
+        name:
+          maxLength: 256
+          minLength: 1
+          type: string
+        settings:
+          additionalProperties: true
+          type: object
+      required:
+        - name
+      type: object
     DevToken:
-        additionalProperties: false
-        properties:
-            access_token:
-                type: string
-            expires_in:
-                type: integer
-        required:
-            - access_token
-            - expires_in
-        type: object
+      additionalProperties: false
+      properties:
+        access_token:
+          type: string
+        expires_in:
+          type: integer
+      required:
+        - access_token
+        - expires_in
+      type: object
     DevTokenInput:
-        additionalProperties: false
-        properties:
-            display_name:
-                type: string
-            email:
-                format: email
-                type: string
-        required:
-            - email
-        type: object
+      additionalProperties: false
+      properties:
+        display_name:
+          type: string
+        email:
+          format: email
+          type: string
+      required:
+        - email
+      type: object
     Error:
-        additionalProperties: false
-        properties:
-            error:
-                additionalProperties: false
-                properties:
-                    code:
-                        type: string
-                    details:
-                        additionalProperties: true
-                        type: object
-                    message:
-                        type: string
-                    retryable:
-                        type: boolean
-                required:
-                    - code
-                    - message
-                    - retryable
-                    - details
-                type: object
-        required:
-            - error
-        type: object
-    Health:
-        additionalProperties: false
-        properties:
-            status:
-                const: ok
-        required:
-            - status
-        type: object
-    Invitation:
-        properties:
-            email:
-                format: email
-                type: string
-            expires_at:
-                format: date-time
-                type: string
-            id:
-                format: uuid
-                type: string
-            role:
-                $ref: '#/components/schemas/TenantRole'
-            status:
-                enum:
-                    - pending
-                    - accepted
-                    - revoked
-                type: string
-        required:
-            - id
-            - email
-            - role
-            - expires_at
-            - status
-        type: object
-    InvitationCreated:
-        allOf:
-            - $ref: '#/components/schemas/Invitation'
-            - properties:
-                token:
-                    description: Bearer secret, returned only upon creation.
-                    type: string
-              required:
-                - token
+      additionalProperties: false
+      properties:
+        error:
+          additionalProperties: false
+          properties:
+            code:
+              type: string
+              enum:
+                - ASSETS_UNAVAILABLE
+                - ASSET_CHANGED
+                - ATTACHMENTS_UNSUPPORTED
+                - BODY_TOO_LARGE
+                - CONFLICT
+                - CONTENT_FORBIDDEN
+                - CORS_DENIED
+                - FILE_TOO_LARGE
+                - FORBIDDEN
+                - IDEMPOTENCY_MISMATCH
+                - IDEMPOTENCY_REQUIRED
+                - INTERACTION_NOT_PENDING
+                - INTERNAL
+                - INVALID_ASSET_STATE
+                - INVALID_CURSOR
+                - INVALID_IDEMPOTENCY_KEY
+                - INVALID_INPUT
+                - INVALID_JSON
+                - INVALID_LIMIT
+                - INVALID_PATTERN
+                - INVALID_ROLE
+                - INVALID_TENANT
+                - INVALID_USAGE
+                - INVALID_USAGE_KEY
+                - LAST_OWNER
+                - LOCK_RESOLUTION_FAILED
+                - MODEL_PROFILE_CONFLICT
+                - MODEL_PROFILE_NOT_FOUND
+                - NOT_FOUND
+                - NOT_READY
+                - QUOTA_EXCEEDED
+                - RELEASE_VISIBILITY_FROZEN
+                - RUN_FINISHED
+                - RUN_NOT_ACTIVE
+                - SECRET_NOT_DECLARED
+                - SESSION_ARCHIVED
+                - SESSION_UNAVAILABLE
+                - STORAGE_UNAVAILABLE
+                - TEMPORAL_UNAVAILABLE
+                - TENANT_REQUIRED
+                - TOKEN_INVALID
+                - TOKEN_SUPERSEDED
+                - UNAUTHENTICATED
+                - VISIBILITY_BOUNDARY
+            details:
+              additionalProperties: true
               type: object
+            message:
+              type: string
+            retryable:
+              type: boolean
+          required:
+            - code
+            - message
+            - retryable
+            - details
+          type: object
+      required:
+        - error
+      type: object
+    Health:
+      additionalProperties: false
+      properties:
+        status:
+          const: ok
+      required:
+        - status
+      type: object
+    Invitation:
+      properties:
+        email:
+          format: email
+          type: string
+        expires_at:
+          format: date-time
+          type: string
+        id:
+          format: uuid
+          type: string
+        role:
+          $ref: '#/components/schemas/TenantRole'
+        status:
+          enum:
+            - pending
+            - accepted
+            - revoked
+          type: string
+      required:
+        - id
+        - email
+        - role
+        - expires_at
+        - status
+      type: object
+    InvitationCreated:
+      allOf:
+        - $ref: '#/components/schemas/Invitation'
+        - properties:
+            token:
+              description: Bearer secret, returned only upon creation.
+              type: string
+          required:
+            - token
+          type: object
     InvitationInput:
-        additionalProperties: false
-        properties:
-            email:
-                format: email
-                type: string
-            expires_at:
-                format: date-time
-                type: string
-            role:
-                $ref: '#/components/schemas/TenantRole'
-        required:
-            - email
-            - expires_at
-        type: object
+      additionalProperties: false
+      properties:
+        email:
+          format: email
+          type: string
+        expires_at:
+          format: date-time
+          type: string
+        role:
+          $ref: '#/components/schemas/TenantRole'
+      required:
+        - email
+        - expires_at
+      type: object
     InvitationPage:
-        properties:
-            items:
-                items:
-                    $ref: '#/components/schemas/Invitation'
-                type: array
-            next_cursor:
-                type: string
-        required:
-            - items
-            - next_cursor
-        type: object
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/Invitation'
+          type: array
+        next_cursor:
+          type: string
+      required:
+        - items
+        - next_cursor
+      type: object
     Me:
-        additionalProperties: false
-        properties:
-            current_tenant:
-                format: uuid
-                type:
-                    - string
-                    - "null"
-            principal:
-                $ref: '#/components/schemas/Principal'
-            roles:
-                items:
-                    type: string
-                type: array
-            tenants:
-                items:
-                    $ref: '#/components/schemas/Tenant'
-                type: array
-        required:
-            - principal
-            - tenants
-            - current_tenant
-            - roles
-        type: object
+      additionalProperties: false
+      properties:
+        current_tenant:
+          format: uuid
+          type:
+            - string
+            - "null"
+        principal:
+          $ref: '#/components/schemas/Principal'
+        roles:
+          items:
+            type: string
+          type: array
+        tenants:
+          items:
+            $ref: '#/components/schemas/Tenant'
+          type: array
+      required:
+        - principal
+        - tenants
+        - current_tenant
+        - roles
+      type: object
     Member:
-        additionalProperties: false
-        properties:
-            id:
-                format: uuid
-                type: string
-            principal:
-                $ref: '#/components/schemas/Principal'
-            roles:
-                items:
-                    type: string
-                type: array
-            source:
-                enum:
-                    - scim
-                    - invite
-                    - jit
-                    - direct
-            status:
-                enum:
-                    - active
-                    - invited
-                    - suspended
-        required:
-            - id
-            - principal
-            - status
-            - source
-            - roles
-        type: object
+      additionalProperties: false
+      properties:
+        id:
+          format: uuid
+          type: string
+        principal:
+          $ref: '#/components/schemas/Principal'
+        roles:
+          items:
+            type: string
+          type: array
+        source:
+          enum:
+            - scim
+            - invite
+            - jit
+            - direct
+        status:
+          enum:
+            - active
+            - invited
+            - suspended
+      required:
+        - id
+        - principal
+        - status
+        - source
+        - roles
+      type: object
     MemberInput:
-        additionalProperties: false
-        properties:
-            principal_id:
-                format: uuid
-                type: string
-            role:
-                enum:
-                    - tenant.owner
-                    - tenant.admin
-                    - tenant.auditor
-                    - tenant.reviewer
-                    - tenant.member
-            status:
-                enum:
-                    - active
-                    - invited
-                    - suspended
-        required:
-            - principal_id
-        type: object
-    MemberPage:
-        additionalProperties: false
-        properties:
-            items:
-                items:
-                    $ref: '#/components/schemas/Member'
-                type: array
-            next_cursor:
-                type: string
-        required:
-            - items
-            - next_cursor
-        type: object
-    MemberPatch:
-        additionalProperties: false
-        minProperties: 1
-        properties:
-            role:
-                enum:
-                    - tenant.owner
-                    - tenant.admin
-                    - tenant.auditor
-                    - tenant.reviewer
-                    - tenant.member
-            status:
-                enum:
-                    - active
-                    - invited
-                    - suspended
-        type: object
-    MemberPatchResult:
-        additionalProperties: false
-        properties:
-            principal_id:
-                format: uuid
-                type: string
-            role:
-                type:
-                    - string
-                    - "null"
-            status:
-                type:
-                    - string
-                    - "null"
-        required:
-            - principal_id
-            - role
-            - status
-        type: object
-    PatchWorkspace:
-        additionalProperties: false
-        minProperties: 1
-        properties:
-            default_agent_ref:
-                type:
-                    - string
-                    - "null"
-            name:
-                maxLength: 256
-                minLength: 1
-                type: string
-            settings:
-                additionalProperties: true
-                type: object
-        type: object
-    Principal:
-        additionalProperties: false
-        properties:
-            display_name:
-                type: string
-            email:
-                type: string
-            id:
-                format: uuid
-                type: string
-            kind:
-                enum:
-                    - user
-                    - service
-        required:
-            - id
-            - kind
-            - email
-            - display_name
-        type: object
-    PrincipalPage:
-        additionalProperties: false
-        properties:
-            items:
-                items:
-                    $ref: '#/components/schemas/Principal'
-                type: array
-            next_cursor:
-                type: string
-        required:
-            - items
-            - next_cursor
-        type: object
-    ServicePrincipalInput:
-        additionalProperties: false
-        properties:
-            display_name:
-                maxLength: 256
-                minLength: 1
-                type: string
-            role:
-                $ref: '#/components/schemas/TenantRole'
-        required:
-            - display_name
-        type: object
-    Tenant:
-        additionalProperties: false
-        properties:
-            id:
-                format: uuid
-                type: string
-            name:
-                type: string
-            slug:
-                type: string
-        required:
-            - id
-            - slug
-            - name
-        type: object
-    TenantPage:
-        additionalProperties: false
-        properties:
-            items:
-                items:
-                    $ref: '#/components/schemas/Tenant'
-                type: array
-            next_cursor:
-                type: string
-        required:
-            - items
-            - next_cursor
-        type: object
-    TenantRole:
-        enum:
+      additionalProperties: false
+      properties:
+        principal_id:
+          format: uuid
+          type: string
+        role:
+          enum:
             - tenant.owner
             - tenant.admin
             - tenant.auditor
             - tenant.reviewer
             - tenant.member
-        type: string
+        status:
+          enum:
+            - active
+            - invited
+            - suspended
+      required:
+        - principal_id
+      type: object
+    MemberPage:
+      additionalProperties: false
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/Member'
+          type: array
+        next_cursor:
+          type: string
+      required:
+        - items
+        - next_cursor
+      type: object
+    MemberPatch:
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        role:
+          enum:
+            - tenant.owner
+            - tenant.admin
+            - tenant.auditor
+            - tenant.reviewer
+            - tenant.member
+        status:
+          enum:
+            - active
+            - invited
+            - suspended
+      type: object
+    MemberPatchResult:
+      additionalProperties: false
+      properties:
+        principal_id:
+          format: uuid
+          type: string
+        role:
+          type:
+            - string
+            - "null"
+        status:
+          type:
+            - string
+            - "null"
+      required:
+        - principal_id
+        - role
+        - status
+      type: object
+    PatchWorkspace:
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        default_agent_ref:
+          type:
+            - string
+            - "null"
+        name:
+          maxLength: 256
+          minLength: 1
+          type: string
+        settings:
+          additionalProperties: true
+          type: object
+      type: object
+    Principal:
+      additionalProperties: false
+      properties:
+        display_name:
+          type: string
+        email:
+          type: string
+        id:
+          format: uuid
+          type: string
+        kind:
+          enum:
+            - user
+            - service
+      required:
+        - id
+        - kind
+        - email
+        - display_name
+      type: object
+    PrincipalPage:
+      additionalProperties: false
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/Principal'
+          type: array
+        next_cursor:
+          type: string
+      required:
+        - items
+        - next_cursor
+      type: object
+    ServicePrincipalInput:
+      additionalProperties: false
+      properties:
+        display_name:
+          maxLength: 256
+          minLength: 1
+          type: string
+        role:
+          $ref: '#/components/schemas/TenantRole'
+      required:
+        - display_name
+      type: object
+    Tenant:
+      additionalProperties: false
+      properties:
+        id:
+          format: uuid
+          type: string
+        name:
+          type: string
+        slug:
+          type: string
+      required:
+        - id
+        - slug
+        - name
+      type: object
+    TenantPage:
+      additionalProperties: false
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/Tenant'
+          type: array
+        next_cursor:
+          type: string
+      required:
+        - items
+        - next_cursor
+      type: object
+    TenantRole:
+      enum:
+        - tenant.owner
+        - tenant.admin
+        - tenant.auditor
+        - tenant.reviewer
+        - tenant.member
+      type: string
     Workspace:
-        additionalProperties: false
-        properties:
-            created_at:
-                type: string
-            default_agent_ref:
-                type:
-                    - string
-                    - "null"
-            id:
-                format: uuid
-                type: string
-            name:
-                type: string
-            settings:
-                additionalProperties: true
-                type: object
-        required:
-            - id
-            - name
-            - settings
-            - default_agent_ref
-            - created_at
-        type: object
+      additionalProperties: false
+      properties:
+        created_at:
+          type: string
+        default_agent_ref:
+          type:
+            - string
+            - "null"
+        id:
+          format: uuid
+          type: string
+        name:
+          type: string
+        settings:
+          additionalProperties: true
+          type: object
+      required:
+        - id
+        - name
+        - settings
+        - default_agent_ref
+        - created_at
+      type: object
     WorkspaceMemberInput:
-        additionalProperties: false
-        properties:
-            principal_id:
-                format: uuid
-                type: string
-            role:
-                enum:
-                    - ws.admin
-                    - ws.editor
-                    - ws.member
-                    - ws.viewer
-        required:
-            - principal_id
-        type: object
+      additionalProperties: false
+      properties:
+        principal_id:
+          format: uuid
+          type: string
+        role:
+          enum:
+            - ws.admin
+            - ws.editor
+            - ws.member
+            - ws.viewer
+      required:
+        - principal_id
+      type: object
     WorkspacePage:
-        additionalProperties: false
-        properties:
-            items:
-                items:
-                    $ref: '#/components/schemas/Workspace'
-                type: array
-            next_cursor:
-                type: string
-        required:
-            - items
-            - next_cursor
-        type: object
-
-    InteractionRequest: {"$ref": "../contract/v2/schema/interaction.json#/$defs/InteractionRequest"}
-
-    Decision: {"$ref": "../contract/v2/schema/interaction.json#/$defs/Decision"}
-
-    Usage: {"$ref": "../contract/v2/schema/common.json#/$defs/Usage"}
-
-    Session: {"type": "object", "properties": {"id": {"type": "string", "format": "uuid"}, "workspace_id": {"type": "string", "format": "uuid"}, "project_id": {"type": "string", "format": "uuid"}, "owner_id": {"type": "string", "format": "uuid"}, "title": {"type": "string"}, "entry_kind": {"enum": ["agent", "team"]}, "entry_ref": {"type": "string"}, "message_policy": {"enum": ["queue", "steer", "interrupt"]}, "status": {"enum": ["active", "idle", "archived"]}, "pinned_lock_id": {"type": "string", "format": "uuid"}, "created_at": {"type": "string", "format": "date-time"}, "last_activity_at": {"type": "string", "format": "date-time"}}}
-
-    Message: {"type": "object", "properties": {"id": {"type": "string", "format": "uuid"}, "session_id": {"type": "string", "format": "uuid"}, "run_id": {"type": "string", "format": "uuid"}, "role": {"enum": ["user", "assistant", "system", "tool_summary"]}, "text": {"type": "string"}, "content_ref": {"type": "string"}, "truncated": {"type": "boolean"}, "created_at": {"type": "string", "format": "date-time"}}}
-
-    Run: {"type": "object", "properties": {"id": {"type": "string", "format": "uuid"}, "session_id": {"type": "string", "format": "uuid"}, "status": {"$ref": "../contract/v2/schema/run_event.json#/$defs/RunState"}, "trigger": {"type": "string"}, "created_by": {"type": "string", "format": "uuid"}, "lock_id": {"type": "string", "format": "uuid"}, "budget_millicredits": {"type": "integer", "format": "int64"}, "used_millicredits": {"type": "integer", "format": "int64"}, "started_at": {"type": "string", "format": "date-time"}, "ended_at": {"type": "string", "format": "date-time"}, "error_code": {"type": "string"}, "summary": {"type": "string"}, "pending_interaction_id": {"type": "string", "format": "uuid"}, "segments_count": {"type": "integer", "format": "int64"}, "message_id": {"type": "string", "format": "uuid"}}}
-
-    Segment: {"type": "object", "properties": {"member": {"type": "string"}, "seq": {"type": "integer", "format": "int64"}, "status": {"type": "string"}, "checkpoint_version": {"type": "integer", "format": "int64"}, "iterations": {"type": "integer", "format": "int64"}, "usage": {"type": "array", "items": {"$ref": "#/components/schemas/Usage"}}, "started_at": {"type": "string", "format": "date-time"}, "ended_at": {"type": "string", "format": "date-time"}}}
-
-    Interaction: {"type": "object", "properties": {"id": {"type": "string", "format": "uuid"}, "run_id": {"type": "string", "format": "uuid"}, "session_id": {"type": "string", "format": "uuid"}, "member": {"type": "string"}, "kind": {"type": "string"}, "request": {"$ref": "#/components/schemas/InteractionRequest"}, "status": {"enum": ["pending", "escalated", "resolving", "resolved", "expired", "cancelled"]}, "approvers": {"type": "array", "items": {"type": "string", "format": "uuid"}}, "decision": {"$ref": "#/components/schemas/Decision"}, "decided_by": {"type": "string", "format": "uuid"}, "expires_at": {"type": "string", "format": "date-time"}, "created_at": {"type": "string", "format": "date-time"}}}
-
-    Artifact: {"type": "object", "properties": {"id": {"type": "string", "format": "uuid"}, "session_id": {"type": "string", "format": "uuid"}, "run_id": {"type": "string", "format": "uuid"}, "path": {"type": "string"}, "mime": {"type": "string"}, "size_bytes": {"type": "integer", "format": "int64"}, "digest": {"type": "string"}, "status": {"type": "string"}, "updated_at": {"type": "string", "format": "date-time"}}}
-
+      additionalProperties: false
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/Workspace'
+          type: array
+        next_cursor:
+          type: string
+      required:
+        - items
+        - next_cursor
+      type: object
+    InteractionRequest:
+      $ref: ../contract/v2/schema/interaction.json#/$defs/InteractionRequest
+    Decision:
+      $ref: ../contract/v2/schema/interaction.json#/$defs/Decision
+    Usage:
+      $ref: ../contract/v2/schema/common.json#/$defs/Usage
+    Session:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspace_id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        owner_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        entry_kind:
+          enum:
+            - agent
+            - team
+        entry_ref:
+          type: string
+        message_policy:
+          enum:
+            - queue
+            - steer
+            - interrupt
+        status:
+          enum:
+            - active
+            - idle
+            - archived
+        pinned_lock_id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+        last_activity_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - workspace_id
+        - owner_id
+        - title
+        - entry_kind
+        - entry_ref
+        - message_policy
+        - status
+        - created_at
+        - last_activity_at
+    Message:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        session_id:
+          type: string
+          format: uuid
+        run_id:
+          type: string
+          format: uuid
+        role:
+          enum:
+            - user
+            - assistant
+            - system
+            - tool_summary
+        text:
+          type: string
+        content_ref:
+          type: string
+        truncated:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - session_id
+        - role
+        - created_at
+    Run:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        session_id:
+          type: string
+          format: uuid
+        status:
+          $ref: ../contract/v2/schema/run_event.json#/$defs/RunState
+        trigger:
+          type: string
+        created_by:
+          type: string
+          format: uuid
+        lock_id:
+          type: string
+          format: uuid
+        budget_millicredits:
+          type: integer
+          format: int64
+        used_millicredits:
+          type: integer
+          format: int64
+        started_at:
+          type: string
+          format: date-time
+        ended_at:
+          type: string
+          format: date-time
+        error_code:
+          type: string
+        summary:
+          type: string
+        pending_interaction_id:
+          type: string
+          format: uuid
+        segments_count:
+          type: integer
+          format: int64
+        message_id:
+          type: string
+          format: uuid
+      required:
+        - id
+        - session_id
+        - status
+        - trigger
+        - created_by
+        - message_id
+        - budget_millicredits
+        - used_millicredits
+        - segments_count
+    Segment:
+      type: object
+      properties:
+        member:
+          type: string
+        seq:
+          type: integer
+          format: int64
+        status:
+          type: string
+        checkpoint_version:
+          type: integer
+          format: int64
+        iterations:
+          type: integer
+          format: int64
+        usage:
+          type: array
+          items:
+            $ref: '#/components/schemas/Usage'
+        started_at:
+          type: string
+          format: date-time
+        ended_at:
+          type: string
+          format: date-time
+      required:
+        - member
+        - seq
+        - status
+        - iterations
+        - usage
+        - started_at
+    Interaction:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        run_id:
+          type: string
+          format: uuid
+        session_id:
+          type: string
+          format: uuid
+        member:
+          type: string
+        kind:
+          type: string
+        request:
+          $ref: '#/components/schemas/InteractionRequest'
+        status:
+          enum:
+            - pending
+            - escalated
+            - resolving
+            - resolved
+            - expired
+            - cancelled
+        approvers:
+          type: array
+          items:
+            type: string
+            format: uuid
+        decision:
+          $ref: '#/components/schemas/Decision'
+        decided_by:
+          type: string
+          format: uuid
+        expires_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - run_id
+        - session_id
+        - member
+        - kind
+        - request
+        - status
+        - approvers
+        - expires_at
+        - created_at
+    Artifact:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        session_id:
+          type: string
+          format: uuid
+        run_id:
+          type: string
+          format: uuid
+        path:
+          type: string
+        mime:
+          type: string
+        size_bytes:
+          type: integer
+          format: int64
+        digest:
+          type: string
+        status:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - session_id
+        - run_id
+        - path
+        - mime
+        - size_bytes
+        - digest
+        - status
+        - updated_at

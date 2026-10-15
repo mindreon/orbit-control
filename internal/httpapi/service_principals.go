@@ -34,7 +34,8 @@ func (h *Handler) createServicePrincipal(w http.ResponseWriter, r *http.Request)
 	}
 	id := ids.New()
 	tx := db.Tx(ctx)
-	if _, err := tx.Exec(ctx, `INSERT INTO principals(id,kind,email,display_name,idp_subject) VALUES($1,'service','',$2,$3)`, id, in.DisplayName, "service:"+id); err != nil {
+	if _, err := tx.Exec(ctx, "INSERT INTO principals(id,kind,email,display_name,idp_subject) "+
+		"VALUES($1,'service','',$2,$3)", id, in.DisplayName, "service:"+id); err != nil {
 		return err
 	}
 	if err := tenancy.AddMember(ctx, tx, auth.From(ctx), auth.Tenant(ctx), id, "active", "direct", in.Role); err != nil {
@@ -55,7 +56,10 @@ func (h *Handler) listServicePrincipals(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		return err
 	}
-	rows, err := db.Tx(ctx).Query(ctx, `SELECT p.id::text,p.kind,p.email,p.display_name FROM principals p JOIN memberships m ON m.principal_id=p.id WHERE p.kind='service' AND ($1='' OR p.id>NULLIF($1,'')::uuid) ORDER BY p.id LIMIT $2`, page.Cursor, page.Limit+1)
+	rows, err := db.Tx(ctx).
+		Query(ctx, "SELECT p.id::text,p.kind,p.email,p.display_name FROM principals p JOIN memberships m ON "+
+			"m.principal_id=p.id WHERE p.kind='service' AND ($1='' OR p.id>NULLIF($1,'')::uuid) ORDER "+
+			"BY p.id LIMIT $2", page.Cursor, page.Limit+1)
 	if err != nil {
 		return err
 	}

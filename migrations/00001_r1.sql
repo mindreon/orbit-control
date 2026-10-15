@@ -76,7 +76,7 @@ CREATE TABLE messages (
   id uuid PRIMARY KEY, tenant_id uuid NOT NULL, session_id uuid NOT NULL, run_id uuid, role text NOT NULL CHECK(role IN ('user','assistant','system','tool_summary')), author_id uuid REFERENCES principals(id), content jsonb, content_ref text, created_at timestamptz NOT NULL DEFAULT now(), FOREIGN KEY(tenant_id,session_id) REFERENCES sessions(tenant_id,id), FOREIGN KEY(tenant_id,run_id) REFERENCES runs(tenant_id,id)
 );
 CREATE TABLE run_segments (
-  tenant_id uuid NOT NULL, run_id uuid NOT NULL, member text NOT NULL, seq int NOT NULL CHECK(seq>=1), status text NOT NULL CHECK(status IN ('running','completed','interrupted','yielded','failed')), checkpoint_version bigint, iterations int NOT NULL DEFAULT 0, usage jsonb NOT NULL DEFAULT '{}', result_ref text, started_at timestamptz NOT NULL DEFAULT now(), ended_at timestamptz, PRIMARY KEY(tenant_id,run_id,member,seq), FOREIGN KEY(tenant_id,run_id) REFERENCES runs(tenant_id,id)
+  tenant_id uuid NOT NULL, run_id uuid NOT NULL, member text NOT NULL, seq int NOT NULL CHECK(seq>=1), status text NOT NULL CHECK(status IN ('running','completed','interrupted','yielded','failed')), checkpoint_version bigint, iterations int NOT NULL DEFAULT 0, usage jsonb NOT NULL DEFAULT '{}', model_profiles jsonb NOT NULL DEFAULT '{}', result_ref text, started_at timestamptz NOT NULL DEFAULT now(), ended_at timestamptz, PRIMARY KEY(tenant_id,run_id,member,seq), FOREIGN KEY(tenant_id,run_id) REFERENCES runs(tenant_id,id)
 );
 -- Event IDs are <run>:<member>:<seq>:<attempt>:<n>; ts is the immutable RunEvent timestamp.
 -- Historical reads and cursors order by (ts,event_id); seq is not globally unique.

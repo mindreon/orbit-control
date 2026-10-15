@@ -36,7 +36,10 @@ func Get(ctx context.Context, id string) (Interaction, error) {
 	if !ids.Valid(id) {
 		return i, httpx.E(404, "NOT_FOUND", "Interaction not found")
 	}
-	err := db.Tx(ctx).QueryRow(ctx, `SELECT id::text,run_id::text,session_id::text,member,kind,request,status,approvers,decision,decided_by::text,expires_at,created_at FROM interactions WHERE id=$1`, id).Scan(&i.ID, &i.RunID, &i.SessionID, &i.Member, &i.Kind, &req, &i.Status, &approvers, &decision, &i.DecidedBy, &i.ExpiresAt, &i.CreatedAt)
+	err := db.Tx(ctx).
+		QueryRow(ctx, "SELECT id::text,run_id::text,session_id::text,member,kind,request,status,approvers,decisio"+
+			"n,decided_by::text,expires_at,created_at FROM interactions WHERE id=$1", id).
+		Scan(&i.ID, &i.RunID, &i.SessionID, &i.Member, &i.Kind, &req, &i.Status, &approvers, &decision, &i.DecidedBy, &i.ExpiresAt, &i.CreatedAt)
 	if err != nil {
 		return i, err
 	}
@@ -52,11 +55,17 @@ func Get(ctx context.Context, id string) (Interaction, error) {
 	return i, err
 }
 func CanResolve(principal string, i Interaction) bool {
-	return slices.Contains(i.Approvers, principal) && (i.Status == "pending" || i.Status == "escalated") && time.Now().Before(i.ExpiresAt)
+	return slices.Contains(i.Approvers, principal) && (i.Status == "pending" || i.Status == "escalated") &&
+		time.Now().Before(i.ExpiresAt)
 }
 
 // Grants are written only after an accepted human decision, in its transaction.
-func Grant(ctx context.Context, tenant, workspace, session, actor string, i Interaction, d contract.Decision) (string, error) {
+func Grant(
+	ctx context.Context,
+	tenant, workspace, session, actor string,
+	i Interaction,
+	d contract.Decision,
+) (string, error) {
 	if d.ArgPattern != nil {
 		if _, err := path.Match(*d.ArgPattern, ""); err != nil {
 			return "", httpx.E(422, "INVALID_PATTERN", "Invalid argument pattern")
@@ -74,22 +83,47 @@ func Grant(ctx context.Context, tenant, workspace, session, actor string, i Inte
 			if err != nil {
 				return "", err
 			}
-			if policy.Allows(bindings, "policy.manage", policy.Resource{Type: "workspace", ID: workspace, WorkspaceID: workspace}, tenant) || slices.ContainsFunc(bindings, func(b policy.Binding) bool {
-				return b.Role == "ws.admin" && b.ScopeType == "workspace" && b.ScopeID == workspace
-			}) {
+			if policy.Allows(
+				bindings,
+				"policy.manage",
+				policy.Resource{Type: "workspace", ID: workspace, WorkspaceID: workspace},
+				tenant,
+			) ||
+				slices.ContainsFunc(bindings, func(b policy.Binding) bool {
+					return b.Role == "ws.admin" && b.ScopeType == "workspace" && b.ScopeID == workspace
+				}) {
 				scope, id = "workspace", workspace
 			}
 		}
 	}
 	for _, call := range i.Request.Calls {
-		if _, err := db.Tx(ctx).Exec(ctx, `INSERT INTO permission_grants(id,tenant_id,scope_type,scope_id,interaction_id,tool,arg_pattern,decision,granted_by,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,'allow',$8,$9) ON CONFLICT DO NOTHING`, ids.Derive(i.ID, "grant:"+call.Name), tenant, scope, id, i.ID, call.Name, d.ArgPattern, actor, time.Now().Add(365*24*time.Hour)); err != nil {
+		if _, err := db.Tx(ctx).Exec(ctx, "INSERT INTO permission_grants(id,tenant_id,scope_type,scope_id,interaction_id,tool,arg_pat"+
+			"tern,decision,granted_by,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,'allow',$8,$9) ON "+
+			"CONFLICT DO NOTHING",
+			ids.Derive(i.ID,
+				"grant:"+
+					call.Name),
+			tenant,
+			scope,
+			id,
+			i.ID,
+			call.Name,
+			d.ArgPattern,
+			actor,
+			time.Now().Add(365*24*time.Hour)); err != nil {
 			return "", err
 		}
 	}
 	return scope, nil
 }
 func WorkspaceAdmins(ctx context.Context, workspace string) ([]string, error) {
-	rows, err := db.Tx(ctx).Query(ctx, `SELECT DISTINCT m.principal_id::text FROM memberships m JOIN principals p ON p.id=m.principal_id JOIN role_bindings b ON ((b.principal_type IN ('user','service') AND b.principal_id=m.principal_id) OR (b.principal_type='group' AND b.principal_id IN (SELECT group_id FROM group_members WHERE principal_id=m.principal_id))) WHERE m.status='active' AND p.status='active' AND b.role='ws.admin' AND b.scope_type='workspace' AND b.scope_id=$1 ORDER BY 1`, workspace)
+	rows, err := db.Tx(ctx).
+		Query(ctx, "SELECT DISTINCT m.principal_id::text FROM memberships m JOIN principals p ON "+
+			"p.id=m.principal_id JOIN role_bindings b ON ((b.principal_type IN ('user','service') AND "+
+			"b.principal_id=m.principal_id) OR (b.principal_type='group' AND b.principal_id IN (SELECT "+
+			"group_id FROM group_members WHERE principal_id=m.principal_id))) WHERE m.status='active' "+
+			"AND p.status='active' AND b.role='ws.admin' AND b.scope_type='workspace' AND "+
+			"b.scope_id=$1 ORDER BY 1", workspace)
 	if err != nil {
 		return nil, err
 	}

@@ -4,6 +4,13 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"net/http"
+	"slices"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/jackc/pgx/v5"
+
 	"github.com/mindreon/orbit-control/internal/auth"
 	"github.com/mindreon/orbit-control/internal/contract"
 	"github.com/mindreon/orbit-control/internal/interactions"
@@ -12,9 +19,6 @@ import (
 	"github.com/mindreon/orbit-control/internal/platform/ids"
 	"github.com/mindreon/orbit-control/internal/sessions"
 	w "github.com/mindreon/orbit-control/internal/workflows"
-	"net/http"
-	"strings"
-	"unicode/utf8"
 )
 
 func (h *Handler) getRun(out http.ResponseWriter, r *http.Request) error {
@@ -31,11 +35,11 @@ func (h *Handler) runSegments(out http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	items, err := sessions.Rows(ctx, `SELECT to_jsonb(s)-'tenant_id'-'run_id'-'result_ref' FROM run_segments s WHERE run_id=$1 ORDER BY member,seq`, run.ID)
+	result, err := sessions.Segments(ctx, run.ID)
 	if err != nil {
 		return err
 	}
-	httpx.JSON(out, 200, map[string]any{"items": items, "next_cursor": ""})
+	httpx.JSON(out, 200, result)
 	return nil
 }
 func (h *Handler) streamToken(out http.ResponseWriter, r *http.Request) error {
@@ -51,7 +55,10 @@ func (h *Handler) streamToken(out http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 func (h *Handler) controlRun(out http.ResponseWriter, r *http.Request) error {
-	return h.twoPhase(out, r, func(ctx context.Context, body []byte) (func(context.Context, *httpx.Recorder) error, error) {
+	return h.twoPhase(out, r, func(ctx context.Context, body []byte) (
+		func(context.Context, *httpx.Recorder) error,
+		error,
+	) {
 		run, s, err := sessions.GetRun(ctx, r.PathValue("r"), "run.control")
 		if err != nil {
 			return nil, err
@@ -97,7 +104,14 @@ func (h *Handler) controlRun(out http.ResponseWriter, r *http.Request) error {
 			}
 			if action == "cancel" {
 				var result w.CancelRunOutput
-				if err := h.Temporal.Update(ctx, w.SessionWorkflowID(tenant, s.ID), w.CancelRun, "cancel:"+run.ID, w.CancelRunInput{RunID: run.ID, ActorID: actor, Reason: in.Reason}, &result); err != nil {
+				if err := h.Temporal.Update(
+					ctx,
+					w.SessionWorkflowID(tenant, s.ID),
+					w.CancelRun,
+					"cancel:"+run.ID,
+					w.CancelRunInput{RunID: run.ID, ActorID: actor, Reason: in.Reason},
+					&result,
+				); err != nil {
 					return temporalError(err, "RUN_FINISHED")
 				}
 				httpx.JSON(rec, 202, result)
@@ -107,7 +121,12 @@ func (h *Handler) controlRun(out http.ResponseWriter, r *http.Request) error {
 			if action == "resume" {
 				signal = w.Resume
 			}
-			if err := h.Temporal.Signal(ctx, w.AgentRunWorkflowID(tenant, run.ID), signal, w.ActorInput{ActorID: actor}); err != nil {
+			if err := h.Temporal.Signal(
+				ctx,
+				w.AgentRunWorkflowID(tenant, run.ID),
+				signal,
+				w.ActorInput{ActorID: actor},
+			); err != nil {
 				return temporalError(err, "RUN_NOT_ACTIVE")
 			}
 			rec.WriteHeader(202)
@@ -115,18 +134,24 @@ func (h *Handler) controlRun(out http.ResponseWriter, r *http.Request) error {
 		}, nil
 	})
 }
-func (h *Handler) prepareSteer(ctx context.Context, s sessions.Session, runID, messageID, text string, submission bool) (func(context.Context, *httpx.Recorder) error, error) {
+func (h *Handler) prepareSteer(
+	ctx context.Context,
+	s sessions.Session,
+	runID, messageID, text string,
+	submission bool,
+) (
+	func(
+		context.Context,
+		*httpx.Recorder,
+	) error,
+	error,
+) {
 	tenant, actor := auth.Tenant(ctx), auth.From(ctx).ID
-	// run.create already authorized a policy-steered submission; explicit steer needs run.control.
-	_, _, err := sessions.GetRun(ctx, runID, "run.create")
+	run, _, err := sessions.GetRun(ctx, runID, "run.create")
 	if err != nil {
 		return nil, err
 	}
-	var status string
-	if err = db.Tx(ctx).QueryRow(ctx, `SELECT status FROM runs WHERE tenant_id=$1 AND id=$2`, tenant, runID).Scan(&status); err != nil {
-		return nil, err
-	}
-	if w.Terminal(status) || status == "queued" {
+	if w.Terminal(run.Status) || run.Status == "queued" {
 		return nil, httpx.E(409, "RUN_NOT_ACTIVE", "Run is not active")
 	}
 	ref := "t/" + tenant + "/runs/" + runID + "/steer/" + messageID + ".json"
@@ -137,26 +162,44 @@ func (h *Handler) prepareSteer(ctx context.Context, s sessions.Session, runID, m
 	if err = h.Objects.PutObject(ctx, tenant, ref, content, "application/json"); err != nil {
 		return nil, err
 	}
-	if _, err = db.Tx(ctx).Exec(ctx, `INSERT INTO messages(id,tenant_id,session_id,run_id,role,author_id,content,content_ref) VALUES($1,$2,$3,$4,'user',$5,$6,$7) ON CONFLICT DO NOTHING`, messageID, tenant, s.ID, runID, actor, content, ref); err != nil {
-		return nil, err
-	}
-	if err = h.logWrite(ctx, "run.steer", "run", runID, map[string]string{"message_id": messageID}); err != nil {
-		return nil, err
-	}
 	return func(ctx context.Context, rec *httpx.Recorder) error {
 		if h.Temporal == nil {
 			return temporalError(errors.New("no client"), "")
 		}
 		var result w.SteerOutput
-		if err := h.Temporal.Update(ctx, w.AgentRunWorkflowID(tenant, runID), w.Steer, messageID, w.SteerInput{MessageID: messageID, ContentRef: ref, ActorID: actor}, &result); err != nil {
+		if err := h.Temporal.Update(
+			ctx,
+			w.AgentRunWorkflowID(tenant, runID),
+			w.Steer,
+			messageID,
+			w.SteerInput{MessageID: messageID, ContentRef: ref, ActorID: actor},
+			&result,
+		); err != nil {
 			return temporalError(err, "RUN_NOT_ACTIVE")
+		}
+		if err := h.DB.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
+			ctx = db.Context(ctx, tx)
+
+			return sessions.AddSteer(ctx, s.ID, runID, messageID, ref, content)
+		}); err != nil {
+			return err
 		}
 		if submission {
 			token, err := h.Auth.Signer.IssueStream(tenant, runID, s.ID)
 			if err != nil {
 				return err
 			}
-			httpx.JSON(rec, 202, map[string]any{"run_id": runID, "message_id": messageID, "disposition": "steered", "position": 0, "stream_token": token})
+			httpx.JSON(
+				rec,
+				202,
+				map[string]any{
+					"run_id":       runID,
+					"message_id":   messageID,
+					"disposition":  "steered",
+					"position":     0,
+					"stream_token": token,
+				},
+			)
 		} else {
 			httpx.JSON(rec, 202, map[string]any{"message_id": messageID, "queued": result.Queued})
 		}
@@ -168,8 +211,10 @@ func (h *Handler) getInteraction(out http.ResponseWriter, r *http.Request) error
 	if err != nil {
 		return err
 	}
-	if _, err = sessions.Get(r.Context(), i.SessionID, "session.read"); err != nil {
-		return err
+	if !slices.Contains(i.Approvers, auth.From(r.Context()).ID) {
+		if _, err = sessions.Get(r.Context(), i.SessionID, "session.read"); err != nil {
+			return err
+		}
 	}
 	httpx.JSON(out, 200, i)
 	return nil
@@ -180,53 +225,19 @@ func (h *Handler) listInteractions(out http.ResponseWriter, r *http.Request) err
 	if err != nil {
 		return err
 	}
-	status := r.URL.Query().Get("status")
-	if status == "" {
-		status = "pending"
-	}
-	rows, err := db.Tx(ctx).Query(ctx, `SELECT id::text FROM interactions WHERE approvers @> jsonb_build_array($1::text) AND ($2='all' OR status=$2 OR ($2='pending' AND status='escalated')) AND ($3='' OR id>NULLIF($3,'')::uuid) ORDER BY id`, auth.From(ctx).ID, status, page.Cursor)
+	result, err := interactions.List(ctx, page, r.URL.Query().Get("status"))
 	if err != nil {
 		return err
 	}
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err = rows.Scan(&id); err != nil {
-			rows.Close()
-			return err
-		}
-		ids = append(ids, id)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return err
-	}
-	items := []interactions.Interaction{}
-	next := ""
-	for _, id := range ids {
-		i, e := interactions.Get(ctx, id)
-		if e != nil {
-			return e
-		}
-		if _, e = sessions.Get(ctx, i.SessionID, "session.read"); e != nil {
-			if he, ok := errors.AsType[*httpx.Error](e); ok && (he.Status == 403 || he.Status == 404) {
-				continue
-			}
-			return e
-		}
-		items = append(items, i)
-		if len(items) > page.Limit {
-			items = items[:page.Limit]
-			next = httpx.Cursor(items[len(items)-1].ID)
-			break
-		}
-	}
-	httpx.JSON(out, 200, map[string]any{"items": items, "next_cursor": next})
+	httpx.JSON(out, 200, result)
 	return nil
 }
+
 func (h *Handler) resolveInteraction(out http.ResponseWriter, r *http.Request) error {
-	return h.twoPhase(out, r, func(ctx context.Context, body []byte) (func(context.Context, *httpx.Recorder) error, error) {
+	return h.twoPhase(out, r, func(ctx context.Context, body []byte) (
+		func(context.Context, *httpx.Recorder) error,
+		error,
+	) {
 		i, err := interactions.Get(ctx, r.PathValue("i"))
 		if err != nil {
 			return nil, err
@@ -254,7 +265,14 @@ func (h *Handler) resolveInteraction(out http.ResponseWriter, r *http.Request) e
 				return temporalError(errors.New("no client"), "")
 			}
 			var result w.ResolveInteractionOutput
-			if err := h.Temporal.Update(ctx, w.AgentRunWorkflowID(tenant, i.RunID), w.ResolveInteraction, "resolve:"+i.ID, w.ResolveInteractionInput{InteractionID: i.ID, ActorID: actor, Decision: decision}, &result); err != nil {
+			if err := h.Temporal.Update(
+				ctx,
+				w.AgentRunWorkflowID(tenant, i.RunID),
+				w.ResolveInteraction,
+				"resolve:"+i.ID,
+				w.ResolveInteractionInput{InteractionID: i.ID, ActorID: actor, Decision: decision},
+				&result,
+			); err != nil {
 				return temporalError(err, "INTERACTION_NOT_PENDING")
 			}
 			i.Status = "resolving"

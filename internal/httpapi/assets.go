@@ -60,7 +60,16 @@ func (h *Handler) listAssets(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	result, err := s.List(r.Context(), page, assets.Filter{Kind: r.URL.Query().Get("kind"), Visibility: r.URL.Query().Get("visibility"), Query: r.URL.Query().Get("q"), WorkspaceID: r.URL.Query().Get("workspace_id")})
+	result, err := s.List(
+		r.Context(),
+		page,
+		assets.Filter{
+			Kind:        r.URL.Query().Get("kind"),
+			Visibility:  r.URL.Query().Get("visibility"),
+			Query:       r.URL.Query().Get("q"),
+			WorkspaceID: r.URL.Query().Get("workspace_id"),
+		},
+	)
 	if err != nil {
 		return err
 	}
@@ -388,7 +397,15 @@ func (h *Handler) previewAssetLock(w http.ResponseWriter, r *http.Request) error
 		return err
 	}
 	resolver := locks.NewResolver(s)
-	lock, err := resolver.Resolve(r.Context(), locks.Request{TenantID: auth.Tenant(r.Context()), LockID: ids.New(), Entry: entry, Scope: locks.Scope{WorkspaceID: r.PathValue("w")}})
+	lock, err := resolver.Resolve(
+		r.Context(),
+		locks.Request{
+			TenantID: auth.Tenant(r.Context()),
+			LockID:   ids.New(),
+			Entry:    entry,
+			Scope:    locks.Scope{WorkspaceID: r.PathValue("w")},
+		},
+	)
 	if err != nil {
 		return err
 	}

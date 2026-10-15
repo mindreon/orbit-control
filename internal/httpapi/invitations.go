@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
 	"github.com/mindreon/orbit-control/internal/auth"
 	"github.com/mindreon/orbit-control/internal/platform/db"
 	"github.com/mindreon/orbit-control/internal/platform/httpx"
@@ -63,13 +64,31 @@ func (h *Handler) createInvitation(w http.ResponseWriter, r *http.Request) error
 	token := base64.RawURLEncoding.EncodeToString(secret)
 	hash := sha256.Sum256([]byte(token))
 	id := ids.New()
-	if _, err := db.Tx(ctx).Exec(ctx, `INSERT INTO invitations(id,tenant_id,email,role,token_hash,expires_at,created_by) VALUES($1,$2,$3,$4,$5,$6,$7)`, id, auth.Tenant(ctx), in.Email, in.Role, hash[:], in.ExpiresAt, auth.From(ctx).ID); err != nil {
+	if _, err := db.Tx(ctx).Exec(ctx, "INSERT INTO invitations(id,tenant_id,email,role,token_hash,expires_at,created_by) "+
+		"VALUES($1,$2,$3,$4,$5,$6,$7)", id, auth.Tenant(ctx), in.Email, in.Role, hash[:], in.ExpiresAt, auth.From(ctx).ID); err != nil {
 		return err
 	}
-	if err := h.logWrite(ctx, "invitation.created", "invitation", id, map[string]any{"email": in.Email, "role": in.Role, "expires_at": in.ExpiresAt}); err != nil {
+	if err := h.logWrite(ctx,
+		"invitation.created",
+		"invitation",
+		id,
+		map[string]any{"email": in.Email,
+			"role":       in.Role,
+			"expires_at": in.ExpiresAt}); err != nil {
 		return err
 	}
-	httpx.JSON(w, 201, map[string]any{"id": id, "email": in.Email, "role": in.Role, "expires_at": in.ExpiresAt, "status": "pending", "token": token})
+	httpx.JSON(
+		w,
+		201,
+		map[string]any{
+			"id":         id,
+			"email":      in.Email,
+			"role":       in.Role,
+			"expires_at": in.ExpiresAt,
+			"status":     "pending",
+			"token":      token,
+		},
+	)
 	return nil
 }
 func (h *Handler) listInvitations(w http.ResponseWriter, r *http.Request) error {
@@ -81,7 +100,9 @@ func (h *Handler) listInvitations(w http.ResponseWriter, r *http.Request) error 
 	if err != nil {
 		return err
 	}
-	rows, err := db.Tx(ctx).Query(ctx, `SELECT id::text,email,role,expires_at,status FROM invitations WHERE ($1='' OR id>NULLIF($1,'')::uuid) ORDER BY id LIMIT $2`, page.Cursor, page.Limit+1)
+	rows, err := db.Tx(ctx).
+		Query(ctx, "SELECT id::text,email,role,expires_at,status FROM invitations WHERE ($1='' OR "+
+			"id>NULLIF($1,'')::uuid) ORDER BY id LIMIT $2", page.Cursor, page.Limit+1)
 	if err != nil {
 		return err
 	}
@@ -115,7 +136,10 @@ func (h *Handler) deleteInvitation(w http.ResponseWriter, r *http.Request) error
 		return httpx.E(404, "NOT_FOUND", "Invitation not found")
 	}
 	var role string
-	if err := db.Tx(ctx).QueryRow(ctx, "SELECT role FROM invitations WHERE id=$1 AND status='pending' FOR UPDATE", id).Scan(&role); err != nil {
+	if err := db.Tx(ctx).QueryRow(ctx,
+		("SELECT role FROM invitations WHERE id=$1 AND status='pending' FOR " +
+			"UPDATE"),
+		id).Scan(&role); err != nil {
 		return err
 	}
 	if role == "tenant.owner" {
@@ -152,26 +176,47 @@ func (h *Handler) acceptInvitation(w http.ResponseWriter, r *http.Request) error
 	return h.DB.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
 		ctx = auth.Context(db.Context(ctx, tx), p, tenant)
 		r = r.WithContext(ctx)
-		return httpx.Idempotent(ctx, tx, tenant, p.ID, h.Auth.Replay, w, r, func(w http.ResponseWriter, r *http.Request) error {
-			var i invitation
-			if err := tx.QueryRow(ctx, "SELECT id::text,email,role,expires_at,status FROM invitations WHERE tenant_id=$1 AND token_hash=$2 AND status='pending' AND expires_at>now() FOR UPDATE", tenant, hash[:]).Scan(&i.ID, &i.Email, &i.Role, &i.ExpiresAt, &i.Status); err != nil {
-				return err
-			}
-			if !strings.EqualFold(i.Email, p.Email) {
-				return httpx.E(403, "FORBIDDEN", "Invitation email does not match verified email")
-			}
-			// Existing/suspended membership cannot be escalated or reactivated by an invitation.
-			if err := tenancy.AddMember(ctx, tx, p, tenant, p.ID, "active", "invite", i.Role); err != nil {
-				return err
-			}
-			if _, err := tx.Exec(ctx, "UPDATE invitations SET status='accepted',accepted_by=$2,accepted_at=now() WHERE id=$1", i.ID, p.ID); err != nil {
-				return err
-			}
-			if err := h.logWrite(ctx, "invitation.accepted", "invitation", i.ID, map[string]any{"principal_id": p.ID}); err != nil {
-				return err
-			}
-			httpx.JSON(w, 200, map[string]any{"tenant_id": tenant})
-			return nil
-		})
+		return httpx.Idempotent(
+			ctx,
+			tx,
+			tenant,
+			p.ID,
+			h.Auth.Replay,
+			w,
+			r,
+			func(w http.ResponseWriter, r *http.Request) error {
+				var i invitation
+				if err := tx.QueryRow(ctx, "SELECT id::text,email,role,expires_at,status FROM invitations WHERE tenant_id=$1 AND "+
+					("token_hash=$2 AND status='pending' AND expires_at>now() FOR UPDATE"),
+					tenant,
+					hash[:]).Scan(&i.ID,
+					&i.Email,
+					&i.Role,
+					&i.ExpiresAt,
+					&i.Status); err != nil {
+					return err
+				}
+				if !strings.EqualFold(i.Email, p.Email) {
+					return httpx.E(403, "FORBIDDEN", "Invitation email does not match verified email")
+				}
+				// Existing/suspended membership cannot be escalated or reactivated by an invitation.
+				if err := tenancy.AddMember(ctx, tx, p, tenant, p.ID, "active", "invite", i.Role); err != nil {
+					return err
+				}
+				if _,
+					err := tx.Exec(ctx,
+					("UPDATE invitations SET status='accepted',accepted_by=$2,accepted_at=no" +
+						"w() WHERE id=$1"),
+					i.ID,
+					p.ID); err != nil {
+					return err
+				}
+				if err := h.logWrite(ctx, "invitation.accepted", "invitation", i.ID, map[string]any{"principal_id": p.ID}); err != nil {
+					return err
+				}
+				httpx.JSON(w, 200, map[string]any{"tenant_id": tenant})
+				return nil
+			},
+		)
 	})
 }

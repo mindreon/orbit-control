@@ -20,6 +20,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/mindreon/orbit-control/internal/audit"
 	"github.com/mindreon/orbit-control/internal/auth"
 	"github.com/mindreon/orbit-control/internal/httpapi"
@@ -90,6 +91,7 @@ func TestPostgresSuite(t *testing.T) {
 	t.Run("HTTPAndAudit", func(t *testing.T) { testHTTP(t, app, admin) })
 	t.Run("JITProvisioning", func(t *testing.T) { testJITProvisioning(t, app, admin) })
 	t.Run("Assets", func(t *testing.T) { testAssets(t, app, admin) })
+	t.Run("Runs", func(t *testing.T) { testRuns(t, app, admin) })
 	t.Run("UsageAndEvents", func(t *testing.T) { testUsageAndEvents(t, app, admin) })
 }
 func roleURL(t *testing.T, raw, role string) string {
@@ -106,7 +108,8 @@ func roleURL(t *testing.T, raw, role string) string {
 func testRLS(t *testing.T, admin *pgx.Conn, app *db.DB) {
 	ctx := t.Context()
 	a, b, pid := ids.New(), ids.New(), ids.New()
-	if _, e := admin.Exec(ctx, "INSERT INTO principals(id,kind,email,display_name,idp_subject) VALUES($1,'user','rls@example.test','RLS',$1::uuid::text)", pid); e != nil {
+	if _, e := admin.Exec(ctx, "INSERT INTO principals(id,kind,email,display_name,idp_subject) "+
+		"VALUES($1,'user','rls@example.test','RLS',$1::uuid::text)", pid); e != nil {
 		t.Fatal(e)
 	}
 	for _, id := range []string{a, b} {
@@ -115,7 +118,13 @@ func testRLS(t *testing.T, admin *pgx.Conn, app *db.DB) {
 		}
 	}
 	// Discover every tenant-bearing table, including direct partition access.
-	rows, e := admin.Query(ctx, `SELECT c.table_name,pc.relrowsecurity,pc.relforcerowsecurity,pg_get_userbyid(pc.relowner) FROM information_schema.columns c JOIN pg_class pc ON pc.relname=c.table_name JOIN pg_namespace n ON n.oid=pc.relnamespace AND n.nspname=c.table_schema WHERE c.table_schema='public' AND c.column_name='tenant_id' ORDER BY c.table_name`)
+	rows, e := admin.Query(
+		ctx,
+		"SELECT c.table_name,pc.relrowsecurity,pc.relforcerowsecurity,pg_get_userbyid(pc.relowner) "+
+			"FROM information_schema.columns c JOIN pg_class pc ON pc.relname=c.table_name JOIN "+
+			"pg_namespace n ON n.oid=pc.relnamespace AND n.nspname=c.table_schema WHERE "+
+			"c.table_schema='public' AND c.column_name='tenant_id' ORDER BY c.table_name",
+	)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -244,7 +253,11 @@ func testRLS(t *testing.T, admin *pgx.Conn, app *db.DB) {
 				t.Fatal(e)
 			}
 			e = app.WithTenant(ctx, b, func(tx pgx.Tx) error {
-				_, e := tx.Exec(ctx, "INSERT INTO "+q+" SELECT (jsonb_populate_record(NULL::"+q+",$1::jsonb)).*", fixture)
+				_, e := tx.Exec(
+					ctx,
+					"INSERT INTO "+q+" SELECT (jsonb_populate_record(NULL::"+q+",$1::jsonb)).*",
+					fixture,
+				)
 				return e
 			})
 			var pgerr *pgconn.PgError
@@ -268,11 +281,23 @@ func testRLS(t *testing.T, admin *pgx.Conn, app *db.DB) {
 	}
 	t.Logf("RLS exercised %d tenant tables (including partitions)", len(tables))
 }
-func insertFixture(t *testing.T, admin *pgx.Conn, app *db.DB, table, base, tenant, pid string, idmap map[string]string, at time.Time) {
+
+func insertFixture(
+	t *testing.T,
+	admin *pgx.Conn,
+	app *db.DB,
+	table, base, tenant, pid string,
+	idmap map[string]string,
+	at time.Time,
+) {
 	t.Helper()
 	ctx := t.Context()
 	var checks []string
-	rows, e := admin.Query(ctx, "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid=$1::regclass AND contype='c'", table)
+	rows, e := admin.Query(
+		ctx,
+		"SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid=$1::regclass AND contype='c'",
+		table,
+	)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -284,7 +309,12 @@ func insertFixture(t *testing.T, admin *pgx.Conn, app *db.DB, table, base, tenan
 		checks = append(checks, v)
 	}
 	rows.Close()
-	rows, e = admin.Query(ctx, "SELECT column_name,data_type,is_nullable,column_default FROM information_schema.columns WHERE table_schema='public' AND table_name=$1 ORDER BY ordinal_position", table)
+	rows, e = admin.Query(
+		ctx,
+		"SELECT column_name,data_type,is_nullable,column_default FROM information_schema.columns "+
+			"WHERE table_schema='public' AND table_name=$1 ORDER BY ordinal_position",
+		table,
+	)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -312,7 +342,14 @@ func insertFixture(t *testing.T, admin *pgx.Conn, app *db.DB, table, base, tenan
 				v = idmap[base]
 			case "tenant_id":
 				v = tenant
-			case "principal_id", "owner_id", "actor_id", "created_by", "reviewer_id", "granted_by", "updated_by", "uploaded_by":
+			case "principal_id",
+				"owner_id",
+				"actor_id",
+				"created_by",
+				"reviewer_id",
+				"granted_by",
+				"updated_by",
+				"uploaded_by":
 				v = pid
 			case "group_id":
 				v = idmap["groups"]
@@ -388,8 +425,19 @@ func insertFixture(t *testing.T, admin *pgx.Conn, app *db.DB, table, base, tenan
 		t.Fatal(e)
 	}
 	rows.Close()
-	query := "INSERT INTO " + pgx.Identifier{table}.Sanitize() + "(" + strings.Join(cols, ",") + ") VALUES(" + strings.Join(marks, ",") + ")"
-	e = app.WithTenant(ctx, tenant, func(tx pgx.Tx) error { _, e := tx.Exec(ctx, query, values...); return e })
+	query := "INSERT INTO " + pgx.Identifier{
+		table,
+	}.Sanitize() + "(" + strings.Join(
+		cols,
+		",",
+	) + ") VALUES(" + strings.Join(
+		marks,
+		",",
+	) + ")"
+	e = app.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, query, values...)
+		return e
+	})
 	if e != nil {
 		t.Fatalf("fixture %s: %v", table, e)
 	}
@@ -458,7 +506,8 @@ func testWorker(t *testing.T, admin *pgx.Conn) {
 	if e = workerUpdate("UPDATE tool_effects SET status='completed',completed_at=now() WHERE id=$1"); e != nil {
 		t.Fatal(e)
 	}
-	for _, q := range []string{"UPDATE tool_effects SET status='started' WHERE id=$1", "UPDATE tool_effects SET args_digest='changed' WHERE id=$1"} {
+	for _, q := range []string{"UPDATE tool_effects SET status='started' WHERE id=$1",
+		"UPDATE tool_effects SET args_digest='changed' WHERE id=$1"} {
 		e = workerUpdate(q)
 		var pgerr *pgconn.PgError
 		if !errors.As(e, &pgerr) || pgerr.Code != "42501" {
@@ -469,7 +518,16 @@ func testWorker(t *testing.T, admin *pgx.Conn) {
 }
 func testHTTP(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	ctx := t.Context()
-	c := config.Config{AuthMode: "dev", KeyFile: t.TempDir() + "/signing.key", PersonalTenants: true, CapabilityKeyFile: t.TempDir() + "/capability.key", CapabilityKeyID: "1", SecretsKeyVersion: 1, SecretsKEKs: map[int][]byte{1: make([]byte, 32)}, CORS: []string{"https://web.example"}}
+	c := config.Config{
+		AuthMode:          "dev",
+		KeyFile:           t.TempDir() + "/signing.key",
+		PersonalTenants:   true,
+		CapabilityKeyFile: t.TempDir() + "/capability.key",
+		CapabilityKeyID:   "1",
+		SecretsKeyVersion: 1,
+		SecretsKEKs:       map[int][]byte{1: make([]byte, 32)},
+		CORS:              []string{"https://web.example"},
+	}
 	l := slog.New(slog.NewTextHandler(io.Discard, nil))
 	a, e := auth.New(ctx, d, c, l)
 	if e != nil {
@@ -531,13 +589,27 @@ func testHTTP(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	}
 	token, tenant, pid := login("owner-" + ids.New() + "@example.test")
 	other, otherTenant, otherID := login("member-" + ids.New() + "@example.test")
-	code, v, original := request("POST", "/v1/workspaces", token, tenant, "create-workspace", map[string]any{"name": "Engineering"})
+	code, v, original := request(
+		"POST",
+		"/v1/workspaces",
+		token,
+		tenant,
+		"create-workspace",
+		map[string]any{"name": "Engineering"},
+	)
 	check(code, 201, v)
 	ws := v["id"].(string)
 	if _, err := time.Parse(time.RFC3339Nano, v["created_at"].(string)); err != nil {
 		t.Fatal("workspace time is not RFC3339", err)
 	}
-	code, v, replay := request("POST", "/v1/workspaces", token, tenant, "create-workspace", map[string]any{"name": "Engineering"})
+	code, v, replay := request(
+		"POST",
+		"/v1/workspaces",
+		token,
+		tenant,
+		"create-workspace",
+		map[string]any{"name": "Engineering"},
+	)
 	check(code, 201, v)
 	if !bytes.Equal(original, replay) {
 		t.Fatal("idempotent response mismatch")
@@ -548,7 +620,14 @@ func testHTTP(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	check(code, 404, v)
 	code, v, _ = request("GET", "/v1/workspaces/"+ws, other, tenant, "", nil)
 	check(code, 403, v)
-	code, v, _ = request("POST", "/v1/admin/members", token, tenant, "", map[string]any{"principal_id": otherID, "role": "tenant.member"})
+	code, v, _ = request(
+		"POST",
+		"/v1/admin/members",
+		token,
+		tenant,
+		"",
+		map[string]any{"principal_id": otherID, "role": "tenant.member"},
+	)
 	check(code, 201, v)
 	for _, id := range []string{ws, ids.New()} {
 		code, v, _ = request("GET", "/v1/workspaces/"+id, other, tenant, "", nil)
@@ -556,7 +635,14 @@ func testHTTP(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		code, v, _ = request("PATCH", "/v1/workspaces/"+id, other, tenant, "", map[string]any{"name": "no"})
 		check(code, 404, v)
 	}
-	code, v, _ = request("POST", "/v1/workspaces/"+ws+"/members", token, tenant, "", map[string]any{"principal_id": otherID, "role": "ws.viewer"})
+	code, v, _ = request(
+		"POST",
+		"/v1/workspaces/"+ws+"/members",
+		token,
+		tenant,
+		"",
+		map[string]any{"principal_id": otherID, "role": "ws.viewer"},
+	)
 	check(code, 201, v)
 	code, v, _ = request("GET", "/v1/workspaces/"+ws, other, tenant, "", nil)
 	check(code, 200, v)
@@ -577,7 +663,11 @@ func testHTTP(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	}
 	code, v, _ = request("GET", "/v1/admin/members?cursor="+cursor+"&limit=1", token, tenant, "", nil)
 	check(code, 200, v)
-	keyInput := map[string]any{"name": "automation", "scopes": []string{"workspace.read"}, "expires_at": time.Now().UTC().Add(time.Hour).Format(time.RFC3339)}
+	keyInput := map[string]any{
+		"name":       "automation",
+		"scopes":     []string{"workspace.read"},
+		"expires_at": time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
+	}
 	code, v, keyResponse := request("POST", "/v1/admin/api-keys", token, tenant, "key-create", keyInput)
 	check(code, 201, v)
 	key := v["key"].(string)
@@ -598,11 +688,23 @@ func testHTTP(t *testing.T, d *db.DB, admin *pgx.Conn) {
 
 	// Issuance may never impersonate another human, even for the tenant owner.
 	keyFor := func(target string, scopes ...string) map[string]any {
-		return map[string]any{"name": "scoped", "principal_id": target, "scopes": scopes, "expires_at": time.Now().UTC().Add(time.Hour)}
+		return map[string]any{
+			"name":         "scoped",
+			"principal_id": target,
+			"scopes":       scopes,
+			"expires_at":   time.Now().UTC().Add(time.Hour),
+		}
 	}
 	code, v, _ = request("POST", "/v1/admin/api-keys", token, tenant, "", keyFor(otherID, "workspace.read"))
 	check(code, 403, v)
-	code, v, _ = request("PATCH", "/v1/admin/members/"+otherID, token, tenant, "", map[string]any{"role": "tenant.admin"})
+	code, v, _ = request(
+		"PATCH",
+		"/v1/admin/members/"+otherID,
+		token,
+		tenant,
+		"",
+		map[string]any{"role": "tenant.admin"},
+	)
 	check(code, 200, v)
 	code, v, _ = request("POST", "/v1/admin/api-keys", other, tenant, "", keyFor(pid, "tenant.manage"))
 	check(code, 403, v)
@@ -610,9 +712,23 @@ func testHTTP(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	check(code, 403, v)
 	code, v, _ = request("POST", "/v1/admin/api-keys", other, tenant, "", keyFor(otherID, "workspace.read"))
 	check(code, 201, v)
-	code, v, _ = request("POST", "/v1/admin/service-principals", other, tenant, "", map[string]any{"display_name": "forbidden"})
+	code, v, _ = request(
+		"POST",
+		"/v1/admin/service-principals",
+		other,
+		tenant,
+		"",
+		map[string]any{"display_name": "forbidden"},
+	)
 	check(code, 403, v)
-	code, v, _ = request("POST", "/v1/admin/service-principals", token, tenant, "service-create", map[string]any{"display_name": "automation", "role": "tenant.member"})
+	code, v, _ = request(
+		"POST",
+		"/v1/admin/service-principals",
+		token,
+		tenant,
+		"service-create",
+		map[string]any{"display_name": "automation", "role": "tenant.member"},
+	)
 	check(code, 201, v)
 	serviceID := v["id"].(string)
 	if v["kind"] != "service" {
@@ -637,7 +753,14 @@ func testHTTP(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	code, v, _ = request("POST", "/v1/admin/api-keys", narrow, tenant, "", keyFor(pid, "workspace.read"))
 	check(code, 403, v)
 	// Restore the non-admin member before the workspace/group checks.
-	code, v, _ = request("PATCH", "/v1/admin/members/"+otherID, token, tenant, "", map[string]any{"role": "tenant.member"})
+	code, v, _ = request(
+		"PATCH",
+		"/v1/admin/members/"+otherID,
+		token,
+		tenant,
+		"",
+		map[string]any{"role": "tenant.member"},
+	)
 	check(code, 200, v)
 	// KEK and JWT rotation leave old encrypted replays readable.
 	oldKEK := c.SecretsKEKs[1]
@@ -666,7 +789,12 @@ func testHTTP(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	code, v, _ = request("POST", "/v1/workspaces", token, tenant, "new-key-version", map[string]any{"name": "Rotated"})
 	check(code, 201, v)
 	var version int
-	if e = admin.QueryRow(ctx, "SELECT key_version FROM idempotency_keys WHERE tenant_id=$1 AND key='new-key-version'", tenant).Scan(&version); e != nil || version != 2 {
+	if e = admin.QueryRow(ctx,
+		"SELECT key_version FROM idempotency_keys WHERE tenant_id=$1 AND "+
+			"key='new-key-version'",
+		tenant).Scan(&version); e != nil ||
+
+		version != 2 {
 		t.Fatal(version, e)
 	}
 	// Group inheritance grants no direct principal role; the group binding is used.
@@ -695,7 +823,15 @@ func testHTTP(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	for range 8 {
 		wg.Go(func() {
 			errs <- d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
-				return audit.Append(ctx, tx, auth.Principal{ID: pid, Kind: "user"}, tenant, "test.concurrent", "tenant", tenant, map[string]any{"test": true})
+				return audit.Append(ctx,
+					tx,
+					auth.Principal{ID: pid,
+						Kind: "user"},
+					tenant,
+					"test.concurrent",
+					"tenant",
+					tenant,
+					map[string]any{"test": true})
 			})
 		})
 	}
@@ -735,19 +871,36 @@ func testHTTP(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	check(code, 409, v)
 	// Expired idempotency records can be reused with a different body.
 	e = d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
-		_, e := tx.Exec(ctx, "UPDATE idempotency_keys SET expires_at=now()-interval '1 second' WHERE key='create-workspace'")
+		_, e := tx.Exec(
+			ctx,
+			"UPDATE idempotency_keys SET expires_at=now()-interval '1 second' WHERE key='create-workspace'",
+		)
 		return e
 	})
 	if e != nil {
 		t.Fatal(e)
 	}
-	code, v, _ = request("POST", "/v1/workspaces", token, tenant, "create-workspace", map[string]any{"name": "After expiration"})
+	code, v, _ = request(
+		"POST",
+		"/v1/workspaces",
+		token,
+		tenant,
+		"create-workspace",
+		map[string]any{"name": "After expiration"},
+	)
 	check(code, 201, v)
 	// Duplicate concurrent creates cause one write and identical responses.
 	results := make(chan string, 4)
 	for range 4 {
 		wg.Go(func() {
-			code, _, b := request("POST", "/v1/workspaces", token, tenant, "concurrent-create", map[string]any{"name": "Concurrent"})
+			code, _, b := request(
+				"POST",
+				"/v1/workspaces",
+				token,
+				tenant,
+				"concurrent-create",
+				map[string]any{"name": "Concurrent"},
+			)
 			results <- fmt.Sprintf("%d:%s", code, b)
 		})
 	}
@@ -765,20 +918,31 @@ func testHTTP(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		}
 	}
 	// API keys are revoked by suspended membership even when their hash remains.
-	code, v, _ = request("PATCH", "/v1/admin/members/"+otherID, token, tenant, "", map[string]any{"status": "suspended"})
+	code, v, _ = request(
+		"PATCH",
+		"/v1/admin/members/"+otherID,
+		token,
+		tenant,
+		"",
+		map[string]any{"status": "suspended"},
+	)
 	check(code, 200, v)
 	code, v, _ = request("GET", "/v1/me", other, tenant, "", nil)
 	check(code, 403, v)
 	// Privileged corruption is detectable even though app cannot UPDATE audit.
 	var lastID string
 	var detail []byte
-	if e = admin.QueryRow(ctx, "SELECT id::text,detail FROM audit_log WHERE tenant_id=$1 ORDER BY occurred_at DESC,id DESC LIMIT 1", tenant).Scan(&lastID, &detail); e != nil {
+	if e = admin.QueryRow(ctx, "SELECT id::text,detail FROM audit_log WHERE tenant_id=$1 ORDER BY occurred_at DESC,id "+
+		"DESC LIMIT 1", tenant).Scan(&lastID, &detail); e != nil {
 		t.Fatal(e)
 	}
 	if _, e = admin.Exec(ctx, "UPDATE audit_log SET detail='{\"tampered\":true}' WHERE tenant_id=$1 AND id=$2", tenant, lastID); e != nil {
 		t.Fatal(e)
 	}
-	e = d.WithTenant(ctx, tenant, func(tx pgx.Tx) error { _, e := audit.Verify(ctx, tx); return e })
+	e = d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
+		_, e := audit.Verify(ctx, tx)
+		return e
+	})
 	if e == nil || !strings.Contains(e.Error(), "audit chain broken") {
 		t.Fatalf("audit corruption not detected: %v", e)
 	}
@@ -791,7 +955,10 @@ func testHTTP(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	}
 	defer owner.Close()
 	// Owner verification must ignore other tenants despite BYPASSRLS.
-	e = owner.WithTenant(ctx, tenant, func(tx pgx.Tx) error { _, e := audit.Verify(ctx, tx); return e })
+	e = owner.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
+		_, e := audit.Verify(ctx, tx)
+		return e
+	})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -804,7 +971,9 @@ func testHTTP(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		t.Fatal(e)
 	}
 	defer enterpriseAuth.Close()
-	enterpriseServer := httptest.NewServer((&httpapi.Handler{DB: d, Auth: enterpriseAuth, Config: enterprise, Logger: l}).Router())
+	enterpriseServer := httptest.NewServer(
+		(&httpapi.Handler{DB: d, Auth: enterpriseAuth, Config: enterprise, Logger: l}).Router(),
+	)
 	defer enterpriseServer.Close()
 	server = enterpriseServer
 	// Use a token trusted by this service's dev issuer for the existing owner.
@@ -824,7 +993,14 @@ func testHTTP(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	inviteeID := v["principal"].(map[string]any)["id"].(string)
 	createInvite := func(email string) (string, string) {
 		t.Helper()
-		code, v, _ := request("POST", "/v1/admin/invitations", ownerToken, tenant, "", map[string]any{"email": email, "role": "tenant.member", "expires_at": time.Now().UTC().Add(time.Hour)})
+		code, v, _ := request(
+			"POST",
+			"/v1/admin/invitations",
+			ownerToken,
+			tenant,
+			"",
+			map[string]any{"email": email, "role": "tenant.member", "expires_at": time.Now().UTC().Add(time.Hour)},
+		)
 		check(code, 201, v)
 		return v["id"].(string), v["token"].(string)
 	}
@@ -861,11 +1037,14 @@ func testHTTP(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	code, v, _ = request("POST", acceptPath, inviteeToken, "", "", nil)
 	check(code, 404, v)
 	var savedPath string
-	if e = admin.QueryRow(ctx, "SELECT path FROM idempotency_keys WHERE tenant_id=$1 AND principal_id=$2 AND key='accept-once'", tenant, inviteeID).Scan(&savedPath); e != nil || strings.Contains(savedPath, invitationToken) {
+	if e = admin.QueryRow(ctx, "SELECT path FROM idempotency_keys WHERE tenant_id=$1 AND principal_id=$2 AND "+
+		"key='accept-once'", tenant, inviteeID).Scan(&savedPath); e != nil ||
+		strings.Contains(savedPath, invitationToken) {
 		t.Fatal("invitation secret persisted in URI", e)
 	}
 	var inviteHash []byte
-	if e = admin.QueryRow(ctx, "SELECT token_hash FROM invitations WHERE id=$1", invitationID).Scan(&inviteHash); e != nil || bytes.Contains(inviteHash, []byte(invitationToken)) {
+	if e = admin.QueryRow(ctx, "SELECT token_hash FROM invitations WHERE id=$1", invitationID).Scan(&inviteHash); e != nil ||
+		bytes.Contains(inviteHash, []byte(invitationToken)) {
 		t.Fatal("invitation plaintext stored", e)
 	}
 	expiredID, expiredToken := createInvite(inviteeEmail)
@@ -880,7 +1059,14 @@ func testHTTP(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	code, v, _ = request("POST", "/v1/invitations/"+revokedToken+":accept", inviteeToken, "", "", nil)
 	check(code, 404, v)
 	// Client-chosen provenance is rejected; direct additions always use direct.
-	code, v, _ = request("POST", "/v1/admin/members", ownerToken, tenant, "", map[string]any{"principal_id": ids.New(), "source": "jit"})
+	code, v, _ = request(
+		"POST",
+		"/v1/admin/members",
+		ownerToken,
+		tenant,
+		"",
+		map[string]any{"principal_id": ids.New(), "source": "jit"},
+	)
 	check(code, 400, v)
 	// A database failure during authentication must be retryable 5xx, not 401.
 	failedDB, e := db.OpenApp(ctx, roleURL(t, os.Getenv("ORBIT_TEST_DATABASE_URL"), "orbit_app"))
@@ -900,5 +1086,9 @@ func testHTTP(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	if e = d.WithTenant(ctx, tenant, func(tx pgx.Tx) error { _, err := audit.Verify(ctx, tx); return err }); e != nil {
 		t.Fatal("invitation/service audit verification", e)
 	}
-	t.Log("dev login, workspace creator role, member addition, tenant isolation, RBAC/group inheritance, pagination, encrypted idempotency, concurrent replay, audit tamper detection and owner isolation verified")
+	t.Log(
+		"dev login, workspace creator role, member addition, tenant isolation, RBAC/group " +
+			"inheritance, pagination, encrypted idempotency, concurrent replay, audit tamper detection " +
+			"and owner isolation verified",
+	)
 }

@@ -15,6 +15,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/mindreon/orbit-control/internal/assets"
 	"github.com/mindreon/orbit-control/internal/audit"
 	"github.com/mindreon/orbit-control/internal/auth"
@@ -44,89 +45,689 @@ type Handler struct {
 }
 type endpoint func(http.ResponseWriter, *http.Request) error
 type route struct {
-	Pattern string
-	Public  bool
-	Handle  func(*Handler) endpoint
+	Pattern        string
+	Public         bool
+	Handle         func(*Handler) endpoint
+	TwoPhase       bool
+	TenantOptional bool
 }
 
 var routes = []route{
-	{"POST /v1/sessions", false, func(h *Handler) endpoint { return h.createSession }},
-	{"GET /v1/sessions", false, func(h *Handler) endpoint { return h.listSessions }},
-	{"GET /v1/sessions/{s}", false, func(h *Handler) endpoint { return h.getSession }},
-	{"PATCH /v1/sessions/{s}", false, func(h *Handler) endpoint { return h.patchSession }},
-	{"POST /v1/sessions/{s}/archive", false, func(h *Handler) endpoint { return h.archiveSession }},
-	{"POST /v1/sessions/{s}/messages", false, func(h *Handler) endpoint { return h.submitMessage }},
-	{"GET /v1/sessions/{s}/messages", false, func(h *Handler) endpoint { return h.sessionChildren }},
-	{"GET /v1/sessions/{s}/runs", false, func(h *Handler) endpoint { return h.sessionChildren }},
-	{"GET /v1/sessions/{s}/artifacts", false, func(h *Handler) endpoint { return h.sessionChildren }},
-	{"GET /v1/artifacts/{a}", false, func(h *Handler) endpoint { return h.getArtifact }},
-	{"GET /v1/runs/{r}", false, func(h *Handler) endpoint { return h.getRun }},
-	{"GET /v1/runs/{r}/segments", false, func(h *Handler) endpoint { return h.runSegments }},
-	{"GET /v1/runs/{r}/stream-token", false, func(h *Handler) endpoint { return h.streamToken }},
-	{"POST /v1/runs/{r}/cancel", false, func(h *Handler) endpoint { return h.controlRun }},
-	{"POST /v1/runs/{r}/pause", false, func(h *Handler) endpoint { return h.controlRun }},
-	{"POST /v1/runs/{r}/resume", false, func(h *Handler) endpoint { return h.controlRun }},
-	{"POST /v1/runs/{r}/steer", false, func(h *Handler) endpoint { return h.controlRun }},
-	{"GET /v1/interactions", false, func(h *Handler) endpoint { return h.listInteractions }},
-	{"GET /v1/interactions/{i}", false, func(h *Handler) endpoint { return h.getInteraction }},
-	{"POST /v1/interactions/{i}/resolve", false, func(h *Handler) endpoint { return h.resolveInteraction }},
-
-	{"GET /v1/assets", false, func(h *Handler) endpoint { return h.listAssets }},
-	{"POST /v1/assets", false, func(h *Handler) endpoint { return h.createAsset }},
-	{"GET /v1/assets/{a}", false, func(h *Handler) endpoint { return h.getAsset }},
-	{"PATCH /v1/assets/{a}", false, func(h *Handler) endpoint { return h.patchAsset }},
-	{"DELETE /v1/assets/{a}", false, func(h *Handler) endpoint { return h.archiveAsset }},
-	{"POST /v1/assets/{a}/versions", false, func(h *Handler) endpoint { return h.uploadAssetVersion }},
-	{"GET /v1/assets/{a}/versions", false, func(h *Handler) endpoint { return h.listAssetVersions }},
-	{"GET /v1/assets/{a}/versions/{v}", false, func(h *Handler) endpoint { return h.getAssetVersion }},
-	{"GET /v1/assets/{a}/versions/{v}/files", false, func(h *Handler) endpoint { return h.listAssetFiles }},
-	{"GET /v1/assets/{a}/versions/{v}/file", false, func(h *Handler) endpoint { return h.getAssetFile }},
-	{"POST /v1/assets/{a}/versions/{v}:submit", false, func(h *Handler) endpoint { return h.submitAssetVersion }},
-	{"POST /v1/assets/{a}/versions/{v}:withdraw", false, func(h *Handler) endpoint { return h.withdrawAssetVersion }},
-	{"POST /v1/assets/{a}/versions/{v}:transition", false, func(h *Handler) endpoint { return h.transitionAssetVersion }},
-	{"GET /v1/assets/{a}/versions/{v}/checks", false, func(h *Handler) endpoint { return h.listAssetChecks }},
-	{"GET /v1/assets/{a}/channels", false, func(h *Handler) endpoint { return h.listAssetChannels }},
-	{"POST /v1/assets/{a}/channels/{c}", false, func(h *Handler) endpoint { return h.setAssetChannel }},
-	{"POST /v1/assets/{a}:restore", false, func(h *Handler) endpoint { return h.restoreAsset }},
-	{"POST /v1/assets/{a}:suspend", false, func(h *Handler) endpoint { return h.suspendAsset }},
-	{"GET /v1/assets/{a}/grants", false, func(h *Handler) endpoint { return h.listAssetGrants }},
-	{"POST /v1/assets/{a}/grants", false, func(h *Handler) endpoint { return h.grantAsset }},
-	{"DELETE /v1/assets/{a}/grants", false, func(h *Handler) endpoint { return h.revokeAssetGrant }},
-	{"GET /v1/reviews", false, func(h *Handler) endpoint { return h.listAssetReviews }},
-	{"POST /v1/reviews/{v}:decide", false, func(h *Handler) endpoint { return h.decideAssetReview }},
-	{"POST /v1/workspaces/{w}/installs", false, func(h *Handler) endpoint { return h.installWorkspaceAsset }},
-	{"GET /v1/workspaces/{w}/installs", false, func(h *Handler) endpoint { return h.listWorkspaceInstalls }},
-	{"POST /v1/installs", false, func(h *Handler) endpoint { return h.installTenantAsset }},
-	{"GET /v1/installs", false, func(h *Handler) endpoint { return h.listTenantInstalls }},
-	{"DELETE /v1/installs/{i}", false, func(h *Handler) endpoint { return h.uninstallAsset }},
-	{"POST /v1/workspaces/{w}/locks:preview", false, func(h *Handler) endpoint { return h.previewAssetLock }},
-
-	{"GET /health", true, func(h *Handler) endpoint { return h.health }},
-	{"GET /ready", true, func(h *Handler) endpoint { return h.ready }},
-	{"GET /v1/auth/config", true, func(h *Handler) endpoint { return h.authConfig }},
-	{"POST /v1/auth/dev/token", true, func(h *Handler) endpoint { return h.devToken }},
-	{"GET /v1/me", false, func(h *Handler) endpoint { return h.me }},
-	{"GET /v1/tenants", false, func(h *Handler) endpoint { return h.tenants }},
-	{"GET /v1/workspaces", false, func(h *Handler) endpoint { return h.listWorkspaces }},
-	{"POST /v1/workspaces", false, func(h *Handler) endpoint { return h.createWorkspace }},
-	{"GET /v1/workspaces/{w}", false, func(h *Handler) endpoint { return h.getWorkspace }},
-	{"PATCH /v1/workspaces/{w}", false, func(h *Handler) endpoint { return h.patchWorkspace }},
-	{"GET /v1/workspaces/{w}/members", false, func(h *Handler) endpoint { return h.listWorkspaceMembers }},
-	{"POST /v1/workspaces/{w}/members", false, func(h *Handler) endpoint { return h.addWorkspaceMember }},
-	{"DELETE /v1/workspaces/{w}/members/{p}", false, func(h *Handler) endpoint { return h.deleteWorkspaceMember }},
-	{"GET /v1/admin/members", false, func(h *Handler) endpoint { return h.listMembers }},
-	{"POST /v1/admin/members", false, func(h *Handler) endpoint { return h.addMember }},
-	{"PATCH /v1/admin/members/{p}", false, func(h *Handler) endpoint { return h.patchMember }},
-	{"GET /v1/admin/api-keys", false, func(h *Handler) endpoint { return h.listKeys }},
-	{"POST /v1/admin/api-keys", false, func(h *Handler) endpoint { return h.createKey }},
-	{"DELETE /v1/admin/api-keys/{k}", false, func(h *Handler) endpoint { return h.deleteKey }},
-	{"POST /v1/admin/service-principals", false, func(h *Handler) endpoint { return h.createServicePrincipal }},
-	{"GET /v1/admin/service-principals", false, func(h *Handler) endpoint { return h.listServicePrincipals }},
-	{"POST /v1/admin/invitations", false, func(h *Handler) endpoint { return h.createInvitation }},
-	{"GET /v1/admin/invitations", false, func(h *Handler) endpoint { return h.listInvitations }},
-	{"DELETE /v1/admin/invitations/{i}", false, func(h *Handler) endpoint { return h.deleteInvitation }},
-	{"POST /v1/invitations/{token}:accept", false, func(h *Handler) endpoint { return h.acceptInvitation }},
-	{"GET /v1/admin/audit", false, func(h *Handler) endpoint { return h.listAudit }},
+	{
+		Pattern: "POST /v1/sessions",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.createSession
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /v1/sessions",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.listSessions
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /v1/sessions/{s}",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.getSession
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "PATCH /v1/sessions/{s}",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.patchSession
+		},
+		TwoPhase:       true,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "POST /v1/sessions/{s}/archive",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.archiveSession
+		},
+		TwoPhase:       true,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "POST /v1/sessions/{s}/messages",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.submitMessage
+		},
+		TwoPhase:       true,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /v1/sessions/{s}/messages",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.sessionChildren
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /v1/sessions/{s}/runs",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.sessionChildren
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /v1/sessions/{s}/artifacts",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.sessionChildren
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /v1/artifacts/{a}",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.getArtifact
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /v1/runs/{r}",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.getRun
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /v1/runs/{r}/segments",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.runSegments
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /v1/runs/{r}/stream-token",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.streamToken
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "POST /v1/runs/{r}/cancel",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.controlRun
+		},
+		TwoPhase:       true,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "POST /v1/runs/{r}/pause",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.controlRun
+		},
+		TwoPhase:       true,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "POST /v1/runs/{r}/resume",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.controlRun
+		},
+		TwoPhase:       true,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "POST /v1/runs/{r}/steer",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.controlRun
+		},
+		TwoPhase:       true,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /v1/interactions",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.listInteractions
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /v1/interactions/{i}",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.getInteraction
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "POST /v1/interactions/{i}/resolve",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.resolveInteraction
+		},
+		TwoPhase:       true,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /v1/assets",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.listAssets
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "POST /v1/assets",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.createAsset
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /v1/assets/{a}",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.getAsset
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "PATCH /v1/assets/{a}",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.patchAsset
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "DELETE /v1/assets/{a}",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.archiveAsset
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "POST /v1/assets/{a}/versions",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.uploadAssetVersion
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /v1/assets/{a}/versions",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.listAssetVersions
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /v1/assets/{a}/versions/{v}",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.getAssetVersion
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /v1/assets/{a}/versions/{v}/files",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.listAssetFiles
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /v1/assets/{a}/versions/{v}/file",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.getAssetFile
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "POST /v1/assets/{a}/versions/{v}:submit",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.submitAssetVersion
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "POST /v1/assets/{a}/versions/{v}:withdraw",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.withdrawAssetVersion
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "POST /v1/assets/{a}/versions/{v}:transition",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.transitionAssetVersion
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /v1/assets/{a}/versions/{v}/checks",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.listAssetChecks
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /v1/assets/{a}/channels",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.listAssetChannels
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "POST /v1/assets/{a}/channels/{c}",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.setAssetChannel
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "POST /v1/assets/{a}:restore",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.restoreAsset
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "POST /v1/assets/{a}:suspend",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.suspendAsset
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /v1/assets/{a}/grants",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.listAssetGrants
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "POST /v1/assets/{a}/grants",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.grantAsset
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "DELETE /v1/assets/{a}/grants",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.revokeAssetGrant
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /v1/reviews",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.listAssetReviews
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "POST /v1/reviews/{v}:decide",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.decideAssetReview
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "POST /v1/workspaces/{w}/installs",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.installWorkspaceAsset
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /v1/workspaces/{w}/installs",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.listWorkspaceInstalls
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "POST /v1/installs",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.installTenantAsset
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /v1/installs",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.listTenantInstalls
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "DELETE /v1/installs/{i}",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.uninstallAsset
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "POST /v1/workspaces/{w}/locks:preview",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.previewAssetLock
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /health",
+		Public:  true,
+		Handle: func(h *Handler) endpoint {
+			return h.health
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /ready",
+		Public:  true,
+		Handle: func(h *Handler) endpoint {
+			return h.ready
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /v1/auth/config",
+		Public:  true,
+		Handle: func(h *Handler) endpoint {
+			return h.authConfig
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "POST /v1/auth/dev/token",
+		Public:  true,
+		Handle: func(h *Handler) endpoint {
+			return h.devToken
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /v1/me",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.me
+		},
+		TwoPhase:       false,
+		TenantOptional: true,
+	},
+	{
+		Pattern: "GET /v1/tenants",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.tenants
+		},
+		TwoPhase:       false,
+		TenantOptional: true,
+	},
+	{
+		Pattern: "GET /v1/workspaces",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.listWorkspaces
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "POST /v1/workspaces",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.createWorkspace
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /v1/workspaces/{w}",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.getWorkspace
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "PATCH /v1/workspaces/{w}",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.patchWorkspace
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /v1/workspaces/{w}/members",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.listWorkspaceMembers
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "POST /v1/workspaces/{w}/members",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.addWorkspaceMember
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "DELETE /v1/workspaces/{w}/members/{p}",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.deleteWorkspaceMember
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /v1/admin/members",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.listMembers
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "POST /v1/admin/members",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.addMember
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "PATCH /v1/admin/members/{p}",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.patchMember
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /v1/admin/api-keys",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.listKeys
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "POST /v1/admin/api-keys",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.createKey
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "DELETE /v1/admin/api-keys/{k}",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.deleteKey
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "POST /v1/admin/service-principals",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.createServicePrincipal
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /v1/admin/service-principals",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.listServicePrincipals
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "POST /v1/admin/invitations",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.createInvitation
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "GET /v1/admin/invitations",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.listInvitations
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "DELETE /v1/admin/invitations/{i}",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.deleteInvitation
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
+	{
+		Pattern: "POST /v1/invitations/{token}:accept",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.acceptInvitation
+		},
+		TwoPhase:       false,
+		TenantOptional: true,
+	},
+	{
+		Pattern: "GET /v1/admin/audit",
+		Public:  false,
+		Handle: func(h *Handler) endpoint {
+			return h.listAudit
+		},
+		TwoPhase:       false,
+		TenantOptional: false,
+	},
 }
 
 func Routes() []string {
@@ -189,7 +790,7 @@ func (h *Handler) Router() http.Handler {
 			if selected.Public {
 				e = fn(rec, r)
 			} else {
-				e = h.protected(rec, r, fn)
+				e = h.protected(rec, r, fn, selected)
 			}
 			if e != nil {
 				var expected *httpx.Error
@@ -212,7 +813,7 @@ func (h *Handler) Router() http.Handler {
 	})
 	return httpx.Middleware(h.Logger, h.Config.PublicOrigin, h.Config.CORS, mux)
 }
-func (h *Handler) protected(w http.ResponseWriter, r *http.Request, fn endpoint) error {
+func (h *Handler) protected(w http.ResponseWriter, r *http.Request, fn endpoint, selected route) error {
 	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if !ok || token == "" {
 		return httpx.E(401, "UNAUTHENTICATED", "Bearer token required")
@@ -230,11 +831,11 @@ func (h *Handler) protected(w http.ResponseWriter, r *http.Request, fn endpoint)
 	}
 	ctx := auth.Context(r.Context(), p, tenant)
 	r = r.WithContext(ctx)
-	if r.Pattern == "POST /v1/invitations/{token}" {
+	if selected.Pattern == "POST /v1/invitations/{token}:accept" {
 		return fn(w, r)
 	}
 	if tenant == "" {
-		if r.URL.Path != "/v1/me" && r.URL.Path != "/v1/tenants" {
+		if !selected.TenantOptional {
 			return httpx.E(403, "TENANT_REQUIRED", "X-Orbit-Tenant is required")
 		}
 		return fn(w, r)
@@ -243,7 +844,9 @@ func (h *Handler) protected(w http.ResponseWriter, r *http.Request, fn endpoint)
 		slots := h.uploadSlots()
 		select {
 		case slots <- struct{}{}:
-			defer func() { <-slots }()
+			defer func() {
+				<-slots
+			}()
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -254,7 +857,7 @@ func (h *Handler) protected(w http.ResponseWriter, r *http.Request, fn endpoint)
 		ctx = r.Context()
 	}
 
-	if isRunWrite(r) {
+	if selected.TwoPhase {
 		return fn(w, r)
 	}
 	return h.DB.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
@@ -343,19 +946,47 @@ func (h *Handler) devToken(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 	r.Body = io.NopCloser(bytes.NewReader(body))
-	return h.DB.WithTenant(r.Context(), tenant, func(tx pgx.Tx) error {
-		return httpx.Idempotent(r.Context(), tx, tenant, p.ID, h.Auth.Replay, w, r, func(w http.ResponseWriter, r *http.Request) error {
-			if e := audit.Append(r.Context(), tx, p, tenant, "login", "principal", p.ID, map[string]any{"mode": "dev"}); e != nil {
-				return e
-			}
-			token, e := h.Auth.Signer.DevToken(p)
-			if e != nil {
-				return e
-			}
-			httpx.JSON(w, 200, map[string]any{"access_token": token, "expires_in": 3600})
-			return nil
-		})
-	})
+	return h.devTenantToken(w, r, p, tenant)
+}
+func (h *Handler) devTenantToken(w http.ResponseWriter, r *http.Request, p auth.Principal, tenant string) error {
+	return h.DB.WithTenant(
+		r.Context(),
+		tenant,
+		func(tx pgx.Tx) error {
+			return httpx.Idempotent(
+				r.Context(),
+				tx,
+				tenant,
+				p.ID,
+				h.Auth.Replay,
+				w,
+				r,
+				func(
+					w http.ResponseWriter,
+					r *http.Request,
+				) error {
+					if e := audit.Append(
+						r.Context(),
+						tx,
+						p,
+						tenant,
+						"login",
+						"principal",
+						p.ID,
+						map[string]any{"mode": "dev"},
+					); e != nil {
+						return e
+					}
+					token, e := h.Auth.Signer.DevToken(p)
+					if e != nil {
+						return e
+					}
+					httpx.JSON(w, 200, map[string]any{"access_token": token, "expires_in": 3600})
+					return nil
+				},
+			)
+		},
+	)
 }
 func (h *Handler) me(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
@@ -378,7 +1009,11 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) error {
 		slices.Sort(roles)
 		roles = slices.Compact(roles)
 	}
-	httpx.JSON(w, 200, map[string]any{"principal": p, "tenants": ts, "current_tenant": tenant, "roles": roles})
+	httpx.JSON(
+		w,
+		200,
+		map[string]any{"principal": p, "tenants": ts, "current_tenant": tenant, "roles": roles},
+	)
 	return nil
 }
 func (h *Handler) tenants(w http.ResponseWriter, r *http.Request) error {
@@ -421,12 +1056,16 @@ func (h *Handler) provisionIdentity(ctx context.Context, tx pgx.Tx, p auth.Princ
 		return err
 	}
 	if h.Config.AuthMode == "oidc" {
-		return audit.Append(ctx, tx, p, tenant, "login", "principal", p.ID, map[string]any{"mode": "oidc", "jit": true})
+		return audit.Append(
+			ctx,
+			tx,
+			p,
+			tenant,
+			"login",
+			"principal",
+			p.ID,
+			map[string]any{"mode": "oidc", "jit": true},
+		)
 	}
 	return nil
-}
-
-func isRunWrite(r *http.Request) bool {
-	p := r.URL.Path
-	return (r.Method == "PATCH" && strings.HasPrefix(p, "/v1/sessions/")) || (r.Method == "POST" && (strings.HasPrefix(p, "/v1/runs/") || strings.HasPrefix(p, "/v1/interactions/") || strings.HasPrefix(p, "/v1/sessions/")))
 }
