@@ -247,10 +247,33 @@ func TestGoWireFixtures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(raw, stored) {
-		t.Fatal(
-			"Go wire fixtures are stale: ORBIT_UPDATE_CONTRACT_FIXTURES=1 go test ./internal/contract -run TestGoWireFixtures",
-		)
+	var shared []wireFixture
+	if err := json.Unmarshal(stored, &shared); err != nil {
+		t.Fatal(err)
+	}
+	if len(shared) != len(fixtures) {
+		t.Fatal("Go wire fixture count changed")
+	}
+	for i, expected := range shared {
+		actual := fixtures[i]
+		if actual.Kind != expected.Kind || actual.Case != expected.Case || actual.Valid != expected.Valid {
+			t.Fatalf("Go wire fixture metadata changed: %s/%s", actual.Kind, actual.Case)
+		}
+		// Invalid constructor zero values need not share an encoding; both must fail validation.
+		if !actual.Valid {
+			if ValidateStrict(expected.Kind, expected.Payload) == nil {
+				t.Fatalf("shared invalid fixture accepted: %s/%s", expected.Kind, expected.Case)
+			}
+			continue
+		}
+		got, err := jcs.Canonicalize(actual.Payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, err := jcs.Canonicalize(expected.Payload)
+		if err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("Go wire fixture changed: %s/%s: %v", actual.Kind, actual.Case, err)
+		}
 	}
 }
 

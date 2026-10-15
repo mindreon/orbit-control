@@ -65,6 +65,7 @@
       "required": [
         "tenant_id",
         "isolation_key",
+        "provider",
         "profile",
         "ttl_seconds",
         "metadata"
@@ -121,6 +122,9 @@
         },
         "metadata": {
           "$ref": "#/$defs/SandboxMetadata"
+        },
+        "provider": {
+          "$ref": "#/$defs/SandboxProvider"
         }
       },
       "x-extra": "ignore"

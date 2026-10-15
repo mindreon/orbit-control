@@ -3392,6 +3392,9 @@ type SandboxAcquireInput struct {
 	// Sandbox image and resource profile.
 	Profile string `json:"profile" yaml:"profile" mapstructure:"profile"`
 
+	// Provider corresponds to the JSON schema field "provider".
+	Provider SandboxProvider `json:"provider" yaml:"provider" mapstructure:"provider"`
+
 	// Existing sandbox to resume.
 	SandboxId *string `json:"sandbox_id,omitempty,omitzero" yaml:"sandbox_id,omitempty" mapstructure:"sandbox_id,omitempty"`
 
@@ -3419,6 +3422,9 @@ func (j *SandboxAcquireInput) UnmarshalJSON(value []byte) error {
 	}
 	if _, ok := raw["profile"]; raw != nil && !ok {
 		return fmt.Errorf("field profile in SandboxAcquireInput: required")
+	}
+	if _, ok := raw["provider"]; raw != nil && !ok {
+		return fmt.Errorf("field provider in SandboxAcquireInput: required")
 	}
 	if _, ok := raw["tenant_id"]; raw != nil && !ok {
 		return fmt.Errorf("field tenant_id in SandboxAcquireInput: required")

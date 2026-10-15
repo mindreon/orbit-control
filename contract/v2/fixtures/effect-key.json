@@ -1,0 +1,12 @@
+{
+  "run_id": "run",
+  "member": "main",
+  "checkpoint_version": 2,
+  "tool": "tool",
+  "args": {
+    "z": 1,
+    "a": "é"
+  },
+  "canonical": "[\"run\",\"main\",2,\"tool\",{\"a\":\"é\",\"z\":1}]",
+  "digest": "sha256:503ead8a47ee146545bab266e988259acea4ad59b797cf3ecb764b40ddf9ab67"
+}
