@@ -6,7 +6,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"net/url"
+	"os"
+	"strings"
+
 	"github.com/jackc/pgx/v5"
+
 	"github.com/mindreon/orbit-control/internal/assets"
 	"github.com/mindreon/orbit-control/internal/audit"
 	"github.com/mindreon/orbit-control/internal/auth"
@@ -17,10 +23,6 @@ import (
 	"github.com/mindreon/orbit-control/internal/platform/ids"
 	"github.com/mindreon/orbit-control/internal/platform/objstore"
 	"github.com/mindreon/orbit-control/internal/secrets"
-	"io"
-	"net/url"
-	"os"
-	"strings"
 )
 
 func runAdmin(ctx context.Context, d *db.DB, c config.Config, args []string) error {
@@ -29,52 +31,7 @@ func runAdmin(ctx context.Context, d *db.DB, c config.Config, args []string) err
 		return fmt.Errorf("ORBIT_SECRETS_KEK or ORBIT_KEK_FILE required")
 	}
 	if args[0] == "seed-dev" {
-		if len(args) != 1 {
-			return fmt.Errorf("seed-dev takes no arguments")
-		}
-		if c.Environment != "dev" {
-			return fmt.Errorf("seed-dev requires ORBIT_ENV=dev")
-		}
-		if err := c.ValidateAssets(); err != nil {
-			return err
-		}
-		store, err := objstore.New(c.ObjectEndpoint, c.ObjectBucket, c.ObjectAccessKey, c.ObjectSecretKey, c.ObjectTLS)
-		if err != nil {
-			return err
-		}
-		signer, err := assets.LoadSigner(c.AssetKeyFile, c.AssetKeyID, true, c.AssetPublicKeys)
-		if err != nil {
-			return err
-		}
-		model := devseed.Model{BaseURL: os.Getenv("ORBIT_SEED_MODEL_BASE_URL"), APIKey: contract.Secret(os.Getenv("ORBIT_SEED_MODEL_API_KEY")), Name: os.Getenv("ORBIT_SEED_MODEL_NAME")}
-		if model.BaseURL == "" {
-			model.BaseURL = "http://mockllm:8000/v1"
-		}
-		if model.Name == "" {
-			model.Name = "orbit-mock"
-		}
-		if model.APIKey == "" {
-			if model.BaseURL != "http://mockllm:8000/v1" {
-				return fmt.Errorf("ORBIT_SEED_MODEL_API_KEY required for custom model endpoint")
-			}
-			model.APIKey = contract.Secret("orbit-mock")
-		}
-		if !validModelURL(model.BaseURL) {
-			return fmt.Errorf("ORBIT_SEED_MODEL_BASE_URL must be an HTTP URL without credentials")
-		}
-		result, err := devseed.Seed(ctx, d, &assets.Service{Store: store, Signer: signer}, keys, model)
-		if err != nil {
-			return err
-		}
-		if err = devseed.WaitPublished(ctx, d, result); err != nil {
-			return err
-		}
-		raw, err := json.Marshal(result)
-		if err != nil {
-			return err
-		}
-		fmt.Fprintln(os.Stdout, string(raw))
-		return nil
+		return seedDevelopment(ctx, d, c, keys, args)
 	}
 	f := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	tenant := f.String("tenant", "", "tenant UUID")
@@ -84,7 +41,12 @@ func runAdmin(ctx context.Context, d *db.DB, c config.Config, args []string) err
 	base := f.String("base-url", "", "OpenAI-compatible base URL")
 	model := f.String("model", "", "model name")
 	secretID := f.String("secret", "", "secret UUID")
-	pricing := f.String("pricing", `{"input_per_mtok_millicredits":1000,"output_per_mtok_millicredits":2000,"cache_read_per_mtok_millicredits":0,"cache_write_per_mtok_millicredits":0}`, "ModelPricing JSON")
+	pricing := f.String(
+		"pricing",
+		"{\"input_per_mtok_millicredits\":1000,\"output_per_mtok_millicredits\":2000,\"cache_read_per_mt"+
+			"ok_millicredits\":0,\"cache_write_per_mtok_millicredits\":0}",
+		"ModelPricing JSON",
+	)
 	def := f.Bool("default", false, "default model profile")
 	window := f.Int("context-window", 32768, "context tokens")
 	if err := f.Parse(args[1:]); err != nil {
@@ -121,7 +83,13 @@ func runAdmin(ctx context.Context, d *db.DB, c config.Config, args []string) err
 					return e
 				}
 			}
-			e := tx.QueryRow(ctx, `INSERT INTO model_profiles(id,tenant_id,name,provider,base_url,model,secret_id,pricing,context_window,is_default) VALUES($1,$2,$3,'openai',$4,$5,$6,$7,$8,$9) ON CONFLICT(tenant_id,name) DO UPDATE SET base_url=EXCLUDED.base_url,model=EXCLUDED.model,secret_id=EXCLUDED.secret_id,pricing=EXCLUDED.pricing,context_window=EXCLUDED.context_window,is_default=EXCLUDED.is_default RETURNING id::text`, ids.New(), *tenant, *name, *base, *model, *secretID, *pricing, *window, *def).Scan(&id)
+			e := tx.QueryRow(ctx, "INSERT INTO model_profiles(id,tenant_id,name,provider,base_url,model,secret_id,pricing,con"+
+				"text_window,is_default) VALUES($1,$2,$3,'openai',$4,$5,$6,$7,$8,$9) ON "+
+				"CONFLICT(tenant_id,name) DO UPDATE SET "+
+				"base_url=EXCLUDED.base_url,model=EXCLUDED.model,secret_id=EXCLUDED.secret_id,pricing=EXCLU"+
+				"DED.pricing,context_window=EXCLUDED.context_window,is_default=EXCLUDED.is_default "+
+				"RETURNING id::text", ids.New(), *tenant, *name, *base, *model, *secretID, *pricing, *window, *def).
+				Scan(&id)
 			if e != nil {
 				return e
 			}
@@ -137,5 +105,60 @@ func runAdmin(ctx context.Context, d *db.DB, c config.Config, args []string) err
 }
 func validModelURL(raw string) bool {
 	u, e := url.Parse(raw)
-	return e == nil && u.Host != "" && (u.Scheme == "http" || u.Scheme == "https") && u.User == nil && u.RawQuery == "" && u.Fragment == ""
+	return e == nil && u.Host != "" && (u.Scheme == "http" || u.Scheme == "https") && u.User == nil &&
+		u.RawQuery == "" &&
+		u.Fragment == ""
+}
+
+func seedDevelopment(ctx context.Context, d *db.DB, c config.Config, keys secrets.Keys, args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("seed-dev takes no arguments")
+	}
+	if c.Environment != "dev" {
+		return fmt.Errorf("seed-dev requires ORBIT_ENV=dev")
+	}
+	if err := c.ValidateAssets(); err != nil {
+		return err
+	}
+	store, err := objstore.New(c.ObjectEndpoint, c.ObjectBucket, c.ObjectAccessKey, c.ObjectSecretKey, c.ObjectTLS)
+	if err != nil {
+		return err
+	}
+	signer, err := assets.LoadSigner(c.AssetKeyFile, c.AssetKeyID, true, c.AssetPublicKeys)
+	if err != nil {
+		return err
+	}
+	model := devseed.Model{
+		BaseURL: os.Getenv("ORBIT_SEED_MODEL_BASE_URL"),
+		APIKey:  contract.Secret(os.Getenv("ORBIT_SEED_MODEL_API_KEY")),
+		Name:    os.Getenv("ORBIT_SEED_MODEL_NAME"),
+	}
+	if model.BaseURL == "" {
+		model.BaseURL = "http://mockllm:8000/v1"
+	}
+	if model.Name == "" {
+		model.Name = "orbit-mock"
+	}
+	if model.APIKey == "" {
+		if model.BaseURL != "http://mockllm:8000/v1" {
+			return fmt.Errorf("ORBIT_SEED_MODEL_API_KEY required for custom model endpoint")
+		}
+		model.APIKey = contract.Secret("orbit-mock")
+	}
+	if !validModelURL(model.BaseURL) {
+		return fmt.Errorf("ORBIT_SEED_MODEL_BASE_URL must be an HTTP URL without credentials")
+	}
+	result, err := devseed.Seed(ctx, d, &assets.Service{Store: store, Signer: signer}, keys, model)
+	if err != nil {
+		return err
+	}
+	if err = devseed.WaitPublished(ctx, d, result); err != nil {
+		return err
+	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(os.Stdout, string(raw))
+	return nil
 }

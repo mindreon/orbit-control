@@ -6,9 +6,10 @@ import (
 	"slices"
 	"time"
 
-	"github.com/mindreon/orbit-control/internal/contract"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
+
+	"github.com/mindreon/orbit-control/internal/contract"
 )
 
 const Name = "AssetReleaseWorkflow"
@@ -50,7 +51,14 @@ type Result struct {
 func ID(in Input) string { return "asset:" + in.Tenant + ":" + in.VersionID }
 
 func Run(ctx workflow.Context, in Input) (result Result, err error) {
-	ctl := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{TaskQueue: contract.TaskQueueCtl, StartToCloseTimeout: 30 * time.Second, RetryPolicy: &temporal.RetryPolicy{MaximumAttempts: 5}})
+	ctl := workflow.WithActivityOptions(
+		ctx,
+		workflow.ActivityOptions{
+			TaskQueue:           contract.TaskQueueCtl,
+			StartToCloseTimeout: 30 * time.Second,
+			RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 5},
+		},
+	)
 	active, cancel := workflow.WithCancel(ctl)
 	defer cancel()
 	withdrawn := false
@@ -63,7 +71,8 @@ func Run(ctx workflow.Context, in Input) (result Result, err error) {
 		if err != nil || withdrawn {
 			cleanup, _ := workflow.NewDisconnectedContext(ctl)
 			var out Result
-			e := workflow.ExecuteActivity(cleanup, "AbortAssetRelease", releaseFailure(in, err, withdrawn)).Get(cleanup, &out)
+			e := workflow.ExecuteActivity(cleanup, "AbortAssetRelease", releaseFailure(in, err, withdrawn)).
+				Get(cleanup, &out)
 			if e != nil {
 				err = e
 			} else if withdrawn {
@@ -83,7 +92,7 @@ func Run(ctx workflow.Context, in Input) (result Result, err error) {
 			return
 		}
 		if state == "check_failed" {
-			return Result{state}, nil
+			return Result{State: state}, nil
 		}
 	}
 	if state == "in_review" {
@@ -92,7 +101,7 @@ func Run(ctx workflow.Context, in Input) (result Result, err error) {
 			return
 		}
 		if state != "approved" {
-			return Result{state}, nil
+			return Result{State: state}, nil
 		}
 	}
 	if withdrawn {
@@ -111,17 +120,32 @@ func Run(ctx workflow.Context, in Input) (result Result, err error) {
 	if err = workflow.ExecuteActivity(active, "NotifyAuthor", in).Get(active, nil); err != nil {
 		return
 	}
-	return Result{"published"}, nil
+	return Result{State: "published"}, nil
 }
 
 func checkRelease(active workflow.Context, in Input, snap Snapshot) (string, error) {
 	var err error
-	checks := []string{contract.ActivityAssetCheckStructure, contract.ActivityAssetCheckCompat, contract.ActivityAssetCheckSecrets, contract.ActivityAssetCheckStatic, contract.ActivityAssetCheckInjection, contract.ActivityAssetCheckPermissionDiff}
+	checks := []string{
+		contract.ActivityAssetCheckStructure,
+		contract.ActivityAssetCheckCompat,
+		contract.ActivityAssetCheckSecrets,
+		contract.ActivityAssetCheckStatic,
+		contract.ActivityAssetCheckInjection,
+		contract.ActivityAssetCheckPermissionDiff,
+	}
 	futures := make([]workflow.Future, 0, len(checks))
 	for _, name := range checks {
 		target := active
 		if name != contract.ActivityAssetCheckPermissionDiff {
-			target = workflow.WithActivityOptions(active, workflow.ActivityOptions{TaskQueue: contract.TaskQueueAssetCheck, StartToCloseTimeout: 5 * time.Minute, HeartbeatTimeout: 30 * time.Second, RetryPolicy: &temporal.RetryPolicy{MaximumAttempts: 2}})
+			target = workflow.WithActivityOptions(
+				active,
+				workflow.ActivityOptions{
+					TaskQueue:           contract.TaskQueueAssetCheck,
+					StartToCloseTimeout: 5 * time.Minute,
+					HeartbeatTimeout:    30 * time.Second,
+					RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 2},
+				},
+			)
 		}
 		futures = append(futures, workflow.ExecuteActivity(target, name, snap.Check))
 	}
@@ -144,7 +168,12 @@ func checkRelease(active workflow.Context, in Input, snap Snapshot) (string, err
 	if block {
 		state = "check_failed"
 	}
-	if err = workflow.ExecuteActivity(active, "AggregateAssetChecks", Aggregate{in, reports, state}).Get(active, nil); err != nil {
+	if err = workflow.ExecuteActivity(active,
+		"AggregateAssetChecks",
+		Aggregate{Input: in,
+			Reports: reports,
+			State:   state}).Get(active,
+		nil); err != nil {
 		return "", err
 	}
 	return state, nil
@@ -175,48 +204,69 @@ func reviewRelease(ctx, ctl, active workflow.Context, in Input, snap Snapshot, w
 	}
 	processing := false
 	var updateFailure error
-	err = workflow.SetUpdateHandlerWithOptions(ctx, SubmitReview, func(updateCtx workflow.Context, review Review) error {
-		if slices.Contains(reviewIDs, review.ID) {
-			return nil
-		}
-		processing = true
-		defer func() { processing = false }()
-		var verified Review
-		if e := workflow.ExecuteActivity(ctl, "LoadAssetReview", review).Get(updateCtx, &verified); e != nil {
-			updateFailure = e
-			return e
-		}
-		if verified.Reviewer == snap.Author || verified.Reviewer == snap.Owner || verified.Reviewer == snap.Uploader {
-			return fmt.Errorf("author cannot review")
-		}
-		if slices.Contains(reviewers, verified.Reviewer) {
-			return fmt.Errorf("reviewer already voted")
-		}
-		reviewIDs = append(reviewIDs, verified.ID)
-		reviewers = append(reviewers, verified.Reviewer)
-		switch verified.Decision {
-		case "reject":
-			decision = "rejected"
-		case "request_changes":
-			decision = "changes_requested"
-		case "approve":
-			if len(reviewers) >= snap.Required {
-				decision = "approved"
+	err = workflow.SetUpdateHandlerWithOptions(
+		ctx,
+		SubmitReview,
+		func(updateCtx workflow.Context, review Review) error {
+			if slices.Contains(reviewIDs, review.ID) {
+				return nil
 			}
-		}
-		return nil
-	}, workflow.UpdateHandlerOptions{Validator: func(review Review) error {
-		if decision != "" || *withdrawn || processing {
-			return fmt.Errorf("review is closed or busy")
-		}
-		if review.Input != in || review.ID == "" {
-			return fmt.Errorf("invalid review identity")
-		}
-		return nil
-	}})
+			processing = true
+			defer func() { processing = false }()
+			var verified Review
+			if e := workflow.ExecuteActivity(workflow.WithActivityOptions(updateCtx,
+				workflow.GetActivityOptions(ctl)),
+				"LoadAssetReview",
+				review).Get(updateCtx,
+				&verified); e != nil {
+				updateFailure = e
+				return e
+			}
+			if verified.Reviewer == snap.Author || verified.Reviewer == snap.Owner ||
+				verified.Reviewer == snap.Uploader {
+				return fmt.Errorf("author cannot review")
+			}
+			if slices.Contains(reviewers, verified.Reviewer) {
+				return fmt.Errorf("reviewer already voted")
+			}
+			reviewIDs = append(reviewIDs, verified.ID)
+			reviewers = append(reviewers, verified.Reviewer)
+			switch verified.Decision {
+			case "reject":
+				decision = "rejected"
+			case "request_changes":
+				decision = "changes_requested"
+			case "approve":
+				if len(reviewers) >= snap.Required {
+					decision = "approved"
+				}
+			}
+			return nil
+		},
+		workflow.UpdateHandlerOptions{Validator: func(review Review) error {
+			if decision != "" || *withdrawn || processing {
+				return fmt.Errorf("review is closed or busy")
+			}
+			if review.Input != in || review.ID == "" {
+				return fmt.Errorf("invalid review identity")
+			}
+			return nil
+		}},
+	)
 	if err != nil {
 		return "", err
 	}
+	return awaitReviewDecision(ctx, active, in, &decision, withdrawn, &updateFailure)
+}
+
+func awaitReviewDecision(
+	ctx, active workflow.Context,
+	in Input,
+	decision *string,
+	withdrawn *bool,
+	updateFailure *error,
+) (string, error) {
+	var err error
 	timerCtx, stopTimer := workflow.WithCancel(active)
 	timer := workflow.NewTimer(timerCtx, 48*time.Hour)
 	reminded := false
@@ -225,23 +275,23 @@ func reviewRelease(ctx, ctl, active workflow.Context, in Input, snap Snapshot, w
 			reminded = true
 		}
 	})
-	if err = workflow.Await(active, func() bool { return decision != "" || *withdrawn || reminded || updateFailure != nil }); err != nil {
+	if err = workflow.Await(active, func() bool { return *decision != "" || *withdrawn || reminded || *updateFailure != nil }); err != nil {
 		stopTimer()
 		return "", err
 	}
-	if reminded && decision == "" && !*withdrawn && updateFailure == nil {
+	if reminded && *decision == "" && !*withdrawn && *updateFailure == nil {
 		if err = workflow.ExecuteActivity(active, "RemindAssetReview", in).Get(active, nil); err != nil {
 			stopTimer()
 			return "", err
 		}
-		if err = workflow.Await(active, func() bool { return decision != "" || *withdrawn || updateFailure != nil }); err != nil {
+		if err = workflow.Await(active, func() bool { return *decision != "" || *withdrawn || *updateFailure != nil }); err != nil {
 			stopTimer()
 			return "", err
 		}
 	}
 	stopTimer()
-	if updateFailure != nil {
-		return "", updateFailure
+	if *updateFailure != nil {
+		return "", *updateFailure
 	}
 	if *withdrawn {
 		return "", temporal.NewCanceledError()
@@ -250,7 +300,11 @@ func reviewRelease(ctx, ctl, active workflow.Context, in Input, snap Snapshot, w
 		return "", err
 	}
 	var finalDecision Result
-	if err = workflow.ExecuteActivity(active, "DecideAssetReview", Aggregate{Input: in, State: decision}).Get(active, &finalDecision); err != nil {
+	if err = workflow.ExecuteActivity(active,
+		"DecideAssetReview",
+		Aggregate{Input: in,
+			State: *decision}).Get(active,
+		&finalDecision); err != nil {
 		return "", err
 	}
 	return finalDecision.State, nil

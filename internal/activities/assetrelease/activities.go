@@ -7,13 +7,14 @@ import (
 	"slices"
 
 	"github.com/jackc/pgx/v5"
+	"go.temporal.io/sdk/temporal"
+
 	"github.com/mindreon/orbit-control/internal/assets"
 	"github.com/mindreon/orbit-control/internal/auth"
 	"github.com/mindreon/orbit-control/internal/contract"
 	"github.com/mindreon/orbit-control/internal/locks"
 	"github.com/mindreon/orbit-control/internal/platform/db"
 	"github.com/mindreon/orbit-control/internal/platform/ids"
-	"go.temporal.io/sdk/temporal"
 )
 
 type Activities struct {
@@ -21,12 +22,18 @@ type Activities struct {
 	Assets *assets.Service
 }
 
-func (a *Activities) transaction(ctx context.Context, in Input, fn func(context.Context, assets.Asset, assets.Version) error) error {
+func (a *Activities) transaction(
+	ctx context.Context,
+	in Input,
+	fn func(context.Context, assets.Asset, assets.Version) error,
+) error {
 	return a.DB.WithTenant(ctx, in.Tenant, func(tx pgx.Tx) error {
 		ctx = auth.Context(db.Context(ctx, tx), auth.Principal{}, in.Tenant)
 		var assetID, actor, actorKind string
 		var generation int
-		if err := tx.QueryRow(ctx, `SELECT v.asset_id::text,v.submitted_by::text,v.release_generation,p.kind FROM asset_versions v JOIN principals p ON p.id=v.submitted_by WHERE v.tenant_id=$1 AND v.id=$2 FOR UPDATE OF v`, in.Tenant, in.VersionID).Scan(&assetID, &actor, &generation, &actorKind); err != nil {
+		if err := tx.QueryRow(ctx, "SELECT v.asset_id::text,v.submitted_by::text,v.release_generation,p.kind FROM "+
+			"asset_versions v JOIN principals p ON p.id=v.submitted_by WHERE v.tenant_id=$1 AND "+
+			"v.id=$2 FOR UPDATE OF v", in.Tenant, in.VersionID).Scan(&assetID, &actor, &generation, &actorKind); err != nil {
 			return err
 		}
 		if generation != in.Generation {
@@ -35,7 +42,17 @@ func (a *Activities) transaction(ctx context.Context, in Input, fn func(context.
 		ctx = auth.Context(ctx, auth.Principal{ID: actor, Kind: actorKind}, in.Tenant)
 		// Activities act on the frozen snapshot, not on today's author permissions.
 		var asset assets.Asset
-		err := tx.QueryRow(ctx, `SELECT id::text,publisher,kind,name,visibility,COALESCE(workspace_id::text,''),owner_id::text,status,created_at FROM assets WHERE tenant_id=$1 AND id=$2`, in.Tenant, assetID).Scan(&asset.ID, &asset.Publisher, &asset.Kind, &asset.Name, &asset.Visibility, &asset.WorkspaceID, &asset.OwnerID, &asset.Status, &asset.CreatedAt)
+		err := tx.QueryRow(ctx, "SELECT id::text,publisher,kind,name,visibility,COALESCE(workspace_id::text,''),owner_id::t"+
+			"ext,status,created_at FROM assets WHERE tenant_id=$1 AND id=$2", in.Tenant, assetID).
+			Scan(&asset.ID,
+				&asset.Publisher,
+				&asset.Kind,
+				&asset.Name,
+				&asset.Visibility,
+				&asset.WorkspaceID,
+				&asset.OwnerID,
+				&asset.Status,
+				&asset.CreatedAt)
 		if err != nil {
 			return err
 		}
@@ -57,14 +74,19 @@ func (a *Activities) SnapshotAssetRelease(ctx context.Context, in Input) (Snapsh
 			return temporal.NewNonRetryableApplicationError("invalid release state", "InvalidState", nil)
 		}
 		var previous *string
-		err := db.Tx(ctx).QueryRow(ctx, `SELECT review_required,workspace_review,previous_version_id::text,submitted_by::text FROM asset_versions WHERE id=$1`, v.ID).Scan(&out.Required, &out.WorkspaceReview, &previous, &out.Author)
+		err := db.Tx(ctx).
+			QueryRow(ctx, "SELECT review_required,workspace_review,previous_version_id::text,submitted_by::text FROM "+
+				"asset_versions WHERE id=$1", v.ID).
+			Scan(&out.Required, &out.WorkspaceReview, &previous, &out.Author)
 		if err != nil {
 			return err
 		}
 		out.State = v.State
 		out.Uploader = v.UploadedBy
 		if v.State == "in_review" {
-			rows, err := db.Tx(ctx).Query(ctx, `SELECT id::text,reviewer_id::text,decision,comment FROM asset_reviews WHERE tenant_id=$1 AND version_id=$2 AND generation=$3 ORDER BY id`, in.Tenant, v.ID, in.Generation)
+			rows, err := db.Tx(ctx).
+				Query(ctx, "SELECT id::text,reviewer_id::text,decision,comment FROM asset_reviews WHERE tenant_id=$1 "+
+					"AND version_id=$2 AND generation=$3 ORDER BY id", in.Tenant, v.ID, in.Generation)
 			if err != nil {
 				return err
 			}
@@ -82,12 +104,25 @@ func (a *Activities) SnapshotAssetRelease(ctx context.Context, in Input) (Snapsh
 		}
 		out.Visibility = asset.Visibility
 		out.Owner = asset.OwnerID
-		out.Check = contract.AssetCheckInput{V: 1, TenantId: in.Tenant, AssetId: asset.ID, AssetVersionId: v.ID, Kind: asset.Kind, ContentDigest: v.Digest, BlobRef: v.BlobRef, PreviousVersionId: previous}
+		out.Check = contract.AssetCheckInput{
+			V:                 1,
+			TenantId:          in.Tenant,
+			AssetId:           asset.ID,
+			AssetVersionId:    v.ID,
+			Kind:              asset.Kind,
+			ContentDigest:     v.Digest,
+			BlobRef:           v.BlobRef,
+			PreviousVersionId: previous,
+		}
 		return nil
 	})
 	return out, err
 }
-func (a *Activities) AssetCheckPermissionDiff(ctx context.Context, input contract.AssetCheckInput) (contract.AssetCheckReport, error) {
+
+func (a *Activities) AssetCheckPermissionDiff(
+	ctx context.Context,
+	input contract.AssetCheckInput,
+) (contract.AssetCheckReport, error) {
 	report := contract.AssetCheckReport{Check: "permission_diff", DurationMs: 0, CheckerVersion: "orbit-control/1"}
 	err := a.DB.WithTenant(ctx, input.TenantId, func(tx pgx.Tx) error {
 		var raw []byte
@@ -96,7 +131,9 @@ func (a *Activities) AssetCheckPermissionDiff(ctx context.Context, input contrac
 		var manifestRaw []byte
 		var workspace, submitter string
 		var previous contract.EffectivePermissions
-		if err := tx.QueryRow(ctx, `SELECT v.permissions,v.manifest,COALESCE(a.workspace_id::text,''),v.submitted_by::text FROM asset_versions v JOIN assets a ON a.id=v.asset_id WHERE v.tenant_id=$1 AND v.id=$2 AND v.asset_id=$3`, input.TenantId, input.AssetVersionId, input.AssetId).Scan(&raw, &manifestRaw, &workspace, &submitter); err != nil {
+		if err := tx.QueryRow(ctx, "SELECT v.permissions,v.manifest,COALESCE(a.workspace_id::text,''),v.submitted_by::text "+
+			"FROM asset_versions v JOIN assets a ON a.id=v.asset_id WHERE v.tenant_id=$1 AND v.id=$2 "+
+			"AND v.asset_id=$3", input.TenantId, input.AssetVersionId, input.AssetId).Scan(&raw, &manifestRaw, &workspace, &submitter); err != nil {
 			return err
 		}
 		if err := json.Unmarshal(manifestRaw, &currentManifest); err != nil {
@@ -106,7 +143,8 @@ func (a *Activities) AssetCheckPermissionDiff(ctx context.Context, input contrac
 			return err
 		}
 		if input.PreviousVersionId != nil {
-			if err := tx.QueryRow(ctx, `SELECT permissions,manifest FROM asset_versions WHERE tenant_id=$1 AND id=$2 AND asset_id=$3`, input.TenantId, *input.PreviousVersionId, input.AssetId).Scan(&raw, &manifestRaw); err != nil {
+			if err := tx.QueryRow(ctx, "SELECT permissions,manifest FROM asset_versions WHERE tenant_id=$1 AND id=$2 AND "+
+				"asset_id=$3", input.TenantId, *input.PreviousVersionId, input.AssetId).Scan(&raw, &manifestRaw); err != nil {
 				return err
 			}
 			if err := json.Unmarshal(manifestRaw, &previousManifest); err != nil {
@@ -139,7 +177,14 @@ func (a *Activities) AssetCheckPermissionDiff(ctx context.Context, input contrac
 			expanded = expanded || Expanded(before, after)
 		}
 		if expanded {
-			report.Findings = []contract.AssetCheckFinding{{Check: "permission_diff", RuleId: "permissions.expanded", Severity: "review", Message: "Declared member permissions increased"}}
+			report.Findings = []contract.AssetCheckFinding{
+				{
+					Check:    "permission_diff",
+					RuleId:   "permissions.expanded",
+					Severity: "review",
+					Message:  "Declared member permissions increased",
+				},
+			}
 		}
 		return nil
 	})
@@ -176,7 +221,8 @@ func Expanded(before, after contract.EffectivePermissions) bool {
 			return true
 		}
 	}
-	if after.SandboxProfile != "" && after.SandboxProfile != "default" && after.SandboxProfile != before.SandboxProfile {
+	if after.SandboxProfile != "" && after.SandboxProfile != "default" &&
+		after.SandboxProfile != before.SandboxProfile {
 		return true
 	}
 	if before.SandboxProfile != "" && after.SandboxProfile != before.SandboxProfile {
@@ -200,7 +246,14 @@ func (a *Activities) AggregateAssetChecks(ctx context.Context, in Aggregate) err
 		if withdrawn {
 			return temporal.NewNonRetryableApplicationError("withdrawn", "Withdrawn", nil)
 		}
-		expected := []contract.AssetCheckKind{"structure", "compat", "secrets", "static", "injection", "permission_diff"}
+		expected := []contract.AssetCheckKind{
+			"structure",
+			"compat",
+			"secrets",
+			"static",
+			"injection",
+			"permission_diff",
+		}
 		if len(in.Reports) != len(expected) {
 			return fmt.Errorf("missing check reports")
 		}
@@ -228,7 +281,10 @@ func (a *Activities) AggregateAssetChecks(ctx context.Context, in Aggregate) err
 					status = "warn"
 				}
 			}
-			_, err = db.Tx(ctx).Exec(ctx, `INSERT INTO asset_check_reports(id,tenant_id,version_id,"check",status,findings) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(tenant_id,version_id,"check") DO UPDATE SET status=EXCLUDED.status,findings=EXCLUDED.findings`, ids.New(), in.Input.Tenant, v.ID, report.Check, status, raw)
+			_, err = db.Tx(ctx).
+				Exec(ctx, "INSERT INTO asset_check_reports(id,tenant_id,version_id,\"check\",status,findings) "+
+					"VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(tenant_id,version_id,\"check\") DO UPDATE SET "+
+					"status=EXCLUDED.status,findings=EXCLUDED.findings", ids.New(), in.Input.Tenant, v.ID, report.Check, status, raw)
 			if err != nil {
 				return err
 			}
@@ -248,7 +304,8 @@ func (a *Activities) NotifyAuthor(ctx context.Context, in Input) error {
 func (a *Activities) onceAudit(ctx context.Context, in Input, action string) error {
 	return a.transaction(ctx, in, func(ctx context.Context, asset assets.Asset, v assets.Version) error {
 		var exists bool
-		if err := db.Tx(ctx).QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM audit_log WHERE tenant_id=$1 AND target_id=$2 AND action=$3 AND detail->>'generation'=$4)`, in.Tenant, v.ID, action, fmt.Sprint(in.Generation)).Scan(&exists); err != nil {
+		if err := db.Tx(ctx).QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM audit_log WHERE tenant_id=$1 AND target_id=$2 AND action=$3 "+
+			"AND detail->>'generation'=$4)", in.Tenant, v.ID, action, fmt.Sprint(in.Generation)).Scan(&exists); err != nil {
 			return err
 		}
 		if exists {
@@ -264,7 +321,15 @@ func (a *Activities) LoadAssetReview(ctx context.Context, review Review) (Review
 		if v.State != "in_review" {
 			return temporal.NewNonRetryableApplicationError("review is closed", "InvalidReview", nil)
 		}
-		if err := db.Tx(ctx).QueryRow(ctx, `SELECT id::text,reviewer_id::text,decision,comment FROM asset_reviews WHERE tenant_id=$1 AND version_id=$2 AND generation=$3 AND id=$4`, review.Input.Tenant, v.ID, review.Input.Generation, review.ID).Scan(&out.ID, &out.Reviewer, &out.Decision, &out.Comment); err != nil {
+		if err := db.Tx(ctx).QueryRow(ctx, "SELECT id::text,reviewer_id::text,decision,comment FROM asset_reviews WHERE tenant_id=$1 "+
+			"AND version_id=$2 AND generation=$3 AND id=$4",
+			review.Input.Tenant,
+			v.ID,
+			review.Input.Generation,
+			review.ID).Scan(&out.ID,
+			&out.Reviewer,
+			&out.Decision,
+			&out.Comment); err != nil {
 			return err
 		}
 		if out.Reviewer == asset.OwnerID || out.Reviewer == auth.From(ctx).ID || out.Reviewer == v.UploadedBy {
@@ -284,13 +349,24 @@ func (a *Activities) DecideAssetReview(ctx context.Context, in Aggregate) (Resul
 		var withdrawn bool
 		var required, approvals int
 		var rejected, changes bool
-		if err := db.Tx(ctx).QueryRow(ctx, `SELECT withdraw_requested,review_required FROM asset_versions WHERE id=$1`, v.ID).Scan(&withdrawn, &required); err != nil {
+		if err := db.Tx(ctx).QueryRow(ctx,
+			("SELECT withdraw_requested,review_required FROM asset_versions WHERE "+
+				"id=$1"),
+			v.ID).Scan(&withdrawn,
+			&required); err != nil {
 			return err
 		}
 		if withdrawn {
 			return temporal.NewNonRetryableApplicationError("withdrawn", "Withdrawn", nil)
 		}
-		if err := db.Tx(ctx).QueryRow(ctx, `SELECT count(*) FILTER(WHERE decision='approve'),COALESCE(bool_or(decision='reject'),false),COALESCE(bool_or(decision='request_changes'),false) FROM asset_reviews WHERE tenant_id=$1 AND version_id=$2 AND generation=$3`, in.Input.Tenant, v.ID, in.Input.Generation).Scan(&approvals, &rejected, &changes); err != nil {
+		if err := db.Tx(ctx).QueryRow(ctx, "SELECT count(*) FILTER(WHERE decision='approve'),COALESCE(bool_or(decision='reject'),false"+
+			"),COALESCE(bool_or(decision='request_changes'),false) FROM asset_reviews WHERE "+
+			"tenant_id=$1 AND version_id=$2 AND generation=$3",
+			in.Input.Tenant,
+			v.ID,
+			in.Input.Generation).Scan(&approvals,
+			&rejected,
+			&changes); err != nil {
 			return err
 		}
 		switch {
@@ -346,7 +422,8 @@ func (a *Activities) Publish(ctx context.Context, in Input) error {
 		if err := a.Assets.SetChannel(ctx, asset, channel, v.ID); err != nil {
 			return err
 		}
-		_, err := db.Tx(ctx).Exec(ctx, `UPDATE asset_versions SET published_at=now(),release_error=NULL,release_retryable=true WHERE id=$1`, v.ID)
+		_, err := db.Tx(ctx).
+			Exec(ctx, `UPDATE asset_versions SET published_at=now(),release_error=NULL,release_retryable=true WHERE id=$1`, v.ID)
 		if err != nil {
 			return err
 		}
@@ -363,15 +440,32 @@ func (a *Activities) CompensateAssetPublish(ctx context.Context, in Input) error
 		}
 		var channel string
 		var previous *string
-		if err := db.Tx(ctx).QueryRow(ctx, `SELECT release_channel,previous_channel_id::text FROM asset_versions WHERE id=$1`, v.ID).Scan(&channel, &previous); err != nil {
+		if err := db.Tx(ctx).QueryRow(ctx,
+			("SELECT release_channel,previous_channel_id::text FROM asset_versions "+
+				"WHERE id=$1"),
+			v.ID).Scan(&channel,
+			&previous); err != nil {
 			return err
 		}
 		if previous == nil {
-			if _, err := db.Tx(ctx).Exec(ctx, `DELETE FROM asset_channels WHERE asset_id=$1 AND channel=$2 AND version_id=$3`, asset.ID, channel, v.ID); err != nil {
+			if _,
+				err := db.Tx(ctx).Exec(ctx,
+				("DELETE FROM asset_channels WHERE asset_id=$1 AND channel=$2 AND " +
+					"version_id=$3"),
+				asset.ID,
+				channel,
+				v.ID); err != nil {
 				return err
 			}
 		} else {
-			if _, err := db.Tx(ctx).Exec(ctx, `UPDATE asset_channels SET version_id=$4 WHERE asset_id=$1 AND channel=$2 AND version_id=$3`, asset.ID, channel, v.ID, *previous); err != nil {
+			if _,
+				err := db.Tx(ctx).Exec(ctx,
+				("UPDATE asset_channels SET version_id=$4 WHERE asset_id=$1 AND " +
+					"channel=$2 AND version_id=$3"),
+				asset.ID,
+				channel,
+				v.ID,
+				*previous); err != nil {
 				return err
 			}
 		}
@@ -379,10 +473,18 @@ func (a *Activities) CompensateAssetPublish(ctx context.Context, in Input) error
 		if _, err := db.Tx(ctx).Exec(ctx, `UPDATE asset_versions SET state='approved',published_at=NULL WHERE id=$1`, v.ID); err != nil {
 			return err
 		}
-		if _, err := db.Tx(ctx).Exec(ctx, `UPDATE assets SET latest_version=(SELECT version FROM asset_versions WHERE asset_id=$1 AND state IN ('published','deprecated') ORDER BY published_at DESC,id DESC LIMIT 1) WHERE id=$1 AND latest_version=$2`, asset.ID, v.Version); err != nil {
+		if _, err := db.Tx(ctx).Exec(ctx, "UPDATE assets SET latest_version=(SELECT version FROM asset_versions WHERE asset_id=$1 "+
+			"AND state IN ('published','deprecated') ORDER BY published_at DESC,id DESC LIMIT 1) WHERE "+
+			"id=$1 AND latest_version=$2", asset.ID, v.Version); err != nil {
 			return err
 		}
-		return assets.Log(ctx, "asset.publish_compensated", "asset_version", v.ID, map[string]any{"channel": channel, "previous_version_id": previous})
+		return assets.Log(
+			ctx,
+			"asset.publish_compensated",
+			"asset_version",
+			v.ID,
+			map[string]any{"channel": channel, "previous_version_id": previous},
+		)
 	})
 }
 func (a *Activities) AbortAssetRelease(ctx context.Context, failure Failure) (Result, error) {
@@ -396,17 +498,30 @@ func (a *Activities) AbortAssetRelease(ctx context.Context, failure Failure) (Re
 		if (failure.Withdrawn || requested) && v.State == "draft" {
 			return nil
 		}
-		if (failure.Withdrawn || requested) && (v.State == "submitted" || v.State == "checking" || v.State == "in_review") {
+		if (failure.Withdrawn || requested) &&
+			(v.State == "submitted" || v.State == "checking" || v.State == "in_review") {
 			if err := a.Assets.Withdraw(ctx, v.ID); err != nil {
 				return err
 			}
 			out.State = "draft"
 			return nil
 		}
-		if _, err := db.Tx(ctx).Exec(ctx, `UPDATE asset_versions SET release_error=$2,release_retryable=$3 WHERE id=$1`, v.ID, failure.Code, failure.Retryable); err != nil {
+		if _,
+			err := db.Tx(ctx).Exec(ctx,
+			("UPDATE asset_versions SET release_error=$2,release_retryable=$3 WHERE " +
+				"id=$1"),
+			v.ID,
+			failure.Code,
+			failure.Retryable); err != nil {
 			return err
 		}
-		return assets.Log(ctx, "asset.release_failed", "asset_version", v.ID, map[string]any{"code": failure.Code, "retryable": failure.Retryable})
+		return assets.Log(
+			ctx,
+			"asset.release_failed",
+			"asset_version",
+			v.ID,
+			map[string]any{"code": failure.Code, "retryable": failure.Retryable},
+		)
 	})
 	return out, err
 }

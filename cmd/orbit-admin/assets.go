@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+
 	"github.com/mindreon/orbit-control/internal/assets"
 	"github.com/mindreon/orbit-control/internal/auth"
 	"github.com/mindreon/orbit-control/internal/platform/db"
@@ -28,7 +29,11 @@ func retryAssetRelease(ctx context.Context, d *db.DB, args []string) error {
 	return d.WithTenant(ctx, *tenant, func(tx pgx.Tx) error {
 		// Admin connection is privileged; every query and the audit remain tenant-filtered.
 		var actor auth.Principal
-		if err := tx.QueryRow(ctx, `SELECT p.id::text,p.kind FROM role_bindings b JOIN memberships m ON m.tenant_id=b.tenant_id AND m.principal_id=b.principal_id JOIN principals p ON p.id=b.principal_id WHERE b.tenant_id=$1 AND b.scope_type='tenant' AND b.scope_id=$1 AND b.role='tenant.owner' AND b.principal_type='user' AND m.status='active' AND p.status='active' ORDER BY b.created_at LIMIT 1`, *tenant).Scan(&actor.ID, &actor.Kind); err != nil {
+		if err := tx.QueryRow(ctx, "SELECT p.id::text,p.kind FROM role_bindings b JOIN memberships m ON "+
+			"m.tenant_id=b.tenant_id AND m.principal_id=b.principal_id JOIN principals p ON "+
+			"p.id=b.principal_id WHERE b.tenant_id=$1 AND b.scope_type='tenant' AND b.scope_id=$1 AND "+
+			"b.role='tenant.owner' AND b.principal_type='user' AND m.status='active' AND "+
+			"p.status='active' ORDER BY b.created_at LIMIT 1", *tenant).Scan(&actor.ID, &actor.Kind); err != nil {
 			return err
 		}
 		ctx := auth.Context(db.Context(ctx, tx), actor, *tenant)

@@ -10,6 +10,13 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"go.temporal.io/api/enums/v1"
+	"go.temporal.io/api/serviceerror"
+	"go.temporal.io/api/workflow/v1"
+	"go.temporal.io/api/workflowservice/v1"
+	"go.temporal.io/sdk/client"
+
+	releaseactivities "github.com/mindreon/orbit-control/internal/activities/assetrelease"
 	"github.com/mindreon/orbit-control/internal/assets"
 	"github.com/mindreon/orbit-control/internal/assets/bundle"
 	"github.com/mindreon/orbit-control/internal/auth"
@@ -18,11 +25,6 @@ import (
 	"github.com/mindreon/orbit-control/internal/platform/ids"
 	"github.com/mindreon/orbit-control/internal/tenancy"
 	"github.com/mindreon/orbit-control/internal/workflows/assetrelease"
-	"go.temporal.io/api/enums/v1"
-	"go.temporal.io/api/serviceerror"
-	"go.temporal.io/api/workflow/v1"
-	"go.temporal.io/api/workflowservice/v1"
-	"go.temporal.io/sdk/client"
 )
 
 type dispatchClient struct {
@@ -31,10 +33,22 @@ type dispatchClient struct {
 	started  chan string
 }
 
-func (c *dispatchClient) DescribeWorkflowExecution(context.Context, string, string) (*workflowservice.DescribeWorkflowExecutionResponse, error) {
-	return &workflowservice.DescribeWorkflowExecutionResponse{WorkflowExecutionInfo: &workflow.WorkflowExecutionInfo{Status: enums.WORKFLOW_EXECUTION_STATUS_FAILED}}, nil
+func (c *dispatchClient) DescribeWorkflowExecution(
+	context.Context,
+	string,
+	string,
+) (*workflowservice.DescribeWorkflowExecutionResponse, error) {
+	return &workflowservice.DescribeWorkflowExecutionResponse{
+		WorkflowExecutionInfo: &workflow.WorkflowExecutionInfo{Status: enums.WORKFLOW_EXECUTION_STATUS_FAILED},
+	}, nil
 }
-func (c *dispatchClient) ExecuteWorkflow(_ context.Context, options client.StartWorkflowOptions, _ any, _ ...any) (client.WorkflowRun, error) {
+
+func (c *dispatchClient) ExecuteWorkflow(
+	_ context.Context,
+	options client.StartWorkflowOptions,
+	_ any,
+	_ ...any,
+) (client.WorkflowRun, error) {
 	if err := c.failures[options.ID]; err != nil {
 		return nil, err
 	}
@@ -44,7 +58,14 @@ func (c *dispatchClient) ExecuteWorkflow(_ context.Context, options client.Start
 	}
 	return nil, nil
 }
-func testDispatchIsolation(t *testing.T, d *db.DB, s *assets.Service, a *assetrelease.Activities, tenant, owner, workspace string) {
+
+func testDispatchIsolation(
+	t *testing.T,
+	d *db.DB,
+	s *assets.Service,
+	a *releaseactivities.Activities,
+	tenant, owner, workspace string,
+) {
 	t.Helper()
 	ctx := t.Context()
 	inputs := []assetrelease.Input{}
@@ -56,7 +77,13 @@ func testDispatchIsolation(t *testing.T, d *db.DB, s *assets.Service, a *assetre
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherTenant, err := tenancy.CreateTenant(ctx, d, auth.Principal{ID: owner, Kind: "user"}, "dispatch-"+ids.New(), "Dispatch isolation")
+	otherTenant, err := tenancy.CreateTenant(
+		ctx,
+		d,
+		auth.Principal{ID: owner, Kind: "user"},
+		"dispatch-"+ids.New(),
+		"Dispatch isolation",
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +91,11 @@ func testDispatchIsolation(t *testing.T, d *db.DB, s *assets.Service, a *assetre
 		targetTenant, targetWorkspace := tenant, workspace
 		if i == 2 {
 			targetTenant, targetWorkspace = otherTenant.ID, ""
-			staged, err = s.PrepareUpload(auth.Context(ctx, auth.Principal{ID: owner, Kind: "user"}, targetTenant), "1.0.0", raw)
+			staged, err = s.PrepareUpload(
+				auth.Context(ctx, auth.Principal{ID: owner, Kind: "user"}, targetTenant),
+				"1.0.0",
+				raw,
+			)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -103,15 +134,27 @@ func testDispatchIsolation(t *testing.T, d *db.DB, s *assets.Service, a *assetre
 	if err = a.AggregateAssetChecks(ctx, assetrelease.Aggregate{Input: inputs[2], Reports: reports, State: "approved"}); err != nil {
 		t.Fatal(err)
 	}
-	c := &dispatchClient{failures: map[string]error{assetrelease.ID(inputs[0]): serviceerror.NewInvalidArgument("permanent test error"), assetrelease.ID(inputs[1]): serviceerror.NewUnavailable("transient test error")}, started: make(chan string, 10)}
+	c := &dispatchClient{
+		failures: map[string]error{
+			assetrelease.ID(inputs[0]): serviceerror.NewInvalidArgument("permanent test error"),
+			assetrelease.ID(inputs[1]): serviceerror.NewUnavailable("transient test error"),
+		},
+		started: make(chan string, 10),
+	}
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, nil))
 	run := func(want string) {
 		t.Helper()
 		dispatchCtx, cancel := context.WithCancel(ctx)
 		done := make(chan struct{})
-		go func() { defer close(done); _ = assetrelease.Dispatch(dispatchCtx, d, c, logger) }()
-		defer func() { cancel(); <-done }()
+		go func() {
+			defer close(done)
+			_ = releaseactivities.Dispatch(dispatchCtx, d, c, logger)
+		}()
+		defer func() {
+			cancel()
+			<-done
+		}()
 		timeout := time.After(5 * time.Second)
 		for {
 			select {
@@ -129,11 +172,15 @@ func testDispatchIsolation(t *testing.T, d *db.DB, s *assets.Service, a *assetre
 		var retryable bool
 		var message string
 		if err = d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
-			return tx.QueryRow(ctx, `SELECT release_retryable,release_error FROM asset_versions WHERE id=$1`, in.VersionID).Scan(&retryable, &message)
+			return tx.QueryRow(ctx,
+				"SELECT release_retryable,release_error FROM asset_versions WHERE id=$1",
+				in.VersionID).Scan(&retryable,
+				&message)
 		}); err != nil || retryable != (i == 1) || message == "" {
 			t.Fatal("dispatch classification", i, retryable, message, err)
 		}
-		if !strings.Contains(logs.String(), in.Tenant) || !strings.Contains(logs.String(), in.VersionID) || !strings.Contains(logs.String(), "error") {
+		if !strings.Contains(logs.String(), in.Tenant) || !strings.Contains(logs.String(), in.VersionID) ||
+			!strings.Contains(logs.String(), "error") {
 			t.Fatal("dispatch log lacks row identity")
 		}
 	}

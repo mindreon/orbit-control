@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
 	"github.com/mindreon/orbit-control/internal/audit"
 	"github.com/mindreon/orbit-control/internal/auth"
 	"github.com/mindreon/orbit-control/internal/httpapi"
@@ -51,7 +52,11 @@ func testPartitionTimeZone(t *testing.T, admin *pgx.Conn) {
 			if err = tx.QueryRow(ctx, "SELECT pg_get_expr(relpartbound,oid) FROM pg_class WHERE relname=$1", table).Scan(&bound); err != nil {
 				t.Fatal(err)
 			}
-			want := fmt.Sprintf("FOR VALUES FROM ('%s') TO ('%s')", from.Format("2006-01-02 15:04:05-07"), to.Format("2006-01-02 15:04:05-07"))
+			want := fmt.Sprintf(
+				"FOR VALUES FROM ('%s') TO ('%s')",
+				from.Format("2006-01-02 15:04:05-07"),
+				to.Format("2006-01-02 15:04:05-07"),
+			)
 			if bound != want {
 				t.Errorf("%s: got %s want %s", table, bound, want)
 			}
@@ -67,7 +72,17 @@ func testUsageAndEvents(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	}
 	key := ids.New()
 	at := time.Now().UTC()
-	entry := usage.Entry{TenantID: tenant, RunID: &run, Source: "model", Meter: "tokens", Quantity: "7", UnitPrice: "100", Millicredits: 700, IdempotencyKey: key, OccurredAt: at}
+	entry := usage.Entry{
+		TenantID:       tenant,
+		RunID:          &run,
+		Source:         "model",
+		Meter:          "tokens",
+		Quantity:       "7",
+		UnitPrice:      "100",
+		Millicredits:   700,
+		IdempotencyKey: key,
+		OccurredAt:     at,
+	}
 	var wg sync.WaitGroup
 	results := make(chan bool, 6)
 	errs := make(chan error, 6)
@@ -75,7 +90,11 @@ func testUsageAndEvents(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		wg.Go(func() {
 			e := entry
 			e.OccurredAt = at.AddDate(0, i, 0)
-			errs <- d.WithTenant(ctx, tenant, func(tx pgx.Tx) error { recorded, err := usage.RecordUsage(ctx, tx, e); results <- recorded; return err })
+			errs <- d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
+				recorded, err := usage.RecordUsage(ctx, tx, e)
+				results <- recorded
+				return err
+			})
 		})
 	}
 	wg.Wait()
@@ -113,17 +132,25 @@ func testUsageAndEvents(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		t.Fatal("accepted invalid ledger row")
 	}
 	var n int
-	if err := admin.QueryRow(ctx, "SELECT count(*) FROM usage_keys WHERE tenant_id=$1 AND idempotency_key=$2", tenant, bad.IdempotencyKey).Scan(&n); err != nil || n != 0 {
+	if err := admin.QueryRow(ctx,
+		"SELECT count(*) FROM usage_keys WHERE tenant_id=$1 AND "+
+			"idempotency_key=$2",
+		tenant,
+		bad.IdempotencyKey).Scan(&n); err != nil ||
+
+		n != 0 {
 		t.Fatal("orphan claim after rollback", n, err)
 	}
 	event := run + ":leader:1:1:1"
 	if err := d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
 		for range 2 {
-			if _, err := tx.Exec(ctx, `INSERT INTO run_events(tenant_id,run_id,seq,event_id,type,payload,ts) VALUES($1,$2,1,$3,'test','{}',$4) ON CONFLICT DO NOTHING`, tenant, run, event, at); err != nil {
+			if _, err := tx.Exec(ctx, "INSERT INTO run_events(tenant_id,run_id,seq,event_id,type,payload,ts) "+
+				"VALUES($1,$2,1,$3,'test','{}',$4) ON CONFLICT DO NOTHING", tenant, run, event, at); err != nil {
 				return err
 			}
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO run_events(tenant_id,run_id,seq,event_id,type,payload,ts) VALUES($1,$2,1,$3,'test','{}',$4)`, tenant, run, run+":follower:1:1:1", at); err != nil {
+		if _, err := tx.Exec(ctx, "INSERT INTO run_events(tenant_id,run_id,seq,event_id,type,payload,ts) "+
+			"VALUES($1,$2,1,$3,'test','{}',$4)", tenant, run, run+":follower:1:1:1", at); err != nil {
 			return err
 		}
 		return tx.QueryRow(ctx, "SELECT count(*) FROM run_events WHERE event_id=$1", event).Scan(&n)
@@ -131,7 +158,8 @@ func testUsageAndEvents(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		t.Fatal("event replay duplicated", n, err)
 	}
 	if err := d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `INSERT INTO run_events(tenant_id,run_id,seq,event_id,type,payload) VALUES($1,$2,1,$3,'test','{}')`, tenant, run, ids.New())
+		_, err := tx.Exec(ctx, "INSERT INTO run_events(tenant_id,run_id,seq,event_id,type,payload) "+
+			"VALUES($1,$2,1,$3,'test','{}')", tenant, run, ids.New())
 		return err
 	}); err == nil {
 		t.Fatal("event timestamp defaulted")
@@ -155,8 +183,11 @@ func testUsageAndEvents(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		for _, k := range []struct {
 			key     string
 			expires time.Time
-		}{{expiredKey, at.Add(-time.Hour)}, {liveKey, at.Add(time.Hour)}} {
-			if _, err := tx.Exec(ctx, `INSERT INTO idempotency_keys(tenant_id,principal_id,key,method,path,request_hash,status,headers,response,key_version,expires_at) SELECT tenant_id,principal_id,$2,'POST','/test',$3,200,'{}',$3,1,$4 FROM memberships WHERE tenant_id=$1 LIMIT 1`, tenant, k.key, make([]byte, 32), k.expires); err != nil {
+		}{{key: expiredKey, expires: at.Add(-time.Hour)}, {key: liveKey, expires: at.Add(time.Hour)}} {
+			if _, err := tx.Exec(ctx, "INSERT INTO idempotency_keys(tenant_id,principal_id,key,method,path,request_hash,status,he"+
+				"aders,response,key_version,expires_at) SELECT "+
+				"tenant_id,principal_id,$2,'POST','/test',$3,200,'{}',$3,1,$4 FROM memberships WHERE "+
+				"tenant_id=$1 LIMIT 1", tenant, k.key, make([]byte, 32), k.expires); err != nil {
 				return err
 			}
 		}
@@ -169,18 +200,38 @@ func testUsageAndEvents(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		t.Fatal(err)
 	}
 	for _, table := range []string{"usage_keys", "usage_ledger"} {
-		if err = admin.QueryRow(ctx, "SELECT count(*) FROM "+table+" WHERE tenant_id=$1 AND idempotency_key=$2", tenant, oldKey).Scan(&n); err != nil || n != 0 {
+		if err = admin.QueryRow(ctx,
+			"SELECT count(*) FROM "+
+				table+
+				" WHERE tenant_id=$1 AND idempotency_key=$2",
+			tenant,
+			oldKey).Scan(&n); err != nil ||
+
+			n != 0 {
 			t.Fatal("expired usage retained", table, n, err)
 		}
-		if err = admin.QueryRow(ctx, "SELECT count(*) FROM "+table+" WHERE tenant_id=$1 AND idempotency_key=$2", tenant, key).Scan(&n); err != nil || n != 1 {
+		if err = admin.QueryRow(ctx,
+			"SELECT count(*) FROM "+
+				table+
+				" WHERE tenant_id=$1 AND idempotency_key=$2",
+			tenant,
+			key).Scan(&n); err != nil ||
+
+			n != 1 {
 			t.Fatal("live usage lost", table, n, err)
 		}
 	}
-	if err = admin.QueryRow(ctx, "SELECT count(*) FROM idempotency_keys WHERE tenant_id=$1 AND key=$2", tenant, liveKey).Scan(&n); err != nil || n != 1 {
+	if err = admin.QueryRow(ctx,
+		"SELECT count(*) FROM idempotency_keys WHERE tenant_id=$1 AND key=$2",
+		tenant,
+		liveKey).Scan(&n); err != nil ||
+
+		n != 1 {
 		t.Fatal("prune removed live replay", n, err)
 	}
 	var rows int
-	if err = admin.QueryRow(ctx, "SELECT count(*) FROM idempotency_keys WHERE expires_at<=now()").Scan(&rows); err != nil || rows != 0 {
+	if err = admin.QueryRow(ctx, "SELECT count(*) FROM idempotency_keys WHERE expires_at<=now()").Scan(&rows); err != nil ||
+		rows != 0 {
 		t.Fatal("expired idempotency rows retained", rows, err)
 	}
 	t.Log(strings.Join([]string{"UTC partitions", "concurrent cross-month usage", "event replay", "retention"}, ", "))
@@ -188,7 +239,15 @@ func testUsageAndEvents(t *testing.T, d *db.DB, admin *pgx.Conn) {
 
 func testJITProvisioning(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	ctx := t.Context()
-	c := config.Config{AuthMode: "dev", PersonalTenants: true, KeyFile: t.TempDir() + "/dev.key", CapabilityKeyFile: t.TempDir() + "/capability.key", CapabilityKeyID: "1", SecretsKeyVersion: 1, SecretsKEKs: map[int][]byte{1: make([]byte, 32)}}
+	c := config.Config{
+		AuthMode:          "dev",
+		PersonalTenants:   true,
+		KeyFile:           t.TempDir() + "/dev.key",
+		CapabilityKeyFile: t.TempDir() + "/capability.key",
+		CapabilityKeyID:   "1",
+		SecretsKeyVersion: 1,
+		SecretsKEKs:       map[int][]byte{1: make([]byte, 32)},
+	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	a, err := auth.New(ctx, d, c, logger)
 	if err != nil {
@@ -196,14 +255,22 @@ func testJITProvisioning(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	}
 	defer a.Close()
 	// Exercise the same first-JIT hook used after successful OIDC verification.
-	h := &httpapi.Handler{DB: d, Auth: a, Config: config.Config{AuthMode: "oidc", PersonalTenants: true}, Logger: logger}
+	h := &httpapi.Handler{
+		DB:     d,
+		Auth:   a,
+		Config: config.Config{AuthMode: "oidc", PersonalTenants: true},
+		Logger: logger,
+	}
 	h.Router()
 	subject := ids.New()
 	email := "oidc-" + subject + "@example.test"
 	var wg sync.WaitGroup
 	errs := make(chan error, 5)
 	for range 5 {
-		wg.Go(func() { _, err := a.JIT(ctx, "https://idp.example", subject, email, "JIT", true); errs <- err })
+		wg.Go(func() {
+			_, err := a.JIT(ctx, "https://idp.example", subject, email, "JIT", true)
+			errs <- err
+		})
 	}
 	wg.Wait()
 	close(errs)
@@ -221,10 +288,17 @@ func testJITProvisioning(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		t.Fatal(tenants, err)
 	}
 	var logins, markers int
-	if err = admin.QueryRow(ctx, "SELECT count(*) FROM audit_log WHERE tenant_id=$1 AND actor_id=$2 AND action='login'", tenants[0].ID, p.ID).Scan(&logins); err != nil || logins != 1 {
+	if err = admin.QueryRow(ctx,
+		"SELECT count(*) FROM audit_log WHERE tenant_id=$1 AND actor_id=$2 AND "+
+			"action='login'",
+		tenants[0].ID,
+		p.ID).Scan(&logins); err != nil ||
+
+		logins != 1 {
 		t.Fatal("OIDC login audit not first-JIT only", logins, err)
 	}
-	if err = admin.QueryRow(ctx, "SELECT count(*) FROM idempotency_keys WHERE principal_id=$1", p.ID).Scan(&markers); err != nil || markers != 0 {
+	if err = admin.QueryRow(ctx, "SELECT count(*) FROM idempotency_keys WHERE principal_id=$1", p.ID).Scan(&markers); err != nil ||
+		markers != 0 {
 		t.Fatal("OIDC login left replay markers", markers, err)
 	}
 	if err = d.WithTenant(ctx, tenants[0].ID, func(tx pgx.Tx) error {
@@ -234,7 +308,8 @@ func testJITProvisioning(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		}
 		var latest string
 		var count int
-		if err = tx.QueryRow(ctx, "SELECT encode(hash,'hex') FROM audit_log WHERE tenant_id=$1 ORDER BY occurred_at DESC,id DESC LIMIT 1", tenants[0].ID).Scan(&latest); err != nil {
+		if err = tx.QueryRow(ctx, "SELECT encode(hash,'hex') FROM audit_log WHERE tenant_id=$1 ORDER BY occurred_at DESC,id "+
+			"DESC LIMIT 1", tenants[0].ID).Scan(&latest); err != nil {
 			return err
 		}
 		if err = tx.QueryRow(ctx, "SELECT count(*) FROM audit_log WHERE tenant_id=$1", tenants[0].ID).Scan(&count); err != nil {
@@ -254,7 +329,12 @@ func testJITProvisioning(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		t.Fatal("provision failure ignored")
 	}
 	var count int
-	if err = admin.QueryRow(ctx, "SELECT count(*) FROM principals WHERE idp_subject=$1", "https://idp.example|"+failedSubject).Scan(&count); err != nil || count != 0 {
+	if err = admin.QueryRow(ctx,
+		"SELECT count(*) FROM principals WHERE idp_subject=$1",
+		"https://idp.example|"+
+			failedSubject).Scan(&count); err != nil ||
+
+		count != 0 {
 		t.Fatal("identity survived failed JIT transaction", count, err)
 	}
 }
