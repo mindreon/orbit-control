@@ -43,10 +43,10 @@ func (a *Activities) CreateInteraction(ctx context.Context, in w.InteractionInpu
 		}
 		n, err := tx.Exec(
 			ctx,
-			"INSERT INTO interactions(id,tenant_id,run_id,session_id,member,se"+
-				"q,kind,request,approvers,status,remind_at,due_at,expires_at,creat"+
-				"ed_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10,$11,$12,$1"+
-				"3) ON CONFLICT DO NOTHING",
+			`INSERT INTO interactions(id,tenant_id,run_id,session_id,member,seq,kind,request,approvers,status,remind_at,due_at,
+ expires_at,created_at)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10,$11,$12,$13)
+ ON CONFLICT DO NOTHING`,
 			in.Request.InteractionId,
 			in.TenantID,
 			in.RunID,
@@ -93,8 +93,11 @@ func (a *Activities) CancelInteraction(ctx context.Context, in w.NotifyInput) er
 	return a.change(ctx, in.RunOp, func(ctx context.Context, tx pgx.Tx) ([]event, error) {
 		_, err := tx.Exec(
 			ctx,
-			"UPDATE interactions SET status='cancelled',resolved_at=now() WHER"+
-				"E tenant_id=$1 AND id=$2 AND status IN ('pending','escalated')",
+			`UPDATE interactions
+ SET status='cancelled',resolved_at=now()
+ WHERE tenant_id=$1
+ AND id=$2
+ AND status IN ('pending','escalated')`,
 			in.TenantID,
 			in.InteractionID,
 		)
@@ -103,7 +106,7 @@ func (a *Activities) CancelInteraction(ctx context.Context, in w.NotifyInput) er
 }
 func (a *Activities) NotifyInteraction(ctx context.Context, in w.NotifyInput) error {
 	return a.change(ctx, in.RunOp, func(ctx context.Context, tx pgx.Tx) ([]event, error) {
-		i, err := interactions.Get(ctx, in.InteractionID)
+		i, err := interactions.Get(ctx, in.TenantID, in.InteractionID)
 		if err != nil {
 			return nil, err
 		}
@@ -135,8 +138,10 @@ func (a *Activities) NotifyInteraction(ctx context.Context, in w.NotifyInput) er
 			}
 			if _, err = tx.Exec(
 				ctx,
-				"UPDATE interactions SET approvers=$3,status='escalated',escalated"+
-					"_at=COALESCE(escalated_at,now()) WHERE tenant_id=$1 AND id=$2",
+				`UPDATE interactions
+ SET approvers=$3,status='escalated',escalated_at=COALESCE(escalated_at,now())
+ WHERE tenant_id=$1
+ AND id=$2`,
 				in.TenantID,
 				i.ID,
 				raw,
@@ -157,7 +162,7 @@ func (a *Activities) ApplyDecision(ctx context.Context, in w.DecisionInput) erro
 		return err
 	}
 	return a.change(ctx, in.RunOp, func(ctx context.Context, tx pgx.Tx) ([]event, error) {
-		i, err := interactions.Get(ctx, in.InteractionID)
+		i, err := interactions.Get(ctx, in.TenantID, in.InteractionID)
 		if err != nil {
 			return nil, err
 		}
@@ -201,8 +206,10 @@ func (a *Activities) ApplyDecision(ctx context.Context, in w.DecisionInput) erro
 		}
 		if _, err = tx.Exec(
 			ctx,
-			"UPDATE interactions SET status=$3,decision=$4,decided_by=$5,resol"+
-				"ved_at=now() WHERE tenant_id=$1 AND id=$2",
+			`UPDATE interactions
+ SET status=$3,decision=$4,decided_by=$5,resolved_at=now()
+ WHERE tenant_id=$1
+ AND id=$2`,
 			in.TenantID,
 			i.ID,
 			status,

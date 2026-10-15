@@ -2,7 +2,7 @@ package sessions
 
 import (
 	"context"
-	"errors"
+	"encoding/json/v2"
 	"strings"
 
 	"github.com/mindreon/orbit-control/internal/auth"
@@ -51,11 +51,10 @@ func (svc Service) Create(ctx context.Context, in CreateInput) (Session, error) 
 	_, err = tx.Exec(
 		ctx,
 		`INSERT INTO sessions(id,tenant_id,workspace_id,project_id,owner_id,title,entry_kind,
- entry_ref,message_policy,status,pinned) VALUES($1,$2,$3,$4,$5,$6,'agent',$7,$8,'idle',$9)`,
+ entry_ref,message_policy,status,pinned)
+ VALUES($1,$2,$3,$4,$5,$6,'agent',$7,$8,'idle',$9)`,
 		id,
-		auth.Tenant(
-			ctx,
-		),
+		auth.Tenant(ctx),
 		in.WorkspaceID,
 		in.ProjectID,
 		auth.From(ctx).ID,
@@ -91,8 +90,10 @@ func Patch(ctx context.Context, id string, in PatchInput) (Session, error) {
 		return s, httpx.E(422, "INVALID_INPUT", "Invalid message policy")
 	}
 	_, err = db.Tx(ctx).
-		Exec(ctx, `UPDATE sessions SET title=COALESCE($3,title),message_policy=COALESCE($4,message_policy)
- WHERE tenant_id=$1 AND id=$2`, auth.Tenant(ctx), id, in.Title, in.Policy)
+		Exec(ctx, `UPDATE sessions
+ SET title=COALESCE($3,title),message_policy=COALESCE($4,message_policy)
+ WHERE tenant_id=$1
+ AND id=$2`, auth.Tenant(ctx), id, in.Title, in.Policy)
 	if err != nil {
 		return s, err
 	}
@@ -122,39 +123,42 @@ func List(ctx context.Context, page httpx.Page, workspace, status string) (Page[
 	if workspace != "" && !ids.Valid(workspace) {
 		return result, httpx.E(422, "INVALID_INPUT", "Invalid workspace")
 	}
-	rows, err := db.Tx(ctx).Query(ctx, `SELECT id::text FROM sessions WHERE tenant_id=$1 AND
- ($2='' OR id>NULLIF($2,'')::uuid) AND ($3='' OR workspace_id=NULLIF($3,'')::uuid) AND ($4='' OR status=$4)
- ORDER BY id`, auth.Tenant(ctx), page.Cursor, workspace, status)
+	args, err := (policy.Authorizer{}).SessionReadFilter(ctx)
 	if err != nil {
 		return result, err
 	}
-	var candidates []string
+	args["tenant"], args["cursor"], args["workspace"], args["status"], args["limit"] =
+		auth.Tenant(ctx), page.Cursor, workspace, status, page.Limit+1
+	rows, err := db.Tx(ctx).Query(ctx, `SELECT to_jsonb(s)
+ FROM sessions s
+ WHERE s.tenant_id=@tenant
+ AND (@cursor=''
+ OR s.id>NULLIF(@cursor,'')::uuid)
+ AND (@workspace=''
+ OR s.workspace_id=NULLIF(@workspace,'')::uuid)
+ AND (@status=''
+ OR s.status=@status)
+ AND `+policy.SessionReadPredicate+`
+ ORDER BY s.id
+ LIMIT @limit`, args)
+	if err != nil {
+		return result, err
+	}
+	defer rows.Close()
 	for rows.Next() {
-		var id string
-		if err = rows.Scan(&id); err != nil {
-			rows.Close()
+		var raw []byte
+		var item Session
+		if err := rows.Scan(&raw); err != nil {
 			return result, err
 		}
-		candidates = append(candidates, id)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return result, err
-	}
-	for _, id := range candidates {
-		s, err := Get(ctx, id, "session.read")
-		if err != nil {
-			if e, ok := errors.AsType[*httpx.Error](err); ok && (e.Status == 403 || e.Status == 404) {
-				continue
-			}
+		if err := json.Unmarshal(raw, &item); err != nil {
 			return result, err
 		}
-		if len(result.Items) == page.Limit {
-			result.NextCursor = httpx.Cursor(result.Items[len(result.Items)-1].ID)
-			break
-		}
-		result.Items = append(result.Items, s)
+		result.Items = append(result.Items, item)
 	}
-	return result, nil
+	if len(result.Items) > page.Limit {
+		result.Items = result.Items[:page.Limit]
+		result.NextCursor = httpx.Cursor(result.Items[page.Limit-1].ID)
+	}
+	return result, rows.Err()
 }

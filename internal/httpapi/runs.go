@@ -55,10 +55,7 @@ func (h *Handler) streamToken(out http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 func (h *Handler) controlRun(out http.ResponseWriter, r *http.Request) error {
-	return h.twoPhase(out, r, func(ctx context.Context, body []byte) (
-		func(context.Context, *httpx.Recorder) error,
-		error,
-	) {
+	return h.twoPhase(out, r, func(ctx context.Context, body []byte) (func(context.Context, *httpx.Recorder) error, error) {
 		run, s, err := sessions.GetRun(ctx, r.PathValue("r"), "run.control")
 		if err != nil {
 			return nil, err
@@ -121,12 +118,7 @@ func (h *Handler) controlRun(out http.ResponseWriter, r *http.Request) error {
 			if action == "resume" {
 				signal = w.Resume
 			}
-			if err := h.Temporal.Signal(
-				ctx,
-				w.AgentRunWorkflowID(tenant, run.ID),
-				signal,
-				w.ActorInput{ActorID: actor},
-			); err != nil {
+			if err := h.Temporal.Signal(ctx, w.AgentRunWorkflowID(tenant, run.ID), signal, w.ActorInput{ActorID: actor}); err != nil {
 				return temporalError(err, "RUN_NOT_ACTIVE")
 			}
 			rec.WriteHeader(202)
@@ -140,10 +132,7 @@ func (h *Handler) prepareSteer(
 	runID, messageID, text string,
 	submission bool,
 ) (
-	func(
-		context.Context,
-		*httpx.Recorder,
-	) error,
+	func(context.Context, *httpx.Recorder) error,
 	error,
 ) {
 	tenant, actor := auth.Tenant(ctx), auth.From(ctx).ID
@@ -207,14 +196,15 @@ func (h *Handler) prepareSteer(
 	}, nil
 }
 func (h *Handler) getInteraction(out http.ResponseWriter, r *http.Request) error {
-	i, err := interactions.Get(r.Context(), r.PathValue("i"))
+	i, err := interactions.Get(r.Context(), auth.Tenant(r.Context()), r.PathValue("i"))
 	if err != nil {
 		return err
 	}
 	if !slices.Contains(i.Approvers, auth.From(r.Context()).ID) {
-		if _, err = sessions.Get(r.Context(), i.SessionID, "session.read"); err != nil {
-			return err
-		}
+		return httpx.E(404, "NOT_FOUND", "Interaction not found")
+	}
+	if _, err = sessions.Get(r.Context(), i.SessionID, "session.read"); err != nil {
+		return err
 	}
 	httpx.JSON(out, 200, i)
 	return nil
@@ -234,11 +224,8 @@ func (h *Handler) listInteractions(out http.ResponseWriter, r *http.Request) err
 }
 
 func (h *Handler) resolveInteraction(out http.ResponseWriter, r *http.Request) error {
-	return h.twoPhase(out, r, func(ctx context.Context, body []byte) (
-		func(context.Context, *httpx.Recorder) error,
-		error,
-	) {
-		i, err := interactions.Get(ctx, r.PathValue("i"))
+	return h.twoPhase(out, r, func(ctx context.Context, body []byte) (func(context.Context, *httpx.Recorder) error, error) {
+		i, err := interactions.Get(ctx, auth.Tenant(ctx), r.PathValue("i"))
 		if err != nil {
 			return nil, err
 		}
@@ -246,6 +233,9 @@ func (h *Handler) resolveInteraction(out http.ResponseWriter, r *http.Request) e
 			return nil, err
 		}
 		actor := auth.From(ctx).ID
+		if !slices.Contains(i.Approvers, actor) {
+			return nil, httpx.E(403, "FORBIDDEN", "Current principal is not an approver")
+		}
 		if !interactions.CanResolve(actor, i) {
 			return nil, httpx.E(409, "INTERACTION_NOT_PENDING", "Interaction is not pending for this approver")
 		}

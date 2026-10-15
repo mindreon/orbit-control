@@ -76,7 +76,7 @@ func (c *runTemporal) Submit(_ context.Context, _ w.SessionInput, msg w.SubmitMe
 func (c *runTemporal) Signal(context.Context, string, string, any) error { return c.signalError }
 
 func testRunHTTP(t *testing.T, d *db.DB, admin *pgx.Conn) {
-	for _, mode := range []string{"fallback", "rejected", "lease-unavailable", "lease-missing"} {
+	for _, mode := range []string{"fallback", "rejected", "duplicate", "lease-unavailable", "lease-missing"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newRunFixture(t, d, admin)
 			f.start(t)
@@ -106,7 +106,10 @@ func testRunHTTP(t *testing.T, d *db.DB, admin *pgx.Conn) {
 			require.NoError(t, err)
 			temporalClient := &runTemporal{active: f.run}
 			if mode == "rejected" {
-				temporalClient.submitError = temporal.NewApplicationError("queue full", "SESSION_UNAVAILABLE")
+				temporalClient.submitError = temporal.NewApplicationError("queue full", "QUEUE_FULL")
+			}
+			if mode == "duplicate" {
+				temporalClient.submitError = temporal.NewApplicationError("duplicate", "DUPLICATE_RUN")
 			}
 			if mode == "lease-unavailable" {
 				temporalClient.signalError = serviceerror.NewUnavailable("offline")
@@ -127,7 +130,7 @@ func testRunHTTP(t *testing.T, d *db.DB, admin *pgx.Conn) {
 			response := httptest.NewRecorder()
 			h.ServeHTTP(response, request)
 			want := http.StatusAccepted
-			if mode == "rejected" {
+			if mode == "rejected" || mode == "duplicate" {
 				want = 409
 			}
 			if mode == "lease-unavailable" {
@@ -141,8 +144,10 @@ func testRunHTTP(t *testing.T, d *db.DB, admin *pgx.Conn) {
 			require.Equal(t, 1, temporalClient.submits)
 			f.tx(t, func(ctx context.Context, tx pgx.Tx) error {
 				var messages, orphaned, queued int
-				require.NoError(t, tx.QueryRow(ctx, `SELECT count(*),count(*) FILTER(WHERE run_id=$2) FROM messages
- WHERE tenant_id=$1 AND role='user'`, f.tenant, f.run).Scan(&messages, &orphaned))
+				require.NoError(t, tx.QueryRow(ctx, `SELECT count(*),count(*) FILTER(WHERE run_id=$2)
+ FROM messages
+ WHERE tenant_id=$1
+ AND role='user'`, f.tenant, f.run).Scan(&messages, &orphaned))
 				require.Equal(t, 1, messages)
 				require.Zero(t, orphaned)
 				require.NoError(
@@ -158,7 +163,7 @@ func testRunHTTP(t *testing.T, d *db.DB, admin *pgx.Conn) {
 			})
 		})
 	}
-	// A listed approver can read an interaction without session.read.
+	// An approver can read only while the session permission remains effective.
 	f := newRunFixture(t, d, admin)
 	approver := ids.New()
 	_, err := admin.Exec(t.Context(), `INSERT INTO principals(id,kind,email,display_name,idp_subject)
@@ -190,6 +195,9 @@ func testRunHTTP(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		)
 		return err
 	})
+	f.tx(t, func(ctx context.Context, tx pgx.Tx) error {
+		return tenancy.Bind(ctx, tx, auth.From(ctx), f.tenant, "user", approver, "session.viewer", "session", f.session)
+	})
 	c := config.Config{AuthMode: "dev", KeyFile: t.TempDir() + "/auth.key", CapabilityKeyFile: t.TempDir() + "/cap.key",
 		CapabilityKeyID: "test", SecretsKeyVersion: 1, SecretsKEKs: map[int][]byte{1: make([]byte, 32)}}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -199,13 +207,29 @@ func testRunHTTP(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	token, err := a.Signer.DevToken(auth.Principal{ID: approver, Kind: "user"})
 	require.NoError(t, err)
 	h := (&httpapi.Handler{DB: d, Auth: a, Config: c, Logger: logger}).Router()
-	for _, path := range []string{"/v1/interactions/" + req.InteractionId, "/v1/interactions?assignee=me"} {
-		r := httptest.NewRequest("GET", path, nil)
-		r.Header.Set("Authorization", "Bearer "+token)
-		r.Header.Set("X-Orbit-Tenant", f.tenant)
-		response := httptest.NewRecorder()
-		h.ServeHTTP(response, r)
-		require.Equal(t, 200, response.Code, response.Body.String())
-		require.Contains(t, response.Body.String(), req.InteractionId)
+	for _, revoked := range []bool{false, true} {
+		if revoked {
+			f.tx(t, func(ctx context.Context, tx pgx.Tx) error {
+				_, err := tx.Exec(ctx, `DELETE FROM role_bindings WHERE tenant_id=$1 AND principal_id=$2`, f.tenant, approver)
+				return err
+			})
+		}
+		for _, path := range []string{"/v1/interactions/" + req.InteractionId, "/v1/interactions?assignee=me"} {
+			r := httptest.NewRequest("GET", path, nil)
+			r.Header.Set("Authorization", "Bearer "+token)
+			r.Header.Set("X-Orbit-Tenant", f.tenant)
+			response := httptest.NewRecorder()
+			h.ServeHTTP(response, r)
+			want := 200
+			if revoked && !strings.Contains(path, "?") {
+				want = 404
+			}
+			require.Equal(t, want, response.Code, response.Body.String())
+			if revoked {
+				require.NotContains(t, response.Body.String(), req.InteractionId)
+			} else {
+				require.Contains(t, response.Body.String(), req.InteractionId)
+			}
+		}
 	}
 }

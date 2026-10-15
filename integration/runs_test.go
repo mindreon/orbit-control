@@ -67,9 +67,9 @@ func newRunFixture(t *testing.T, d *db.DB, admin *pgx.Conn) *runFixture {
 			{sql: `INSERT INTO memberships(tenant_id,principal_id,status,source) VALUES($1,$2,'active','direct')`, args: []any{f.tenant, f.actor}},
 			{sql: `INSERT INTO workspaces(id,tenant_id,name) VALUES($1,$2,'Runs')`, args: []any{f.workspace, f.tenant}},
 			{sql: `INSERT INTO sessions(id,tenant_id,workspace_id,owner_id,title,entry_kind,entry_ref,message_policy,status)
-    VALUES($1,$2,$3,$4,'Fixture','agent','agent:test','queue','idle')`, args: []any{f.session, f.tenant, f.workspace, f.actor}},
+ VALUES($1,$2,$3,$4,'Fixture','agent','agent:test','queue','idle')`, args: []any{f.session, f.tenant, f.workspace, f.actor}},
 			{sql: `INSERT INTO runs(id,tenant_id,session_id,trigger,status,created_by,budget_millicredits)
-    VALUES($1,$2,$3,'user_message','queued',$4,200000)`, args: []any{f.run, f.tenant, f.session, f.actor}},
+ VALUES($1,$2,$3,'user_message','queued',$4,200000)`, args: []any{f.run, f.tenant, f.session, f.actor}},
 		} {
 			if _, err := tx.Exec(ctx, q.sql, q.args...); err != nil {
 				return err
@@ -89,7 +89,7 @@ func newRunFixture(t *testing.T, d *db.DB, admin *pgx.Conn) *runFixture {
 			return err
 		}
 		if _, err = tx.Exec(ctx, `INSERT INTO run_locks(id,tenant_id,run_id,digest,entries,effective_permissions,lock)
-   VALUES($1,$2,$3,$4,'[]','{}',$5)`, f.lock, f.tenant, f.run, lock.Digest, raw); err != nil {
+ VALUES($1,$2,$3,$4,'[]','{}',$5)`, f.lock, f.tenant, f.run, lock.Digest, raw); err != nil {
 			return err
 		}
 		_, err = tx.Exec(ctx, `UPDATE runs SET lock_id=$3 WHERE tenant_id=$1 AND id=$2`, f.tenant, f.run, f.lock)
@@ -102,8 +102,7 @@ func newRunFixture(t *testing.T, d *db.DB, admin *pgx.Conn) *runFixture {
 	require.NoError(t, err)
 	f.keys = secrets.Keys{Current: 1, KEKs: map[int][]byte{1: make([]byte, 32)}}
 	digest := sha256.Sum256([]byte("fixture-service-credential"))
-	f.router = (&kernelapi.Handler{DB: d, Signer: f.signer, Secrets: f.keys,
-		ServiceTokenSHA256: hex.EncodeToString(digest[:])}).Router()
+	f.router = (&kernelapi.Handler{DB: d, Signer: f.signer, Secrets: f.keys, ServiceTokenSHA256: hex.EncodeToString(digest[:])}).Router()
 	return f
 }
 func (f *runFixture) tx(t *testing.T, fn func(context.Context, pgx.Tx) error) {
@@ -157,8 +156,11 @@ func (f *runFixture) token(t *testing.T) string {
 }
 func testRuns(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	t.Run("SandboxProjection", func(t *testing.T) { testSandboxProjection(t, d, admin) })
+	t.Run("SandboxAcquire", func(t *testing.T) { testSandboxAcquireGenerationAndProvider(t, d, admin) })
 	t.Run("SegmentBoundary", func(t *testing.T) { testSegmentBoundary(t, d, admin) })
 	t.Run("HTTP", func(t *testing.T) { testRunHTTP(t, d, admin) })
+	t.Run("HTTPHandlers", func(t *testing.T) { testRunHTTPHandlers(t, d, admin) })
+	t.Run("SessionVisibilityPagination", func(t *testing.T) { testSessionVisibilityPagination(t, d, admin) })
 	t.Run("ProjectionAndIdempotentActivities", func(t *testing.T) { testRunProjection(t, d, admin) })
 	t.Run("Grants", func(t *testing.T) { testRunGrants(t, d, admin) })
 	t.Run("SecretGrantAudit", func(t *testing.T) { testSecretGrantAudit(t, d, admin) })
@@ -249,7 +251,7 @@ func testRunGrants(t *testing.T, d *db.DB, admin *pgx.Conn) {
 					_, err := tx.Exec(
 						ctx,
 						`INSERT INTO role_bindings(id,tenant_id,principal_type,principal_id,role,scope_type,scope_id,created_by)
-     VALUES($1,$2,'user',$3,'ws.admin','workspace',$4,$3)`,
+ VALUES($1,$2,'user',$3,'ws.admin','workspace',$4,$3)`,
 						ids.New(),
 						f.tenant,
 						f.actor,
@@ -345,20 +347,14 @@ func testKernelRun(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	}
 	status, _ := f.request(t, "GET", prefix+"/content?ref=t/"+other.tenant+"/runs/"+f.run+"/input/message", token, nil)
 	require.Equal(t, 403, status)
-	status, _ = f.request(
-		t,
-		"POST",
-		prefix+"/secret-grants",
-		token,
-		contract.SecretGrantRequest{Names: []string{"NOT_DECLARED"}},
-	)
+	status, _ = f.request(t, "POST", prefix+"/secret-grants", token, contract.SecretGrantRequest{Names: []string{"NOT_DECLARED"}})
 	require.Equal(t, 403, status)
 	f.tx(t, func(ctx context.Context, tx pgx.Tx) error {
 		for i, name := range []string{"cheap", "expensive"} {
 			_, err := tx.Exec(
 				ctx,
 				`INSERT INTO model_profiles(id,tenant_id,name,provider,base_url,model,pricing,is_default)
-    VALUES($1,$2,$3,'openai','http://mock.invalid/v1','same-model',$4,$5)`,
+ VALUES($1,$2,$3,'openai','http://mock.invalid/v1','same-model',$4,$5)`,
 				ids.New(),
 				f.tenant,
 				name,
@@ -410,7 +406,10 @@ func testSandboxProjection(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	}
 	f.tx(t, func(ctx context.Context, tx pgx.Tx) error {
 		var count int
-		require.NoError(t, tx.QueryRow(ctx, `SELECT count(*) FROM control_events WHERE run_id=$1 AND
+		require.NoError(t, tx.QueryRow(ctx, `SELECT count(*)
+ FROM control_events
+ WHERE run_id=$1
+ AND
  payload->>'type'='sandbox.restored'`, f.run).Scan(&count))
 		require.Equal(t, 1, count)
 		return nil
@@ -424,6 +423,30 @@ func testSandboxProjection(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		require.Equal(t, "destroyed", state)
 		return nil
 	})
+	input.Gen = 2
+	input.State = "destroyed"
+	require.NoError(t, f.activities.RecordSandboxState(t.Context(), input))
+	// A restarted lease starts above the persisted generation; stale executions cannot overwrite it.
+	input.Provider = "opensandbox"
+	input.Gen = 3
+	input.State = "creating"
+	input.Lease = nil
+	require.NoError(t, f.activities.RecordSandboxState(t.Context(), input))
+	input.State = "ready"
+	input.Lease = &contract.SandboxLease{Provider: "opensandbox", SandboxId: "new-box", ExpiresAt: time.Now().Add(time.Hour)}
+	require.NoError(t, f.activities.RecordSandboxState(t.Context(), input))
+	input.Gen = 2
+	input.State = "destroyed"
+	require.NoError(t, f.activities.RecordSandboxState(t.Context(), input))
+	status, _ := f.request(t, "POST", "/internal/v1/tokens", "fixture-service-credential", contract.TokenRequest{
+		TenantId: f.tenant, RunId: f.run, Purpose: "sandbox", LeaseId: new(input.IsolationKey),
+	})
+	require.Equal(t, 200, status)
+	f.activities.Environment = "prod"
+	f.activities.SandboxProvider = "local"
+	_, err := f.activities.AcquireSandbox(t.Context(), w.AcquireSandboxInput{RunOp: f.op()})
+	require.ErrorContains(t, err, "invalid sandbox provider")
+
 }
 func testSegmentBoundary(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	f := newRunFixture(t, d, admin)

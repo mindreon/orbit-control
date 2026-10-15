@@ -1208,7 +1208,7 @@ paths:
   /v1/sessions:
     post:
       operationId: createSession
-      summary: createSession
+      summary: Create an agent session
       parameters:
         - $ref: '#/components/parameters/Tenant'
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -1252,7 +1252,7 @@ paths:
                 - entry_ref
     get:
       operationId: listSessions
-      summary: listSessions
+      summary: List sessions readable by the current principal
       parameters:
         - $ref: '#/components/parameters/Tenant'
         - $ref: '#/components/parameters/Cursor'
@@ -1287,7 +1287,7 @@ paths:
   /v1/sessions/{s}:
     get:
       operationId: getSession
-      summary: getSession
+      summary: Read a session
       parameters:
         - $ref: '#/components/parameters/Tenant'
         - name: s
@@ -1307,7 +1307,7 @@ paths:
           $ref: '#/components/responses/Error'
     patch:
       operationId: updateSession
-      summary: updateSession
+      summary: Update session title or message policy
       parameters:
         - $ref: '#/components/parameters/Tenant'
         - name: s
@@ -1344,7 +1344,7 @@ paths:
   /v1/sessions/{s}/archive:
     post:
       operationId: archiveSession
-      summary: archiveSession
+      summary: Archive a session after draining its runs
       parameters:
         - $ref: '#/components/parameters/Tenant'
         - name: s
@@ -1366,7 +1366,7 @@ paths:
   /v1/sessions/{s}/messages:
     post:
       operationId: submitMessage
-      summary: submitMessage
+      summary: Submit a message and admit an agent run
       parameters:
         - $ref: '#/components/parameters/Tenant'
         - name: s
@@ -1421,7 +1421,7 @@ paths:
                 - text
     get:
       operationId: listSessionMessages
-      summary: listSessionMessages
+      summary: List session messages
       parameters:
         - $ref: '#/components/parameters/Tenant'
         - name: s
@@ -1454,7 +1454,7 @@ paths:
   /v1/sessions/{s}/runs:
     get:
       operationId: listSessionRuns
-      summary: listSessionRuns
+      summary: List session runs
       parameters:
         - $ref: '#/components/parameters/Tenant'
         - name: s
@@ -1487,7 +1487,7 @@ paths:
   /v1/sessions/{s}/artifacts:
     get:
       operationId: listSessionArtifacts
-      summary: listSessionArtifacts
+      summary: List session artifacts
       parameters:
         - $ref: '#/components/parameters/Tenant'
         - name: s
@@ -1520,7 +1520,7 @@ paths:
   /v1/artifacts/{a}:
     get:
       operationId: getArtifact
-      summary: getArtifact
+      summary: Redirect to a signed artifact download
       parameters:
         - $ref: '#/components/parameters/Tenant'
         - name: a
@@ -1543,7 +1543,7 @@ paths:
   /v1/runs/{r}:
     get:
       operationId: getRun
-      summary: getRun
+      summary: Read run status and usage
       parameters:
         - $ref: '#/components/parameters/Tenant'
         - name: r
@@ -1564,7 +1564,7 @@ paths:
   /v1/runs/{r}/segments:
     get:
       operationId: listRunSegments
-      summary: listRunSegments
+      summary: List committed run segments
       parameters:
         - $ref: '#/components/parameters/Tenant'
         - name: r
@@ -1597,7 +1597,7 @@ paths:
   /v1/runs/{r}/cancel:
     post:
       operationId: cancelRun
-      summary: cancelRun
+      summary: Cancel an active or queued run
       parameters:
         - $ref: '#/components/parameters/Tenant'
         - name: r
@@ -1617,6 +1617,7 @@ paths:
                 properties:
                   disposition:
                     type: string
+                    enum: [dequeued, cancelling]
         default:
           $ref: '#/components/responses/Error'
       requestBody:
@@ -1631,7 +1632,7 @@ paths:
   /v1/runs/{r}/pause:
     post:
       operationId: pauseRun
-      summary: pauseRun
+      summary: Pause a run after its current segment
       parameters:
         - $ref: '#/components/parameters/Tenant'
         - name: r
@@ -1649,7 +1650,7 @@ paths:
   /v1/runs/{r}/resume:
     post:
       operationId: resumeRun
-      summary: resumeRun
+      summary: Resume a paused run
       parameters:
         - $ref: '#/components/parameters/Tenant'
         - name: r
@@ -1667,7 +1668,7 @@ paths:
   /v1/runs/{r}/steer:
     post:
       operationId: steerRun
-      summary: steerRun
+      summary: Queue additional input for an active run
       parameters:
         - $ref: '#/components/parameters/Tenant'
         - name: r
@@ -1709,7 +1710,7 @@ paths:
   /v1/runs/{r}/stream-token:
     get:
       operationId: getStreamToken
-      summary: getStreamToken
+      summary: Issue a short-lived run stream token
       parameters:
         - $ref: '#/components/parameters/Tenant'
         - name: r
@@ -1736,7 +1737,7 @@ paths:
   /v1/interactions:
     get:
       operationId: listInteractions
-      summary: listInteractions
+      summary: List approvals with current session access
       parameters:
         - $ref: '#/components/parameters/Tenant'
         - $ref: '#/components/parameters/Cursor'
@@ -1771,7 +1772,7 @@ paths:
   /v1/interactions/{i}:
     get:
       operationId: getInteraction
-      summary: getInteraction
+      summary: Read an approval with current session access
       parameters:
         - $ref: '#/components/parameters/Tenant'
         - name: i
@@ -1792,7 +1793,7 @@ paths:
   /v1/interactions/{i}/resolve:
     post:
       operationId: resolveInteraction
-      summary: resolveInteraction
+      summary: Resolve a pending interaction as an authorized approver
       parameters:
         - $ref: '#/components/parameters/Tenant'
         - name: i
@@ -2538,6 +2539,8 @@ components:
                 - SECRET_NOT_DECLARED
                 - SESSION_ARCHIVED
                 - SESSION_UNAVAILABLE
+                - DUPLICATE_RUN
+                - QUEUE_FULL
                 - STORAGE_UNAVAILABLE
                 - TEMPORAL_UNAVAILABLE
                 - TENANT_REQUIRED

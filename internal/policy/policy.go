@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/mindreon/orbit-control/internal/auth"
 	"github.com/mindreon/orbit-control/internal/platform/db"
 	"github.com/mindreon/orbit-control/internal/platform/httpx"
@@ -154,9 +156,14 @@ type Authorizer struct{}
 func (Authorizer) Bindings(ctx context.Context) ([]Binding, error) {
 	p := auth.From(ctx)
 	rows, e := db.Tx(ctx).
-		Query(ctx, "SELECT role,scope_type,scope_id::text FROM role_bindings WHERE (principal_type IN "+
-			"('user','service') AND principal_id=$1) OR (principal_type='group' AND principal_id IN "+
-			"(SELECT group_id FROM group_members WHERE principal_id=$1))", p.ID)
+		Query(ctx, `SELECT role,scope_type,scope_id::text
+ FROM role_bindings
+ WHERE (principal_type IN ('user','service')
+ AND principal_id=$1)
+ OR (principal_type='group'
+ AND principal_id IN (SELECT group_id
+ FROM group_members
+ WHERE principal_id=$1))`, p.ID)
 	if e != nil {
 		return nil, e
 	}
@@ -217,8 +224,12 @@ func (a Authorizer) RequireKeyIssuance(ctx context.Context, target string, scope
 	issuer := auth.From(ctx)
 	var kind string
 	err := db.Tx(ctx).
-		QueryRow(ctx, "SELECT p.kind FROM principals p JOIN memberships m ON m.principal_id=p.id WHERE p.id=$1 "+
-			"AND m.status='active' AND p.status='active'", target).
+		QueryRow(ctx, `SELECT p.kind
+ FROM principals p
+ JOIN memberships m ON m.principal_id=p.id
+ WHERE p.id=$1
+ AND m.status='active'
+ AND p.status='active'`, target).
 		Scan(&kind)
 	if err != nil {
 		return err
@@ -258,4 +269,34 @@ func hasAction(bindings []Binding, action, tenant string) bool {
 		}
 	}
 	return false
+}
+
+// SessionReadPredicate applies the same role matrix and scope inheritance as Require.
+// The query must expose its session as s and supply SessionReadFilter's named arguments.
+const SessionReadPredicate = `EXISTS (
+ SELECT 1
+ FROM role_bindings b
+ WHERE b.tenant_id=s.tenant_id
+ AND b.role=ANY(@read_roles::text[])
+ AND ((b.principal_type IN ('user','service') AND b.principal_id=@read_principal)
+      OR (b.principal_type='group' AND EXISTS (
+       SELECT 1 FROM group_members gm
+       WHERE gm.tenant_id=b.tenant_id AND gm.group_id=b.principal_id AND gm.principal_id=@read_principal)))
+ AND ((b.scope_type='tenant' AND b.scope_id=s.tenant_id)
+      OR (b.scope_type='workspace' AND b.scope_id=s.workspace_id)
+      OR (b.scope_type='session' AND b.scope_id=s.id)))`
+
+func (Authorizer) SessionReadFilter(ctx context.Context) (pgx.NamedArgs, error) {
+	p := auth.From(ctx)
+	if p.APIKey && !slices.Contains(p.Scopes, "session.read") {
+		return nil, httpx.E(403, "FORBIDDEN", "API key scope does not permit this action")
+	}
+	roles := []string{}
+	for role, actions := range Matrix {
+		if slices.Contains(actions, "session.read") {
+			roles = append(roles, role)
+		}
+	}
+	slices.Sort(roles)
+	return pgx.NamedArgs{"read_principal": p.ID, "read_roles": roles}, nil
 }

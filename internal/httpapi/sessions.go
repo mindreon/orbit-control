@@ -122,7 +122,10 @@ func (h *Handler) twoPhase(
 	return nil
 }
 func temporalError(err error, conflict string) error {
-	if _, ok := errors.AsType[*temporal.ApplicationError](err); ok {
+	if app, ok := errors.AsType[*temporal.ApplicationError](err); ok {
+		if app.Type() == "SESSION_ARCHIVED" || app.Type() == "QUEUE_FULL" || app.Type() == "DUPLICATE_RUN" {
+			conflict = app.Type()
+		}
 		return httpx.E(409, conflict, "Workflow no longer accepts this operation")
 	}
 	if _, ok := errors.AsType[*serviceerror.NotFound](err); ok {
@@ -139,10 +142,7 @@ func decodeBody(body []byte, out any) error {
 	return nil
 }
 func (h *Handler) submitMessage(out http.ResponseWriter, r *http.Request) error {
-	return h.twoPhase(out, r, func(ctx context.Context, body []byte) (
-		func(context.Context, *httpx.Recorder) error,
-		error,
-	) {
+	return h.twoPhase(out, r, func(ctx context.Context, body []byte) (func(context.Context, *httpx.Recorder) error, error) {
 		return h.prepareSubmission(ctx, r, body, true)
 	})
 }
@@ -183,14 +183,7 @@ func (h *Handler) prepareSubmission(ctx context.Context, r *http.Request, body [
 			return deliver, err
 		}
 	}
-	lock, storedBudget, err := h.sessionService().PrepareSubmission(
-		ctx,
-		s,
-		runID,
-		messageID,
-		input.Text,
-		input.Budget,
-	)
+	lock, storedBudget, err := h.sessionService().PrepareSubmission(ctx, s, runID, messageID, input.Text, input.Budget)
 	if err != nil {
 		return nil, err
 	}
@@ -281,10 +274,9 @@ func (h *Handler) submitDelivery(
 		)
 		if e != nil {
 			mapped := temporalError(e, "SESSION_UNAVAILABLE")
-			if he, ok := errors.AsType[*httpx.Error](mapped); ok && he.Status == 409 {
-				if err := h.DB.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
-					return sessions.RejectQueued(db.Context(ctx, tx), runID)
-				}); err != nil {
+			if app, ok := errors.AsType[*temporal.ApplicationError](e); ok &&
+				(app.Type() == "SESSION_ARCHIVED" || app.Type() == "QUEUE_FULL") {
+				if err := h.DB.WithTenant(ctx, tenant, func(tx pgx.Tx) error { return sessions.RejectQueued(db.Context(ctx, tx), runID) }); err != nil {
 					return err
 				}
 			}
@@ -309,10 +301,7 @@ func (h *Handler) submitDelivery(
 	}
 }
 func (h *Handler) patchSession(out http.ResponseWriter, r *http.Request) error {
-	return h.twoPhase(out, r, func(ctx context.Context, body []byte) (
-		func(context.Context, *httpx.Recorder) error,
-		error,
-	) {
+	return h.twoPhase(out, r, func(ctx context.Context, body []byte) (func(context.Context, *httpx.Recorder) error, error) {
 		var input sessions.PatchInput
 		if err := decodeBody(body, &input); err != nil {
 			return nil, err
@@ -324,12 +313,7 @@ func (h *Handler) patchSession(out http.ResponseWriter, r *http.Request) error {
 		tenant := auth.Tenant(ctx)
 		return func(ctx context.Context, rec *httpx.Recorder) error {
 			if input.Policy != nil && h.Temporal != nil {
-				if err := h.Temporal.Signal(
-					ctx,
-					w.SessionWorkflowID(tenant, s.ID),
-					w.SetPolicy,
-					w.SetPolicyInput{Policy: *input.Policy},
-				); err != nil {
+				if err := h.Temporal.Signal(ctx, w.SessionWorkflowID(tenant, s.ID), w.SetPolicy, w.SetPolicyInput{Policy: *input.Policy}); err != nil {
 					if _, missing := errors.AsType[*serviceerror.NotFound](err); !missing {
 						return temporalError(err, "")
 					}
@@ -341,10 +325,7 @@ func (h *Handler) patchSession(out http.ResponseWriter, r *http.Request) error {
 	})
 }
 func (h *Handler) archiveSession(out http.ResponseWriter, r *http.Request) error {
-	return h.twoPhase(out, r, func(ctx context.Context, body []byte) (
-		func(context.Context, *httpx.Recorder) error,
-		error,
-	) {
+	return h.twoPhase(out, r, func(ctx context.Context, body []byte) (func(context.Context, *httpx.Recorder) error, error) {
 		s, err := sessions.Archive(ctx, r.PathValue("s"))
 		if err != nil {
 			return nil, err
@@ -356,6 +337,9 @@ func (h *Handler) archiveSession(out http.ResponseWriter, r *http.Request) error
 					if _, missing := errors.AsType[*serviceerror.NotFound](err); !missing {
 						return temporalError(err, "")
 					}
+				} else {
+					httpx.JSON(rec, 202, s)
+					return nil
 				}
 
 				leaseID := w.LeaseWorkflowID(tenant, w.IsolationKey(tenant, s.ID))
