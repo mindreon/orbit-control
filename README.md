@@ -468,7 +468,10 @@ uses only `ORBIT_WORKER_SERVICE_TOKEN_SHA256`. Run budgets default to
 `local` sandbox provider. Object storage may be configured with the existing
 `ORBIT_OBJECT_*` variables or the `ORBIT_S3_*` aliases. `orbit-admin seed-dev`
 uses `ORBIT_SEED_MODEL_BASE_URL`, `ORBIT_SEED_MODEL_API_KEY`, and
-`ORBIT_SEED_MODEL_NAME`; unset values select the local mock model.
+`ORBIT_SEED_MODEL_NAME`; all three are required. The encrypted secret is named `MODEL_KEY`. Trusted embedded
+development agents publish through `assets.PublishDevelopmentSeed` with normal bundle,
+version, signature and channel checks and an explicit seed audit; this dev-only
+provisioning path does not wait for interactive release review.
 
 ## Single-agent execution (WP6b)
 

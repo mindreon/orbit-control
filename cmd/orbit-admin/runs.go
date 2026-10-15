@@ -128,22 +128,9 @@ func seedDevelopment(ctx context.Context, d *db.DB, c config.Config, keys secret
 	if err != nil {
 		return err
 	}
-	model := devseed.Model{
-		BaseURL: os.Getenv("ORBIT_SEED_MODEL_BASE_URL"),
-		APIKey:  contract.Secret(os.Getenv("ORBIT_SEED_MODEL_API_KEY")),
-		Name:    os.Getenv("ORBIT_SEED_MODEL_NAME"),
-	}
-	if model.BaseURL == "" {
-		model.BaseURL = "http://mockllm:8000/v1"
-	}
-	if model.Name == "" {
-		model.Name = "orbit-mock"
-	}
-	if model.APIKey == "" {
-		if model.BaseURL != "http://mockllm:8000/v1" {
-			return fmt.Errorf("ORBIT_SEED_MODEL_API_KEY required for custom model endpoint")
-		}
-		model.APIKey = contract.Secret("orbit-mock")
+	model, err := devseed.ModelFromEnv()
+	if err != nil {
+		return err
 	}
 	if !validModelURL(model.BaseURL) {
 		return fmt.Errorf("ORBIT_SEED_MODEL_BASE_URL must be an HTTP URL without credentials")

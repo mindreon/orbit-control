@@ -237,3 +237,17 @@ func TestStoredSigningPreimagePreservesUnknownFields(t *testing.T) {
 		t.Fatal("noncanonical signing bytes accepted")
 	}
 }
+
+func TestDevelopmentSeedPublicationRejectsOtherContexts(t *testing.T) {
+	svc := Service{}
+	for _, tc := range []struct{ environment, name, publisher string }{
+		{environment: "prod", name: "echo-agent", publisher: "dev"},
+		{environment: "dev", name: "other", publisher: "dev"},
+		{environment: "dev", name: "echo-agent", publisher: "other"},
+	} {
+		asset := Asset{Kind: "agent", Name: tc.name, Publisher: tc.publisher}
+		if err := svc.PublishDevelopmentSeed(t.Context(), asset, "", tc.environment); err == nil {
+			t.Fatal("non-seed publication accepted")
+		}
+	}
+}

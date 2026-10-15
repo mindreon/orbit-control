@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -35,8 +37,29 @@ type Result struct {
 	Versions    []string `json:"versions"`
 }
 
+func ModelFromEnv() (Model, error) {
+	model := Model{BaseURL: os.Getenv("ORBIT_SEED_MODEL_BASE_URL"),
+		APIKey: contract.Secret(os.Getenv("ORBIT_SEED_MODEL_API_KEY")), Name: os.Getenv("ORBIT_SEED_MODEL_NAME")}
+	return model, model.validate()
+}
+func (m Model) validate() error {
+	for _, value := range []struct{ name, value string }{
+		{name: "ORBIT_SEED_MODEL_BASE_URL", value: m.BaseURL},
+		{name: "ORBIT_SEED_MODEL_API_KEY", value: string(m.APIKey)},
+		{name: "ORBIT_SEED_MODEL_NAME", value: m.Name},
+	} {
+		if strings.TrimSpace(value.value) == "" {
+			return fmt.Errorf("%s is required", value.name)
+		}
+	}
+	return nil
+}
+
 func Seed(ctx context.Context, d *db.DB, svc *assets.Service, keys secrets.Keys, model Model) (Result, error) {
 	var out Result
+	if err := model.validate(); err != nil {
+		return out, err
+	}
 	var p auth.Principal
 	err := d.Global(ctx, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `SELECT id::text,kind FROM principals WHERE idp_subject=$1`, auth.DevIssuer+"|dev@orbit.local").
@@ -152,7 +175,7 @@ func seedWorkspaceModel(ctx context.Context, tx pgx.Tx, p auth.Principal, out Re
 	if e := tenancy.Bind(ctx, tx, p, out.TenantID, p.Kind, p.ID, "ws.admin", "workspace", out.WorkspaceID); e != nil {
 		return e
 	}
-	secretID, e := keys.Put(ctx, out.TenantID, p.ID, "MOCK_KEY", "tenant", []byte(model.APIKey))
+	secretID, e := keys.Put(ctx, out.TenantID, p.ID, "MODEL_KEY", "tenant", []byte(model.APIKey))
 	if e != nil {
 		return e
 	}
@@ -223,7 +246,7 @@ func seedAgents(ctx context.Context, tx pgx.Tx, svc *assets.Service, out *Result
 				return e
 			}
 			versionID = version.ID
-			if e = svc.Submit(ctx, a, versionID, "stable"); e != nil {
+			if e = svc.PublishDevelopmentSeed(ctx, a, versionID, "dev"); e != nil {
 				return e
 			}
 		} else if e != nil {

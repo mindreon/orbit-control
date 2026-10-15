@@ -1,0 +1,1 @@
+{"mcpServers":{"test":{"url":"http://testmcp:8000/mcp","transport":"streamable_http","tools":{"wait_seconds":{"effectClass":"read_only"}}}}}

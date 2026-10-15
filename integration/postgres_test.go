@@ -96,6 +96,7 @@ func TestPostgresSuite(t *testing.T) {
 	t.Run("HTTPAndAudit", func(t *testing.T) { testHTTP(t, app, admin) })
 	t.Run("JITProvisioning", func(t *testing.T) { testJITProvisioning(t, app, admin) })
 	t.Run("Assets", func(t *testing.T) { testAssets(t, app, admin) })
+	t.Run("DevSeed", func(t *testing.T) { testDevSeed(t, app) })
 	t.Run("Runs", func(t *testing.T) { testRuns(t, app, admin) })
 	t.Run("UsageAndEvents", func(t *testing.T) { testUsageAndEvents(t, app, admin) })
 }
