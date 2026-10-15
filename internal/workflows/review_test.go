@@ -459,3 +459,18 @@ func TestActivityOrder(t *testing.T) {
 	require.Equal(t, []string{"PrepareRun", "AcquireSandbox", "StartSegment", contract.ActivityRunAgentSegment,
 		"RecordSegment", "FinalizeRun"}, calls)
 }
+
+func TestCancelWinsOverConcurrentSuccessfulSegment(t *testing.T) {
+	h := newHarness(t)
+	h.env.OnActivity("RecordSegment", mock.Anything, mock.Anything).Return(
+		func(_ context.Context, in w.RecordSegmentInput) (w.RecordSegmentOutput, error) {
+			h.records = append(h.records, in)
+			return w.RecordSegmentOutput{}, nil
+		}).After(2 * time.Second)
+	h.env.RegisterDelayedCallback(func() {
+		h.env.SignalWorkflow(w.Cancel, w.CancelInput{Reason: "asset_suspended:user supplied text"})
+	}, time.Second)
+	h.execute(t, "cancelled", "CANCELLED")
+	require.Len(t, h.records, 1, "the safe segment result is still projected before cancellation")
+	require.Equal(t, "asset_suspended:user supplied text", h.finished[0].Reason)
+}

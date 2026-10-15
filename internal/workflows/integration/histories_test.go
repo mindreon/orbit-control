@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/api/enums/v1"
 	historypb "go.temporal.io/api/history/v1"
+	"go.temporal.io/api/operatorservice/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/activity"
@@ -54,7 +55,7 @@ func (f *fixtures) segment(ctx context.Context, in contract.SegmentInput) (contr
 	case "yield", "can":
 		threshold := 3
 		if name == "can" {
-			threshold = 4
+			threshold = w.RunContinueAfter + 1
 		}
 		if in.Seq < threshold {
 			res.Status = "yielded"
@@ -215,7 +216,10 @@ func devClient(t *testing.T) client.Client {
 	if address == "" {
 		address = "127.0.0.1:57233"
 	}
-	ns := "orbit-v2-wp6b-histories"
+	ns := os.Getenv("ORBIT_TEST_TEMPORAL_NAMESPACE")
+	if ns == "" {
+		ns = "orbit-v2-wp6b-histories"
+	}
 	c, err := client.Dial(client.Options{HostPort: address, Namespace: ns})
 	require.NoError(t, err)
 	t.Cleanup(c.Close)
@@ -224,6 +228,14 @@ func devClient(t *testing.T) client.Client {
 	})
 	if _, exists := err.(*serviceerror.NamespaceAlreadyExists); !exists {
 		require.NoError(t, err)
+	}
+	for _, name := range []string{"TenantId", "WorkspaceId", "RunKind"} {
+		_, err = c.OperatorService().AddSearchAttributes(t.Context(), &operatorservice.AddSearchAttributesRequest{
+			Namespace: ns, SearchAttributes: map[string]enums.IndexedValueType{name: enums.INDEXED_VALUE_TYPE_KEYWORD},
+		})
+		if _, exists := err.(*serviceerror.AlreadyExists); !exists {
+			require.NoError(t, err)
+		}
 	}
 	return c
 }
@@ -282,7 +294,7 @@ func TestRecordHistories(t *testing.T) {
 		"compact",
 	} {
 		t.Run(name, func(t *testing.T) {
-			recordRun(t, c, queue, name)
+			recordRun(t, c, queue, name, f)
 		})
 	}
 	t.Run("session", func(t *testing.T) {
@@ -292,7 +304,7 @@ func TestRecordHistories(t *testing.T) {
 		recordLease(t, c, queue)
 	})
 }
-func recordRun(t *testing.T, c client.Client, queue, name string) {
+func recordRun(t *testing.T, c client.Client, queue, name string, fixture *fixtures) {
 	in := runInput(name)
 	run, err := c.ExecuteWorkflow(
 		t.Context(),
@@ -301,6 +313,7 @@ func recordRun(t *testing.T, c client.Client, queue, name string) {
 		in,
 	)
 	require.NoError(t, err)
+	firstRunID := run.GetRunID()
 	switch name {
 	case "approval":
 		waitProgress(
@@ -333,9 +346,11 @@ func recordRun(t *testing.T, c client.Client, queue, name string) {
 			&out,
 		)
 	case "cancel", "pause", "steer":
-		waitProgress(t, c, run.GetID(), func(p w.RunProgress) bool {
-			return p.Status == "running"
-		})
+		require.Eventually(t, func() bool {
+			fixture.Lock()
+			defer fixture.Unlock()
+			return fixture.calls[in.RunID] > 0
+		}, 10*time.Second, 10*time.Millisecond)
 		if name == "cancel" {
 			require.NoError(
 				t,
@@ -361,10 +376,10 @@ func recordRun(t *testing.T, c client.Client, queue, name string) {
 			)
 		}
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 	defer cancel()
 	require.NoError(t, run.Get(ctx, nil))
-	save(t, c, run.GetID(), run.GetRunID(), name)
+	save(t, c, run.GetID(), firstRunID, name)
 }
 func waitProgress(t *testing.T, c client.Client, id string, ready func(w.RunProgress) bool) {
 	t.Helper()
@@ -415,6 +430,11 @@ func recordSession(t *testing.T, c client.Client, queue string) {
 		var state w.SessionState
 		return value.Get(&state) == nil && state.ActiveRunID == "" && state.QueueLen == 0
 	}, 15*time.Second, 20*time.Millisecond)
+	for _, name := range []string{"pause", "complete"} {
+		child, err := c.DescribeWorkflowExecution(t.Context(), w.AgentRunWorkflowID("tenant", queue+name), "")
+		require.NoError(t, err)
+		require.Equal(t, enums.WORKFLOW_EXECUTION_STATUS_COMPLETED, child.WorkflowExecutionInfo.Status)
+	}
 	require.NoError(t, c.SignalWorkflow(t.Context(), run.GetID(), "", w.Archive, w.ArchiveInput{}))
 	require.NoError(t, run.Get(t.Context(), nil))
 	save(t, c, run.GetID(), run.GetRunID(), "session")

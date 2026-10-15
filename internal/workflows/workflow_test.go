@@ -2,12 +2,12 @@ package workflows_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
-	"errors"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/activity"
@@ -357,6 +357,17 @@ func TestInteractions(t *testing.T) {
 					require.Equal(t, kind, in.Input.Decision.Kind)
 					return completed(in), nil
 				}
+				h.env.RegisterDelayedCallback(func() {
+					value, err := h.env.QueryWorkflow(w.Progress)
+					require.NoError(t, err)
+					var progress w.RunProgress
+					require.NoError(t, value.Get(&progress))
+					want := "waiting_approval"
+					if kind == "ask_user" {
+						want = "waiting_input"
+					}
+					require.Equal(t, want, progress.Status)
+				}, 500*time.Millisecond)
 				if !expire {
 					h.env.RegisterDelayedCallback(func() {
 						d := contract.Decision{Kind: kind}
@@ -382,6 +393,14 @@ func TestInteractions(t *testing.T) {
 				require.Equal(t, expire, h.decisions[0].Expired)
 				if expire {
 					require.Equal(t, []string{"remind", "escalate"}, h.notices)
+					switch kind {
+					case "tool_approval":
+						require.Equal(t, contract.DecisionChoice("deny"), *h.decisions[0].Decision.Choice)
+					case "effect_uncertain":
+						require.Equal(t, contract.DecisionChoice("abandon"), *h.decisions[0].Decision.Choice)
+					case "ask_user":
+						require.NotEmpty(t, *h.decisions[0].Decision.Answer)
+					}
 				}
 				require.Zero(t, h.finished[0].NeverStarted)
 			})
@@ -536,6 +555,7 @@ func TestSessionQueue(t *testing.T) {
 					workflow.RegisterOptions{Name: w.AgentRunWorkflow},
 				)
 				var finished []w.FinalizeInput
+				rejected := 0
 				env.RegisterActivityWithOptions(
 					func(_ context.Context, in w.FinalizeInput) error {
 						finished = append(finished, in)
@@ -577,6 +597,8 @@ func TestSessionQueue(t *testing.T) {
 										err error,
 									) {
 										require.Equal(t, "full", mode)
+										require.Error(t, err)
+										rejected++
 									}, OnComplete: func(v any, e error) {
 										require.NoError(t, e)
 										if mode == "queue" {
@@ -627,6 +649,9 @@ func TestSessionQueue(t *testing.T) {
 					w.SessionInput{V: 1, TenantID: "tenant", SessionID: "session", Policy: policy},
 				)
 				require.NoError(t, env.GetWorkflowError())
+				if mode == "full" {
+					require.Equal(t, 1, rejected)
+				}
 				if mode == "cancel_queued" || mode == "archive" {
 					require.NotEmpty(t, finished)
 					require.True(t, finished[0].NeverStarted)

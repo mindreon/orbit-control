@@ -241,6 +241,9 @@ func (l *loop) commit(seg contract.SegmentInput, turn contract.SegmentTurn, seq 
 	st.UsedMillicredits = rec.RunUsedMillicredits
 	st.Steer = st.Steer[len(seg.Steer):]
 	st.SandboxRetries = 0
+	if st.Cancel != nil {
+		return true, l.cancelled()
+	}
 	if turn.Kind == "compact" {
 		if res.Status == "failed" {
 			return true, l.finish("failed", "CONTEXT_TOO_LARGE")
@@ -478,7 +481,7 @@ func (l *loop) committedOp() w.RunOp {
 
 func (l *loop) cancelled() error {
 	code := "CANCELLED"
-	if l.st.Cancel != nil && strings.HasPrefix(l.st.Cancel.Reason, "asset_suspended:") {
+	if l.st.CancelCode == "ASSET_SUSPENDED" {
 		code = "ASSET_SUSPENDED"
 	}
 	return l.finish("cancelled", code)
@@ -559,6 +562,7 @@ func (l *loop) registerSignals(ctx workflow.Context) {
 			var in w.AssetSuspendedInput
 			ch.Receive(ctx, &in)
 			if st.Cancel == nil {
+				st.CancelCode = "ASSET_SUSPENDED"
 				st.Cancel = &w.CancelInput{Reason: "asset_suspended:" + in.AssetRef}
 				if l.cancelSegment != nil {
 					l.cancelSegment()

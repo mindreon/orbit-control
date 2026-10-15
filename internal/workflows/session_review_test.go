@@ -180,3 +180,25 @@ func TestSessionAlreadyStartedWaitsForExistingRun(t *testing.T) {
 	require.NoError(t, h.env.GetWorkflowError())
 	require.True(t, waited)
 }
+
+func TestArchivedSessionRejectsNewMessages(t *testing.T) {
+	h := newSessionHarness(t)
+	h.env.OnActivity("FinalizeRun", mock.Anything, mock.Anything).Return(nil).After(5 * time.Second)
+	h.env.RegisterDelayedCallback(func() { h.submit(t, "one", "one") }, 0)
+	h.env.RegisterDelayedCallback(func() { h.submit(t, "two", "two") }, time.Second)
+	h.env.RegisterDelayedCallback(func() { h.env.SignalWorkflow(w.Archive, w.ArchiveInput{}) }, 2*time.Second)
+	rejected := false
+	h.env.RegisterDelayedCallback(func() {
+		h.env.UpdateWorkflow(w.SubmitMessage, "late", &testsuite.TestUpdateCallback{
+			OnReject: func(err error) {
+				require.Error(t, err)
+				rejected = true
+			},
+			OnAccept: func() { t.Error("archived session admitted another run") },
+		}, sessionMessage("late"))
+	}, 3*time.Second)
+	h.env.ExecuteWorkflow(session.Run, h.in)
+	require.NoError(t, h.env.GetWorkflowError())
+	require.True(t, rejected)
+	require.Len(t, h.started, 1)
+}

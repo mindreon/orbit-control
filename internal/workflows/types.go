@@ -99,6 +99,7 @@ type Pending struct {
 	Expired   bool                     `json:"expired"`
 }
 type RunCarry struct {
+	CancelCode        string                `json:"cancel_code,omitempty"`
 	ContinuedAt       int                   `json:"continued_at"`
 	Status            string                `json:"status"`
 	CommittedSeq      int                   `json:"committed_seq"`
