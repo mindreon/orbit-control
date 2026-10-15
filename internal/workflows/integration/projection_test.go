@@ -242,6 +242,17 @@ func TestAPIToRunProjection(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	require.NoError(t, run.Get(ctx, nil))
+	// Retry the real ctl AcquireSandbox with the original operation ID. Temporal
+	// must return the accepted lease without creating another sandbox generation.
+	activity := &ctl.Activities{DB: f.db, Temporal: f.temporal, Environment: "dev"}
+	acquire := w.AcquireSandboxInput{RunOp: w.RunOp{TenantID: f.tenant, SessionID: session.ID,
+		RunID: submission.RunID, Member: "main"},
+		Spec: w.SandboxSpec{IsolationKey: w.IsolationKey(f.tenant, session.ID), Profile: "default", TTLSeconds: 1800}}
+	first, err := activity.AcquireSandbox(ctx, acquire)
+	require.NoError(t, err)
+	second, err := activity.AcquireSandbox(ctx, acquire)
+	require.NoError(t, err)
+	require.Equal(t, first, second)
 	raw := f.request(t, "GET", "/v1/runs/"+submission.RunID, nil)
 	require.Contains(t, string(raw), `"status":"succeeded"`)
 	require.Contains(t, string(f.request(t, "GET", "/v1/sessions/"+session.ID+"/messages", nil)), "Projection complete")
