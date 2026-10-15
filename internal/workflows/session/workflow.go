@@ -54,7 +54,14 @@ func Run(ctx workflow.Context, in w.SessionInput) error {
 			return workflow.NewContinueAsNewError(ctx, w.SessionWorkflow, in)
 		}
 		if !ok && s.active == "" && len(s.queue) == 0 {
-			return archiveLease(ctx, in)
+			if err := archiveLease(ctx, in); err != nil {
+				return err
+			}
+			// Submit updates may arrive while the external signal is in flight.
+			if len(s.queue) == 0 && workflow.AllHandlersFinished(ctx) {
+				return nil
+			}
+			continue
 		}
 		if s.active == "" && len(s.queue) > 0 {
 			s.startNext(ctx)
@@ -70,8 +77,9 @@ func (s *sessionWorkflow) register(ctx workflow.Context) error {
 		workflow.UpdateHandlerOptions{Validator: s.validateSubmit}); err != nil {
 		return err
 	}
-	if err := workflow.SetUpdateHandlerWithOptions(ctx, w.CancelRun, s.cancel,
-		workflow.UpdateHandlerOptions{Validator: s.validateCancel}); err != nil {
+	if err := workflow.SetUpdateHandlerWithOptions(
+		ctx, w.CancelRun, s.cancel, workflow.UpdateHandlerOptions{Validator: s.validateCancel},
+	); err != nil {
 		return err
 	}
 	if err := workflow.SetQueryHandler(ctx, w.State, func() (w.SessionState, error) {
@@ -101,13 +109,22 @@ func (s *sessionWorkflow) register(ctx workflow.Context) error {
 	return nil
 }
 func (s *sessionWorkflow) validateSubmit(in w.SubmitMessageInput) error {
-	if s.archived || len(s.queue) >= 20 || in.V != 1 || in.RunID == "" || in.RunID == s.active {
-		return fmt.Errorf("session unavailable or invalid message")
+	if s.archived {
+		return temporal.NewNonRetryableApplicationError("Session archived", "SESSION_ARCHIVED", nil)
+	}
+	if in.RunID == s.active && s.active != "" {
+		return temporal.NewNonRetryableApplicationError("Duplicate run", "DUPLICATE_RUN", nil)
 	}
 	for _, q := range s.queue {
 		if q.RunID == in.RunID {
-			return fmt.Errorf("duplicate run")
+			return temporal.NewNonRetryableApplicationError("Duplicate run", "DUPLICATE_RUN", nil)
 		}
+	}
+	if len(s.queue) >= 20 {
+		return temporal.NewNonRetryableApplicationError("Session queue full", "QUEUE_FULL", nil)
+	}
+	if in.V != 1 || in.RunID == "" {
+		return temporal.NewNonRetryableApplicationError("Invalid message", "INVALID_INPUT", nil)
 	}
 	return nil
 }
@@ -159,8 +176,7 @@ func (s *sessionWorkflow) cancel(ctx workflow.Context, in w.CancelRunInput) (w.C
 }
 func (s *sessionWorkflow) signalActive(ctx workflow.Context, in w.CancelInput) error {
 	if s.external {
-		return workflow.SignalExternalWorkflow(ctx, w.AgentRunWorkflowID(s.in.TenantID, s.active), "", w.Cancel, in).
-			Get(ctx, nil)
+		return workflow.SignalExternalWorkflow(ctx, w.AgentRunWorkflowID(s.in.TenantID, s.active), "", w.Cancel, in).Get(ctx, nil)
 	}
 	return s.child.SignalChildWorkflow(ctx, w.Cancel, in).Get(ctx, nil)
 }
@@ -190,10 +206,7 @@ func (s *sessionWorkflow) drain(ctx workflow.Context) error {
 func archiveLease(ctx workflow.Context, in w.SessionInput) error {
 	err := workflow.SignalExternalWorkflow(
 		ctx,
-		w.LeaseWorkflowID(
-			in.TenantID,
-			w.IsolationKey(in.TenantID, in.SessionID),
-		),
+		w.LeaseWorkflowID(in.TenantID, w.IsolationKey(in.TenantID, in.SessionID)),
 		"",
 		w.Archive,
 		w.ArchiveInput{},
@@ -206,10 +219,7 @@ func archiveLease(ctx workflow.Context, in w.SessionInput) error {
 func (s *sessionWorkflow) runInput(msg w.SubmitMessageInput) w.RunInput {
 	return w.RunInput{V: 1, TenantID: s.in.TenantID, WorkspaceID: s.in.WorkspaceID, SessionID: s.in.SessionID,
 		RunID: msg.RunID, PrincipalID: msg.PrincipalID, MessageID: msg.MessageID, Member: "main", Lock: msg.Lock,
-		AgentSessionKey: w.AgentSessionKey(
-			s.in.SessionID,
-			msg.Lock.Digest,
-		), EventSubject: w.EventSubject(s.in.TenantID, msg.RunID),
+		AgentSessionKey: w.AgentSessionKey(s.in.SessionID, msg.Lock.Digest), EventSubject: w.EventSubject(s.in.TenantID, msg.RunID),
 		InputRef: msg.InputRef, BudgetMillicredits: msg.BudgetMillicredits, Limits: msg.Limits, Sandbox: msg.Sandbox, Tier: "standard"}
 }
 func (s *sessionWorkflow) startNext(ctx workflow.Context) {
@@ -242,9 +252,7 @@ func (s *sessionWorkflow) waitChild(ctx workflow.Context, future workflow.ChildW
 		s.external = true
 		// Temporal does not expose an external ChildWorkflowFuture. Wait on the
 		// existing stable workflow ID with a heartbeat Activity; signal it directly.
-		err = workflow.ExecuteActivity(w.Ctl(ctx, "WaitForRun"), "WaitForRun", w.RunOp{
-			TenantID: s.in.TenantID, RunID: runID,
-		}).Get(ctx, nil)
+		err = workflow.ExecuteActivity(w.Ctl(ctx, "WaitForRun"), "WaitForRun", w.RunOp{TenantID: s.in.TenantID, RunID: runID}).Get(ctx, nil)
 	}
 
 	if err != nil {

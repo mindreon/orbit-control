@@ -17,6 +17,7 @@ import (
 	"github.com/mindreon/orbit-control/internal/activities/ctl"
 	"github.com/mindreon/orbit-control/internal/assets"
 	"github.com/mindreon/orbit-control/internal/auth"
+	"github.com/mindreon/orbit-control/internal/contract"
 	"github.com/mindreon/orbit-control/internal/httpapi"
 	"github.com/mindreon/orbit-control/internal/kernelapi"
 	"github.com/mindreon/orbit-control/internal/platform/config"
@@ -186,7 +187,10 @@ func startWorkers(
 	}
 	worker := runworker.New(
 		tc,
-		&ctl.Activities{DB: d, Obj: store, NATS: bus, Temporal: tc, Environment: c.Environment},
+		&ctl.Activities{
+			DB: d, Obj: store, NATS: bus, Temporal: tc, Environment: c.Environment,
+			SandboxProvider: contract.SandboxProvider(c.SandboxProvider),
+		},
 	)
 	releaseactivities.Register(worker, &releaseactivities.Activities{DB: d, Assets: assetService})
 	if err := worker.Start(); err != nil {

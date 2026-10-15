@@ -11,6 +11,7 @@ import (
 )
 
 type Config struct {
+	SandboxProvider                                                                                           string
 	InternalAddr, WorkerServiceTokenSHA256, NATSURL, Environment                                              string
 	DefaultRunBudget                                                                                          int64
 	AssetUploadConcurrency                                                                                    int
@@ -79,9 +80,7 @@ func (c Config) ValidateAPI() error {
 	}
 	ip := net.ParseIP(host)
 	if c.AuthMode == "dev" && !(host == "localhost" || ip != nil && ip.IsLoopback()) && !c.AllowDevNetwork {
-		return fmt.Errorf(
-			"ORBIT_ALLOW_DEV_AUTH_ON_NETWORK=1 is required for ORBIT_AUTH_MODE=dev on non-loopback ORBIT_HTTP_ADDR",
-		)
+		return fmt.Errorf("ORBIT_ALLOW_DEV_AUTH_ON_NETWORK=1 is required for ORBIT_AUTH_MODE=dev on non-loopback ORBIT_HTTP_ADDR")
 	}
 	if c.AuthMode == "oidc" {
 		u, e := url.Parse(c.Issuer)
@@ -199,6 +198,16 @@ func (c *Config) loadRunEnvironment() error {
 	c.Environment = env("ORBIT_ENV", "dev")
 	if c.Environment != "dev" && c.Environment != "prod" {
 		return fmt.Errorf("ORBIT_ENV must be dev or prod")
+	}
+	c.SandboxProvider = env("ORBIT_SANDBOX_PROVIDER", "local")
+	if c.Environment == "prod" {
+		c.SandboxProvider = env("ORBIT_SANDBOX_PROVIDER", "opensandbox")
+	}
+	if c.SandboxProvider != "local" && c.SandboxProvider != "opensandbox" {
+		return fmt.Errorf("ORBIT_SANDBOX_PROVIDER must be local or opensandbox")
+	}
+	if c.Environment == "prod" && c.SandboxProvider == "local" {
+		return fmt.Errorf("ORBIT_SANDBOX_PROVIDER=local is forbidden in prod")
 	}
 	c.DefaultRunBudget = 200000
 	if value := os.Getenv("ORBIT_DEFAULT_RUN_BUDGET_MILLICREDITS"); value != "" {

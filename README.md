@@ -97,6 +97,7 @@ URLs are not logged. Configuration uses environment variables only.
 | `ORBIT_TEMPORAL_TLS_CA_FILE` | Optional private CA PEM; otherwise system roots |
 | `ORBIT_TEMPORAL_TLS_CERT_FILE` / `ORBIT_TEMPORAL_TLS_KEY_FILE` | Optional paired client certificate/key for mTLS |
 | `ORBIT_TEMPORAL_TLS_SERVER_NAME` | Optional certificate server-name override |
+| `ORBIT_SANDBOX_PROVIDER` | `local` in dev, `opensandbox` in prod; prod forbids `local` before acquisition |
 | `ORBIT_TEST_DATABASE_URL` | Superuser URL to a **disposable** test database |
 | `ORBIT_REQUIRE_PG_TESTS` | `1` makes missing PG configuration fail instead of skip |
 

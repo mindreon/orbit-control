@@ -178,7 +178,6 @@ type LeaseInput struct {
 }
 type LeaseCarry struct {
 	NextRenew  time.Time              `json:"next_renew"`
-	EventN     int64                  `json:"event_n"`
 	State      string                 `json:"state"`
 	Lease      *contract.SandboxLease `json:"lease,omitempty"`
 	SnapshotID string                 `json:"snapshot_id"`
@@ -191,17 +190,19 @@ type LeaseCarry struct {
 	Spec       AcquireInput           `json:"spec"`
 }
 type AcquireInput struct {
-	EventN      int64                   `json:"event_n"`
-	EventAt     time.Time               `json:"event_at"`
-	SpecDigest  string                  `json:"spec_digest"`
-	RunID       string                  `json:"run_id"`
-	SessionID   string                  `json:"session_id"`
-	WorkspaceID string                  `json:"workspace_id"`
-	Profile     string                  `json:"profile"`
-	Egress      []string                `json:"egress,omitempty"`
-	Mounts      []contract.SandboxMount `json:"mounts,omitempty"`
-	TTLSeconds  int                     `json:"ttl_seconds"`
-	Reacquire   bool                    `json:"reacquire"`
+	Provider    contract.SandboxProvider `json:"provider"`
+	Gen         int                      `json:"gen"`
+	EventN      int64                    `json:"event_n"`
+	EventAt     time.Time                `json:"event_at"`
+	SpecDigest  string                   `json:"spec_digest"`
+	RunID       string                   `json:"run_id"`
+	SessionID   string                   `json:"session_id"`
+	WorkspaceID string                   `json:"workspace_id"`
+	Profile     string                   `json:"profile"`
+	Egress      []string                 `json:"egress,omitempty"`
+	Mounts      []contract.SandboxMount  `json:"mounts,omitempty"`
+	TTLSeconds  int                      `json:"ttl_seconds"`
+	Reacquire   bool                     `json:"reacquire"`
 }
 
 // RunOp carries the common tenant/run boundary for ctl Activities.
@@ -286,16 +287,17 @@ type FinalizeInput struct {
 	NeverStarted   bool   `json:"never_started"`
 }
 type SandboxStateInput struct {
-	RunID        string                 `json:"run_id"`
-	Restored     *bool                  `json:"restored,omitempty"`
-	EventN       int64                  `json:"event_n"`
-	EventAt      time.Time              `json:"event_at"`
-	TenantID     string                 `json:"tenant_id"`
-	IsolationKey string                 `json:"isolation_key"`
-	SessionID    string                 `json:"session_id"`
-	Gen          int                    `json:"gen"`
-	State        string                 `json:"state"`
-	Lease        *contract.SandboxLease `json:"lease,omitempty"`
-	SnapshotID   string                 `json:"snapshot_id"`
-	Profile      string                 `json:"profile"`
+	Provider     contract.SandboxProvider `json:"provider"`
+	RunID        string                   `json:"run_id"`
+	Restored     *bool                    `json:"restored,omitempty"`
+	EventN       int64                    `json:"event_n"`
+	EventAt      time.Time                `json:"event_at"`
+	TenantID     string                   `json:"tenant_id"`
+	IsolationKey string                   `json:"isolation_key"`
+	SessionID    string                   `json:"session_id"`
+	Gen          int                      `json:"gen"`
+	State        string                   `json:"state"`
+	Lease        *contract.SandboxLease   `json:"lease,omitempty"`
+	SnapshotID   string                   `json:"snapshot_id"`
+	Profile      string                   `json:"profile"`
 }

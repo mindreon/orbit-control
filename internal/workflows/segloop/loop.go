@@ -16,7 +16,6 @@ import (
 
 type State = w.RunCarry
 type loop struct {
-	ctx           workflow.Context
 	in            w.RunInput
 	st            *State
 	cancelSegment workflow.CancelFunc
@@ -37,11 +36,11 @@ func Run(ctx workflow.Context, in w.RunInput) error {
 	if err != nil {
 		return err
 	}
-	l := &loop{ctx: ctx, in: in, st: Restore(in), continueAfter: limit}
-	if err := l.register(); err != nil {
+	l := &loop{in: in, st: Restore(in), continueAfter: limit}
+	if err := l.register(ctx); err != nil {
 		return err
 	}
-	if err := l.prepare(); err != nil {
+	if err := l.prepare(ctx); err != nil {
 		return err
 	}
 	if w.Terminal(l.st.Status) {
@@ -51,10 +50,10 @@ func Run(ctx workflow.Context, in w.RunInput) error {
 	for {
 		st := l.st
 		if st.Cancel != nil {
-			return l.cancelled()
+			return l.cancelled(ctx)
 		}
 		if st.Paused {
-			if err := l.waitResume(); err != nil {
+			if err := l.waitResume(ctx); err != nil {
 				return err
 			}
 			if w.Terminal(l.st.Status) {
@@ -63,13 +62,13 @@ func Run(ctx workflow.Context, in w.RunInput) error {
 			continue
 		}
 		if st.UsedMillicredits >= in.BudgetMillicredits {
-			return l.finish("budget_exhausted", "")
+			return l.finish(ctx, "budget_exhausted", "")
 		}
 		if st.ActiveSeconds >= int64(in.Limits.MaxActiveSeconds) {
-			return l.finish("timed_out", "")
+			return l.finish(ctx, "timed_out", "")
 		}
 		if st.CommittedSeq >= in.Limits.MaxSegments {
-			return l.finish("failed", "SEGMENT_LIMIT")
+			return l.finish(ctx, "failed", "SEGMENT_LIMIT")
 		}
 		if st.Interaction == nil && workflow.AllHandlersFinished(ctx) &&
 			((st.CommittedSeq > st.ContinuedAt && st.CommittedSeq%l.continueAfter == 0) ||
@@ -78,74 +77,68 @@ func Run(ctx workflow.Context, in w.RunInput) error {
 			in.Carry = st
 			return workflow.NewContinueAsNewError(ctx, w.AgentRunWorkflow, in)
 		}
-		done, err := l.step()
+		done, err := l.step(ctx)
 		if done || err != nil {
 			return err
 		}
 	}
 }
-func (l *loop) prepare() error {
+func (l *loop) prepare(ctx workflow.Context) error {
 	in := l.in
 	if in.Carry == nil {
 		var prep w.PrepareOutput
-		if err := l.exec(
+		if err := l.exec(ctx,
 			"PrepareRun",
-			w.PrepareInput{RunOp: l.op(), SessionKey: in.AgentSessionKey, Budget: in.BudgetMillicredits},
+			w.PrepareInput{RunOp: l.op(ctx), SessionKey: in.AgentSessionKey, Budget: in.BudgetMillicredits},
 			&prep,
 		); err != nil {
-			return l.finish("failed", "PREPARE_FAILED")
+			return l.failure(ctx, err, "PREPARE_FAILED")
 		}
 		l.st.CheckpointVersion = prep.CheckpointVersion
 		l.st.Status = "running"
-		if err := l.acquire(); err != nil {
-			return l.finish("failed", "SANDBOX_UNAVAILABLE")
+		if err := l.acquire(ctx); err != nil {
+			return l.failure(ctx, err, "SANDBOX_UNAVAILABLE")
 		}
 	}
 	return nil
 }
-func (l *loop) waitResume() error {
-	st, ctx := l.st, l.ctx
+func (l *loop) waitResume(ctx workflow.Context) error {
+	st := l.st
 
 	st.Status = "paused"
-	if err := l.status("paused"); err != nil {
-		return l.finish("failed", "STATUS_FAILED")
+	if err := l.status(ctx, "paused"); err != nil {
+		return l.finish(ctx, "failed", "STATUS_FAILED")
 	}
-	if err := workflow.Await(ctx, func() bool {
-		return !st.Paused || st.Cancel != nil
-	}); err != nil {
-		return l.finish("cancelled", "CANCELLED")
+	if err := workflow.Await(ctx, func() bool { return !st.Paused || st.Cancel != nil }); err != nil {
+		return l.finish(ctx, "cancelled", "CANCELLED")
 	}
 	if st.Cancel != nil {
 		return nil
 	}
 	st.Status = "running"
-	if err := l.status("running"); err != nil {
-		return l.finish("failed", "STATUS_FAILED")
+	if err := l.status(ctx, "running"); err != nil {
+		return l.finish(ctx, "failed", "STATUS_FAILED")
 	}
 	return nil
 }
-func (l *loop) step() (bool, error) {
+func (l *loop) step(ctx workflow.Context) (bool, error) {
 	st := l.st
-	ctx, in := l.ctx, l.in
+	in := l.in
 	seq := st.CommittedSeq + 1
 	turn := st.PendingTurn
 	if turn.Kind == "continue" && len(st.Steer) > 0 {
 		turn.Kind = "follow_up"
 	}
-	seg := l.segmentInput(turn, seq)
-	if err := l.exec(
-		"StartSegment",
-		w.StartSegmentInput{RunOp: l.op(), ExpectedVersion: st.CheckpointVersion},
-		nil,
-	); err != nil {
-		return true, l.finish("failed", "START_SEGMENT_FAILED")
+	seg := l.segmentInput(ctx, turn, seq)
+	if err := l.exec(ctx, "StartSegment", w.StartSegmentInput{RunOp: l.op(ctx), ExpectedVersion: st.CheckpointVersion}, nil); err != nil {
+		return true, l.failure(ctx, err, "START_SEGMENT_FAILED")
 	}
 	if st.Cancel != nil {
-		return true, l.cancelled()
+		return true, l.cancelled(ctx)
 	}
-	l.touch(true)
+	l.touch(ctx, true)
 	if st.Cancel != nil {
-		return true, l.cancelled()
+		return true, l.cancelled(ctx)
 	}
 	actCtx, cancel := workflow.WithCancel(w.Agent(ctx, in.Tier))
 	l.cancelSegment = cancel
@@ -155,10 +148,10 @@ func (l *loop) step() (bool, error) {
 	st.ActiveSeconds += int64(workflow.Now(ctx).Sub(t0) / time.Second)
 	l.cancelSegment = nil
 	cancel()
-	l.touch(false)
+	l.touch(ctx, false)
 	if err != nil {
 		var retry, done bool
-		res, retry, done, err = l.segmentError(err, seg)
+		res, retry, done, err = l.segmentError(ctx, err, seg)
 		if done || err != nil {
 			return true, err
 		}
@@ -166,36 +159,32 @@ func (l *loop) step() (bool, error) {
 			return false, nil
 		}
 	}
-	return l.commit(seg, turn, seq, res)
+	return l.commit(ctx, seg, turn, seq, res)
 }
-func (l *loop) segmentError(err error, seg contract.SegmentInput) (contract.SegmentResult, bool, bool, error) {
+func (l *loop) segmentError(ctx workflow.Context, err error, seg contract.SegmentInput) (contract.SegmentResult, bool, bool, error) {
 	st, in := l.st, l.in
 	var res contract.SegmentResult
 	if err != nil {
 		if temporal.IsCanceledError(err) {
-			return res, false, true, l.cancelled()
+			return res, false, true, l.cancelled(ctx)
 		}
 		app, ok := errors.AsType[*temporal.ApplicationError](err)
 		if !ok {
-			return res, false, true, l.finish("failed", "SEGMENT_FAILED")
+			return res, false, true, l.finish(ctx, "failed", "SEGMENT_FAILED")
 		}
 		switch app.Type() {
 		case contract.ErrorCheckpointConflict:
 			var rec w.ReconcileOutput
-			if e := l.exec(
-				"ReconcileCheckpoint",
-				w.ReconcileInput{RunOp: l.op(), SessionKey: in.AgentSessionKey},
-				&rec,
-			); e != nil {
-				return res, false, true, l.finish("failed", "RECONCILE_FAILED")
+			if e := l.exec(ctx, "ReconcileCheckpoint", w.ReconcileInput{RunOp: l.op(ctx), SessionKey: in.AgentSessionKey}, &rec); e != nil {
+				return res, false, true, l.finish(ctx, "failed", "RECONCILE_FAILED")
 			}
 			if rec.Result == nil {
-				return res, false, true, l.finish("failed", "CHECKPOINT_CONFLICT")
+				return res, false, true, l.finish(ctx, "failed", "CHECKPOINT_CONFLICT")
 			}
 			res = *rec.Result
 		case contract.ErrorContextLengthExceeded:
 			if st.CompactedFor != 0 || st.ResumeTurn != nil {
-				return res, false, true, l.finish("failed", "CONTEXT_TOO_LARGE")
+				return res, false, true, l.finish(ctx, "failed", "CONTEXT_TOO_LARGE")
 			}
 			st.CompactedFor = seg.Seq
 			st.ResumeTurn = new(st.PendingTurn)
@@ -204,14 +193,14 @@ func (l *loop) segmentError(err error, seg contract.SegmentInput) (contract.Segm
 		case contract.ErrorSandboxUnavailable:
 			st.SandboxRetries++
 			if st.SandboxRetries > 2 {
-				return res, false, true, l.finish("failed", "SANDBOX_UNAVAILABLE")
+				return res, false, true, l.finish(ctx, "failed", "SANDBOX_UNAVAILABLE")
 			}
-			if e := l.acquire(); e != nil {
-				return res, false, true, l.finish("failed", "SANDBOX_UNAVAILABLE")
+			if e := l.acquire(ctx); e != nil {
+				return res, false, true, l.finish(ctx, "failed", "SANDBOX_UNAVAILABLE")
 			}
 			return res, true, false, nil
 		case contract.ErrorBudgetExhausted:
-			return res, false, true, l.finish("budget_exhausted", "")
+			return res, false, true, l.finish(ctx, "budget_exhausted", "")
 		default:
 			code := map[string]string{
 				contract.ErrorPolicyDenied:           "POLICY_DENIED",
@@ -224,17 +213,19 @@ func (l *loop) segmentError(err error, seg contract.SegmentInput) (contract.Segm
 			if code == "" {
 				code = "SEGMENT_FAILED"
 			}
-			return res, false, true, l.finish("failed", code)
+			return res, false, true, l.finish(ctx, "failed", code)
 		}
 	}
 
 	return res, false, false, nil
 }
-func (l *loop) commit(seg contract.SegmentInput, turn contract.SegmentTurn, seq int, res contract.SegmentResult) (bool, error) {
+func (l *loop) commit(
+	ctx workflow.Context, seg contract.SegmentInput, turn contract.SegmentTurn, seq int, res contract.SegmentResult,
+) (bool, error) {
 	st, in := l.st, l.in
 	var rec w.RecordSegmentOutput
-	if e := l.exec("RecordSegment", w.RecordSegmentInput{RunOp: l.op(), Result: res}, &rec); e != nil {
-		return true, l.finish("failed", "RECORD_SEGMENT_FAILED")
+	if e := l.exec(ctx, "RecordSegment", w.RecordSegmentInput{RunOp: l.op(ctx), Result: res}, &rec); e != nil {
+		return true, l.failure(ctx, e, "RECORD_SEGMENT_FAILED")
 	}
 	st.CommittedSeq = seq
 	st.CheckpointVersion = res.CheckpointVersion
@@ -242,33 +233,35 @@ func (l *loop) commit(seg contract.SegmentInput, turn contract.SegmentTurn, seq 
 	st.Steer = st.Steer[len(seg.Steer):]
 	st.SandboxRetries = 0
 	if st.Cancel != nil {
-		return true, l.cancelled()
+		return true, l.cancelled(ctx)
 	}
 	if turn.Kind == "compact" {
 		if res.Status == "failed" {
-			return true, l.finish("failed", "CONTEXT_TOO_LARGE")
+			return true, l.finish(ctx, "failed", "CONTEXT_TOO_LARGE")
 		}
 		st.PendingTurn = *st.ResumeTurn
 		st.ResumeTurn = nil
 		return false, nil
 	}
+	// A committed retransmission ends this compaction attempt. Later growth may compact again.
+	st.CompactedFor = 0
 	switch res.Status {
 	case "completed":
 		if len(st.Steer) > 0 {
 			st.PendingTurn = contract.SegmentTurn{Kind: "follow_up"}
 			return false, nil
 		}
-		return true, l.finish("succeeded", "")
+		return true, l.finish(ctx, "succeeded", "")
 	case "interrupted":
-		d, e := l.await(res.Interaction)
+		d, e := l.await(ctx, res.Interaction)
 		if e != nil {
 			if temporal.IsCanceledError(e) {
-				return true, l.cancelled()
+				return true, l.cancelled(ctx)
 			}
-			return true, l.finish("failed", "INTERACTION_FAILED")
+			return true, l.finish(ctx, "failed", "INTERACTION_FAILED")
 		}
 		if d == nil {
-			return true, l.cancelled()
+			return true, l.cancelled(ctx)
 		}
 		st.PendingTurn = *d
 	case "yielded":
@@ -278,18 +271,18 @@ func (l *loop) commit(seg contract.SegmentInput, turn contract.SegmentTurn, seq 
 			st.NoProgress++
 		}
 		if st.NoProgress >= in.Limits.NoProgressLimit {
-			return true, l.finish("failed", "STUCK")
+			return true, l.finish(ctx, "failed", "STUCK")
 		}
 		st.PendingTurn = contract.SegmentTurn{Kind: "continue"}
 	case "failed":
-		return true, l.finish("failed", strings.ToUpper(string(res.Error.Code)))
+		return true, l.finish(ctx, "failed", strings.ToUpper(string(res.Error.Code)))
 	default:
-		return true, l.finish("failed", "INVALID_SEGMENT_RESULT")
+		return true, l.finish(ctx, "failed", "INVALID_SEGMENT_RESULT")
 	}
 	return false, nil
 }
 
-func (l *loop) op() w.RunOp {
+func (l *loop) op(ctx workflow.Context) w.RunOp {
 	l.st.EventN++
 	return w.RunOp{
 		TenantID:  l.in.TenantID,
@@ -298,71 +291,70 @@ func (l *loop) op() w.RunOp {
 		Member:    l.in.Member,
 		Seq:       l.st.CommittedSeq + 1,
 		EventN:    l.st.EventN,
-		EventAt:   workflow.Now(l.ctx),
+		EventAt:   workflow.Now(ctx),
 	}
 }
-func (l *loop) exec(name string, in, out any) error {
-	return workflow.ExecuteActivity(w.Ctl(l.ctx, name), name, in).Get(l.ctx, out)
+func (l *loop) exec(ctx workflow.Context, name string, in, out any) error {
+	return workflow.ExecuteActivity(w.Ctl(ctx, name), name, in).Get(ctx, out)
 }
-func (l *loop) status(status string) error {
-	return l.exec("SetRunStatus", w.StatusInput{RunOp: l.op(), Status: status}, nil)
+func (l *loop) status(ctx workflow.Context, status string) error {
+	return l.exec(ctx, "SetRunStatus", w.StatusInput{RunOp: l.op(ctx), Status: status}, nil)
 }
-func (l *loop) acquire() error {
+func (l *loop) acquire(ctx workflow.Context) error {
 	attempt := l.st.Acquisitions
 	l.st.Acquisitions++
-	return l.exec("AcquireSandbox", w.AcquireSandboxInput{
-		RunOp: l.op(), Spec: l.in.Sandbox, LockID: l.in.Lock.Id, Attempt: attempt,
+	return l.exec(ctx, "AcquireSandbox", w.AcquireSandboxInput{
+		RunOp: l.op(ctx), Spec: l.in.Sandbox, LockID: l.in.Lock.Id, Attempt: attempt,
 	}, &l.st.Lease)
 }
-func (l *loop) touch(use bool) {
+func (l *loop) touch(ctx workflow.Context, use bool) {
 	err := workflow.SignalExternalWorkflow(
-		l.ctx,
+		ctx,
 		w.LeaseWorkflowID(l.in.TenantID, l.in.Sandbox.IsolationKey),
 		"",
 		w.Touch,
 		w.TouchInput{RunID: l.in.RunID, InUse: use},
 	).Get(
-		l.ctx,
+		ctx,
 		nil,
 	)
 	if err != nil {
-		workflow.GetLogger(l.ctx).Warn("lease touch failed", "error", err)
+		workflow.GetLogger(ctx).Warn("lease touch failed", "error", err)
 	}
 }
-func (l *loop) finish(status, code string) error {
+func (l *loop) finish(ctx workflow.Context, status, code string) error {
 	l.st.Status = status
 	reason := ""
 	if l.st.Cancel != nil {
 		reason = l.st.Cancel.Reason
 	}
-	ctx, _ := workflow.NewDisconnectedContext(l.ctx)
+	ctx, _ = workflow.NewDisconnectedContext(ctx)
 	return workflow.ExecuteActivity(
 		w.Ctl(ctx, "FinalizeRun"),
 		"FinalizeRun",
-		w.FinalizeInput{RunOp: l.op(), Status: status, ErrorCode: code, Reason: reason},
+		w.FinalizeInput{RunOp: l.op(ctx), Status: status, ErrorCode: code, Reason: reason},
 	).Get(
 		ctx,
 		nil,
 	)
 }
-func (l *loop) register() error {
+func (l *loop) register(ctx workflow.Context) error {
 	st := l.st
-	ctx := l.ctx
 	l.registerSignals(ctx)
 	if err := workflow.SetUpdateHandlerWithOptions(
 		ctx,
 		w.Steer,
-		func(ctx workflow.Context, in w.SteerInput) (
-			w.SteerOutput,
-			error,
-		) {
+		func(ctx workflow.Context, in w.SteerInput) (w.SteerOutput, error) {
 			st.Steer = append(st.Steer, contract.SteerItem{ContentRef: new(in.ContentRef)})
 			return w.SteerOutput{Queued: len(st.Steer)}, nil
 		},
 		workflow.UpdateHandlerOptions{Validator: func(in w.SteerInput) error {
-			if w.Terminal(st.Status) || len(st.Steer) >= 20 ||
+			if len(st.Steer) >= 20 {
+				return temporal.NewNonRetryableApplicationError("Steer queue is full", "QUEUE_FULL", nil)
+			}
+			if w.Terminal(st.Status) ||
 				!strings.HasPrefix(in.ContentRef, "t/"+l.in.TenantID+"/runs/"+l.in.RunID+"/steer/") {
-				return fmt.Errorf("RUN_NOT_ACTIVE or invalid steer")
+				return temporal.NewNonRetryableApplicationError("Run is not active", "RUN_NOT_ACTIVE", nil)
 			}
 			return nil
 		}},
@@ -372,13 +364,7 @@ func (l *loop) register() error {
 	if err := workflow.SetUpdateHandlerWithOptions(
 		ctx,
 		w.ResolveInteraction,
-		func(
-			ctx workflow.Context,
-			in w.ResolveInteractionInput,
-		) (
-			w.ResolveInteractionOutput,
-			error,
-		) {
+		func(ctx workflow.Context, in w.ResolveInteractionInput) (w.ResolveInteractionOutput, error) {
 			st.Interaction.Decision = &in.Decision
 			st.Interaction.Actor = in.ActorID
 			return w.ResolveInteractionOutput{Accepted: true}, nil
@@ -411,17 +397,17 @@ func (l *loop) register() error {
 		return p, nil
 	})
 }
-func (l *loop) await(req *contract.InteractionRequest) (*contract.SegmentTurn, error) {
+func (l *loop) await(ctx workflow.Context, req *contract.InteractionRequest) (*contract.SegmentTurn, error) {
 	if req == nil {
 		return nil, fmt.Errorf("missing interaction")
 	}
-	now := workflow.Now(l.ctx)
+	now := workflow.Now(ctx)
 	limits := l.in.Limits
 	var rec w.InteractionOutput
-	if err := l.exec(
+	if err := l.exec(ctx,
 		"CreateInteraction",
 		w.InteractionInput{
-			RunOp:      l.committedOp(),
+			RunOp:      l.committedOp(ctx),
 			Request:    *req,
 			RemindAt:   now.Add(limits.RemindAfter),
 			EscalateAt: now.Add(limits.EscalateAfter),
@@ -442,22 +428,18 @@ func (l *loop) await(req *contract.InteractionRequest) (*contract.SegmentTurn, e
 	if req.Kind == "ask_user" {
 		st.Status = "waiting_input"
 	}
-	if err := l.waitDecision(now, req); err != nil {
+	if err := l.waitDecision(ctx, now, req); err != nil {
 		return nil, err
 	}
 	if st.Cancel != nil && st.Interaction.Decision == nil {
-		err := l.exec(
-			"CancelInteraction",
-			w.NotifyInput{RunOp: l.op(), InteractionID: req.InteractionId},
-			nil,
-		)
+		err := l.exec(ctx, "CancelInteraction", w.NotifyInput{RunOp: l.op(ctx), InteractionID: req.InteractionId}, nil)
 		return nil, err
 	}
 	p := st.Interaction
-	if err := l.exec(
+	if err := l.exec(ctx,
 		"ApplyDecision",
 		w.DecisionInput{
-			RunOp:         l.op(),
+			RunOp:         l.op(ctx),
 			InteractionID: p.ID,
 			Kind:          p.Kind,
 			Decision:      *p.Decision,
@@ -473,21 +455,28 @@ func (l *loop) await(req *contract.InteractionRequest) (*contract.SegmentTurn, e
 	return &contract.SegmentTurn{Kind: "interactive_input", InteractionId: new(p.ID), Decision: p.Decision}, nil
 }
 
-func (l *loop) committedOp() w.RunOp {
-	op := l.op()
+func (l *loop) committedOp(ctx workflow.Context) w.RunOp {
+	op := l.op(ctx)
 	op.Seq = l.st.CommittedSeq
 	return op
 }
 
-func (l *loop) cancelled() error {
+func (l *loop) failure(ctx workflow.Context, err error, code string) error {
+	if temporal.IsCanceledError(err) || ctx.Err() != nil {
+		return l.cancelled(ctx)
+	}
+	return l.finish(ctx, "failed", code)
+}
+
+func (l *loop) cancelled(ctx workflow.Context) error {
 	code := "CANCELLED"
 	if l.st.CancelCode == "ASSET_SUSPENDED" {
 		code = "ASSET_SUSPENDED"
 	}
-	return l.finish("cancelled", code)
+	return l.finish(ctx, "cancelled", code)
 }
 
-func (l *loop) segmentInput(turn contract.SegmentTurn, seq int) contract.SegmentInput {
+func (l *loop) segmentInput(ctx workflow.Context, turn contract.SegmentTurn, seq int) contract.SegmentInput {
 	in, st := l.in, l.st
 	remaining := in.BudgetMillicredits - st.UsedMillicredits
 	notice := contract.BudgetNotice("none")
@@ -572,7 +561,7 @@ func (l *loop) registerSignals(ctx workflow.Context) {
 	})
 }
 
-func (l *loop) waitDecision(now time.Time, req *contract.InteractionRequest) error {
+func (l *loop) waitDecision(ctx workflow.Context, now time.Time, req *contract.InteractionRequest) error {
 	st, limits := l.st, l.in.Limits
 	for _, step := range []struct {
 		after time.Duration
@@ -584,8 +573,8 @@ func (l *loop) waitDecision(now time.Time, req *contract.InteractionRequest) err
 		{after: limits.ExpireAfter,
 			kind: "expire"}} {
 		ok, err := workflow.AwaitWithTimeout(
-			l.ctx,
-			max(time.Duration(0), now.Add(step.after).Sub(workflow.Now(l.ctx))),
+			ctx,
+			max(time.Duration(0), now.Add(step.after).Sub(workflow.Now(ctx))),
 			func() bool {
 				return st.Interaction.Decision != nil || st.Cancel != nil
 			},
@@ -614,11 +603,9 @@ func (l *loop) waitDecision(now time.Time, req *contract.InteractionRequest) err
 			break
 		}
 		if err := l.exec(
-			"NotifyInteraction",
-			w.NotifyInput{RunOp: l.op(), InteractionID: req.InteractionId, Kind: step.kind},
-			nil,
+			ctx, "NotifyInteraction", w.NotifyInput{RunOp: l.op(ctx), InteractionID: req.InteractionId, Kind: step.kind}, nil,
 		); err != nil {
-			workflow.GetLogger(l.ctx).Warn("interaction notification failed", "error", err)
+			workflow.GetLogger(ctx).Warn("interaction notification failed", "error", err)
 		}
 	}
 	return nil

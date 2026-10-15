@@ -24,11 +24,12 @@ import (
 )
 
 type Activities struct {
-	DB          *db.DB
-	Obj         objstore.ObjectStore
-	NATS        natsx.Publisher
-	Temporal    client.Client
-	Environment string
+	SandboxProvider contract.SandboxProvider
+	DB              *db.DB
+	Obj             objstore.ObjectStore
+	NATS            natsx.Publisher
+	Temporal        client.Client
+	Environment     string
 }
 type event struct {
 	typ  string
@@ -66,8 +67,12 @@ func (a *Activities) change(ctx context.Context, in w.RunOp, fn func(context.Con
 			}
 			rows, err := tx.Query(
 				ctx,
-				"SELECT payload FROM control_events WHERE tenant_id=$1 AND run_id="+
-					"$2 AND operation=$3 ORDER BY event_id",
+				`SELECT payload
+ FROM control_events
+ WHERE tenant_id=$1
+ AND run_id=$2
+ AND operation=$3
+ ORDER BY event_id`,
 				in.TenantID,
 				in.RunID,
 				in.EventN,
@@ -110,8 +115,11 @@ func runActor(ctx context.Context, tx pgx.Tx, in w.RunOp) (auth.Principal, error
 	var p auth.Principal
 	err := tx.QueryRow(
 		ctx,
-		"SELECT p.id::text,p.kind FROM runs r JOIN principals p ON p.id=r."+
-			"created_by WHERE r.tenant_id=$1 AND r.id=$2",
+		`SELECT p.id::text,p.kind
+ FROM runs r
+ JOIN principals p ON p.id=r.created_by
+ WHERE r.tenant_id=$1
+ AND r.id=$2`,
 		in.TenantID,
 		in.RunID,
 	).Scan(
@@ -134,8 +142,11 @@ func (a *Activities) PrepareRun(ctx context.Context, in w.PrepareInput) (w.Prepa
 		var kind string
 		if err := tx.QueryRow(
 			ctx,
-			"SELECT r.lock_id::text,s.entry_kind FROM runs r JOIN sessions s O"+
-				"N s.id=r.session_id WHERE r.tenant_id=$1 AND r.id=$2",
+			`SELECT r.lock_id::text,s.entry_kind
+ FROM runs r
+ JOIN sessions s ON s.id=r.session_id
+ WHERE r.tenant_id=$1
+ AND r.id=$2`,
 			in.TenantID,
 			in.RunID,
 		).Scan(
@@ -146,9 +157,11 @@ func (a *Activities) PrepareRun(ctx context.Context, in w.PrepareInput) (w.Prepa
 		}
 		if _, err := tx.Exec(
 			ctx,
-			"UPDATE runs SET status='running',started_at=COALESCE(started_at,n"+
-				"ow()) WHERE tenant_id=$1 AND id=$2 AND status IN ('queued','runni"+
-				"ng')",
+			`UPDATE runs
+ SET status='running',started_at=COALESCE(started_at,now())
+ WHERE tenant_id=$1
+ AND id=$2
+ AND status IN ('queued','running')`,
 			in.TenantID,
 			in.RunID,
 		); err != nil {
@@ -156,9 +169,9 @@ func (a *Activities) PrepareRun(ctx context.Context, in w.PrepareInput) (w.Prepa
 		}
 		if _, err := tx.Exec(
 			ctx,
-			"INSERT INTO budget_reservations(id,tenant_id,run_id,millicredits,"+
-				"status,expires_at) VALUES($1,$2,$3,$4,'held',now()+interval '7 da"+
-				"ys') ON CONFLICT DO NOTHING",
+			`INSERT INTO budget_reservations(id,tenant_id,run_id,millicredits,status,expires_at)
+ VALUES($1,$2,$3,$4,'held',now()+interval '7 days')
+ ON CONFLICT DO NOTHING`,
 			ids.Derive(in.RunID, "reservation"),
 			in.TenantID,
 			in.RunID,
@@ -168,8 +181,10 @@ func (a *Activities) PrepareRun(ctx context.Context, in w.PrepareInput) (w.Prepa
 		}
 		if err := tx.QueryRow(
 			ctx,
-			"SELECT COALESCE(max(version),0) FROM agent_checkpoints WHERE tena"+
-				"nt_id=$1 AND session_key=$2",
+			`SELECT COALESCE(max(version),0)
+ FROM agent_checkpoints
+ WHERE tenant_id=$1
+ AND session_key=$2`,
 			in.TenantID,
 			in.SessionKey,
 		).Scan(
@@ -197,10 +212,11 @@ func (a *Activities) StartSegment(ctx context.Context, in w.StartSegmentInput) e
 	return a.change(ctx, in.RunOp, func(ctx context.Context, tx pgx.Tx) ([]event, error) {
 		_, err := tx.Exec(
 			ctx,
-			"INSERT INTO run_segments(tenant_id,run_id,member,seq,status,check"+
-				"point_version) VALUES($1,$2,$3,$4,'running',$5) ON CONFLICT(tenan"+
-				"t_id,run_id,member,seq) DO UPDATE SET started_at=now() WHERE run_"+
-				"segments.status='running'",
+			`INSERT INTO run_segments(tenant_id,run_id,member,seq,status,checkpoint_version)
+ VALUES($1,$2,$3,$4,'running',$5)
+ ON CONFLICT(tenant_id,run_id,member,seq)
+ DO UPDATE SET started_at=now()
+ WHERE run_segments.status='running'`,
 			in.TenantID,
 			in.RunID,
 			in.Member,
@@ -234,9 +250,13 @@ func (a *Activities) RecordSegment(ctx context.Context, in w.RecordSegmentInput)
 		}
 		n, err := tx.Exec(
 			ctx,
-			"UPDATE run_segments SET status=$5,checkpoint_version=$6,iteration"+
-				"s=$7,usage=$8,ended_at=now() WHERE tenant_id=$1 AND run_id=$2 AND"+
-				" member=$3 AND seq=$4 AND status='running'",
+			`UPDATE run_segments
+ SET status=$5,checkpoint_version=$6,iterations=$7,usage=$8,ended_at=now()
+ WHERE tenant_id=$1
+ AND run_id=$2
+ AND member=$3
+ AND seq=$4
+ AND status='running'`,
 			in.TenantID,
 			in.RunID,
 			in.Member,
@@ -255,8 +275,10 @@ func (a *Activities) RecordSegment(ctx context.Context, in w.RecordSegmentInput)
 		}
 		if err = tx.QueryRow(
 			ctx,
-			"SELECT COALESCE(sum(millicredits),0)::bigint FROM usage_ledger WH"+
-				"ERE tenant_id=$1 AND run_id=$2",
+			`SELECT COALESCE(sum(millicredits),0)::bigint
+ FROM usage_ledger
+ WHERE tenant_id=$1
+ AND run_id=$2`,
 			in.TenantID,
 			in.RunID,
 		).Scan(
@@ -298,8 +320,12 @@ func (a *Activities) ReconcileCheckpoint(ctx context.Context, in w.ReconcileInpu
 		var raw []byte
 		err := tx.QueryRow(
 			ctx,
-			"SELECT result FROM segment_results WHERE tenant_id=$1 AND run_id="+
-				"$2 AND member=$3 AND seq=$4",
+			`SELECT result
+ FROM segment_results
+ WHERE tenant_id=$1
+ AND run_id=$2
+ AND member=$3
+ AND seq=$4`,
 			in.TenantID,
 			in.RunID,
 			in.Member,
@@ -318,8 +344,10 @@ func (a *Activities) ReconcileCheckpoint(ctx context.Context, in w.ReconcileInpu
 		}
 		return tx.QueryRow(
 			ctx,
-			"SELECT COALESCE(max(version),0) FROM agent_checkpoints WHERE tena"+
-				"nt_id=$1 AND session_key=$2",
+			`SELECT COALESCE(max(version),0)
+ FROM agent_checkpoints
+ WHERE tenant_id=$1
+ AND session_key=$2`,
 			in.TenantID,
 			in.SessionKey,
 		).Scan(
@@ -333,8 +361,10 @@ func (a *Activities) FinalizeRun(ctx context.Context, in w.FinalizeInput) error 
 		var used int64
 		if err := tx.QueryRow(
 			ctx,
-			"SELECT COALESCE(sum(millicredits),0)::bigint FROM usage_ledger WH"+
-				"ERE tenant_id=$1 AND run_id=$2",
+			`SELECT COALESCE(sum(millicredits),0)::bigint
+ FROM usage_ledger
+ WHERE tenant_id=$1
+ AND run_id=$2`,
 			in.TenantID,
 			in.RunID,
 		).Scan(
@@ -344,9 +374,11 @@ func (a *Activities) FinalizeRun(ctx context.Context, in w.FinalizeInput) error 
 		}
 		n, err := tx.Exec(
 			ctx,
-			"UPDATE runs SET status=$3,error_code=NULLIF($4,''),summary=NULLIF"+
-				"($5,''),ended_at=now(),used_millicredits=$6 WHERE tenant_id=$1 AN"+
-				"D id=$2 AND ended_at IS NULL",
+			`UPDATE runs
+ SET status=$3,error_code=NULLIF($4,''),summary=NULLIF($5,''),ended_at=now(),used_millicredits=$6
+ WHERE tenant_id=$1
+ AND id=$2
+ AND ended_at IS NULL`,
 			in.TenantID,
 			in.RunID,
 			in.Status,
@@ -372,12 +404,7 @@ func (a *Activities) FinalizeRun(ctx context.Context, in w.FinalizeInput) error 
 			return nil, err
 		}
 		if err = auditRun(
-			ctx,
-			tx,
-			in.RunOp,
-			"run.finish",
-			in.RunID,
-			map[string]any{"status": in.Status, "error_code": in.ErrorCode},
+			ctx, tx, in.RunOp, "run.finish", in.RunID, map[string]any{"status": in.Status, "error_code": in.ErrorCode},
 		); err != nil {
 			return nil, err
 		}
@@ -402,6 +429,10 @@ func (a *Activities) WaitForRun(ctx context.Context, in w.RunOp) error {
 	for {
 		select {
 		case err := <-done:
+			// A closed workflow has finished even when its business outcome failed.
+			if _, closed := errors.AsType[*temporal.WorkflowExecutionError](err); closed {
+				return nil
+			}
 			return err
 		case <-ticker.C:
 			activity.RecordHeartbeat(ctx)
@@ -447,8 +478,9 @@ func persistEvents(ctx context.Context, tx pgx.Tx, in w.RunOp, evs []event) erro
 		}
 		if _, err = tx.Exec(
 			ctx,
-			"INSERT INTO control_events(tenant_id,run_id,event_id,operation,pa"+
-				"yload) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING",
+			`INSERT INTO control_events(tenant_id,run_id,event_id,operation,payload)
+ VALUES($1,$2,$3,$4,$5)
+ ON CONFLICT DO NOTHING`,
 			in.TenantID,
 			in.RunID,
 			msg.Id,
@@ -472,9 +504,9 @@ func recordOutput(ctx context.Context, tx pgx.Tx, in w.RecordSegmentInput, chang
 			}
 			if _, err = tx.Exec(
 				ctx,
-				"INSERT INTO messages(id,tenant_id,session_id,run_id,role,content,"+
-					"content_ref) VALUES($1,$2,$3,$4,'assistant',$5,$6) ON CONFLICT DO"+
-					" NOTHING",
+				`INSERT INTO messages(id,tenant_id,session_id,run_id,role,content,content_ref)
+ VALUES($1,$2,$3,$4,'assistant',$5,$6)
+ ON CONFLICT DO NOTHING`,
 				f.MessageId,
 				in.TenantID,
 				in.SessionID,
@@ -487,11 +519,7 @@ func recordOutput(ctx context.Context, tx pgx.Tx, in w.RecordSegmentInput, chang
 		}
 		for _, artifact := range in.Result.Artifacts {
 			if !strings.HasPrefix(artifact.ObjectRef, "t/"+in.TenantID+"/artifacts/"+in.RunID+"/") {
-				return nil, temporal.NewNonRetryableApplicationError(
-					"invalid artifact reference",
-					contract.ErrorInvalidSpec,
-					nil,
-				)
+				return nil, temporal.NewNonRetryableApplicationError("invalid artifact reference", contract.ErrorInvalidSpec, nil)
 			}
 			var old string
 			err = tx.QueryRow(
@@ -508,12 +536,12 @@ func recordOutput(ctx context.Context, tx pgx.Tx, in w.RecordSegmentInput, chang
 			}
 			_, err = tx.Exec(
 				ctx,
-				"INSERT INTO artifacts(id,tenant_id,session_id,run_id,path,mime,si"+
-					"ze,digest,object_ref,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'f"+
-					"inal') ON CONFLICT(tenant_id,session_id,path) DO UPDATE SET run_i"+
-					"d=EXCLUDED.run_id,mime=EXCLUDED.mime,size=EXCLUDED.size,digest=EX"+
-					"CLUDED.digest,object_ref=EXCLUDED.object_ref,updated_at=now() WHE"+
-					"RE artifacts.digest<>EXCLUDED.digest",
+				`INSERT INTO artifacts(id,tenant_id,session_id,run_id,path,mime,size,digest,object_ref,status)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'final')
+ ON CONFLICT(tenant_id,session_id,path)
+ DO UPDATE SET run_id=EXCLUDED.run_id,mime=EXCLUDED.mime,size=EXCLUDED.size,digest=EXCLUDED.digest,
+ object_ref=EXCLUDED.object_ref,updated_at=now()
+ WHERE artifacts.digest<>EXCLUDED.digest`,
 				ids.Derive(in.SessionID, artifact.Path),
 				in.TenantID,
 				in.SessionID,
@@ -542,11 +570,16 @@ func recordOutput(ctx context.Context, tx pgx.Tx, in w.RecordSegmentInput, chang
 func settleRun(ctx context.Context, tx pgx.Tx, in w.FinalizeInput, used int64) error {
 	var err error
 	for _, sql := range []string{
-		"UPDATE run_segments SET status='failed',ended_at=now() WHERE tena" +
-			"nt_id=$1 AND run_id=$2 AND status='running'",
-		"UPDATE interactions SET status='cancelled',resolved_at=now() WHER" +
-			"E tenant_id=$1 AND run_id=$2 AND status IN ('pending','escalated'" +
-			")",
+		`UPDATE run_segments
+ SET status='failed',ended_at=now()
+ WHERE tenant_id=$1
+ AND run_id=$2
+ AND status='running'`,
+		`UPDATE interactions
+ SET status='cancelled',resolved_at=now()
+ WHERE tenant_id=$1
+ AND run_id=$2
+ AND status IN ('pending','escalated')`,
 	} {
 		if _, err = tx.Exec(ctx, sql, in.TenantID, in.RunID); err != nil {
 			return err
@@ -558,8 +591,10 @@ func settleRun(ctx context.Context, tx pgx.Tx, in w.FinalizeInput, used int64) e
 	}
 	if _, err = tx.Exec(
 		ctx,
-		"UPDATE budget_reservations SET status=$3,millicredits=$4 WHERE te"+
-			"nant_id=$1 AND run_id=$2",
+		`UPDATE budget_reservations
+ SET status=$3,millicredits=$4
+ WHERE tenant_id=$1
+ AND run_id=$2`,
 		in.TenantID,
 		in.RunID,
 		reservation,

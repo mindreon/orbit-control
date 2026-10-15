@@ -13,10 +13,16 @@ import (
 )
 
 type leaseWorkflow struct {
-	in    w.LeaseInput
-	st    *w.LeaseCarry
-	mutex workflow.Mutex
-	wake  workflow.Channel
+	in               w.LeaseInput
+	st               *w.LeaseCarry
+	mutex            workflow.Mutex
+	wake             workflow.Channel
+	retryAt          time.Time
+	backoff          time.Duration
+	dirty            bool
+	pendingRestored  *bool
+	snapshotPending  bool
+	obsoleteSnapshot string
 }
 
 func Run(ctx workflow.Context, in w.LeaseInput) error {
@@ -36,46 +42,93 @@ func Run(ctx workflow.Context, in w.LeaseInput) error {
 	if err := l.register(ctx); err != nil {
 		return err
 	}
-	for !st.Archived {
-		if workflow.AllHandlersFinished(ctx) &&
+	for {
+		l.drainSignals(ctx)
+		if st.Archived {
+			if err := workflow.Await(ctx, func() bool { return workflow.AllHandlersFinished(ctx) }); err != nil {
+				return err
+			}
+			if err := l.archive(ctx); err == nil {
+				return nil
+			} else {
+				l.retry(ctx, err)
+				if err := workflow.Sleep(ctx, l.backoff); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		if st.Lease != nil && l.retryAt.IsZero() && !l.dirty && !l.snapshotPending &&
+			workflow.AllHandlersFinished(ctx) &&
 			(st.Touches >= 1000 || workflow.GetInfo(ctx).GetContinueAsNewSuggested()) {
 			st.Touches = 0
 			in.Carry = st
 			return workflow.NewContinueAsNewError(ctx, w.SandboxLeaseWorkflow, in)
 		}
 		l.wait(ctx)
+		if st.Archived || workflow.Now(ctx).Before(l.retryAt) {
+			continue
+		}
 		if err := l.mutex.Lock(ctx); err != nil {
 			return err
 		}
 		err := l.maintain(ctx)
 		l.mutex.Unlock()
 		if err != nil {
-			return err
+			l.retry(ctx, err)
+		} else {
+			l.retryAt, l.backoff = time.Time{}, 0
 		}
 	}
-	if err := workflow.Await(ctx, func() bool {
-		return workflow.AllHandlersFinished(ctx)
-	}); err != nil {
-		return err
+}
+
+// Provider retries are bounded per Activity; maintenance keeps trying for the lease lifetime.
+func (l *leaseWorkflow) retry(ctx workflow.Context, err error) {
+	l.backoff = min(15*time.Minute, max(time.Minute, 2*l.backoff))
+	l.retryAt = workflow.Now(ctx).Add(l.backoff)
+	workflow.GetLogger(ctx).Warn("lease maintenance failed", "error", err, "retry_after", l.backoff)
+}
+func (l *leaseWorkflow) touch(ctx workflow.Context, in w.TouchInput) {
+	l.st.LastTouch = workflow.Now(ctx)
+	l.st.Touches++
+	if in.InUse {
+		l.st.InUse[in.RunID] = l.st.LastTouch
+	} else {
+		delete(l.st.InUse, in.RunID)
 	}
-	return l.archive(ctx)
+}
+func (l *leaseWorkflow) drainSignals(ctx workflow.Context) {
+	ch := workflow.GetSignalChannel(ctx, w.Touch)
+	var touch w.TouchInput
+	for ch.ReceiveAsync(&touch) {
+		l.touch(ctx, touch)
+	}
+	ch = workflow.GetSignalChannel(ctx, w.Archive)
+	for ch.ReceiveAsync(nil) {
+		l.st.Archived = true
+	}
 }
 
 func (l *leaseWorkflow) exec(ctx workflow.Context, name string, arg, out any) error {
 	return workflow.ExecuteActivity(w.Sandbox(ctx), name, arg).Get(ctx, out)
 }
 func (l *leaseWorkflow) record(ctx workflow.Context, restored *bool) error {
-	l.st.EventN++
+	l.dirty = true
+	if restored != nil {
+		l.pendingRestored = restored
+	}
 	in := w.SandboxStateInput{
 		TenantID: l.in.TenantID, IsolationKey: l.in.IsolationKey, SessionID: l.st.Spec.SessionID,
 		Gen: l.st.Gen, State: l.st.State, Lease: l.st.Lease, SnapshotID: l.st.SnapshotID,
-		Profile: l.st.Spec.Profile, RunID: l.st.Spec.RunID, Restored: restored,
+		Profile: l.st.Spec.Profile, RunID: l.st.Spec.RunID, Restored: l.pendingRestored, Provider: l.st.Spec.Provider,
 		EventN: l.st.Spec.EventN, EventAt: l.st.Spec.EventAt,
 	}
-	return workflow.ExecuteActivity(w.Ctl(ctx, "RecordSandboxState"), "RecordSandboxState", in).Get(
-		ctx,
-		nil,
-	)
+	err := workflow.ExecuteActivity(w.Ctl(ctx, "RecordSandboxState"), "RecordSandboxState", in).Get(ctx, nil)
+	if err == nil {
+		l.dirty = false
+		l.pendingRestored = nil
+	}
+	return err
 }
 func (l *leaseWorkflow) op() contract.SandboxOpInput {
 	return contract.SandboxOpInput{
@@ -90,14 +143,13 @@ func (l *leaseWorkflow) removeSnapshot(ctx workflow.Context, id string) error {
 	}, nil)
 }
 func (l *leaseWorkflow) register(ctx workflow.Context) error {
-	if err := workflow.SetQueryHandler(ctx, w.Lease, func() (w.LeaseCarry, error) {
-		return *l.st, nil
-	}); err != nil {
+	if err := workflow.SetQueryHandler(ctx, w.Lease, func() (w.LeaseCarry, error) { return *l.st, nil }); err != nil {
 		return err
 	}
 	return workflow.SetUpdateHandlerWithOptions(ctx, w.Acquire, l.acquire,
 		workflow.UpdateHandlerOptions{Validator: func(ac w.AcquireInput) error {
-			if l.st.Archived || ac.RunID == "" || ac.SessionID == "" || ac.Profile == "" {
+			if l.st.Archived || ac.RunID == "" || ac.SessionID == "" || ac.Profile == "" ||
+				(ac.Provider != "local" && ac.Provider != "opensandbox") {
 				return fmt.Errorf("lease unavailable")
 			}
 			return nil
@@ -113,6 +165,11 @@ func (l *leaseWorkflow) acquire(ctx workflow.Context, ac w.AcquireInput) (contra
 	}
 	if ac.TTLSeconds <= 0 {
 		ac.TTLSeconds = 1800
+	}
+	if l.snapshotPending {
+		if err := l.snapshot(ctx); err != nil {
+			return contract.SandboxLease{}, err
+		}
 	}
 	st := l.st
 	st.Spec = ac
@@ -170,7 +227,7 @@ func (l *leaseWorkflow) acquire(ctx workflow.Context, ac w.AcquireInput) (contra
 func (l *leaseWorkflow) create(ctx workflow.Context, ac w.AcquireInput) error {
 	st := l.st
 	if st.State != "creating" {
-		st.Gen++
+		st.Gen = max(st.Gen, ac.Gen) + 1
 	}
 	st.State = "creating"
 	if err := l.record(ctx, nil); err != nil {
@@ -178,7 +235,7 @@ func (l *leaseWorkflow) create(ctx workflow.Context, ac w.AcquireInput) error {
 	}
 	input := contract.SandboxAcquireInput{
 		TenantId: l.in.TenantID, IsolationKey: contract.IsolationKey(l.in.IsolationKey),
-		Profile: ac.Profile, Egress: ac.Egress, Mounts: ac.Mounts, TtlSeconds: ac.TTLSeconds,
+		Provider: ac.Provider, Profile: ac.Profile, Egress: ac.Egress, Mounts: ac.Mounts, TtlSeconds: ac.TTLSeconds,
 		Metadata: contract.SandboxMetadata{
 			SessionId: ac.SessionID, WorkspaceId: ac.WorkspaceID, RunId: ac.RunID, LeaseGen: st.Gen,
 		},
@@ -213,18 +270,19 @@ func (l *leaseWorkflow) wait(ctx workflow.Context) {
 	timerCtx, cancel := workflow.WithCancel(ctx)
 	defer cancel()
 	addTimer := func(at time.Time) {
-		selector.AddFuture(
-			workflow.NewTimer(timerCtx, max(time.Duration(0), at.Sub(now))),
-			func(workflow.Future) {},
-		)
+		selector.AddFuture(workflow.NewTimer(timerCtx, max(time.Duration(0), at.Sub(now))), func(workflow.Future) {})
 	}
-	if st.Lease != nil && st.State == "ready" {
+	if !l.retryAt.IsZero() {
+		addTimer(l.retryAt)
+	} else if st.Lease != nil && st.State == "ready" {
 		addTimer(st.NextRenew)
 	}
-	for _, key := range workflow.DeterministicKeys(st.InUse) {
-		addTimer(st.InUse[key].Add(30 * time.Minute))
+	if l.retryAt.IsZero() {
+		for _, key := range workflow.DeterministicKeys(st.InUse) {
+			addTimer(st.InUse[key].Add(30 * time.Minute))
+		}
 	}
-	if st.Lease != nil && st.Lease.Provider == "opensandbox" && len(st.InUse) == 0 {
+	if l.retryAt.IsZero() && st.Lease != nil && st.Lease.Provider == "opensandbox" && len(st.InUse) == 0 {
 		switch st.State {
 		case "ready":
 			addTimer(st.LastTouch.Add(2 * time.Minute))
@@ -232,19 +290,11 @@ func (l *leaseWorkflow) wait(ctx workflow.Context) {
 			addTimer(st.LastTouch.Add(15 * time.Minute))
 		}
 	}
-	selector.AddReceive(l.wake, func(ch workflow.ReceiveChannel, _ bool) {
-		ch.Receive(ctx, nil)
-	})
+	selector.AddReceive(l.wake, func(ch workflow.ReceiveChannel, _ bool) { ch.Receive(ctx, nil) })
 	selector.AddReceive(workflow.GetSignalChannel(ctx, w.Touch), func(ch workflow.ReceiveChannel, _ bool) {
 		var touch w.TouchInput
 		ch.Receive(ctx, &touch)
-		st.LastTouch = workflow.Now(ctx)
-		st.Touches++
-		if touch.InUse {
-			st.InUse[touch.RunID] = st.LastTouch
-		} else {
-			delete(st.InUse, touch.RunID)
-		}
+		l.touch(ctx, touch)
 	})
 	selector.AddReceive(workflow.GetSignalChannel(ctx, w.Archive), func(ch workflow.ReceiveChannel, _ bool) {
 		ch.Receive(ctx, nil)
@@ -256,6 +306,14 @@ func (l *leaseWorkflow) maintain(ctx workflow.Context) error {
 	st := l.st
 	if st.Archived {
 		return nil
+	}
+	if l.dirty {
+		if err := l.record(ctx, nil); err != nil {
+			return err
+		}
+	}
+	if l.snapshotPending {
+		return l.snapshot(ctx)
 	}
 	now := workflow.Now(ctx)
 	for _, key := range workflow.DeterministicKeys(st.InUse) {
@@ -307,26 +365,37 @@ func (l *leaseWorkflow) renew(ctx workflow.Context) error {
 	return l.record(ctx, nil)
 }
 func (l *leaseWorkflow) snapshot(ctx workflow.Context) error {
-	var snapshot contract.SandboxSnapshotResult
-	if err := l.exec(ctx, contract.ActivitySandboxSnapshot, l.op(), &snapshot); err != nil {
-		return err
-	}
-	old := l.st.SnapshotID
-	l.st.SnapshotID = snapshot.SnapshotId
-	if old != "" && old != snapshot.SnapshotId {
-		if err := l.removeSnapshot(ctx, old); err != nil {
+	if !l.snapshotPending {
+		var snapshot contract.SandboxSnapshotResult
+		if err := l.exec(ctx, contract.ActivitySandboxSnapshot, l.op(), &snapshot); err != nil {
 			return err
 		}
+		l.obsoleteSnapshot = l.st.SnapshotID
+		l.st.SnapshotID = snapshot.SnapshotId
+		l.snapshotPending = true
+	}
+	if l.obsoleteSnapshot != "" && l.obsoleteSnapshot != l.st.SnapshotID {
+		if err := l.removeSnapshot(ctx, l.obsoleteSnapshot); err != nil {
+			return err
+		}
+		l.obsoleteSnapshot = ""
 	}
 	if err := l.exec(ctx, contract.ActivitySandboxDestroy, l.op(), nil); err != nil {
 		return err
 	}
+	l.snapshotPending = false
 	l.st.State = "snapshotted"
 	return l.record(ctx, nil)
 }
 func (l *leaseWorkflow) archive(ctx workflow.Context) error {
+	if l.obsoleteSnapshot != "" && l.obsoleteSnapshot != l.st.SnapshotID {
+		if err := l.removeSnapshot(ctx, l.obsoleteSnapshot); err != nil {
+			return err
+		}
+		l.obsoleteSnapshot = ""
+	}
 	if l.st.Lease != nil {
-		if l.st.State != "snapshotted" && l.st.State != "none" {
+		if l.st.State != "snapshotted" && l.st.State != "none" && l.st.State != "destroyed" {
 			if err := l.exec(ctx, contract.ActivitySandboxDestroy, l.op(), nil); err != nil {
 				return err
 			}

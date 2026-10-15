@@ -32,6 +32,10 @@ type sessionHarness struct {
 
 func newSessionHarness(t *testing.T, archiveErrors ...error) *sessionHarness {
 	t.Helper()
+	return sessionHarnessWithArchiveDelay(t, 0, archiveErrors...)
+}
+func sessionHarnessWithArchiveDelay(t *testing.T, delay time.Duration, archiveErrors ...error) *sessionHarness {
+	t.Helper()
 	var suite testsuite.WorkflowTestSuite
 	h := &sessionHarness{env: suite.NewTestWorkflowEnvironment(), in: w.SessionInput{
 		V: 1, TenantID: "tenant", WorkspaceID: "workspace", SessionID: "session", Policy: "queue"}}
@@ -55,7 +59,7 @@ func newSessionHarness(t *testing.T, archiveErrors ...error) *sessionHarness {
 	if len(archiveErrors) > 0 {
 		archiveError = archiveErrors[0]
 	}
-	h.env.OnSignalExternalWorkflow(mock.Anything, mock.Anything, "", w.Archive, mock.Anything).Return(archiveError)
+	h.env.OnSignalExternalWorkflow(mock.Anything, mock.Anything, "", w.Archive, mock.Anything).Return(archiveError).After(delay)
 	return h
 }
 func sessionMessage(id string) w.SubmitMessageInput {

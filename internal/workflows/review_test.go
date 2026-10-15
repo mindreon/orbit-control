@@ -29,11 +29,7 @@ func TestCompactRetryStillTooLarge(t *testing.T) {
 			r.YieldReason = new(contract.YieldReason("compacted"))
 			return r, nil
 		}
-		return contract.SegmentResult{}, temporal.NewNonRetryableApplicationError(
-			"context",
-			contract.ErrorContextLengthExceeded,
-			nil,
-		)
+		return contract.SegmentResult{}, temporal.NewNonRetryableApplicationError("context", contract.ErrorContextLengthExceeded, nil)
 	}
 	h.execute(t, "failed", "CONTEXT_TOO_LARGE")
 	require.Len(t, h.segments, 3)
@@ -64,10 +60,7 @@ func TestReacquisitionIDsAcrossSegments(t *testing.T) {
 func TestCancelDuringStartSegment(t *testing.T) {
 	h := newHarness(t)
 	h.env.OnActivity("StartSegment", mock.Anything, mock.Anything).Return(nil).After(2 * time.Second)
-	h.env.RegisterDelayedCallback(
-		func() { h.env.SignalWorkflow(w.Cancel, w.CancelInput{Reason: "stop now"}) },
-		time.Second,
-	)
+	h.env.RegisterDelayedCallback(func() { h.env.SignalWorkflow(w.Cancel, w.CancelInput{Reason: "stop now"}) }, time.Second)
 	h.execute(t, "cancelled", "CANCELLED")
 	require.Empty(t, h.segments)
 	require.Equal(t, "stop now", h.finished[0].Reason)
@@ -108,11 +101,7 @@ func TestFailuresAlwaysFinalize(t *testing.T) {
 				}
 			case "ReconcileCheckpoint":
 				h.run = func(contract.SegmentInput) (contract.SegmentResult, error) {
-					return contract.SegmentResult{}, temporal.NewNonRetryableApplicationError(
-						"conflict",
-						contract.ErrorCheckpointConflict,
-						nil,
-					)
+					return contract.SegmentResult{}, temporal.NewNonRetryableApplicationError("conflict", contract.ErrorCheckpointConflict, nil)
 				}
 			default:
 				h.run = func(in contract.SegmentInput) (contract.SegmentResult, error) {
@@ -138,6 +127,8 @@ type leaseHarness struct {
 	records      []w.SandboxStateInput
 	missing      bool
 	renewMissing bool
+	provider     contract.SandboxProvider
+	gen          int
 	ttl          int
 }
 
@@ -147,7 +138,7 @@ func newLeaseHarness(t *testing.T, provider contract.SandboxProvider) *leaseHarn
 	env := suite.NewTestWorkflowEnvironment()
 	at := time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC)
 	env.SetStartTime(at)
-	h := &leaseHarness{env: env, ttl: 1800, in: w.LeaseInput{TenantID: "tenant", IsolationKey: "isolation"}}
+	h := &leaseHarness{env: env, provider: provider, ttl: 1800, in: w.LeaseInput{TenantID: "tenant", IsolationKey: "isolation"}}
 	lease := contract.SandboxLease{Provider: provider, SandboxId: "sandbox", ExpiresAt: at.Add(time.Hour)}
 	env.RegisterActivityWithOptions(
 		func(_ context.Context, in contract.SandboxAcquireInput) (contract.SandboxLease, error) {
@@ -210,7 +201,10 @@ func (h *leaseHarness) acquire(t *testing.T, id string, reacquire bool) {
 	t.Helper()
 	h.env.UpdateWorkflow(w.Acquire, id, &testsuite.TestUpdateCallback{
 		OnReject: func(err error) { require.NoError(t, err) }, OnComplete: func(_ any, err error) { require.NoError(t, err) },
-	}, w.AcquireInput{RunID: "run", SessionID: "session", Profile: "default", TTLSeconds: h.ttl, SpecDigest: "digest", Reacquire: reacquire})
+	}, w.AcquireInput{
+		Provider: h.provider, Gen: h.gen, RunID: "run", SessionID: "session", Profile: "default", TTLSeconds: h.ttl,
+		SpecDigest: "digest", Reacquire: reacquire,
+	})
 }
 func (h *leaseHarness) archive(after time.Duration) {
 	h.env.RegisterDelayedCallback(func() { h.env.SignalWorkflow(w.Archive, w.ArchiveInput{}) }, after)
@@ -250,10 +244,7 @@ func TestLeaseRenewAndReacquire(t *testing.T) {
 		h.calls,
 	)
 	require.Equal(t, 2, h.creates[1].Metadata.LeaseGen)
-	require.True(
-		t,
-		slices.ContainsFunc(h.records, func(r w.SandboxStateInput) bool { return r.Restored != nil && !*r.Restored }),
-	)
+	require.True(t, slices.ContainsFunc(h.records, func(r w.SandboxStateInput) bool { return r.Restored != nil && !*r.Restored }))
 }
 func TestLeaseStaleInUseAndRestore(t *testing.T) {
 	h := newLeaseHarness(t, "opensandbox")
@@ -280,7 +271,8 @@ func TestLeaseContinueAfterTouches(t *testing.T) {
 			h.env.RegisterDelayedCallback(send, time.Millisecond)
 		}
 	}
-	h.env.RegisterDelayedCallback(send, 0)
+	h.env.RegisterDelayedCallback(func() { h.acquire(t, "initial", false) }, 0)
+	h.env.RegisterDelayedCallback(send, time.Second)
 	h.env.ExecuteWorkflow(sandboxlease.Run, h.in)
 	var can *workflow.ContinueAsNewError
 	require.True(t, errors.As(h.env.GetWorkflowError(), &can))
@@ -294,7 +286,7 @@ func TestLeaseResumeAndLostSnapshot(t *testing.T) {
 			at := time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC)
 			h.in.Carry = &w.LeaseCarry{State: "paused", Gen: 1, SnapshotID: "snapshot", LastTouch: at,
 				Lease: &contract.SandboxLease{Provider: "opensandbox", SandboxId: "old", ExpiresAt: at.Add(time.Hour)},
-				Spec:  w.AcquireInput{RunID: "run", SessionID: "session", Profile: "default", TTLSeconds: 1800}}
+				Spec:  w.AcquireInput{Provider: h.provider, Gen: h.gen, RunID: "run", SessionID: "session", Profile: "default", TTLSeconds: 1800}}
 			h.missing = mode == "missing"
 			h.env.RegisterDelayedCallback(func() { h.acquire(t, "restore", mode == "missing") }, 0)
 			h.archive(time.Second)
@@ -313,8 +305,10 @@ func TestLeaseResumeAndLostSnapshot(t *testing.T) {
 func TestLeaseSuggestedContinue(t *testing.T) {
 	h := newLeaseHarness(t, "local")
 	h.env.SetContinueAsNewSuggested(true)
+	h.env.RegisterDelayedCallback(func() { h.acquire(t, "initial", false) }, time.Second)
 	h.env.ExecuteWorkflow(sandboxlease.Run, h.in)
 	require.True(t, workflow.IsContinueAsNewError(h.env.GetWorkflowError()))
+	require.Len(t, h.creates, 1, "first acquire must precede Continue-As-New")
 }
 func TestRunCancellationDuringInteractionAwait(t *testing.T) {
 	h := newHarness(t)
@@ -386,6 +380,7 @@ func TestPendingInteractionPreventsContinue(t *testing.T) {
 	}, 2*time.Second)
 	h.env.ExecuteWorkflow(agentrun.Run, h.input)
 	require.True(t, workflow.IsContinueAsNewError(h.env.GetWorkflowError()))
+	require.Len(t, h.creates, 1, "first acquire must precede Continue-As-New")
 	require.Len(t, h.decisions, 1)
 	require.Len(t, h.records, 1)
 	require.Empty(t, h.finished)
