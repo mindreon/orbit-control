@@ -75,10 +75,7 @@ func testReplayBranches(t *testing.T, tenant string) {
 		activity.RegisterOptions{Name: "AggregateAssetChecks"},
 	)
 	for _, name := range []string{"CreateReviewTask", "RemindAssetReview", "Sign", "NotifyAuthor"} {
-		w.RegisterActivityWithOptions(
-			func(context.Context, assetrelease.Input) error { return nil },
-			activity.RegisterOptions{Name: name},
-		)
+		w.RegisterActivityWithOptions(func(context.Context, assetrelease.Input) error { return nil }, activity.RegisterOptions{Name: name})
 	}
 	w.RegisterActivityWithOptions(
 		func(_ context.Context, review assetrelease.Review) (assetrelease.Review, error) { return review, nil },
@@ -115,9 +112,7 @@ func testReplayBranches(t *testing.T, tenant string) {
 		contract.ActivityAssetCheckPermissionDiff,
 	}
 	for i, name := range checks {
-		kind := contract.AssetCheckKind(
-			[]string{"structure", "compat", "secrets", "static", "injection", "permission_diff"}[i],
-		)
+		kind := contract.AssetCheckKind([]string{"structure", "compat", "secrets", "static", "injection", "permission_diff"}[i])
 		fn := func(context.Context, contract.AssetCheckInput) (contract.AssetCheckReport, error) {
 			return contract.AssetCheckReport{Check: kind, CheckerVersion: "replay-fixture/1"}, nil
 		}

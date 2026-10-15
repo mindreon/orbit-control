@@ -203,11 +203,7 @@ func Import(ctx context.Context, d *db.DB, s *assets.Service, tenant, actor, fil
 		if err != nil {
 			return result, err
 		}
-		staged, err := s.PrepareUpload(
-			auth.Context(ctx, auth.Principal{ID: actor, Kind: "user"}, tenant),
-			"0.1.0",
-			archive,
-		)
+		staged, err := s.PrepareUpload(auth.Context(ctx, auth.Principal{ID: actor, Kind: "user"}, tenant), "0.1.0", archive)
 		if err != nil {
 			return result, err
 		}
@@ -219,8 +215,11 @@ func Import(ctx context.Context, d *db.DB, s *assets.Service, tenant, actor, fil
 			}
 			var exists bool
 			if e := tx.QueryRow(ctx,
-				("SELECT EXISTS(SELECT 1 FROM assets WHERE tenant_id=$1 AND kind=$2 AND " +
-					"name=$3)"),
+				(`SELECT EXISTS(SELECT 1
+ FROM assets
+ WHERE tenant_id=$1
+ AND kind=$2
+ AND name=$3)`),
 				tenant,
 				kind,
 				name).Scan(&exists); e != nil {

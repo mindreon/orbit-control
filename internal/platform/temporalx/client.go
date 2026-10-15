@@ -25,11 +25,7 @@ type Client interface {
 }
 type Service struct{ Client client.Client }
 
-func (s Service) Submit(
-	ctx context.Context,
-	in w.SessionInput,
-	msg w.SubmitMessageInput,
-) (w.SubmitMessageOutput, error) {
+func (s Service) Submit(ctx context.Context, in w.SessionInput, msg w.SubmitMessageInput) (w.SubmitMessageOutput, error) {
 	var out w.SubmitMessageOutput
 	start := s.Client.NewWithStartWorkflowOperation(
 		client.StartWorkflowOptions{

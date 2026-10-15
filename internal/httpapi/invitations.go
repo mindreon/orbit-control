@@ -64,8 +64,8 @@ func (h *Handler) createInvitation(w http.ResponseWriter, r *http.Request) error
 	token := base64.RawURLEncoding.EncodeToString(secret)
 	hash := sha256.Sum256([]byte(token))
 	id := ids.New()
-	if _, err := db.Tx(ctx).Exec(ctx, "INSERT INTO invitations(id,tenant_id,email,role,token_hash,expires_at,created_by) "+
-		"VALUES($1,$2,$3,$4,$5,$6,$7)", id, auth.Tenant(ctx), in.Email, in.Role, hash[:], in.ExpiresAt, auth.From(ctx).ID); err != nil {
+	if _, err := db.Tx(ctx).Exec(ctx, `INSERT INTO invitations(id,tenant_id,email,role,token_hash,expires_at,created_by)
+ VALUES($1,$2,$3,$4,$5,$6,$7)`, id, auth.Tenant(ctx), in.Email, in.Role, hash[:], in.ExpiresAt, auth.From(ctx).ID); err != nil {
 		return err
 	}
 	if err := h.logWrite(ctx,
@@ -101,8 +101,12 @@ func (h *Handler) listInvitations(w http.ResponseWriter, r *http.Request) error 
 		return err
 	}
 	rows, err := db.Tx(ctx).
-		Query(ctx, "SELECT id::text,email,role,expires_at,status FROM invitations WHERE ($1='' OR "+
-			"id>NULLIF($1,'')::uuid) ORDER BY id LIMIT $2", page.Cursor, page.Limit+1)
+		Query(ctx, `SELECT id::text,email,role,expires_at,status
+ FROM invitations
+ WHERE ($1=''
+ OR id>NULLIF($1,'')::uuid)
+ ORDER BY id
+ LIMIT $2`, page.Cursor, page.Limit+1)
 	if err != nil {
 		return err
 	}
@@ -137,8 +141,10 @@ func (h *Handler) deleteInvitation(w http.ResponseWriter, r *http.Request) error
 	}
 	var role string
 	if err := db.Tx(ctx).QueryRow(ctx,
-		("SELECT role FROM invitations WHERE id=$1 AND status='pending' FOR " +
-			"UPDATE"),
+		(`SELECT role
+ FROM invitations
+ WHERE id=$1
+ AND status='pending' FOR UPDATE`),
 		id).Scan(&role); err != nil {
 		return err
 	}
@@ -205,8 +211,9 @@ func (h *Handler) acceptInvitation(w http.ResponseWriter, r *http.Request) error
 				}
 				if _,
 					err := tx.Exec(ctx,
-					("UPDATE invitations SET status='accepted',accepted_by=$2,accepted_at=no" +
-						"w() WHERE id=$1"),
+					(`UPDATE invitations
+ SET status='accepted',accepted_by=$2,accepted_at=now()
+ WHERE id=$1`),
 					i.ID,
 					p.ID); err != nil {
 					return err

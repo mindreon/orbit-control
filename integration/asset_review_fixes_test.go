@@ -63,14 +63,7 @@ func testAssetReviewBoundaries(
 	narrow := create("narrow-private", "tenant")
 	grant(narrow, "tenant", tenant)
 	grant(narrow, "workspace", workspace)
-	status, out, _ := request(
-		"PATCH",
-		"/v1/assets/"+narrow,
-		token,
-		tenant,
-		"",
-		map[string]string{"visibility": "private"},
-	)
+	status, out, _ := request("PATCH", "/v1/assets/"+narrow, token, tenant, "", map[string]string{"visibility": "private"})
 	check(status, 200, out)
 	status, out, _ = request("GET", "/v1/assets/"+narrow+"/grants", token, tenant, "", nil)
 	check(status, 200, out)
@@ -81,8 +74,8 @@ func testAssetReviewBoundaries(
 	check(status, 404, out)
 	// Defense in depth: even a stale broad grant cannot override current visibility.
 	if err := d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, "INSERT INTO asset_grants(tenant_id,asset_id,grantee_type,grantee_id,permission) "+
-			"VALUES($1,$2,'tenant',$1,'use')", tenant, narrow)
+		_, err := tx.Exec(ctx, `INSERT INTO asset_grants(tenant_id,asset_id,grantee_type,grantee_id,permission)
+ VALUES($1,$2,'tenant',$1,'use')`, tenant, narrow)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -91,14 +84,7 @@ func testAssetReviewBoundaries(
 	check(status, 404, out)
 	narrowWS := create("narrow-workspace", "tenant")
 	grant(narrowWS, "user", reviewerID)
-	status, out, _ = request(
-		"PATCH",
-		"/v1/assets/"+narrowWS,
-		token,
-		tenant,
-		"",
-		map[string]string{"visibility": "workspace"},
-	)
+	status, out, _ = request("PATCH", "/v1/assets/"+narrowWS, token, tenant, "", map[string]string{"visibility": "workspace"})
 	check(status, 200, out)
 	status, out, _ = request("GET", "/v1/assets/"+narrowWS+"/grants", token, tenant, "", nil)
 	check(status, 200, out)
@@ -117,14 +103,7 @@ func testAssetReviewBoundaries(
 	if err != nil {
 		t.Fatal(err)
 	}
-	status, out, _ = request(
-		"POST",
-		"/v1/assets/"+narrow+"/versions?version=1.0.0",
-		token,
-		tenant,
-		"inactive-upload",
-		raw,
-	)
+	status, out, _ = request("POST", "/v1/assets/"+narrow+"/versions?version=1.0.0", token, tenant, "inactive-upload", raw)
 	check(status, 422, out)
 	status, out, _ = request("POST", "/v1/assets/"+narrow+":restore", token, tenant, "", nil)
 	check(status, 202, out)
@@ -132,8 +111,8 @@ func testAssetReviewBoundaries(
 	// do not inherit workspace policy; workspace-visible assets use it directly.
 	policyID := ids.New()
 	if err = d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, "INSERT INTO policies(id,tenant_id,scope_type,scope_id,kind,body,version,status) "+
-			"VALUES($1,$2,'tenant',$2,'tool_rules','{\"asset_review\":{\"approvals\":3}}',1,'active')", policyID, tenant); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO policies(id,tenant_id,scope_type,scope_id,kind,body,version,status)
+ VALUES($1,$2,'tenant',$2,'tool_rules','{"asset_review":{"approvals":3}}',1,'active')`, policyID, tenant); err != nil {
 			return err
 		}
 		_, err := tx.Exec(ctx, `UPDATE workspaces SET settings='{"assets":{"approvals":1,"review_required":false}}' WHERE id=$1`, workspace)
@@ -161,14 +140,7 @@ func testAssetReviewBoundaries(
 		if out["uploaded_by"] != owner {
 			t.Fatal("uploader missing", out)
 		}
-		status, out, _ = request(
-			"POST",
-			"/v1/assets/"+id+"/versions/"+version+":submit",
-			token,
-			tenant,
-			"",
-			map[string]any{},
-		)
+		status, out, _ = request("POST", "/v1/assets/"+id+"/versions/"+version+":submit", token, tenant, "", map[string]any{})
 		check(status, 202, out)
 		in := assetrelease.Input{Tenant: tenant, VersionID: version, Generation: 1}
 		snap, err := a.SnapshotAssetRelease(ctx, in)
@@ -188,10 +160,7 @@ func testAssetReviewBoundaries(
 		)
 		check(status, 409, out)
 		// Infrastructure failure must leave checking retryable, not check_failed.
-		result, err := a.AbortAssetRelease(
-			ctx,
-			assetrelease.Failure{Input: in, Code: "TestInfrastructure", Retryable: true},
-		)
+		result, err := a.AbortAssetRelease(ctx, assetrelease.Failure{Input: in, Code: "TestInfrastructure", Retryable: true})
 		if err != nil || result.State != "checking" {
 			t.Fatal(result, err)
 		}
@@ -208,14 +177,7 @@ func testAssetReviewBoundaries(
 			t.Fatal("withdraw", result, err)
 		}
 		// A withdrawn version may be submitted again; stale generation cannot mutate it.
-		status, out, _ = request(
-			"POST",
-			"/v1/assets/"+id+"/versions/"+version+":submit",
-			token,
-			tenant,
-			"",
-			map[string]any{},
-		)
+		status, out, _ = request("POST", "/v1/assets/"+id+"/versions/"+version+":submit", token, tenant, "", map[string]any{})
 		check(status, 202, out)
 		if _, err = a.SnapshotAssetRelease(ctx, in); err == nil {
 			t.Fatal("stale generation accepted")
@@ -244,14 +206,7 @@ func testAssetReviewBoundaries(
 		map[string]string{"grantee_type": "user", "grantee_id": reviewerID, "permission": "maintain"},
 	)
 	check(status, 202, out)
-	status, out, _ = request(
-		"POST",
-		"/v1/assets/"+uploaderAsset+"/versions?version=1.0.0",
-		reviewer,
-		tenant,
-		"uploader-test",
-		raw,
-	)
+	status, out, _ = request("POST", "/v1/assets/"+uploaderAsset+"/versions?version=1.0.0", reviewer, tenant, "uploader-test", raw)
 	check(status, 201, out)
 	uploaderVersion := out["id"].(string)
 	status, out, _ = request(
@@ -304,9 +259,9 @@ func testTeamPermissionDiff(
 		files := map[string][]byte{
 			"AGENTS.md": []byte("team"),
 			"team.json": []byte(
-				"{\"schema\":\"orbit.team/v1\",\"name\":\"permissions-team\",\"dispatch\":\"scheduled\",\"roles\":[{\"name" +
-					"\":\"lead\",\"role\":\"leader\",\"agent\":\".\"},{\"name\":\"worker\",\"role\":\"teammate\",\"agent\":\"./member" +
-					"s/worker\"}]}",
+				"{\"schema\":\"orbit.team/v1\",\"name\":\"permissions-team\",\"dispatch\":\"scheduled\",\"roles\":[{" +
+					"\"name\":\"lead\",\"role\":\"leader\",\"agent\":\".\"},{\"name\":\"worker\",\"role\":\"teammate\"," +
+					"\"agent\":\"./members/worker\"}]}",
 			),
 			"agent.json": []byte(
 				`{"schema":"orbit.agent/v2","name":"lead","permissions":{"secrets":[{"name":"KEY"}],"effectClasses":["network_read"]}}`,
@@ -315,20 +270,16 @@ func testTeamPermissionDiff(
 		}
 		if i == 1 {
 			files["members/worker/agent.json"] = []byte(
-				"{\"schema\":\"orbit.agent/v2\",\"name\":\"worker\",\"tools\":{\"builtin\":[\"shell\"]},\"permissions\":{\"s" +
-					"ecrets\":[{\"name\":\"KEY\"}],\"network\":{\"egress\":[\"api.example.test\"]},\"effectClasses\":[\"sandb" +
-					"ox_write\"]}}",
+				"{\"schema\":\"orbit.agent/v2\",\"name\":\"worker\",\"tools\":{\"builtin\":[\"shell\"]},\"permissions\":" +
+					"{\"secrets\":[{\"name\":\"KEY\"}],\"network\":{\"egress\":[\"api.example.test\"]},\"effectClasses\":[" +
+					"\"sandbox_write\"]}}",
 			)
 		}
 		raw, err := bundle.Pack(files)
 		if err != nil {
 			t.Fatal(err)
 		}
-		staged, err := s.PrepareUpload(
-			auth.Context(ctx, auth.Principal{ID: owner, Kind: "user"}, tenant),
-			fmt.Sprintf("1.%d.0", i),
-			raw,
-		)
+		staged, err := s.PrepareUpload(auth.Context(ctx, auth.Principal{ID: owner, Kind: "user"}, tenant), fmt.Sprintf("1.%d.0", i), raw)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -395,7 +346,9 @@ func testAssetImmutability(t *testing.T, d *db.DB, tenant, version string) {
 				_, err := tx.Exec(t.Context(), `INSERT INTO asset_versions
 				 SELECT (jsonb_populate_record(NULL::asset_versions,
 				 to_jsonb(v) || jsonb_build_object('id',$2::text,'version','9.9.9',$3::text,NULL))).*
-				 FROM asset_versions v WHERE tenant_id=$4 AND id=$1`, version, ids.New(), column, tenant)
+ FROM asset_versions v
+ WHERE tenant_id=$4
+ AND id=$1`, version, ids.New(), column, tenant)
 				return err
 			})
 			if pgErr, ok := errors.AsType[*pgconn.PgError](err); !ok || pgErr.Code != "23502" ||

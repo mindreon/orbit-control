@@ -65,9 +65,7 @@ func TestReleasePaths(t *testing.T) {
 			}
 			for i, name := range checks {
 				report := contract.AssetCheckReport{
-					Check: contract.AssetCheckKind(
-						[]string{"structure", "compat", "secrets", "static", "injection", "permission_diff"}[i],
-					),
+					Check:          contract.AssetCheckKind([]string{"structure", "compat", "secrets", "static", "injection", "permission_diff"}[i]),
 					CheckerVersion: "test",
 				}
 				if tc.expanded && i == 5 {
@@ -107,10 +105,7 @@ func TestReleasePaths(t *testing.T) {
 				return Result{State: a.State}, nil
 			}, activity.RegisterOptions{Name: "DecideAssetReview"})
 			for _, name := range []string{"Sign", "Publish", "CompensateAssetPublish", "NotifyAuthor"} {
-				env.RegisterActivityWithOptions(
-					func(context.Context, Input) error { return nil },
-					activity.RegisterOptions{Name: name},
-				)
+				env.RegisterActivityWithOptions(func(context.Context, Input) error { return nil }, activity.RegisterOptions{Name: name})
 			}
 			env.RegisterActivityWithOptions(
 				func(context.Context, Failure) (Result, error) { return Result{State: "draft"}, nil },
@@ -248,10 +243,7 @@ func TestApprovedReleaseResumesWithoutChecks(t *testing.T) {
 		}, nil
 	}, activity.RegisterOptions{Name: "SnapshotAssetRelease"})
 	for _, name := range []string{"Sign", "Publish", "NotifyAuthor"} {
-		env.RegisterActivityWithOptions(
-			func(context.Context, Input) error { return nil },
-			activity.RegisterOptions{Name: name},
-		)
+		env.RegisterActivityWithOptions(func(context.Context, Input) error { return nil }, activity.RegisterOptions{Name: name})
 	}
 	env.RegisterActivityWithOptions(func(_ context.Context, f Failure) (Result, error) {
 		t.Errorf("unexpected abort: %+v", f)

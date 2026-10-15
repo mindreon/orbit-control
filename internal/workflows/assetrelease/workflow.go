@@ -71,8 +71,7 @@ func Run(ctx workflow.Context, in Input) (result Result, err error) {
 		if err != nil || withdrawn {
 			cleanup, _ := workflow.NewDisconnectedContext(ctl)
 			var out Result
-			e := workflow.ExecuteActivity(cleanup, "AbortAssetRelease", releaseFailure(in, err, withdrawn)).
-				Get(cleanup, &out)
+			e := workflow.ExecuteActivity(cleanup, "AbortAssetRelease", releaseFailure(in, err, withdrawn)).Get(cleanup, &out)
 			if e != nil {
 				err = e
 			} else if withdrawn {
@@ -168,11 +167,7 @@ func checkRelease(active workflow.Context, in Input, snap Snapshot) (string, err
 	if block {
 		state = "check_failed"
 	}
-	if err = workflow.ExecuteActivity(active,
-		"AggregateAssetChecks",
-		Aggregate{Input: in,
-			Reports: reports,
-			State:   state}).Get(active,
+	if err = workflow.ExecuteActivity(active, "AggregateAssetChecks", Aggregate{Input: in, Reports: reports, State: state}).Get(active,
 		nil); err != nil {
 		return "", err
 	}
@@ -214,8 +209,7 @@ func reviewRelease(ctx, ctl, active workflow.Context, in Input, snap Snapshot, w
 			processing = true
 			defer func() { processing = false }()
 			var verified Review
-			if e := workflow.ExecuteActivity(workflow.WithActivityOptions(updateCtx,
-				workflow.GetActivityOptions(ctl)),
+			if e := workflow.ExecuteActivity(workflow.WithActivityOptions(updateCtx, workflow.GetActivityOptions(ctl)),
 				"LoadAssetReview",
 				review).Get(updateCtx,
 				&verified); e != nil {
@@ -300,11 +294,9 @@ func awaitReviewDecision(
 		return "", err
 	}
 	var finalDecision Result
-	if err = workflow.ExecuteActivity(active,
-		"DecideAssetReview",
-		Aggregate{Input: in,
-			State: *decision}).Get(active,
-		&finalDecision); err != nil {
+	if err = workflow.ExecuteActivity(active, "DecideAssetReview", Aggregate{Input: in, State: *decision}).Get(
+		active, &finalDecision,
+	); err != nil {
 		return "", err
 	}
 	return finalDecision.State, nil

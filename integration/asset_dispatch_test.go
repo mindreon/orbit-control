@@ -91,11 +91,7 @@ func testDispatchIsolation(
 		targetTenant, targetWorkspace := tenant, workspace
 		if i == 2 {
 			targetTenant, targetWorkspace = otherTenant.ID, ""
-			staged, err = s.PrepareUpload(
-				auth.Context(ctx, auth.Principal{ID: owner, Kind: "user"}, targetTenant),
-				"1.0.0",
-				raw,
-			)
+			staged, err = s.PrepareUpload(auth.Context(ctx, auth.Principal{ID: owner, Kind: "user"}, targetTenant), "1.0.0", raw)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -172,9 +168,7 @@ func testDispatchIsolation(
 		var retryable bool
 		var message string
 		if err = d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
-			return tx.QueryRow(ctx,
-				"SELECT release_retryable,release_error FROM asset_versions WHERE id=$1",
-				in.VersionID).Scan(&retryable,
+			return tx.QueryRow(ctx, "SELECT release_retryable,release_error FROM asset_versions WHERE id=$1", in.VersionID).Scan(&retryable,
 				&message)
 		}); err != nil || retryable != (i == 1) || message == "" {
 			t.Fatal("dispatch classification", i, retryable, message, err)

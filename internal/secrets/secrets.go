@@ -56,10 +56,11 @@ func (k Keys) Put(ctx context.Context, tenant, actor, name, scope string, plain 
 	}
 	var id string
 	err = db.Tx(ctx).
-		QueryRow(ctx, "INSERT INTO secrets(id,tenant_id,name,scope,ciphertext,key_version,created_by) "+
-			"VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(tenant_id,name,scope) DO UPDATE SET "+
-			("ciphertext=EXCLUDED.ciphertext,key_version=EXCLUDED.key_version "+
-				"RETURNING id::text"),
+		QueryRow(ctx, `INSERT INTO secrets(id,tenant_id,name,scope,ciphertext,key_version,created_by)
+ VALUES($1,$2,$3,$4,$5,$6,$7)
+ ON CONFLICT(tenant_id,name,scope)
+ DO UPDATE SET ciphertext=EXCLUDED.ciphertext,key_version=EXCLUDED.key_version
+ RETURNING id::text`,
 			ids.New(),
 			tenant,
 			name,

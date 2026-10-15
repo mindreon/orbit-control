@@ -91,29 +91,22 @@ func TestSignatureTampering(t *testing.T) {
 	if e = s.Verify(a, v); e != nil {
 		t.Fatal(e)
 	}
-	for name, mutate := range map[string]func(*Asset,
-		*Version){"digest": func(a *Asset,
-		v *Version) {
+	for name, mutate := range map[string]func(*Asset, *Version){"digest": func(a *Asset, v *Version) {
 		v.Digest += "1"
 	},
-		"permissions": func(a *Asset,
-			v *Version) {
+		"permissions": func(a *Asset, v *Version) {
 			v.Permissions.Network.Egress = []string{"evil.test"}
 		},
-		"publisher": func(a *Asset,
-			v *Version) {
+		"publisher": func(a *Asset, v *Version) {
 			a.Publisher = "other"
 		},
-		"version": func(a *Asset,
-			v *Version) {
+		"version": func(a *Asset, v *Version) {
 			v.Version = "2.0.0"
 		},
-		"identity bytes": func(a *Asset,
-			v *Version) {
+		"identity bytes": func(a *Asset, v *Version) {
 			v.IdentityJCS = nil
 		},
-		"permission bytes": func(a *Asset,
-			v *Version) {
+		"permission bytes": func(a *Asset, v *Version) {
 			v.PermissionsJCS = nil
 		}} {
 		t.Run(name, func(t *testing.T) {
@@ -183,9 +176,9 @@ func TestManifestDependenciesAndMCPPermissions(t *testing.T) {
 			{
 				Path: "mcp.json",
 				Data: []byte(
-					"{\"mcpServers\":{\"remote\":{\"url\":\"https://api.example.test\",\"transport\":\"sse\",\"headers\":{\"Au" +
-						"thorization\":\"Bearer ${secret:KEY}\"},\"tools\":{\"send\":{\"effectClass\":\"external_write\"}}},\"c" +
-						"atalog\":{\"ref\":\"acme/mail@^2.0\"}}}",
+					"{\"mcpServers\":{\"remote\":{\"url\":\"https://api.example.test\",\"transport\":\"sse\",\"headers\":{" +
+						"\"Authorization\":\"Bearer ${secret:KEY}\"},\"tools\":{\"send\":{\"effectClass\":\"external_write\"}}}," +
+						"\"catalog\":{\"ref\":\"acme/mail@^2.0\"}}}",
 				),
 			},
 		},

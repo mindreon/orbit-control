@@ -105,8 +105,10 @@ func WaitPublished(ctx context.Context, d *db.DB, result Result) error {
 				var state string
 				var failure *string
 				if err := tx.QueryRow(ctx,
-					("SELECT state,release_error FROM asset_versions WHERE tenant_id=$1 AND "+
-						"id=$2"),
+					(`SELECT state,release_error
+ FROM asset_versions
+ WHERE tenant_id=$1
+ AND id=$2`),
 					result.TenantID,
 					id).Scan(&state,
 					&failure); err != nil {
@@ -136,14 +138,16 @@ func WaitPublished(ctx context.Context, d *db.DB, result Result) error {
 func seedWorkspaceModel(ctx context.Context, tx pgx.Tx, p auth.Principal, out Result, keys secrets.Keys, model Model) error {
 	if _,
 		e := tx.Exec(ctx,
-		("INSERT INTO workspaces(id,tenant_id,name) VALUES($1,$2,'dev') ON " +
-			"CONFLICT DO NOTHING"),
+		(`INSERT INTO workspaces(id,tenant_id,name)
+ VALUES($1,$2,'dev')
+ ON CONFLICT DO NOTHING`),
 		out.WorkspaceID,
 		out.TenantID); e != nil {
 		return e
 	}
-	if _, e := tx.Exec(ctx, "INSERT INTO workspace_members(tenant_id,workspace_id,principal_id) VALUES($1,$2,$3) ON "+
-		"CONFLICT DO NOTHING", out.TenantID, out.WorkspaceID, p.ID); e != nil {
+	if _, e := tx.Exec(ctx, `INSERT INTO workspace_members(tenant_id,workspace_id,principal_id)
+ VALUES($1,$2,$3)
+ ON CONFLICT DO NOTHING`, out.TenantID, out.WorkspaceID, p.ID); e != nil {
 		return e
 	}
 	if e := tenancy.Bind(ctx, tx, p, out.TenantID, p.Kind, p.ID, "ws.admin", "workspace", out.WorkspaceID); e != nil {
@@ -153,22 +157,19 @@ func seedWorkspaceModel(ctx context.Context, tx pgx.Tx, p auth.Principal, out Re
 	if e != nil {
 		return e
 	}
-	pricing, e := json.Marshal(
-		contract.ModelPricing{InputPerMtokMillicredits: 1000, OutputPerMtokMillicredits: 2000},
-	)
+	pricing, e := json.Marshal(contract.ModelPricing{InputPerMtokMillicredits: 1000, OutputPerMtokMillicredits: 2000})
 	if e != nil {
 		return e
 	}
 	if _, e = tx.Exec(ctx, `UPDATE model_profiles SET is_default=false WHERE tenant_id=$1 AND name<>'default'`, out.TenantID); e != nil {
 		return e
 	}
-	if _, e = tx.Exec(ctx, "INSERT INTO model_profiles(id,tenant_id,name,provider,base_url,model,secret_id,pricing,con"+
-		"text_window,is_default) VALUES($1,$2,'default','openai',$3,$4,$5,$6,32768,true) ON "+
-		"CONFLICT(tenant_id,name) DO UPDATE SET "+
-		"base_url=EXCLUDED.base_url,model=EXCLUDED.model,secret_id=EXCLUDED.secret_id,pricing=EXCLU"+
-		"DED.pricing,is_default=true",
-		ids.Derive(out.TenantID,
-			"model:default"),
+	if _, e = tx.Exec(ctx, `INSERT INTO model_profiles(id,tenant_id,name,provider,base_url,model,secret_id,pricing,context_window,is_default)
+ VALUES($1,$2,'default','openai',$3,$4,$5,$6,32768,true)
+ ON CONFLICT(tenant_id,name)
+ DO UPDATE SET base_url=EXCLUDED.base_url,model=EXCLUDED.model,secret_id=EXCLUDED.secret_id,
+ pricing=EXCLUDED.pricing,is_default=true`,
+		ids.Derive(out.TenantID, "model:default"),
 		out.TenantID,
 		model.BaseURL,
 		model.Name,
@@ -183,8 +184,12 @@ func seedAgents(ctx context.Context, tx pgx.Tx, svc *assets.Service, out *Result
 	for _, name := range []string{"echo-agent", "notify-agent"} {
 		var a assets.Asset
 		var assetID string
-		e = tx.QueryRow(ctx, "SELECT id::text FROM assets WHERE tenant_id=$1 AND publisher='dev' AND kind='agent' AND "+
-			"name=$2", out.TenantID, name).
+		e = tx.QueryRow(ctx, `SELECT id::text
+ FROM assets
+ WHERE tenant_id=$1
+ AND publisher='dev'
+ AND kind='agent'
+ AND name=$2`, out.TenantID, name).
 			Scan(&assetID)
 		if errors.Is(e, pgx.ErrNoRows) {
 			a, e = svc.Create(ctx, "agent", name, "private", out.WorkspaceID)

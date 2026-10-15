@@ -38,8 +38,11 @@ func (svc Service) PrepareSubmission(
 	}
 	var raw []byte
 	var budget int64
-	err := tx.QueryRow(ctx, `SELECT l.lock,r.budget_millicredits FROM runs r JOIN run_locks l ON l.id=r.lock_id
- WHERE r.tenant_id=$1 AND r.id=$2`, tenant, runID).Scan(&raw, &budget)
+	err := tx.QueryRow(ctx, `SELECT l.lock,r.budget_millicredits
+ FROM runs r
+ JOIN run_locks l ON l.id=r.lock_id
+ WHERE r.tenant_id=$1
+ AND r.id=$2`, tenant, runID).Scan(&raw, &budget)
 	if err == nil {
 		var lock contract.RunLock
 		err = json.Unmarshal(raw, &lock)
@@ -127,7 +130,8 @@ func (svc Service) submissionBudget(ctx context.Context, lock contract.RunLock, 
 func saveSubmissionRun(ctx context.Context, s Session, runID, messageID string, lock contract.RunLock, budget int64, pin bool) error {
 	tx, tenant := db.Tx(ctx), auth.Tenant(ctx)
 	_, err := tx.Exec(ctx, `INSERT INTO runs(id,tenant_id,session_id,trigger,status,created_by,message_id,
- budget_millicredits,temporal_workflow_id) VALUES($1,$2,$3,'user_message','queued',$4,$5,$6,$7)`,
+ budget_millicredits,temporal_workflow_id)
+ VALUES($1,$2,$3,'user_message','queued',$4,$5,$6,$7)`,
 		runID, tenant, s.ID, auth.From(ctx).ID, messageID, budget, w.AgentRunWorkflowID(tenant, runID))
 	if err != nil {
 		return err

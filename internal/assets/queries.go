@@ -21,9 +21,20 @@ func (s *Service) List(ctx context.Context, page httpx.Page, f Filter) (Page[Ass
 	cursor := page.Cursor
 	for len(result) <= page.Limit {
 		rows, e := db.Tx(ctx).
-			Query(ctx, "SELECT id::text FROM assets WHERE ($1='' OR id>NULLIF($1,'')::uuid) AND ($2='' OR "+
-				"kind=$2) AND ($3='' OR visibility=$3) AND ($4='' OR name ILIKE '%'||$4||'%') AND ($5='' "+
-				"OR workspace_id=NULLIF($5,'')::uuid) ORDER BY id LIMIT 100", cursor, f.Kind, f.Visibility, f.Query, f.WorkspaceID)
+			Query(ctx, `SELECT id::text
+ FROM assets
+ WHERE ($1=''
+ OR id>NULLIF($1,'')::uuid)
+ AND ($2=''
+ OR kind=$2)
+ AND ($3=''
+ OR visibility=$3)
+ AND ($4=''
+ OR name ILIKE '%'||$4||'%')
+ AND ($5=''
+ OR workspace_id=NULLIF($5,'')::uuid)
+ ORDER BY id
+ LIMIT 100`, cursor, f.Kind, f.Visibility, f.Query, f.WorkspaceID)
 		if e != nil {
 			return Page[Asset]{}, e
 		}
@@ -159,9 +170,13 @@ func (s *Service) Checks(ctx context.Context, p httpx.Page, id string) (Page[jso
 	return jsonPage(
 		ctx,
 		p,
-		"SELECT id::text,jsonb_build_object('id',id,'report',findings,'status',status) FROM "+
-			"asset_check_reports WHERE version_id=$1 AND ($2='' OR id>NULLIF($2,'')::uuid) ORDER BY id "+
-			"LIMIT $3",
+		`SELECT id::text,jsonb_build_object('id',id,'report',findings,'status',status)
+ FROM asset_check_reports
+ WHERE version_id=$1
+ AND ($2=''
+ OR id>NULLIF($2,'')::uuid)
+ ORDER BY id
+ LIMIT $3`,
 		id,
 	)
 }
@@ -193,8 +208,10 @@ func (s *Service) Channels(ctx context.Context, id string) ([]AssetChannel, erro
 }
 func (s *Service) Grants(ctx context.Context, id string) ([]Grant, error) {
 	rows, err := db.Tx(ctx).
-		Query(ctx, "SELECT grantee_type,grantee_id::text,permission FROM asset_grants WHERE asset_id=$1 ORDER "+
-			"BY grantee_type,grantee_id,permission", id)
+		Query(ctx, `SELECT grantee_type,grantee_id::text,permission
+ FROM asset_grants
+ WHERE asset_id=$1
+ ORDER BY grantee_type,grantee_id,permission`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -223,8 +240,10 @@ func (s *Service) Installs(ctx context.Context, p httpx.Page, scope, id string) 
 	return jsonPage(
 		ctx,
 		p,
-		"SELECT id::text,to_jsonb(i)-'tenant_id' FROM asset_installs i WHERE scope_id=$1 AND "+
-			"scope_type='"+scope+`' AND ($2='' OR id>NULLIF($2,'')::uuid) ORDER BY id LIMIT $3`,
+		`SELECT id::text,to_jsonb(i)-'tenant_id'
+ FROM asset_installs i
+ WHERE scope_id=$1
+ AND scope_type='`+scope+`' AND ($2='' OR id>NULLIF($2,'')::uuid) ORDER BY id LIMIT $3`,
 		id,
 	)
 }

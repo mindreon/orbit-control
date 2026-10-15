@@ -88,10 +88,9 @@ func (s *Service) Upload(ctx context.Context, a Asset, u *Upload) (Version, erro
 		return Version{}, Invalid("Upload tenant mismatch")
 	}
 	// Serialize with status/visibility updates; do not trust a stale preflight read.
-	if err := db.Tx(ctx).QueryRow(ctx,
-		("SELECT status FROM assets WHERE tenant_id=$1 AND id=$2 FOR SHARE"),
-		auth.Tenant(ctx),
-		a.ID).Scan(&a.Status); err != nil {
+	if err := db.Tx(ctx).QueryRow(
+		ctx, ("SELECT status FROM assets WHERE tenant_id=$1 AND id=$2 FOR SHARE"), auth.Tenant(ctx), a.ID,
+	).Scan(&a.Status); err != nil {
 		return Version{}, err
 	}
 	if a.Status != "active" {
@@ -123,9 +122,9 @@ func (s *Service) Upload(ctx context.Context, a Asset, u *Upload) (Version, erro
 	}
 	id := ids.New()
 	_, err = db.Tx(ctx).
-		Exec(ctx, "INSERT INTO asset_versions(id,tenant_id,asset_id,version,manifest,content_digest,blob_inde"+
-			"x_ref,permissions,compat,state,uploaded_by,permissions_jcs,identity_jcs) "+
-			"VALUES($1,$2,$3,$4,$5,$6,$7,$8,'{}','draft',$9,$10,$11)",
+		Exec(ctx, `INSERT INTO asset_versions(id,tenant_id,asset_id,version,manifest,content_digest,blob_index_ref,permissions,compat,
+ state,uploaded_by,permissions_jcs,identity_jcs)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8,'{}','draft',$9,$10,$11)`,
 			id,
 			auth.Tenant(ctx),
 			a.ID,
@@ -143,12 +142,10 @@ func (s *Service) Upload(ctx context.Context, a Asset, u *Upload) (Version, erro
 	if err = saveUploadContents(ctx, id, u); err != nil {
 		return Version{}, err
 	}
-	if err = Log(ctx,
-		"asset.version_uploaded",
-		"asset_version",
-		id,
-		map[string]any{"content_digest": b.Digest,
-			"excluded": b.Excluded}); err != nil {
+	if err = Log(
+		ctx, "asset.version_uploaded", "asset_version", id,
+		map[string]any{"content_digest": b.Digest, "excluded": b.Excluded},
+	); err != nil {
 		return Version{}, err
 	}
 	return s.Version(ctx, a.ID, id)
@@ -159,8 +156,8 @@ func saveUploadContents(ctx context.Context, id string, u *Upload) error {
 	var err error
 	for i, f := range b.Files {
 		_, err = db.Tx(ctx).
-			Exec(ctx, "INSERT INTO asset_files(tenant_id,version_id,path,sha256,size_bytes,is_text,blob_ref) "+
-				"VALUES($1,$2,$3,$4,$5,$6,$7)", auth.Tenant(ctx), id, f.Path, f.Digest, u.sizes[i], f.Text, u.fileRefs[i])
+			Exec(ctx, `INSERT INTO asset_files(tenant_id,version_id,path,sha256,size_bytes,is_text,blob_ref)
+ VALUES($1,$2,$3,$4,$5,$6,$7)`, auth.Tenant(ctx), id, f.Path, f.Digest, u.sizes[i], f.Text, u.fileRefs[i])
 		if err != nil {
 			return err
 		}
@@ -169,8 +166,9 @@ func saveUploadContents(ctx context.Context, id string, u *Upload) error {
 	// in manifest; SQL projection is only an index, not the resolver's authority.
 	for _, d := range m.Dependencies {
 		_, err = db.Tx(ctx).
-			Exec(ctx, "INSERT INTO asset_dependencies(tenant_id,version_id,dep_kind,dep_ref,\"constraint\") "+
-				"VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING", auth.Tenant(ctx), id, d.Kind, d.Ref, d.Constraint)
+			Exec(ctx, `INSERT INTO asset_dependencies(tenant_id,version_id,dep_kind,dep_ref,"constraint")
+ VALUES($1,$2,$3,$4,$5)
+ ON CONFLICT DO NOTHING`, auth.Tenant(ctx), id, d.Kind, d.Ref, d.Constraint)
 		if err != nil {
 			return err
 		}

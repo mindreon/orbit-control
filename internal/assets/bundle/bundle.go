@@ -65,18 +65,12 @@ func SafePath(raw string) (string, error) {
 }
 func excluded(name string) bool {
 	for part := range strings.SplitSeq(name, "/") {
-		if slices.Contains(
-			[]string{".git", ".archive", "__pycache__", ".pytest_cache", "node_modules", "out", ".venv"},
-			part,
-		) {
+		if slices.Contains([]string{".git", ".archive", "__pycache__", ".pytest_cache", "node_modules", "out", ".venv"}, part) {
 			return true
 		}
 	}
 	base := path.Base(name)
-	if slices.Contains(
-		[]string{"id_rsa", "id_ed25519", "credentials.json", "token.json", "tokens.json", ".DS_Store"},
-		base,
-	) {
+	if slices.Contains([]string{"id_rsa", "id_ed25519", "credentials.json", "token.json", "tokens.json", ".DS_Store"}, base) {
 		return true
 	}
 	for _, ext := range []string{".pyc", ".key", ".p12", ".pfx"} {

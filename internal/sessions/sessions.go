@@ -84,12 +84,19 @@ func GetRun(ctx context.Context, id, action string) (Run, Session, error) {
 	var raw []byte
 	err := db.Tx(ctx).QueryRow(
 		ctx,
-		"SELECT to_jsonb(r)||jsonb_build_object('pending_interaction_id',("+
-			"SELECT i.id FROM interactions i WHERE i.tenant_id=r.tenant_id AND"+
-			" i.run_id=r.id AND i.status IN ('pending','escalated') ORDER BY i"+
-			".created_at LIMIT 1),'segments_count',(SELECT count(*) FROM run_s"+
-			"egments g WHERE g.tenant_id=r.tenant_id AND g.run_id=r.id)) FROM "+
-			"runs r WHERE tenant_id=$1 AND id=$2",
+		`SELECT to_jsonb(r)||jsonb_build_object('pending_interaction_id',(SELECT i.id
+ FROM interactions i
+ WHERE i.tenant_id=r.tenant_id
+ AND i.run_id=r.id
+ AND i.status IN ('pending','escalated')
+ ORDER BY i.created_at
+ LIMIT 1),'segments_count',(SELECT count(*)
+ FROM run_segments g
+ WHERE g.tenant_id=r.tenant_id
+ AND g.run_id=r.id))
+ FROM runs r
+ WHERE tenant_id=$1
+ AND id=$2`,
 		auth.Tenant(ctx),
 		id,
 	).Scan(
@@ -108,13 +115,19 @@ func GetRun(ctx context.Context, id, action string) (Run, Session, error) {
 // RejectQueued releases admission when the Session validator rejects delivery.
 func RejectQueued(ctx context.Context, runID string) error {
 	tx := db.Tx(ctx)
-	n, err := tx.Exec(ctx, `UPDATE runs SET status='failed',error_code='SESSION_UNAVAILABLE',ended_at=now()
- WHERE tenant_id=$1 AND id=$2 AND status='queued'`, auth.Tenant(ctx), runID)
+	n, err := tx.Exec(ctx, `UPDATE runs
+ SET status='failed',error_code='SESSION_UNAVAILABLE',ended_at=now()
+ WHERE tenant_id=$1
+ AND id=$2
+ AND status='queued'`, auth.Tenant(ctx), runID)
 	if err != nil || n.RowsAffected() == 0 {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE budget_reservations SET status='released',millicredits=0
- WHERE tenant_id=$1 AND run_id=$2 AND status='held'`, auth.Tenant(ctx), runID); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE budget_reservations
+ SET status='released',millicredits=0
+ WHERE tenant_id=$1
+ AND run_id=$2
+ AND status='held'`, auth.Tenant(ctx), runID); err != nil {
 		return err
 	}
 	return logWrite(ctx, "run.finish", "run", runID, map[string]string{"status": "failed", "error_code": "SESSION_UNAVAILABLE"})

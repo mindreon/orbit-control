@@ -107,9 +107,7 @@ func testAssets(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		t.Fatal(e)
 	}
 	defer a.Close()
-	server := httptest.NewServer(
-		(&httpapi.Handler{DB: d, Auth: a, Config: c, Logger: logger, Assets: service}).Router(),
-	)
+	server := httptest.NewServer((&httpapi.Handler{DB: d, Auth: a, Config: c, Logger: logger, Assets: service}).Router())
 	defer server.Close()
 	type uploadBody struct {
 		data        []byte
@@ -163,14 +161,7 @@ func testAssets(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		}
 	}
 	login := func(prefix string) (string, string, string) {
-		code, out, _ := request(
-			"POST",
-			"/v1/auth/dev/token",
-			"",
-			"",
-			"",
-			map[string]any{"email": prefix + ids.New() + "@example.test"},
-		)
+		code, out, _ := request("POST", "/v1/auth/dev/token", "", "", "", map[string]any{"email": prefix + ids.New() + "@example.test"})
 		check(code, 200, out)
 		token := out["access_token"].(string)
 		code, out, _ = request("GET", "/v1/me", token, "", "", nil)
@@ -216,15 +207,15 @@ func testAssets(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		}
 		if _,
 			e := tx.Exec(ctx,
-			"INSERT INTO group_members(tenant_id,group_id,principal_id) "+
-				"VALUES($1,$2,$3)",
+			`INSERT INTO group_members(tenant_id,group_id,principal_id)
+ VALUES($1,$2,$3)`,
 			tenant,
 			groupID,
 			reviewerID); e != nil {
 			return e
 		}
-		_, e := tx.Exec(ctx, "INSERT INTO role_bindings(id,tenant_id,principal_type,principal_id,role,scope_type,scope_i"+
-			"d,created_by) VALUES($1,$2,'group',$3,'ws.member','workspace',$4,$5)", ids.New(), tenant, groupID, workspace, owner)
+		_, e := tx.Exec(ctx, `INSERT INTO role_bindings(id,tenant_id,principal_type,principal_id,role,scope_type,scope_id,created_by)
+ VALUES($1,$2,'group',$3,'ws.member','workspace',$4,$5)`, ids.New(), tenant, groupID, workspace, owner)
 		return e
 	}); e != nil {
 		t.Fatal(e)
@@ -368,14 +359,7 @@ func testAssets(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	)
 	check(code, 422, out)
 	first := upload("1.0.0")
-	code, out, _ = request(
-		"POST",
-		base+"/versions/"+first+":transition",
-		token,
-		tenant,
-		"",
-		map[string]any{"state": "published"},
-	)
+	code, out, _ = request("POST", base+"/versions/"+first+":transition", token, tenant, "", map[string]any{"state": "published"})
 	check(code, 409, out)
 	code, out, _ = request("GET", base+"/versions/"+first+"/files?limit=1", token, tenant, "", nil)
 	check(code, 200, out)
@@ -451,34 +435,13 @@ func testAssets(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		t.Fatal("ORBIT_TEST_TEMPORAL_ADDRESS required")
 	}
 	release := func(id string) {
-		code, out, _ = request(
-			"POST",
-			base+"/versions/"+id+":submit",
-			token,
-			tenant,
-			"submit-"+id,
-			map[string]any{"channel": "stable"},
-		)
+		code, out, _ = request("POST", base+"/versions/"+id+":submit", token, tenant, "submit-"+id, map[string]any{"channel": "stable"})
 		check(code, 202, out)
 		if tc != nil {
 			waitAssetState(t, request, base, id, token, tenant, "in_review")
-			code, out, _ = request(
-				"POST",
-				"/v1/reviews/"+id+":decide",
-				token,
-				tenant,
-				"",
-				map[string]any{"decision": "approve"},
-			)
+			code, out, _ = request("POST", "/v1/reviews/"+id+":decide", token, tenant, "", map[string]any{"decision": "approve"})
 			check(code, 403, out)
-			code, out, _ = request(
-				"POST",
-				"/v1/reviews/"+id+":decide",
-				reviewer,
-				tenant,
-				"review-"+id,
-				map[string]any{"decision": "approve"},
-			)
+			code, out, _ = request("POST", "/v1/reviews/"+id+":decide", reviewer, tenant, "review-"+id, map[string]any{"decision": "approve"})
 			check(code, 202, out)
 			waitAssetState(t, request, base, id, token, tenant, "published")
 			workflowRun := tc.GetWorkflow(ctx, assetrelease.ID(assetrelease.Input{Tenant: tenant, VersionID: id}), "")
@@ -541,14 +504,7 @@ func testAssets(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		map[string]string{"principal_id": reviewerID, "role": "ws.member"},
 	)
 	check(code, 201, out)
-	code, out, _ = request(
-		"POST",
-		"/v1/workspaces/"+workspace+"/installs",
-		reviewer,
-		tenant,
-		"",
-		map[string]string{"asset_id": asset},
-	)
+	code, out, _ = request("POST", "/v1/workspaces/"+workspace+"/installs", reviewer, tenant, "", map[string]string{"asset_id": asset})
 	check(code, 403, out)
 	code, out, _ = request("DELETE", "/v1/installs/"+installID, reviewer, tenant, "", nil)
 	check(code, 403, out)
@@ -575,26 +531,12 @@ func testAssets(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	if preview() != "1.1.0" {
 		t.Fatal("channel upgrade not resolved")
 	}
-	code, out, _ = request(
-		"POST",
-		base+"/channels/stable",
-		token,
-		tenant,
-		"rollback",
-		map[string]any{"version_id": first},
-	)
+	code, out, _ = request("POST", base+"/channels/stable", token, tenant, "rollback", map[string]any{"version_id": first})
 	check(code, 202, out)
 	if preview() != "1.0.0" {
 		t.Fatal("channel rollback not resolved")
 	}
-	code, out, _ = request(
-		"POST",
-		base+"/channels/release-2026",
-		token,
-		tenant,
-		"",
-		map[string]any{"version_id": first},
-	)
+	code, out, _ = request("POST", base+"/channels/release-2026", token, tenant, "", map[string]any{"version_id": first})
 	check(code, 202, out)
 	code, out, _ = request("GET", base+"/channels?limit=1", token, tenant, "", nil)
 	check(code, 200, out)
@@ -614,28 +556,18 @@ func testAssets(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		t.Fatal("compensation overwrote operator rollback")
 	}
 	var rollbackAudit int
-	if e = admin.QueryRow(ctx, "SELECT count(*) FROM audit_log WHERE tenant_id=$1 AND action='asset.channel_changed' AND "+
-		"detail->>'previous_version_id'=$2 AND detail->>'version_id'=$3", tenant, second, first).Scan(&rollbackAudit); e != nil ||
+	if e = admin.QueryRow(ctx, `SELECT count(*)
+ FROM audit_log
+ WHERE tenant_id=$1
+ AND action='asset.channel_changed'
+ AND detail->>'previous_version_id'=$2
+ AND detail->>'version_id'=$3`, tenant, second, first).Scan(&rollbackAudit); e != nil ||
 		rollbackAudit != 1 {
 		t.Fatal("rollback audit", rollbackAudit, e)
 	}
-	code, out, _ = request(
-		"POST",
-		base+"/versions/"+first+":transition",
-		token,
-		tenant,
-		"",
-		map[string]any{"state": "yanked"},
-	)
+	code, out, _ = request("POST", base+"/versions/"+first+":transition", token, tenant, "", map[string]any{"state": "yanked"})
 	check(code, 409, out)
-	code, out, _ = request(
-		"POST",
-		base+"/versions/"+first+":transition",
-		token,
-		tenant,
-		"",
-		map[string]any{"state": "suspended"},
-	)
+	code, out, _ = request("POST", base+"/versions/"+first+":transition", token, tenant, "", map[string]any{"state": "suspended"})
 	check(code, 200, out)
 	code, out, _ = request(
 		"POST",
@@ -814,14 +746,11 @@ func testAssetGraphs(
 		map[string][]byte{
 			"AGENTS.md": []byte("lead"),
 			"team.json": []byte(
-				"{\"schema\":\"orbit.team/v1\",\"name\":\"graph-team\",\"dispatch\":\"scheduled\",\"roles\":[{\"name\":\"lea" +
-					"d\",\"role\":\"leader\",\"agent\":\".\"},{\"name\":\"worker\",\"role\":\"teammate\",\"ag" +
-					"ent\":\"" +
+				"{\"schema\":\"orbit.team/v1\",\"name\":\"graph-team\",\"dispatch\":\"scheduled\",\"roles\":[{\"name\":" +
+					"\"lead\",\"role\":\"leader\",\"agent\":\".\"},{\"name\":\"worker\",\"role\":\"teammate\",\"agent\":\"" +
 					publisher +
-					"/graph-agent@^1.0\",\"count\":2},{\"name\":\"reviewer\",\"role\":\"reviewer\",\"ag" +
-					"ent\":\"./members/revi" +
-
-					"ewer\"}],\"sharedSkills\":[{\"id\":\"" + shared + `","version":"^1.0"}]}`,
+					"/graph-agent@^1.0\",\"count\":2},{\"name\":\"reviewer\",\"role\":\"reviewer\",\"agent\":" +
+					"\"./members/reviewer\"}],\"sharedSkills\":[{\"id\":\"" + shared + `","version":"^1.0"}]}`,
 			),
 			"members/reviewer/AGENTS.md":             []byte("review"),
 			"members/reviewer/skills/local/SKILL.md": []byte("embedded local skill"),
@@ -901,9 +830,8 @@ func testAssetGraphs(
 	e = d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
 		ctx := auth.Context(db.Context(ctx, tx), auth.Principal{ID: owner, Kind: "user"}, tenant)
 		session, run := ids.New(), ids.New()
-		if _, e := tx.Exec(ctx, "INSERT INTO sessions(id,tenant_id,workspace_id,owner_id,title,entry_kind,entry_ref,message"+
-			"_policy,status) VALUES($1,$2,$3,$4,'lock "+
-			"fixture','team',$5,'queue','active')",
+		if _, e := tx.Exec(ctx, `INSERT INTO sessions(id,tenant_id,workspace_id,owner_id,title,entry_kind,entry_ref,message_policy,status)
+ VALUES($1,$2,$3,$4,'lock fixture','team',$5,'queue','active')`,
 			session,
 			tenant,
 			workspace,
@@ -934,8 +862,8 @@ func testAssetGraphs(
 			count != 0 {
 			return fmt.Errorf("Resolve persisted before run insert: %v", e)
 		}
-		if _, e := tx.Exec(ctx, "INSERT INTO runs(id,tenant_id,session_id,trigger,status,created_by) "+
-			"VALUES($1,$2,$3,'api','queued',$4)", run, tenant, session, owner); e != nil {
+		if _, e := tx.Exec(ctx, `INSERT INTO runs(id,tenant_id,session_id,trigger,status,created_by)
+ VALUES($1,$2,$3,'api','queued',$4)`, run, tenant, session, owner); e != nil {
 			return e
 		}
 		if e = locks.Save(ctx, tx, run, resolved); e != nil {
@@ -976,7 +904,8 @@ func testAssetGraphs(
 	e = d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
 		_, e := tx.Exec(
 			ctx,
-			`INSERT INTO policies(id,tenant_id,scope_type,scope_id,kind,body,version,status) VALUES($1,$2,'tenant',$2,'tool_rules',$3,1,'active')`,
+			`INSERT INTO policies(id,tenant_id,scope_type,scope_id,kind,body,version,status)
+ VALUES($1,$2,'tenant',$2,'tool_rules',$3,1,'active')`,
 			ids.New(),
 			tenant,
 			`{"skills_visibility":{"deny":["`+shared+`"]}}`,
@@ -998,8 +927,8 @@ func testAssetGraphs(
 		}
 	}
 	if e = d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
-		_, e := tx.Exec(ctx, "INSERT INTO policies(id,tenant_id,scope_type,scope_id,kind,body,version,status) "+
-			"VALUES($1,$2,'tenant',$2,'tool_rules',$3,2,'active')", ids.New(), tenant, `{"skills_visibility":{"allow":["`+ref+`"]}}`)
+		_, e := tx.Exec(ctx, `INSERT INTO policies(id,tenant_id,scope_type,scope_id,kind,body,version,status)
+ VALUES($1,$2,'tenant',$2,'tool_rules',$3,2,'active')`, ids.New(), tenant, `{"skills_visibility":{"allow":["`+ref+`"]}}`)
 		return e
 	}); e != nil {
 		t.Fatal(e)

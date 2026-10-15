@@ -43,8 +43,8 @@ func runAdmin(ctx context.Context, d *db.DB, c config.Config, args []string) err
 	secretID := f.String("secret", "", "secret UUID")
 	pricing := f.String(
 		"pricing",
-		"{\"input_per_mtok_millicredits\":1000,\"output_per_mtok_millicredits\":2000,\"cache_read_per_mt"+
-			"ok_millicredits\":0,\"cache_write_per_mtok_millicredits\":0}",
+		"{\"input_per_mtok_millicredits\":1000,\"output_per_mtok_millicredits\":2000,"+
+			"\"cache_read_per_mtok_millicredits\":0,\"cache_write_per_mtok_millicredits\":0}",
 		"ModelPricing JSON",
 	)
 	def := f.Bool("default", false, "default model profile")
@@ -83,12 +83,12 @@ func runAdmin(ctx context.Context, d *db.DB, c config.Config, args []string) err
 					return e
 				}
 			}
-			e := tx.QueryRow(ctx, "INSERT INTO model_profiles(id,tenant_id,name,provider,base_url,model,secret_id,pricing,con"+
-				"text_window,is_default) VALUES($1,$2,$3,'openai',$4,$5,$6,$7,$8,$9) ON "+
-				"CONFLICT(tenant_id,name) DO UPDATE SET "+
-				"base_url=EXCLUDED.base_url,model=EXCLUDED.model,secret_id=EXCLUDED.secret_id,pricing=EXCLU"+
-				"DED.pricing,context_window=EXCLUDED.context_window,is_default=EXCLUDED.is_default "+
-				"RETURNING id::text", ids.New(), *tenant, *name, *base, *model, *secretID, *pricing, *window, *def).
+			e := tx.QueryRow(ctx, `INSERT INTO model_profiles(id,tenant_id,name,provider,base_url,model,secret_id,pricing,context_window,is_default)
+ VALUES($1,$2,$3,'openai',$4,$5,$6,$7,$8,$9)
+ ON CONFLICT(tenant_id,name)
+ DO UPDATE SET base_url=EXCLUDED.base_url,model=EXCLUDED.model,secret_id=EXCLUDED.secret_id,
+ pricing=EXCLUDED.pricing,context_window=EXCLUDED.context_window,is_default=EXCLUDED.is_default
+ RETURNING id::text`, ids.New(), *tenant, *name, *base, *model, *secretID, *pricing, *window, *def).
 				Scan(&id)
 			if e != nil {
 				return e

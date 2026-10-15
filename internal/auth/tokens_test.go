@@ -60,11 +60,7 @@ func TestTokenBoundaries(t *testing.T) {
 		t.Fatal("dev token accepted as capability")
 	}
 	next := testSigner(t)
-	rotated, err := NewCapabilitySigner(
-		next.key,
-		"new",
-		map[string][]byte{"old": original.key.Public().(ed25519.PublicKey)},
-	)
+	rotated, err := NewCapabilitySigner(next.key, "new", map[string][]byte{"old": original.key.Public().(ed25519.PublicKey)})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 python3 - <<'PY'
-import pathlib,sys
+import pathlib,re,sys
 errors=[]
 for path in pathlib.Path('.').rglob('*.go'):
     if any(part.startswith('.') for part in path.parts):
@@ -10,6 +10,9 @@ for path in pathlib.Path('.').rglob('*.go'):
     source=path.read_text()
     if 'Code generated' in source:
         continue
+    for match in re.finditer(r'[A-Za-z_]"\s*\+\s*"[A-Za-z_]', source):
+        line_number=source.count('\n',0,match.start())+1
+        errors.append(f'{path}:{line_number}: string literal splits an identifier')
     for line_number,line in enumerate(source.splitlines(),1):
         if len(line)>140:
             errors.append(f'{path}:{line_number}: {len(line)} characters (maximum 140)')

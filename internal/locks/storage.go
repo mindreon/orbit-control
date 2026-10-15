@@ -38,8 +38,10 @@ func Save(ctx context.Context, tx pgx.Tx, runID string, lock contract.RunLock) e
 	}
 	n, err := tx.Exec(
 		ctx,
-		"INSERT INTO run_locks(id,tenant_id,run_id,digest,entries,effective_permissions,lock) "+
-			"SELECT $1,$2,id,$4,$5,$6,$7 FROM runs WHERE tenant_id=$2 AND id=$3",
+		`INSERT INTO run_locks(id,tenant_id,run_id,digest,entries,effective_permissions,lock) SELECT $1,$2,id,$4,$5,$6,$7
+ FROM runs
+ WHERE tenant_id=$2
+ AND id=$3`,
 		lock.LockId,
 		auth.Tenant(ctx),
 		runID,

@@ -18,8 +18,12 @@ func (a Authorizer) RequireAssetGrantee(ctx context.Context, r Asset, kind, id s
 	switch kind {
 	case "user", "service":
 		err = db.Tx(ctx).
-			QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM memberships m JOIN principals p ON p.id=m.principal_id WHERE "+
-				"m.principal_id=$1 AND m.status='active' AND p.kind=$2)", id, kind).
+			QueryRow(ctx, `SELECT EXISTS(SELECT 1
+ FROM memberships m
+ JOIN principals p ON p.id=m.principal_id
+ WHERE m.principal_id=$1
+ AND m.status='active'
+ AND p.kind=$2)`, id, kind).
 			Scan(&allowed)
 		principals = append(principals, id)
 	case "group":
@@ -59,8 +63,10 @@ func (a Authorizer) RequireAssetGrantee(ctx context.Context, r Asset, kind, id s
 			}
 			var member bool
 			if e = db.Tx(ctx).QueryRow(ctx,
-				("SELECT EXISTS(SELECT 1 FROM workspace_members WHERE workspace_id=$1 " +
-					"AND principal_id=$2)"),
+				(`SELECT EXISTS(SELECT 1
+ FROM workspace_members
+ WHERE workspace_id=$1
+ AND principal_id=$2)`),
 				r.WorkspaceID,
 				principal).Scan(&member); e != nil {
 				return e

@@ -70,9 +70,9 @@ func TestSnapshotsRequireContent(t *testing.T) {
 
 func TestMarketMCPTransportNormalization(t *testing.T) {
 	raw := []byte(
-		"{\"id\":\"mcp-one\",\"name\":\"server\",\"readme\":\"```json\\n{\\\"mcpServers\\\":{\\\"demo\\\":{\\\"url\\\":\\\"ht" +
-			"tps://example.test/private-value\\\",\\\"type\\\":\\\"streamable-http\\\",\\\"headers\\\":{\\\"Authorizati" +
-			"on\\\":\\\"Bearer private-value\\\"}}}}\\n```\"}",
+		"{\"id\":\"mcp-one\",\"name\":\"server\",\"readme\":\"```json\\n{\\\"mcpServers\\\":{\\\"demo\\\":{" +
+			"\\\"url\\\":\\\"https://example.test/private-value\\\",\\\"type\\\":\\\"streamable-http\\\"," +
+			"\\\"headers\\\":{\\\"Authorization\\\":\\\"Bearer private-value\\\"}}}}\\n```\"}",
 	)
 	kind, _, files, err := Convert(raw)
 	if err != nil || kind != "mcp_server" {

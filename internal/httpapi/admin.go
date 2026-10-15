@@ -22,11 +22,18 @@ func (h *Handler) listMembers(w http.ResponseWriter, r *http.Request) error {
 		return e
 	}
 	rows, e := db.Tx(ctx).
-		Query(ctx, "SELECT p.id::text,p.kind,p.email,p.display_name,m.status,m.source,COALESCE((SELECT "+
-			"jsonb_agg(role ORDER BY role) FROM role_bindings rb WHERE rb.principal_type IN "+
-			"('user','service') AND rb.principal_id=p.id AND rb.scope_type='tenant'),'[]') FROM "+
-			"memberships m JOIN principals p ON p.id=m.principal_id WHERE ($1='' OR "+
-			"p.id>NULLIF($1,'')::uuid) ORDER BY p.id LIMIT $2", page.Cursor, page.Limit+1)
+		Query(ctx, `SELECT p.id::text,p.kind,p.email,p.display_name,m.status,m.source,COALESCE((SELECT jsonb_agg(role
+ ORDER BY role)
+ FROM role_bindings rb
+ WHERE rb.principal_type IN ('user','service')
+ AND rb.principal_id=p.id
+ AND rb.scope_type='tenant'),'[]')
+ FROM memberships m
+ JOIN principals p ON p.id=m.principal_id
+ WHERE ($1=''
+ OR p.id>NULLIF($1,'')::uuid)
+ ORDER BY p.id
+ LIMIT $2`, page.Cursor, page.Limit+1)
 	if e != nil {
 		return e
 	}
@@ -39,10 +46,7 @@ func (h *Handler) listMembers(w http.ResponseWriter, r *http.Request) error {
 		if e = rows.Scan(&p.ID, &p.Kind, &p.Email, &p.DisplayName, &status, &source, &roles); e != nil {
 			return e
 		}
-		items = append(
-			items,
-			map[string]any{"id": p.ID, "principal": p, "status": status, "source": source, "roles": roles},
-		)
+		items = append(items, map[string]any{"id": p.ID, "principal": p, "status": status, "source": source, "roles": roles})
 	}
 	if e = rows.Err(); e != nil {
 		return e
@@ -112,14 +116,19 @@ func (h *Handler) patchMember(w http.ResponseWriter, r *http.Request) error {
 	tx := db.Tx(ctx)
 	var kind string
 	if e := tx.QueryRow(ctx,
-		("SELECT p.kind FROM memberships m JOIN principals p ON " +
-			"p.id=m.principal_id WHERE p.id=$1"),
+		(`SELECT p.kind
+ FROM memberships m
+ JOIN principals p ON p.id=m.principal_id
+ WHERE p.id=$1`),
 		pid).Scan(&kind); e != nil {
 		return e
 	}
 	var owner bool
-	if e := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM role_bindings WHERE principal_id=$1 AND principal_type IN "+
-		"('user','service') AND role='tenant.owner')", pid).Scan(&owner); e != nil {
+	if e := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1
+ FROM role_bindings
+ WHERE principal_id=$1
+ AND principal_type IN ('user','service')
+ AND role='tenant.owner')`, pid).Scan(&owner); e != nil {
 		return e
 	}
 	if owner || in.Role != nil && *in.Role == "tenant.owner" {
@@ -133,9 +142,13 @@ func (h *Handler) patchMember(w http.ResponseWriter, r *http.Request) error {
 	}
 	if owner && (in.Role != nil && *in.Role != "tenant.owner" || in.Status != nil && *in.Status != "active") {
 		var count int
-		if e := tx.QueryRow(ctx, "SELECT count(*) FROM role_bindings rb JOIN memberships m ON "+
-			"m.principal_id=rb.principal_id AND m.tenant_id=rb.tenant_id WHERE rb.role='tenant.owner' "+
-			"AND rb.principal_type IN ('user','service') AND m.status='active'").Scan(&count); e != nil {
+		if e := tx.QueryRow(ctx, `SELECT count(*)
+ FROM role_bindings rb
+ JOIN memberships m ON m.principal_id=rb.principal_id
+ AND m.tenant_id=rb.tenant_id
+ WHERE rb.role='tenant.owner'
+ AND rb.principal_type IN ('user','service')
+ AND m.status='active'`).Scan(&count); e != nil {
 			return e
 		}
 		if count <= 1 {
@@ -146,8 +159,11 @@ func (h *Handler) patchMember(w http.ResponseWriter, r *http.Request) error {
 		if !policy.ValidRole(*in.Role, "tenant") {
 			return httpx.E(422, "INVALID_ROLE", "Invalid tenant role")
 		}
-		if _, e := tx.Exec(ctx, "DELETE FROM role_bindings WHERE principal_type IN ('user','service') AND principal_id=$1 "+
-			"AND scope_type='tenant'", pid); e != nil {
+		if _, e := tx.Exec(ctx, `DELETE
+ FROM role_bindings
+ WHERE principal_type IN ('user','service')
+ AND principal_id=$1
+ AND scope_type='tenant'`, pid); e != nil {
 			return e
 		}
 		if e := tenancy.Bind(ctx, tx, auth.From(ctx), auth.Tenant(ctx), kind, pid, *in.Role, "tenant", auth.Tenant(ctx)); e != nil {
@@ -175,8 +191,12 @@ func (h *Handler) listKeys(w http.ResponseWriter, r *http.Request) error {
 		return e
 	}
 	rows, e := db.Tx(ctx).
-		Query(ctx, "SELECT id::text,principal_id::text,name,prefix,scopes,expires_at,last_used_at FROM "+
-			"api_keys WHERE ($1='' OR id>NULLIF($1,'')::uuid) ORDER BY id LIMIT $2", page.Cursor, page.Limit+1)
+		Query(ctx, `SELECT id::text,principal_id::text,name,prefix,scopes,expires_at,last_used_at
+ FROM api_keys
+ WHERE ($1=''
+ OR id>NULLIF($1,'')::uuid)
+ ORDER BY id
+ LIMIT $2`, page.Cursor, page.Limit+1)
 	if e != nil {
 		return e
 	}
@@ -252,19 +272,15 @@ func (h *Handler) createKey(w http.ResponseWriter, r *http.Request) error {
 	}
 	id := ids.New()
 	_, e = db.Tx(ctx).
-		Exec(ctx, "INSERT INTO api_keys(id,tenant_id,principal_id,name,prefix,hash,scopes,expires_at) "+
-			"VALUES($1,$2,$3,$4,$5,$6,$7,$8)", id, auth.Tenant(ctx), in.PrincipalID, in.Name, prefix, hash, in.Scopes, in.ExpiresAt)
+		Exec(ctx, `INSERT INTO api_keys(id,tenant_id,principal_id,name,prefix,hash,scopes,expires_at)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, id, auth.Tenant(ctx), in.PrincipalID, in.Name, prefix, hash, in.Scopes, in.ExpiresAt)
 	if e != nil {
 		return e
 	}
 	if e = h.logWrite(ctx, "apikey.created", "api_key", id, map[string]any{"principal_id": in.PrincipalID, "scopes": in.Scopes}); e != nil {
 		return e
 	}
-	httpx.JSON(
-		w,
-		201,
-		map[string]any{"id": id, "key": token, "prefix": prefix, "scopes": in.Scopes, "expires_at": in.ExpiresAt},
-	)
+	httpx.JSON(w, 201, map[string]any{"id": id, "key": token, "prefix": prefix, "scopes": in.Scopes, "expires_at": in.ExpiresAt})
 	return nil
 }
 func (h *Handler) deleteKey(w http.ResponseWriter, r *http.Request) error {
@@ -299,9 +315,13 @@ func (h *Handler) listAudit(w http.ResponseWriter, r *http.Request) error {
 		return e
 	}
 	rows, e := db.Tx(ctx).
-		Query(ctx, "SELECT id::text,actor_id::text,actor_kind,action,target_type,target_id,detail,encode(prev_"+
-			"hash,'hex'),encode(hash,'hex'),occurred_at FROM audit_log WHERE ($1='' OR "+
-			"id>NULLIF($1,'')::uuid) ORDER BY id LIMIT $2", page.Cursor, page.Limit+1)
+		Query(ctx, `SELECT id::text,actor_id::text,actor_kind,action,target_type,target_id,detail,encode(prev_hash,'hex'),encode(hash,
+ 'hex'),occurred_at
+ FROM audit_log
+ WHERE ($1=''
+ OR id>NULLIF($1,'')::uuid)
+ ORDER BY id
+ LIMIT $2`, page.Cursor, page.Limit+1)
 	if e != nil {
 		return e
 	}

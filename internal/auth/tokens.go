@@ -212,11 +212,7 @@ func (s *Signer) IssueStream(tenant, run, session string) (string, error) {
 		return "", fmt.Errorf("invalid stream identity")
 	}
 	return jwt.NewWithClaims(jwt.SigningMethodEdDSA,
-		StreamClaims{RegisteredClaims: registered("orbit-stream",
-			"run:"+
-				run,
-			"stream",
-			15*time.Minute),
+		StreamClaims{RegisteredClaims: registered("orbit-stream", "run:"+run, "stream", 15*time.Minute),
 			TenantID:  tenant,
 			RunID:     run,
 			SessionID: session}).

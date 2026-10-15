@@ -42,8 +42,12 @@ func Tenants(ctx context.Context, d *db.DB, pid string) ([]Tenant, error) {
 }
 func Active(ctx context.Context, tx pgx.Tx, pid string) error {
 	var ok bool
-	e := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM memberships m JOIN tenants t ON t.id=m.tenant_id WHERE "+
-		"m.principal_id=$1 AND m.status='active' AND t.status='active')", pid).
+	e := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1
+ FROM memberships m
+ JOIN tenants t ON t.id=m.tenant_id
+ WHERE m.principal_id=$1
+ AND m.status='active'
+ AND t.status='active')`, pid).
 		Scan(&ok)
 	if e != nil {
 		return e
@@ -54,23 +58,21 @@ func Active(ctx context.Context, tx pgx.Tx, pid string) error {
 	return nil
 }
 
-func Bind(
-	ctx context.Context,
-	tx pgx.Tx,
-	p auth.Principal,
-	tenant, subjectType, subject, role, scopeType, scope string,
-) error {
+func Bind(ctx context.Context, tx pgx.Tx, p auth.Principal, tenant, subjectType, subject, role, scopeType, scope string) error {
 	if !policy.ValidRole(role, scopeType) || !ids.Valid(scope) || !ids.Valid(subject) {
 		return httpx.E(422, "INVALID_ROLE", "Invalid role or scope")
 	}
 	var exists bool
 	var e error
 	if subjectType == "group" {
-		e = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM groups WHERE id=$1 AND tenant_id=$2)", subject, tenant).
-			Scan(&exists)
+		e = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM groups WHERE id=$1 AND tenant_id=$2)", subject, tenant).Scan(&exists)
 	} else if subjectType == "user" || subjectType == "service" {
-		e = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM memberships m JOIN principals p ON p.id=m.principal_id WHERE "+
-			"m.principal_id=$1 AND p.kind=$2 AND m.tenant_id=$3)", subject, subjectType, tenant).Scan(&exists)
+		e = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1
+ FROM memberships m
+ JOIN principals p ON p.id=m.principal_id
+ WHERE m.principal_id=$1
+ AND p.kind=$2
+ AND m.tenant_id=$3)`, subject, subjectType, tenant).Scan(&exists)
 	} else {
 		return httpx.E(422, "INVALID_INPUT", "Invalid principal type")
 	}
@@ -84,14 +86,11 @@ func Bind(
 	case "tenant":
 		exists = scope == tenant
 	case "workspace":
-		e = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM workspaces WHERE id=$1 AND tenant_id=$2)", scope, tenant).
-			Scan(&exists)
+		e = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM workspaces WHERE id=$1 AND tenant_id=$2)", scope, tenant).Scan(&exists)
 	case "asset":
-		e = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM assets WHERE id=$1 AND tenant_id=$2)", scope, tenant).
-			Scan(&exists)
+		e = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM assets WHERE id=$1 AND tenant_id=$2)", scope, tenant).Scan(&exists)
 	case "session":
-		e = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM sessions WHERE id=$1 AND tenant_id=$2)", scope, tenant).
-			Scan(&exists)
+		e = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM sessions WHERE id=$1 AND tenant_id=$2)", scope, tenant).Scan(&exists)
 	}
 	if e != nil {
 		return e
@@ -101,9 +100,9 @@ func Bind(
 	}
 	_, e = tx.Exec(
 		ctx,
-		"INSERT INTO role_bindings(id,tenant_id,principal_type,principal_id,role,scope_type,scope_i"+
-			"d,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON "+
-			"CONFLICT(tenant_id,principal_type,principal_id,role,scope_type,scope_id) DO NOTHING",
+		`INSERT INTO role_bindings(id,tenant_id,principal_type,principal_id,role,scope_type,scope_id,created_by)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+ ON CONFLICT(tenant_id,principal_type,principal_id,role,scope_type,scope_id) DO NOTHING`,
 		ids.New(),
 		tenant,
 		subjectType,
@@ -155,16 +154,7 @@ func AddMember(ctx context.Context, tx pgx.Tx, p auth.Principal, tenant, pid, st
 	if e = Bind(ctx, tx, p, tenant, kind, pid, role, "tenant", tenant); e != nil {
 		return e
 	}
-	return audit.Append(
-		ctx,
-		tx,
-		p,
-		tenant,
-		"member.added",
-		"principal",
-		pid,
-		map[string]any{"status": status, "source": source},
-	)
+	return audit.Append(ctx, tx, p, tenant, "member.added", "principal", pid, map[string]any{"status": status, "source": source})
 }
 func CreateTenant(ctx context.Context, d *db.DB, p auth.Principal, slug, name string) (Tenant, error) {
 	t := Tenant{ID: ids.New(), Slug: slug, Name: name}
@@ -189,12 +179,7 @@ func CreateTenant(ctx context.Context, d *db.DB, p auth.Principal, slug, name st
 // EnsurePersonal is called only inside a first-JIT WithTenant transaction.
 func EnsurePersonal(ctx context.Context, tx pgx.Tx, p auth.Principal, tenant string) error {
 	if _,
-		err := tx.Exec(ctx,
-		"INSERT INTO tenants(id,slug,name) VALUES($1,$2,$3)",
-		tenant,
-		"personal-"+
-			p.ID,
-		"Personal workspace"); err != nil {
+		err := tx.Exec(ctx, "INSERT INTO tenants(id,slug,name) VALUES($1,$2,$3)", tenant, "personal-"+p.ID, "Personal workspace"); err != nil {
 		return err
 	}
 	return AddMember(ctx, tx, p, tenant, p.ID, "active", "jit", "tenant.owner")
@@ -210,13 +195,7 @@ func CreateGroup(ctx context.Context, tx pgx.Tx, p auth.Principal, tenant, name 
 	return id, audit.Append(ctx, tx, p, tenant, "group.created", "group", id, map[string]any{"name": name})
 }
 func AddGroupMember(ctx context.Context, tx pgx.Tx, p auth.Principal, tenant, group, pid string) error {
-	_, e := tx.Exec(
-		ctx,
-		"INSERT INTO group_members(tenant_id,group_id,principal_id) VALUES($1,$2,$3)",
-		tenant,
-		group,
-		pid,
-	)
+	_, e := tx.Exec(ctx, "INSERT INTO group_members(tenant_id,group_id,principal_id) VALUES($1,$2,$3)", tenant, group, pid)
 	if e != nil {
 		return e
 	}
@@ -259,8 +238,8 @@ func CreateUser(
 		actor = p
 	}
 	e := d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
-		if _, e := tx.Exec(ctx, "INSERT INTO principals(id,kind,email,display_name,idp_subject,email_verified) "+
-			"VALUES($1,$2,$3,$4,$5,true)", p.ID, p.Kind, email, name, subject); e != nil {
+		if _, e := tx.Exec(ctx, `INSERT INTO principals(id,kind,email,display_name,idp_subject,email_verified)
+ VALUES($1,$2,$3,$4,$5,true)`, p.ID, p.Kind, email, name, subject); e != nil {
 			return e
 		}
 		if personal {

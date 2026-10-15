@@ -38,8 +38,7 @@ func TestMaliciousArchives(t *testing.T) {
 		"windows":   {"C:/file"},
 		"backslash": {"a\\..\\b"},
 		"dot":       {"a/./b"},
-		"deep": {strings.Repeat("a/",
-			33) +
+		"deep": {strings.Repeat("a/", 33) +
 			"f"},
 		"duplicate": {"same",
 			"same"},
@@ -211,8 +210,9 @@ func TestPAXGlobalHeader(t *testing.T) {
 	var out bytes.Buffer
 	gz := gzip.NewWriter(&out)
 	tw := tar.NewWriter(gz)
-	if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeXGlobalHeader,
-		PAXRecords: map[string]string{"comment": "git archive"}}); err != nil {
+	if err := tw.WriteHeader(&tar.Header{
+		Typeflag: tar.TypeXGlobalHeader, PAXRecords: map[string]string{"comment": "git archive"},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := tw.WriteHeader(&tar.Header{Name: "AGENTS.md", Mode: 0644, Size: 1}); err != nil {

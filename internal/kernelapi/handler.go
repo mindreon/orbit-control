@@ -118,10 +118,16 @@ func check(ctx context.Context, c auth.CapabilityClaims) error {
 	if c.Purpose == "segment" && c.Member != "" && c.Seq > 0 && c.Attempt > 0 {
 		if err := db.Tx(ctx).QueryRow(
 			ctx,
-			"SELECT EXISTS(SELECT 1 FROM runs r JOIN run_segments s ON s.tenan"+
-				"t_id=r.tenant_id AND s.run_id=r.id WHERE r.tenant_id=$1 AND r.id="+
-				"$2 AND r.ended_at IS NULL AND s.member=$3 AND s.seq=$4 AND s.stat"+
-				"us='running')",
+			`SELECT EXISTS(SELECT 1
+ FROM runs r
+ JOIN run_segments s ON s.tenant_id=r.tenant_id
+ AND s.run_id=r.id
+ WHERE r.tenant_id=$1
+ AND r.id=$2
+ AND r.ended_at IS NULL
+ AND s.member=$3
+ AND s.seq=$4
+ AND s.status='running')`,
 			c.Tenant,
 			c.Run,
 			c.Member,
@@ -135,11 +141,16 @@ func check(ctx context.Context, c auth.CapabilityClaims) error {
 	if c.Purpose == "sandbox" && c.LeaseID != "" {
 		if err := db.Tx(ctx).QueryRow(
 			ctx,
-			"SELECT EXISTS(SELECT 1 FROM runs r JOIN sandboxes s ON s.tenant_i"+
-				"d=r.tenant_id AND s.session_id=r.session_id WHERE r.tenant_id=$1 "+
-				"AND r.id=$2 AND r.ended_at IS NULL AND s.isolation_key=$3 AND s.i"+
-				"solation_key='t-'||r.tenant_id||'-s-'||r.session_id AND s.state N"+
-				"OT IN ('destroyed','failed'))",
+			`SELECT EXISTS(SELECT 1
+ FROM runs r
+ JOIN sandboxes s ON s.tenant_id=r.tenant_id
+ AND s.session_id=r.session_id
+ WHERE r.tenant_id=$1
+ AND r.id=$2
+ AND r.ended_at IS NULL
+ AND s.isolation_key=$3
+ AND s.isolation_key='t-'||r.tenant_id||'-s-'||r.session_id
+ AND s.state NOT IN ('destroyed','failed'))`,
 			c.Tenant,
 			c.Run,
 			c.LeaseID,
@@ -210,11 +221,7 @@ func (h *Handler) tokens(w http.ResponseWriter, r *http.Request) error {
 		if err != nil {
 			return err
 		}
-		httpx.JSON(
-			w,
-			200,
-			contract.TokenResponse{Token: contract.Secret(signed), ExpiresAt: claims.ExpiresAt.Time},
-		)
+		httpx.JSON(w, 200, contract.TokenResponse{Token: contract.Secret(signed), ExpiresAt: claims.ExpiresAt.Time})
 		return nil
 	})
 }
@@ -223,8 +230,12 @@ func getLock(ctx context.Context, c auth.CapabilityClaims) (contract.RunLock, er
 	var raw []byte
 	err := db.Tx(ctx).QueryRow(
 		ctx,
-		"SELECT l.lock FROM run_locks l JOIN runs r ON r.lock_id=l.id AND "+
-			"r.tenant_id=l.tenant_id WHERE r.tenant_id=$1 AND r.id=$2",
+		`SELECT l.lock
+ FROM run_locks l
+ JOIN runs r ON r.lock_id=l.id
+ AND r.tenant_id=l.tenant_id
+ WHERE r.tenant_id=$1
+ AND r.id=$2`,
 		c.Tenant,
 		c.Run,
 	).Scan(
@@ -278,13 +289,7 @@ func (h *Handler) lock(w http.ResponseWriter, r *http.Request, c auth.Capability
 	return nil
 }
 func (h *Handler) model(w http.ResponseWriter, r *http.Request, c auth.CapabilityClaims) error {
-	out, profileID, err := models.Credentials(
-		r.Context(),
-		c.Tenant,
-		r.URL.Query().Get("profile"),
-		c.ExpiresAt.Time,
-		h.Secrets,
-	)
+	out, profileID, err := models.Credentials(r.Context(), c.Tenant, r.URL.Query().Get("profile"), c.ExpiresAt.Time, h.Secrets)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return httpx.E(404, "MODEL_PROFILE_NOT_FOUND", "Model profile not found")
 	}
@@ -364,16 +369,16 @@ func (h *Handler) secretGrants(w http.ResponseWriter, r *http.Request, c auth.Ca
 		if e != nil {
 			return e
 		}
-		out.Grants = append(
-			out.Grants,
-			contract.SecretGrant{Name: name, Value: contract.Secret(plain), ExpiresAt: c.ExpiresAt.Time},
-		)
+		out.Grants = append(out.Grants, contract.SecretGrant{Name: name, Value: contract.Secret(plain), ExpiresAt: c.ExpiresAt.Time})
 	}
 	var actor, kind string
 	if err = db.Tx(r.Context()).QueryRow(
 		r.Context(),
-		"SELECT p.id::text,p.kind FROM runs r JOIN principals p ON p.id=r."+
-			"created_by WHERE r.tenant_id=$1 AND r.id=$2",
+		`SELECT p.id::text,p.kind
+ FROM runs r
+ JOIN principals p ON p.id=r.created_by
+ WHERE r.tenant_id=$1
+ AND r.id=$2`,
 		c.Tenant,
 		c.Run,
 	).Scan(
@@ -402,9 +407,11 @@ func (h *Handler) policy(w http.ResponseWriter, r *http.Request, c auth.Capabili
 	var session, workspace, principal string
 	if err := db.Tx(r.Context()).QueryRow(
 		r.Context(),
-		"SELECT r.session_id::text,s.workspace_id::text,r.created_by::text"+
-			" FROM runs r JOIN sessions s ON s.id=r.session_id WHERE r.tenant_"+
-			"id=$1 AND r.id=$2",
+		`SELECT r.session_id::text,s.workspace_id::text,r.created_by::text
+ FROM runs r
+ JOIN sessions s ON s.id=r.session_id
+ WHERE r.tenant_id=$1
+ AND r.id=$2`,
 		c.Tenant,
 		c.Run,
 	).Scan(
@@ -416,10 +423,16 @@ func (h *Handler) policy(w http.ResponseWriter, r *http.Request, c auth.Capabili
 	}
 	rows, err := db.Tx(r.Context()).Query(
 		r.Context(),
-		"SELECT body FROM policies WHERE tenant_id=$1 AND kind='tool_rules"+
-			"' AND status='active' AND ((scope_type='tenant' AND scope_id=$1) "+
-			"OR (scope_type='workspace' AND scope_id=$2)) ORDER BY CASE scope_"+
-			"type WHEN 'tenant' THEN 0 ELSE 1 END,version,id",
+		`SELECT body
+ FROM policies
+ WHERE tenant_id=$1
+ AND kind='tool_rules'
+ AND status='active'
+ AND ((scope_type='tenant'
+ AND scope_id=$1)
+ OR (scope_type='workspace'
+ AND scope_id=$2))
+ ORDER BY CASE scope_type WHEN 'tenant' THEN 0 ELSE 1 END,version,id`,
 		c.Tenant,
 		workspace,
 	)
@@ -448,11 +461,18 @@ func (h *Handler) policy(w http.ResponseWriter, r *http.Request, c auth.Capabili
 	}
 	rows, err = db.Tx(r.Context()).Query(
 		r.Context(),
-		"SELECT tool,arg_pattern,scope_type,interaction_id::text,expires_a"+
-			"t FROM permission_grants WHERE tenant_id=$1 AND decision='allow' "+
-			"AND expires_at>now() AND ((scope_type='session' AND scope_id=$2) "+
-			"OR (scope_type='user' AND scope_id=$3) OR (scope_type='workspace'"+
-			" AND scope_id=$4)) ORDER BY created_at,id",
+		`SELECT tool,arg_pattern,scope_type,interaction_id::text,expires_at
+ FROM permission_grants
+ WHERE tenant_id=$1
+ AND decision='allow'
+ AND expires_at>now()
+ AND ((scope_type='session'
+ AND scope_id=$2)
+ OR (scope_type='user'
+ AND scope_id=$3)
+ OR (scope_type='workspace'
+ AND scope_id=$4))
+ ORDER BY created_at,id`,
 		c.Tenant,
 		session,
 		principal,

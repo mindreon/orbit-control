@@ -35,10 +35,7 @@ func NewWorker(c client.Client, a *Activities) worker.Worker {
 func Register(w worker.Worker, a *Activities) {
 	w.RegisterWorkflowWithOptions(flow.Run, workflow.RegisterOptions{Name: Name})
 	w.RegisterActivityWithOptions(a.SnapshotAssetRelease, activity.RegisterOptions{Name: "SnapshotAssetRelease"})
-	w.RegisterActivityWithOptions(
-		a.AssetCheckPermissionDiff,
-		activity.RegisterOptions{Name: contract.ActivityAssetCheckPermissionDiff},
-	)
+	w.RegisterActivityWithOptions(a.AssetCheckPermissionDiff, activity.RegisterOptions{Name: contract.ActivityAssetCheckPermissionDiff})
 	w.RegisterActivity(a.AggregateAssetChecks)
 	w.RegisterActivity(a.CreateReviewTask)
 	w.RegisterActivity(a.RemindAssetReview)
@@ -125,9 +122,12 @@ func releaseDeliveries(ctx context.Context, d *db.DB, tenant string) ([]releaseD
 	err := d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
 		rows, err := tx.Query(
 			ctx,
-			"SELECT id::text,release_generation,withdraw_requested,withdraw_delivered FROM "+
-				"asset_versions WHERE (release_retryable OR withdraw_requested) AND state IN "+
-				"('submitted','checking','in_review','approved') ORDER BY id",
+			`SELECT id::text,release_generation,withdraw_requested,withdraw_delivered
+ FROM asset_versions
+ WHERE (release_retryable
+ OR withdraw_requested)
+ AND state IN ('submitted','checking','in_review','approved')
+ ORDER BY id`,
 		)
 		if err != nil {
 			return err
@@ -147,9 +147,14 @@ func releaseDeliveries(ctx context.Context, d *db.DB, tenant string) ([]releaseD
 		}
 		rows, err = tx.Query(
 			ctx,
-			"SELECT r.id::text,r.version_id::text,r.generation FROM asset_reviews r JOIN "+
-				"asset_versions v ON v.id=r.version_id WHERE v.release_retryable AND NOT r.delivered AND "+
-				"r.generation=v.release_generation AND v.state='in_review' ORDER BY r.id",
+			`SELECT r.id::text,r.version_id::text,r.generation
+ FROM asset_reviews r
+ JOIN asset_versions v ON v.id=r.version_id
+ WHERE v.release_retryable
+ AND NOT r.delivered
+ AND r.generation=v.release_generation
+ AND v.state='in_review'
+ ORDER BY r.id`,
 		)
 		if err != nil {
 			return err
@@ -223,9 +228,13 @@ func dispatchRelease(ctx context.Context, d *db.DB, c client.Client, row release
 func startRelease(ctx context.Context, d *db.DB, c client.Client, in Input) error {
 	eligible := false
 	if err := d.WithTenant(ctx, in.Tenant, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, "SELECT release_generation=$3 AND release_retryable AND NOT withdraw_requested AND state "+
-			"IN ('submitted','checking','in_review','approved') FROM asset_versions WHERE tenant_id=$1 "+
-			"AND id=$2", in.Tenant, in.VersionID, in.Generation).Scan(&eligible)
+		return tx.QueryRow(ctx, `SELECT release_generation=$3
+ AND release_retryable
+ AND NOT withdraw_requested
+ AND state IN ('submitted','checking','in_review','approved')
+ FROM asset_versions
+ WHERE tenant_id=$1
+ AND id=$2`, in.Tenant, in.VersionID, in.Generation).Scan(&eligible)
 	}); err != nil {
 		return err
 	}
@@ -331,8 +340,12 @@ func recordDispatchError(ctx context.Context, d *db.DB, l *slog.Logger, in Input
 	)
 	code := fmt.Sprintf("Dispatch:%T", err)
 	if saveErr := d.WithTenant(ctx, in.Tenant, func(tx pgx.Tx) error {
-		_, e := tx.Exec(ctx, "UPDATE asset_versions SET release_error=$3,release_retryable=release_retryable AND $4 "+
-			"WHERE tenant_id=$1 AND id=$2 AND release_generation=$5", in.Tenant, in.VersionID, code, !permanent, in.Generation)
+		_, e := tx.Exec(ctx, `UPDATE asset_versions
+ SET release_error=$3,release_retryable=release_retryable
+ AND $4
+ WHERE tenant_id=$1
+ AND id=$2
+ AND release_generation=$5`, in.Tenant, in.VersionID, code, !permanent, in.Generation)
 		return e
 	}); saveErr != nil {
 		l.Error("asset dispatch error recording failed", "tenant", in.Tenant, "version", in.VersionID, "error", saveErr)

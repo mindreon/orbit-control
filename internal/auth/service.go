@@ -86,8 +86,10 @@ func (a *Service) JIT(ctx context.Context, issuer, subject, email, name string, 
 		p.DisplayName = email
 	}
 	lookup := func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, "SELECT id::text,kind,email,display_name,email_verified FROM principals WHERE "+
-			"idp_subject=$1 AND status='active'", issuer+"|"+subject).
+		return tx.QueryRow(ctx, `SELECT id::text,kind,email,display_name,email_verified
+ FROM principals
+ WHERE idp_subject=$1
+ AND status='active'`, issuer+"|"+subject).
 			Scan(&p.ID, &p.Kind, &p.Email, &p.DisplayName, &p.EmailVerified)
 	}
 	err := a.DB.Global(ctx, lookup)
@@ -99,9 +101,10 @@ func (a *Service) JIT(ctx context.Context, issuer, subject, email, name string, 
 		tenant = ids.New()
 	}
 	create := func(tx pgx.Tx) error {
-		err := tx.QueryRow(ctx, "INSERT INTO principals(id,kind,email,display_name,idp_subject,email_verified) "+
-			"VALUES($1,'user',$2,$3,$4,$5) ON CONFLICT(idp_subject) DO NOTHING RETURNING "+
-			"id::text,kind,email,display_name,email_verified", p.ID, email, p.DisplayName, issuer+"|"+subject, verified).
+		err := tx.QueryRow(ctx, `INSERT INTO principals(id,kind,email,display_name,idp_subject,email_verified)
+ VALUES($1,'user',$2,$3,$4,$5)
+ ON CONFLICT(idp_subject) DO NOTHING
+ RETURNING id::text,kind,email,display_name,email_verified`, p.ID, email, p.DisplayName, issuer+"|"+subject, verified).
 			Scan(&p.ID, &p.Kind, &p.Email, &p.DisplayName, &p.EmailVerified)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return lookup(tx)
@@ -135,8 +138,10 @@ func (a *Service) Authenticate(ctx context.Context, token, tenant string) (Princ
 		}
 		var p Principal
 		e = a.DB.Global(ctx, func(tx pgx.Tx) error {
-			return tx.QueryRow(ctx, "SELECT id::text,kind,email,display_name,email_verified FROM principals WHERE id=$1 AND "+
-				"status='active'", c.Subject).
+			return tx.QueryRow(ctx, `SELECT id::text,kind,email,display_name,email_verified
+ FROM principals
+ WHERE id=$1
+ AND status='active'`, c.Subject).
 				Scan(&p.ID, &p.Kind, &p.Email, &p.DisplayName, &p.EmailVerified)
 		})
 		return p, e
@@ -178,10 +183,15 @@ func (a *Service) apiKey(ctx context.Context, token, tenant string) (Principal, 
 	var p Principal
 	var keyID string
 	e := a.DB.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, "SELECT p.id::text,p.kind,p.email,p.display_name,k.scopes,k.id::text,p.email_verified FROM "+
-			"api_keys k JOIN principals p ON p.id=k.principal_id JOIN memberships m ON "+
-			"m.principal_id=p.id AND m.tenant_id=k.tenant_id WHERE k.hash=$1 AND k.expires_at>now() "+
-			"AND p.status='active' AND m.status='active'", h[:]).
+		return tx.QueryRow(ctx, `SELECT p.id::text,p.kind,p.email,p.display_name,k.scopes,k.id::text,p.email_verified
+ FROM api_keys k
+ JOIN principals p ON p.id=k.principal_id
+ JOIN memberships m ON m.principal_id=p.id
+ AND m.tenant_id=k.tenant_id
+ WHERE k.hash=$1
+ AND k.expires_at>now()
+ AND p.status='active'
+ AND m.status='active'`, h[:]).
 			Scan(&p.ID, &p.Kind, &p.Email, &p.DisplayName, &p.Scopes, &keyID, &p.EmailVerified)
 	})
 	if errors.Is(e, pgx.ErrNoRows) {
@@ -205,7 +215,11 @@ func (a *Service) apiKey(ctx context.Context, token, tenant string) (Principal, 
 			e := a.DB.WithTenant(c, tenant, func(tx pgx.Tx) error {
 				_, e := tx.Exec(
 					c,
-					"UPDATE api_keys SET last_used_at=now() WHERE id=$1 AND (last_used_at IS NULL OR last_used_at<now()-interval '1 minute')",
+					`UPDATE api_keys
+ SET last_used_at=now()
+ WHERE id=$1
+ AND (last_used_at IS NULL
+ OR last_used_at<now()-interval '1 minute')`,
 					keyID,
 				)
 				return e

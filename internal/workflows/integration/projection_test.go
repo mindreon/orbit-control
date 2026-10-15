@@ -233,10 +233,7 @@ func TestAPIToRunProjection(t *testing.T) {
 	}
 	require.NoError(
 		t,
-		json.Unmarshal(
-			f.request(t, "POST", "/v1/sessions/"+session.ID+"/messages", map[string]string{"text": "hello"}),
-			&submission,
-		),
+		json.Unmarshal(f.request(t, "POST", "/v1/sessions/"+session.ID+"/messages", map[string]string{"text": "hello"}), &submission),
 	)
 	run := f.temporal.GetWorkflow(t.Context(), w.AgentRunWorkflowID(f.tenant, submission.RunID), "")
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
@@ -280,8 +277,5 @@ func TestAPIToRunProjection(t *testing.T) {
 	require.True(t, found, "terminal projection must be published through real NATS")
 	f.request(t, "POST", "/v1/sessions/"+session.ID+"/archive", nil)
 	require.NoError(t, f.temporal.GetWorkflow(ctx, w.SessionWorkflowID(f.tenant, session.ID), "").Get(ctx, nil))
-	require.NoError(
-		t,
-		f.temporal.GetWorkflow(ctx, w.LeaseWorkflowID(f.tenant, w.IsolationKey(f.tenant, session.ID)), "").Get(ctx, nil),
-	)
+	require.NoError(t, f.temporal.GetWorkflow(ctx, w.LeaseWorkflowID(f.tenant, w.IsolationKey(f.tenant, session.ID)), "").Get(ctx, nil))
 }

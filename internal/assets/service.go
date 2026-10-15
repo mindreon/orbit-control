@@ -67,17 +67,7 @@ func Log(ctx context.Context, action, typ, id string, detail any) error {
 }
 func scanAsset(row pgx.Row) (Asset, error) {
 	var a Asset
-	err := row.Scan(
-		&a.ID,
-		&a.Publisher,
-		&a.Kind,
-		&a.Name,
-		&a.Visibility,
-		&a.WorkspaceID,
-		&a.OwnerID,
-		&a.Status,
-		&a.CreatedAt,
-	)
+	err := row.Scan(&a.ID, &a.Publisher, &a.Kind, &a.Name, &a.Visibility, &a.WorkspaceID, &a.OwnerID, &a.Status, &a.CreatedAt)
 	return a, err
 }
 
@@ -114,11 +104,7 @@ func (s *Service) Get(ctx context.Context, id, action string) (Asset, error) {
 	)
 }
 
-func (s *Service) Create(
-	ctx context.Context,
-	kind contract.AssetKind,
-	name, visibility, workspace string,
-) (Asset, error) {
+func (s *Service) Create(ctx context.Context, kind contract.AssetKind, name, visibility, workspace string) (Asset, error) {
 	if kind != "agent" && kind != "skill" && kind != "team" && kind != "mcp_server" || !Slug.MatchString(name) {
 		return Asset{}, Invalid("Invalid asset kind or name")
 	}
@@ -143,8 +129,8 @@ func (s *Service) Create(
 	id := ids.New()
 	p := auth.From(ctx)
 	_, err := db.Tx(ctx).
-		Exec(ctx, "INSERT INTO assets(id,tenant_id,publisher,kind,name,visibility,workspace_id,owner_id,statu"+
-			"s) VALUES($1,$2,$3,$4,$5,$6,NULLIF($7,'')::uuid,$8,'active')", id, auth.Tenant(ctx), publisher, kind, name, visibility, workspace, p.ID)
+		Exec(ctx, `INSERT INTO assets(id,tenant_id,publisher,kind,name,visibility,workspace_id,owner_id,status)
+ VALUES($1,$2,$3,$4,$5,$6,NULLIF($7,'')::uuid,$8,'active')`, id, auth.Tenant(ctx), publisher, kind, name, visibility, workspace, p.ID)
 	if err != nil {
 		return Asset{}, err
 	}
@@ -163,9 +149,12 @@ func (s *Service) Version(ctx context.Context, asset, id string) (Version, error
 	}
 	var m, p []byte
 	err := db.Tx(ctx).
-		QueryRow(ctx, "SELECT id::text,asset_id::text,version,manifest,content_digest,blob_index_ref,permissions,"+
-			"state,COALESCE(signature,''),created_at,release_error,uploaded_by::text,permissions_jcs,id"+
-			"entity_jcs FROM asset_versions WHERE tenant_id=$1 AND asset_id=$2 AND id=$3", auth.Tenant(ctx), asset, id).
+		QueryRow(ctx, `SELECT id::text,asset_id::text,version,manifest,content_digest,blob_index_ref,permissions,state,COALESCE(signature,
+ ''),created_at,release_error,uploaded_by::text,permissions_jcs,identity_jcs
+ FROM asset_versions
+ WHERE tenant_id=$1
+ AND asset_id=$2
+ AND id=$3`, auth.Tenant(ctx), asset, id).
 		Scan(&v.ID,
 			&v.AssetID,
 			&v.Version,
@@ -192,8 +181,10 @@ func (s *Service) Version(ctx context.Context, asset, id string) (Version, error
 func SetState(ctx context.Context, id, to string) error {
 	var from string
 	if err := db.Tx(ctx).QueryRow(ctx,
-		("SELECT state FROM asset_versions WHERE tenant_id=$1 AND id=$2 FOR " +
-			"UPDATE"),
+		(`SELECT state
+ FROM asset_versions
+ WHERE tenant_id=$1
+ AND id=$2 FOR UPDATE`),
 		auth.Tenant(ctx),
 		id).Scan(&from); err != nil {
 		return err
@@ -208,10 +199,9 @@ func SetState(ctx context.Context, id, to string) error {
 }
 func (s *Service) Submit(ctx context.Context, a Asset, id, channel string) error {
 	var visibility string
-	if err := db.Tx(ctx).QueryRow(ctx,
-		("SELECT visibility FROM assets WHERE tenant_id=$1 AND id=$2 FOR UPDATE"),
-		auth.Tenant(ctx),
-		a.ID).Scan(&visibility); err != nil {
+	if err := db.Tx(ctx).QueryRow(
+		ctx, ("SELECT visibility FROM assets WHERE tenant_id=$1 AND id=$2 FOR UPDATE"), auth.Tenant(ctx), a.ID,
+	).Scan(&visibility); err != nil {
 		return err
 	}
 	if visibility != a.Visibility {
@@ -234,13 +224,19 @@ func (s *Service) Submit(ctx context.Context, a Asset, id, channel string) error
 		return err
 	}
 	_, err = db.Tx(ctx).
-		Exec(ctx, "UPDATE asset_versions SET submitted_by=$2,release_channel=$3,release_started=false,withdra"+
-			"w_requested=false,withdraw_delivered=false,review_required=$4,workspace_review=$5,release_"+
-			"generation=release_generation+1,release_error=NULL,release_retryable=true,previous_version"+
-			"_id=(SELECT id FROM asset_versions WHERE asset_id=$6 AND state IN "+
-			"('published','deprecated') ORDER BY published_at DESC,id DESC LIMIT "+
-			"1),previous_channel_id=(SELECT version_id FROM asset_channels WHERE asset_id=$6 AND "+
-			"channel=$3) WHERE id=$1", id, auth.From(ctx).ID, channel, required, review, a.ID)
+		Exec(ctx, `UPDATE asset_versions
+ SET submitted_by=$2,release_channel=$3,release_started=false,withdraw_requested=false,withdraw_delivered=false,
+ review_required=$4,workspace_review=$5,release_generation=release_generation+1,release_error=NULL,
+ release_retryable=true,previous_version_id=(SELECT id
+ FROM asset_versions
+ WHERE asset_id=$6
+ AND state IN ('published','deprecated')
+ ORDER BY published_at DESC,id DESC
+ LIMIT 1),previous_channel_id=(SELECT version_id
+ FROM asset_channels
+ WHERE asset_id=$6
+ AND channel=$3)
+ WHERE id=$1`, id, auth.From(ctx).ID, channel, required, review, a.ID)
 	return err
 }
 func (s *Service) SetChannel(ctx context.Context, a Asset, channel, id string) error {
@@ -265,9 +261,11 @@ func (s *Service) SetChannel(ctx context.Context, a Asset, channel, id string) e
 		return err
 	}
 	_, err = db.Tx(ctx).
-		Exec(ctx, "INSERT INTO asset_channels(tenant_id,asset_id,channel,version_id,updated_by) "+
-			"VALUES($1,$2,$3,$4,$5) ON CONFLICT(tenant_id,asset_id,channel) DO UPDATE SET "+
-			"version_id=EXCLUDED.version_id,updated_by=EXCLUDED.updated_by,updated_at=now()", auth.Tenant(ctx), a.ID, channel, id, auth.From(ctx).ID)
+		Exec(ctx, `INSERT INTO asset_channels(tenant_id,asset_id,channel,version_id,updated_by)
+ VALUES($1,$2,$3,$4,$5)
+ ON CONFLICT(tenant_id,asset_id,channel)
+ DO UPDATE SET version_id=EXCLUDED.version_id,updated_by=EXCLUDED.updated_by,updated_at=now()`,
+			auth.Tenant(ctx), a.ID, channel, id, auth.From(ctx).ID)
 	if err != nil {
 		return err
 	}
@@ -303,8 +301,10 @@ func (s *Service) File(ctx context.Context, id, name string) ([]byte, string, er
 	var digest string
 	var size int64
 	if err := db.Tx(ctx).QueryRow(ctx,
-		("SELECT sha256,size_bytes FROM asset_files WHERE version_id=$1 AND "+
-			"path=$2"),
+		(`SELECT sha256,size_bytes
+ FROM asset_files
+ WHERE version_id=$1
+ AND path=$2`),
 		id,
 		name).Scan(&digest,
 		&size); err != nil {
@@ -324,29 +324,23 @@ func (s *Service) File(ctx context.Context, id, name string) ([]byte, string, er
 	return data, typ, nil
 }
 
-func (s *Service) Install(
-	ctx context.Context,
-	a Asset,
-	scope, scopeID, constraint, channel, pinned string,
-) (string, error) {
+func (s *Service) Install(ctx context.Context, a Asset, scope, scopeID, constraint, channel, pinned string) (string, error) {
 	if err := s.requireInstall(ctx, scope, scopeID); err != nil {
 		return "", err
 	}
 	// Lock against concurrent metadata changes and use the current ceiling.
 	if err := db.Tx(ctx).QueryRow(ctx,
-		("SELECT visibility,status FROM assets WHERE tenant_id=$1 AND id=$2 FOR "+
-			"SHARE"),
+		(`SELECT visibility,status
+ FROM assets
+ WHERE tenant_id=$1
+ AND id=$2 FOR SHARE`),
 		auth.Tenant(ctx),
 		a.ID).Scan(&a.Visibility,
 		&a.Status); err != nil {
 		return "", err
 	}
 	if a.Visibility != "tenant" && (scope == "tenant" || a.Visibility != "workspace" || a.WorkspaceID != scopeID) {
-		return "", httpx.E(
-			403,
-			"VISIBILITY_BOUNDARY",
-			"Asset must be visible to every member of the installation scope",
-		)
+		return "", httpx.E(403, "VISIBILITY_BOUNDARY", "Asset must be visible to every member of the installation scope")
 	}
 	if a.Status != "active" {
 		return "", Invalid("Asset is unavailable")
@@ -368,11 +362,12 @@ func (s *Service) Install(
 	}
 	id := ids.New()
 	err := db.Tx(ctx).
-		QueryRow(ctx, "INSERT INTO asset_installs(id,tenant_id,scope_type,scope_id,asset_id,\"constraint\",channel,"+
-			"pinned_version_id,enabled) VALUES($1,$2,$3,$4,$5,$6,NULLIF($7,''),NULLIF($8,'')::uuid,true"+
-			") ON CONFLICT(tenant_id,scope_type,scope_id,asset_id) DO UPDATE SET "+
-			"\"constraint\"=EXCLUDED.\"constraint\",channel=EXCLUDED.channel,pinned_version_id=EXCLUDED.pin"+
-			"ned_version_id,enabled=true RETURNING id::text", id, auth.Tenant(ctx), scope, scopeID, a.ID, constraint, channel, pinned).
+		QueryRow(ctx, `INSERT INTO asset_installs(id,tenant_id,scope_type,scope_id,asset_id,"constraint",channel,pinned_version_id,enabled)
+ VALUES($1,$2,$3,$4,$5,$6,NULLIF($7,''),NULLIF($8,'')::uuid,true)
+ ON CONFLICT(tenant_id,scope_type,scope_id,asset_id)
+ DO UPDATE SET "constraint"=EXCLUDED."constraint",channel=EXCLUDED.channel,
+ pinned_version_id=EXCLUDED.pinned_version_id,enabled=true
+ RETURNING id::text`, id, auth.Tenant(ctx), scope, scopeID, a.ID, constraint, channel, pinned).
 		Scan(&id)
 	if err != nil {
 		return "", err
@@ -391,12 +386,7 @@ func IsLocal(ref string) bool { return ref == "." || strings.HasPrefix(ref, "./"
 // SelectVersion is shared by installation validation and recursive lock
 // resolution. A pin or channel is authoritative; an unavailable pointer never
 // silently falls back to a different version.
-func (s *Service) SelectVersion(
-	ctx context.Context,
-	a Asset,
-	ranges []string,
-	pinned, channel string,
-) (Version, error) {
+func (s *Service) SelectVersion(ctx context.Context, a Asset, ranges []string, pinned, channel string) (Version, error) {
 	if a.Status != "active" {
 		return Version{}, Invalid("Asset is unavailable")
 	}
@@ -413,16 +403,22 @@ func (s *Service) SelectVersion(
 	}
 	if pinned == "" && channel != "" {
 		if err := db.Tx(ctx).QueryRow(ctx,
-			("SELECT version_id::text FROM asset_channels WHERE asset_id=$1 AND " +
-				"channel=$2"),
+			(`SELECT version_id::text
+ FROM asset_channels
+ WHERE asset_id=$1
+ AND channel=$2`),
 			a.ID,
 			channel).Scan(&pinned); err != nil {
 			return Version{}, err
 		}
 	}
 	rows, err := db.Tx(ctx).
-		Query(ctx, "SELECT id::text,version FROM asset_versions WHERE asset_id=$1 AND state IN "+
-			"('published','deprecated') AND ($2='' OR id=NULLIF($2,'')::uuid)", a.ID, pinned)
+		Query(ctx, `SELECT id::text,version
+ FROM asset_versions
+ WHERE asset_id=$1
+ AND state IN ('published','deprecated')
+ AND ($2=''
+ OR id=NULLIF($2,'')::uuid)`, a.ID, pinned)
 	if err != nil {
 		return Version{}, err
 	}
@@ -473,8 +469,14 @@ func submissionReview(ctx context.Context, a Asset) (bool, int, error) {
 	review := true
 	required := 1
 	rows, err := db.Tx(ctx).
-		Query(ctx, "SELECT body FROM policies WHERE tenant_id=$1 AND status='active' AND kind='tool_rules' "+
-			"AND scope_type='tenant' AND scope_id=$1 ORDER BY version,id", auth.Tenant(ctx))
+		Query(ctx, `SELECT body
+ FROM policies
+ WHERE tenant_id=$1
+ AND status='active'
+ AND kind='tool_rules'
+ AND scope_type='tenant'
+ AND scope_id=$1
+ ORDER BY version,id`, auth.Tenant(ctx))
 	if err != nil {
 		return false, 0, err
 	}

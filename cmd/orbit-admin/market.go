@@ -33,10 +33,18 @@ func importMarket(ctx context.Context, d *db.DB, c config.Config, args []string)
 	}
 	if *actor == "" {
 		if err := d.WithTenant(ctx, *tenant, func(tx pgx.Tx) error {
-			return tx.QueryRow(ctx, "SELECT b.principal_id::text FROM role_bindings b JOIN memberships m ON "+
-				"m.tenant_id=b.tenant_id AND m.principal_id=b.principal_id WHERE b.tenant_id=$1 AND "+
-				"b.scope_type='tenant' AND b.scope_id=$1 AND b.role='tenant.owner' AND "+
-				"b.principal_type='user' AND m.status='active' ORDER BY b.created_at LIMIT 1", *tenant).Scan(actor)
+			return tx.QueryRow(ctx, `SELECT b.principal_id::text
+ FROM role_bindings b
+ JOIN memberships m ON m.tenant_id=b.tenant_id
+ AND m.principal_id=b.principal_id
+ WHERE b.tenant_id=$1
+ AND b.scope_type='tenant'
+ AND b.scope_id=$1
+ AND b.role='tenant.owner'
+ AND b.principal_type='user'
+ AND m.status='active'
+ ORDER BY b.created_at
+ LIMIT 1`, *tenant).Scan(actor)
 		}); err != nil {
 			return err
 		}

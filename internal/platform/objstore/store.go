@@ -99,14 +99,7 @@ func (s *S3) PutObject(ctx context.Context, tenant, key string, data []byte, mim
 	if e := tenantKey(tenant, key); e != nil {
 		return e
 	}
-	_, e := s.client.PutObject(
-		ctx,
-		s.bucket,
-		key,
-		bytes.NewReader(data),
-		int64(len(data)),
-		minio.PutObjectOptions{ContentType: mime},
-	)
+	_, e := s.client.PutObject(ctx, s.bucket, key, bytes.NewReader(data), int64(len(data)), minio.PutObjectOptions{ContentType: mime})
 	return e
 }
 func (s *S3) GetObject(ctx context.Context, tenant, key string, limit int64) ([]byte, string, error) {

@@ -14,11 +14,7 @@ import (
 	"github.com/mindreon/orbit-control/internal/platform/httpx"
 )
 
-func ReportModelUsage(
-	ctx context.Context,
-	c auth.CapabilityClaims,
-	req contract.UsageReport,
-) (contract.UsageReportResponse, error) {
+func ReportModelUsage(ctx context.Context, c auth.CapabilityClaims, req contract.UsageReport) (contract.UsageReportResponse, error) {
 	var out contract.UsageReportResponse
 
 	tx := db.Tx(ctx)
@@ -26,8 +22,11 @@ func ReportModelUsage(
 	var workspace, principal string
 	if err := tx.QueryRow(
 		ctx,
-		"SELECT s.workspace_id::text,r.created_by::text FROM runs r JOIN s"+
-			"essions s ON s.id=r.session_id WHERE r.tenant_id=$1 AND r.id=$2",
+		`SELECT s.workspace_id::text,r.created_by::text
+ FROM runs r
+ JOIN sessions s ON s.id=r.session_id
+ WHERE r.tenant_id=$1
+ AND r.id=$2`,
 		c.Tenant,
 		c.Run,
 	).Scan(
@@ -43,8 +42,12 @@ func ReportModelUsage(
 			return out, httpx.E(422, "INVALID_USAGE_KEY", "Usage key must identify this attempt")
 		}
 		var raw []byte
-		if err := tx.QueryRow(ctx, `SELECT model_profiles->$5->'pricing' FROM run_segments
- WHERE tenant_id=$1 AND run_id=$2 AND member=$3 AND seq=$4
+		if err := tx.QueryRow(ctx, `SELECT model_profiles->$5->'pricing'
+ FROM run_segments
+ WHERE tenant_id=$1
+ AND run_id=$2
+ AND member=$3
+ AND seq=$4
  AND model_profiles ? $5`, c.Tenant, c.Run, c.Member, c.Seq, models.BindingKey(c.Attempt, item.Model)).Scan(&raw); err !=
 			nil {
 			return out, err
@@ -60,8 +63,10 @@ func ReportModelUsage(
 	}
 	if err := tx.QueryRow(
 		ctx,
-		"SELECT COALESCE(sum(millicredits),0)::bigint FROM usage_ledger WH"+
-			"ERE tenant_id=$1 AND run_id=$2",
+		`SELECT COALESCE(sum(millicredits),0)::bigint
+ FROM usage_ledger
+ WHERE tenant_id=$1
+ AND run_id=$2`,
 		c.Tenant,
 		c.Run,
 	).Scan(

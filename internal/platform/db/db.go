@@ -69,8 +69,10 @@ func OpenApp(ctx context.Context, url string) (*DB, error) {
 		var name string
 		var privileged bool
 		if e := tx.QueryRow(ctx,
-			("SELECT rolname,rolsuper OR rolbypassrls FROM pg_roles WHERE "+
-				"rolname=current_user")).Scan(&name,
+			(`SELECT rolname,rolsuper
+ OR rolbypassrls
+ FROM pg_roles
+ WHERE rolname=current_user`)).Scan(&name,
 			&privileged); e != nil {
 			return e
 		}

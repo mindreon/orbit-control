@@ -83,12 +83,7 @@ func TestUnconfiguredPermissionDimensionsAreUnrestricted(t *testing.T) {
 	if Visible("skill", Visibility{Allow: []string{}}) {
 		t.Fatal("explicit empty allow ignored")
 	}
-	if Visible(
-		"skill",
-		Visibility{Allow: []string{"skill"}},
-		Visibility{Allow: []string{"other"}},
-		Visibility{Allow: []string{"skill"}},
-	) {
+	if Visible("skill", Visibility{Allow: []string{"skill"}}, Visibility{Allow: []string{"other"}}, Visibility{Allow: []string{"skill"}}) {
 		t.Fatal("author widened workspace cap")
 	}
 }

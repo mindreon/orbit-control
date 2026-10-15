@@ -43,13 +43,7 @@ func Hash(prev []byte, r Record) ([]byte, error) {
 	return h.Sum(nil), nil
 }
 
-func Append(
-	ctx context.Context,
-	tx pgx.Tx,
-	p auth.Principal,
-	tenant, action, targetType, target string,
-	detail any,
-) error {
+func Append(ctx context.Context, tx pgx.Tx, p auth.Principal, tenant, action, targetType, target string, detail any) error {
 	if _, e := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1,0))", tenant); e != nil {
 		return e
 	}
@@ -92,9 +86,9 @@ func Append(
 	}
 	_, e = tx.Exec(
 		ctx,
-		"INSERT INTO audit_log(id,tenant_id,actor_id,actor_kind,action,target_type,target_id,detail"+
-			",ip,user_agent,prev_hash,hash,occurred_at) "+
-			"VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
+		`INSERT INTO audit_log(id,tenant_id,actor_id,actor_kind,action,target_type,target_id,detail,ip,user_agent,prev_hash,
+ hash,occurred_at)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
 		r.ID,
 		tenant,
 		p.ID,
@@ -121,9 +115,11 @@ func Verify(ctx context.Context, tx pgx.Tx) (Head, error) {
 	head := Head{Hash: hex.EncodeToString(make([]byte, 32))}
 	rows, e := tx.Query(
 		ctx,
-		"SELECT id::text,tenant_id::text,actor_id::text,actor_kind,action,target_type,target_id,det"+
-			"ail,ip,user_agent,occurred_at,prev_hash,hash FROM audit_log WHERE "+
-			"tenant_id=NULLIF(current_setting('app.tenant_id',true),'')::uuid ORDER BY occurred_at,id",
+		`SELECT id::text,tenant_id::text,actor_id::text,actor_kind,action,target_type,target_id,detail,ip,user_agent,
+ occurred_at,prev_hash,hash
+ FROM audit_log
+ WHERE tenant_id=NULLIF(current_setting('app.tenant_id',true),'')::uuid
+ ORDER BY occurred_at,id`,
 	)
 	if e != nil {
 		return head, e
