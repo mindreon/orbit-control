@@ -33,6 +33,7 @@ type Model struct {
 type Result struct {
 	TenantID    string   `json:"tenant_id"`
 	PrincipalID string   `json:"principal_id"`
+	ReviewerID  string   `json:"reviewer_id"`
 	WorkspaceID string   `json:"workspace_id"`
 	Versions    []string `json:"versions"`
 }
@@ -55,8 +56,11 @@ func (m Model) validate() error {
 	return nil
 }
 
-func Seed(ctx context.Context, d *db.DB, svc *assets.Service, keys secrets.Keys, model Model) (Result, error) {
+func Seed(ctx context.Context, d *db.DB, svc *assets.Service, keys secrets.Keys, model Model, environment string) (Result, error) {
 	var out Result
+	if environment != "dev" {
+		return out, fmt.Errorf("seed-dev requires ORBIT_ENV=dev")
+	}
 	if err := model.validate(); err != nil {
 		return out, err
 	}
@@ -102,6 +106,9 @@ func Seed(ctx context.Context, d *db.DB, svc *assets.Service, keys secrets.Keys,
 		if err := seedWorkspaceModel(ctx, tx, p, out, keys, model); err != nil {
 			return err
 		}
+		if err := seedReviewer(ctx, tx, p, &out); err != nil {
+			return err
+		}
 		if err := seedAgents(ctx, tx, svc, &out); err != nil {
 			return err
 		}
@@ -118,32 +125,29 @@ func Seed(ctx context.Context, d *db.DB, svc *assets.Service, keys secrets.Keys,
 	})
 	return out, err
 }
-func WaitPublished(ctx context.Context, d *db.DB, result Result) error {
+func WaitPublished(ctx context.Context, d *db.DB, svc *assets.Service, result Result, environment string) error {
+	if environment != "dev" {
+		return fmt.Errorf("seed-dev requires ORBIT_ENV=dev")
+	}
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		done := true
 		err := d.WithTenant(ctx, result.TenantID, func(tx pgx.Tx) error {
+			ctx := auth.Context(db.Context(ctx, tx), auth.Principal{ID: result.ReviewerID, Kind: "user"}, result.TenantID)
 			for _, id := range result.Versions {
-				var state string
-				var failure *string
-				if err := tx.QueryRow(ctx,
-					(`SELECT state,release_error
- FROM asset_versions
- WHERE tenant_id=$1
- AND id=$2`),
-					result.TenantID,
-					id).Scan(&state, &failure); err != nil {
+				state, err := reviewSeed(ctx, tx, svc, result.TenantID, id)
+				if err != nil {
 					return err
-				}
-				if state == "check_failed" || state == "rejected" || failure != nil {
-					return fmt.Errorf("seed asset %s release failed; inspect its check reports", id)
 				}
 				done = done && state == "published"
 			}
 			return nil
 		})
 		if err != nil {
+			if ctx.Err() != nil {
+				return seedWaitTimeout(ctx)
+			}
 			return err
 		}
 		if done {
@@ -151,10 +155,14 @@ func WaitPublished(ctx context.Context, d *db.DB, result Result) error {
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("seed assets await asset-release and asset-check workers: %w", ctx.Err())
+			return seedWaitTimeout(ctx)
 		case <-ticker.C:
 		}
 	}
+}
+
+func seedWaitTimeout(ctx context.Context) error {
+	return fmt.Errorf("timed out waiting for seed AssetReleaseWorkflow publication (ctl/asset-check workers and dev review): %w", ctx.Err())
 }
 
 func seedWorkspaceModel(ctx context.Context, tx pgx.Tx, p auth.Principal, out Result, keys secrets.Keys, model Model) error {
@@ -246,7 +254,7 @@ func seedAgents(ctx context.Context, tx pgx.Tx, svc *assets.Service, out *Result
 				return e
 			}
 			versionID = version.ID
-			if e = svc.PublishDevelopmentSeed(ctx, a, versionID, "dev"); e != nil {
+			if e = svc.Submit(ctx, a, versionID, "stable"); e != nil {
 				return e
 			}
 		} else if e != nil {

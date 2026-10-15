@@ -135,11 +135,12 @@ func seedDevelopment(ctx context.Context, d *db.DB, c config.Config, keys secret
 	if !validModelURL(model.BaseURL) {
 		return fmt.Errorf("ORBIT_SEED_MODEL_BASE_URL must be an HTTP URL without credentials")
 	}
-	result, err := devseed.Seed(ctx, d, &assets.Service{Store: store, Signer: signer}, keys, model)
+	svc := &assets.Service{Store: store, Signer: signer}
+	result, err := devseed.Seed(ctx, d, svc, keys, model, c.Environment)
 	if err != nil {
 		return err
 	}
-	if err = devseed.WaitPublished(ctx, d, result); err != nil {
+	if err = devseed.WaitPublished(ctx, d, svc, result, c.Environment); err != nil {
 		return err
 	}
 	raw, err := json.Marshal(result)
