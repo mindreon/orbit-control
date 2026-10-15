@@ -19,8 +19,11 @@
           "additionalProperties": {
             "$ref": "#/$defs/McpServer"
           },
-          "description": "Servers by name.",
-          "x-extra": "forbid"
+          "description": "Servers by name: 1–63 lowercase letters/digits, starting with a letter.",
+          "x-extra": "forbid",
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9]{0,62}$"
+          }
         }
       },
       "x-extra": "forbid"

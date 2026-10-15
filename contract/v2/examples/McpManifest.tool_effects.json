@@ -15,7 +15,7 @@
         }
       }
     },
-    "local-db": {
+    "localdb": {
       "command": "npx",
       "args": [
         "-y",

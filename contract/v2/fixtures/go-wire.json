@@ -497,7 +497,7 @@
           "transport": "streamable_http",
           "url": "https://mcp.example.com/github"
         },
-        "local-db": {
+        "localdb": {
           "args": [
             "-y",
             "@example/db-mcp"
@@ -531,7 +531,7 @@
           "transport": "streamable_http",
           "url": "https://mcp.example.com/github"
         },
-        "local-db": {
+        "localdb": {
           "args": [
             "-y",
             "@example/db-mcp"

@@ -1971,11 +1971,11 @@ func (j *MailboxMessage) UnmarshalJSON(value []byte) error {
 // so it is not loaded. Values may hold credentials only as ${secret:NAME}
 // placeholders.
 type McpManifest struct {
-	// Servers by name.
+	// Servers by name: 1–63 lowercase letters/digits, starting with a letter.
 	McpServers McpManifestMcpServers `json:"mcpServers" yaml:"mcpServers" mapstructure:"mcpServers"`
 }
 
-// Servers by name.
+// Servers by name: 1–63 lowercase letters/digits, starting with a letter.
 type McpManifestMcpServers map[string]McpServer
 
 // UnmarshalJSON implements json.Unmarshaler.

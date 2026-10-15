@@ -9,7 +9,7 @@
         "Authorization": "Bearer ${secret:GITHUB_TOKEN}"
       }
     },
-    "local-db": {
+    "localdb": {
       "command": "npx",
       "args": [
         "-y",
