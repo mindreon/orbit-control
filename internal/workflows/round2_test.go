@@ -15,6 +15,7 @@ import (
 
 	"github.com/mindreon/orbit-control/internal/contract"
 	w "github.com/mindreon/orbit-control/internal/workflows"
+	"github.com/mindreon/orbit-control/internal/workflows/agentrun"
 	"github.com/mindreon/orbit-control/internal/workflows/sandboxlease"
 	"github.com/mindreon/orbit-control/internal/workflows/session"
 )
@@ -35,12 +36,26 @@ func TestSeparatedContextOverflowsCanBothCompact(t *testing.T) {
 		}
 		return completed(in), nil
 	}
-	h.execute(t, "succeeded", "")
 	var compactSeqs []int
-	for _, in := range h.segments {
-		if in.Input.Kind == "compact" {
-			compactSeqs = append(compactSeqs, in.Seq)
+	for {
+		h.env.ExecuteWorkflow(agentrun.Run, h.input)
+		for _, in := range h.segments {
+			if in.Input.Kind == "compact" {
+				compactSeqs = append(compactSeqs, in.Seq)
+			}
 		}
+		can, ok := errors.AsType[*workflow.ContinueAsNewError](h.env.GetWorkflowError())
+		if !ok {
+			require.NoError(t, h.env.GetWorkflowError())
+			require.Len(t, h.finished, 1)
+			require.Equal(t, "succeeded", h.finished[0].Status)
+			break
+		}
+		var in w.RunInput
+		require.NoError(t, converter.GetDefaultDataConverter().FromPayloads(can.Input, &in))
+		next := newHarness(t)
+		next.input, next.run = in, h.run
+		h = next
 	}
 	require.Equal(t, []int{1, 4}, compactSeqs)
 }

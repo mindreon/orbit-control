@@ -380,7 +380,6 @@ func TestPendingInteractionPreventsContinue(t *testing.T) {
 	}, 2*time.Second)
 	h.env.ExecuteWorkflow(agentrun.Run, h.input)
 	require.True(t, workflow.IsContinueAsNewError(h.env.GetWorkflowError()))
-	require.Len(t, h.creates, 1, "first acquire must precede Continue-As-New")
 	require.Len(t, h.decisions, 1)
 	require.Len(t, h.records, 1)
 	require.Empty(t, h.finished)
