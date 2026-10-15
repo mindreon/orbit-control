@@ -68,12 +68,24 @@ func (f *fixtures) segment(ctx context.Context, in contract.SegmentInput) (contr
 		}
 	case "cancel", "pause", "steer":
 		if n == 1 {
-			timer := time.NewTimer(time.Second)
+			duration := time.Second
+			if name == "cancel" {
+				duration = time.Minute
+			}
+			timer := time.NewTimer(duration)
 			defer timer.Stop()
-			select {
-			case <-ctx.Done():
-				return res, ctx.Err()
-			case <-timer.C:
+			heartbeat := time.NewTicker(50 * time.Millisecond)
+			defer heartbeat.Stop()
+		waiting:
+			for {
+				select {
+				case <-heartbeat.C:
+					activity.RecordHeartbeat(ctx)
+				case <-ctx.Done():
+					return res, ctx.Err()
+				case <-timer.C:
+					break waiting
+				}
 			}
 			if in.RunId == "pause" {
 				res.Status = "yielded"
@@ -96,19 +108,10 @@ func (f *fixtures) segment(ctx context.Context, in contract.SegmentInput) (contr
 	return res, nil
 }
 func registerFixtures(reg worker.Worker, f *fixtures) {
-	reg.RegisterWorkflowWithOptions(
-		agentrun.Run,
-		workflow.RegisterOptions{Name: w.AgentRunWorkflow},
-	)
+	reg.RegisterWorkflowWithOptions(agentrun.Run, workflow.RegisterOptions{Name: w.AgentRunWorkflow})
 	reg.RegisterWorkflowWithOptions(session.Run, workflow.RegisterOptions{Name: w.SessionWorkflow})
-	reg.RegisterWorkflowWithOptions(
-		sandboxlease.Run,
-		workflow.RegisterOptions{Name: w.SandboxLeaseWorkflow},
-	)
-	reg.RegisterActivityWithOptions(
-		f.segment,
-		activity.RegisterOptions{Name: contract.ActivityRunAgentSegment},
-	)
+	reg.RegisterWorkflowWithOptions(sandboxlease.Run, workflow.RegisterOptions{Name: w.SandboxLeaseWorkflow})
+	reg.RegisterActivityWithOptions(f.segment, activity.RegisterOptions{Name: contract.ActivityRunAgentSegment})
 	reg.RegisterActivityWithOptions(func(context.Context, w.PrepareInput) (w.PrepareOutput, error) {
 		return w.PrepareOutput{}, nil
 	}, activity.RegisterOptions{Name: "PrepareRun"})
@@ -162,37 +165,25 @@ func registerFixtures(reg worker.Worker, f *fixtures) {
 			Provider: "opensandbox", SandboxId: "fixture", ExpiresAt: time.Now().Add(time.Hour)}
 	}
 	reg.RegisterActivityWithOptions(
-		func(context.Context, contract.SandboxAcquireInput) (
-			contract.SandboxLease,
-			error,
-		) {
+		func(context.Context, contract.SandboxAcquireInput) (contract.SandboxLease, error) {
 			return lease(), nil
 		},
 		activity.RegisterOptions{Name: contract.ActivitySandboxCreate},
 	)
 	reg.RegisterActivityWithOptions(
-		func(context.Context, contract.SandboxConfigureInput) (
-			contract.SandboxLease,
-			error,
-		) {
+		func(context.Context, contract.SandboxConfigureInput) (contract.SandboxLease, error) {
 			return lease(), nil
 		},
 		activity.RegisterOptions{Name: contract.ActivitySandboxConfigure},
 	)
 	reg.RegisterActivityWithOptions(
-		func(context.Context, contract.SandboxOpInput) (
-			contract.SandboxInspectResult,
-			error,
-		) {
+		func(context.Context, contract.SandboxOpInput) (contract.SandboxInspectResult, error) {
 			return contract.SandboxInspectResult{Exists: true}, nil
 		},
 		activity.RegisterOptions{Name: contract.ActivitySandboxInspect},
 	)
 	reg.RegisterActivityWithOptions(
-		func(context.Context, contract.SandboxOpInput) (
-			contract.SandboxSnapshotResult,
-			error,
-		) {
+		func(context.Context, contract.SandboxOpInput) (contract.SandboxSnapshotResult, error) {
 			return contract.SandboxSnapshotResult{SnapshotId: "snapshot"}, nil
 		},
 		activity.RegisterOptions{Name: contract.ActivitySandboxSnapshot},
@@ -241,9 +232,9 @@ func devClient(t *testing.T) client.Client {
 }
 func runInput(name string) w.RunInput {
 	limits := w.DefaultLimits(200000)
-	limits.RemindAfter = 100 * time.Millisecond
-	limits.EscalateAfter = 200 * time.Millisecond
-	limits.ExpireAfter = 400 * time.Millisecond
+	limits.RemindAfter = 2 * time.Second
+	limits.EscalateAfter = 4 * time.Second
+	limits.ExpireAfter = 6 * time.Second
 	return w.RunInput{
 		V:                  1,
 		TenantID:           "tenant",
@@ -271,10 +262,7 @@ func TestRecordHistories(t *testing.T) {
 	runWorker := worker.New(c, contract.TaskQueueCtl, worker.Options{})
 	registerFixtures(runWorker, f)
 	agent := worker.New(c, contract.TaskQueueAgentStandard, worker.Options{})
-	agent.RegisterActivityWithOptions(
-		f.segment,
-		activity.RegisterOptions{Name: contract.ActivityRunAgentSegment},
-	)
+	agent.RegisterActivityWithOptions(f.segment, activity.RegisterOptions{Name: contract.ActivityRunAgentSegment})
 	sandbox := worker.New(c, contract.TaskQueueSandbox, worker.Options{})
 	registerFixtures(sandbox, f)
 	for _, reg := range []worker.Worker{ctl, runWorker, agent, sandbox} {
@@ -293,16 +281,10 @@ func TestRecordHistories(t *testing.T) {
 		"sandbox",
 		"compact",
 	} {
-		t.Run(name, func(t *testing.T) {
-			recordRun(t, c, queue, name, f)
-		})
+		t.Run(name, func(t *testing.T) { recordRun(t, c, queue, name, f) })
 	}
-	t.Run("session", func(t *testing.T) {
-		recordSession(t, c, queue)
-	})
-	t.Run("lease", func(t *testing.T) {
-		recordLease(t, c, queue)
-	})
+	t.Run("session", func(t *testing.T) { recordSession(t, c, queue) })
+	t.Run("lease", func(t *testing.T) { recordLease(t, c, queue) })
 }
 func recordRun(t *testing.T, c client.Client, queue, name string, fixture *fixtures) {
 	in := runInput(name)
@@ -316,14 +298,7 @@ func recordRun(t *testing.T, c client.Client, queue, name string, fixture *fixtu
 	firstRunID := run.GetRunID()
 	switch name {
 	case "approval":
-		waitProgress(
-			t,
-			c,
-			run.GetID(),
-			func(p w.RunProgress) bool {
-				return p.PendingInteractionID != ""
-			},
-		)
+		waitProgress(t, c, run.GetID(), func(p w.RunProgress) bool { return p.PendingInteractionID != "" })
 		var out w.ResolveInteractionOutput
 		updateWorkflow(
 			t,
@@ -335,12 +310,8 @@ func recordRun(t *testing.T, c client.Client, queue, name string, fixture *fixtu
 				InteractionID: "approval",
 				ActorID:       "owner",
 				Decision: contract.Decision{
-					Kind: "tool_approval",
-					Choice: new(
-						contract.DecisionChoice(
-							"allow_once",
-						),
-					),
+					Kind:   "tool_approval",
+					Choice: new(contract.DecisionChoice("allow_once")),
 				},
 			},
 			&out,
@@ -352,28 +323,15 @@ func recordRun(t *testing.T, c client.Client, queue, name string, fixture *fixtu
 			return fixture.calls[in.RunID] > 0
 		}, 10*time.Second, 10*time.Millisecond)
 		if name == "cancel" {
-			require.NoError(
-				t,
-				c.SignalWorkflow(t.Context(), run.GetID(), "", w.Cancel, w.CancelInput{Reason: "user"}),
-			)
+			require.NoError(t, c.SignalWorkflow(t.Context(), run.GetID(), "", w.Cancel, w.CancelInput{Reason: "user"}))
 		}
 		if name == "pause" {
 			require.NoError(t, c.SignalWorkflow(t.Context(), run.GetID(), "", w.Pause, w.ActorInput{}))
-			waitProgress(t, c, run.GetID(), func(p w.RunProgress) bool {
-				return p.Status == "paused"
-			})
+			waitProgress(t, c, run.GetID(), func(p w.RunProgress) bool { return p.Status == "paused" })
 			require.NoError(t, c.SignalWorkflow(t.Context(), run.GetID(), "", w.Resume, w.ActorInput{}))
 		}
 		if name == "steer" {
-			updateWorkflow(
-				t,
-				c,
-				run.GetID(),
-				w.Steer,
-				"steer",
-				w.SteerInput{ContentRef: "t/tenant/runs/steer/steer/message"},
-				nil,
-			)
+			updateWorkflow(t, c, run.GetID(), w.Steer, "steer", w.SteerInput{ContentRef: "t/tenant/runs/steer/steer/message"}, nil)
 		}
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
@@ -448,6 +406,7 @@ func recordLease(t *testing.T, c client.Client, queue string) {
 	)
 	require.NoError(t, err)
 	ac := w.AcquireInput{
+		Provider:   "opensandbox",
 		RunID:      "lease-run",
 		SessionID:  "session",
 		Profile:    "default",
@@ -455,16 +414,7 @@ func recordLease(t *testing.T, c client.Client, queue string) {
 		SpecDigest: "digest",
 	}
 	updateWorkflow(t, c, run.GetID(), w.Acquire, "one", ac, nil)
-	require.NoError(
-		t,
-		c.SignalWorkflow(
-			t.Context(),
-			run.GetID(),
-			"",
-			w.Touch,
-			w.TouchInput{RunID: ac.RunID, InUse: false},
-		),
-	)
+	require.NoError(t, c.SignalWorkflow(t.Context(), run.GetID(), "", w.Touch, w.TouchInput{RunID: ac.RunID, InUse: false}))
 	require.Eventually(t, func() bool {
 		value, err := c.QueryWorkflow(t.Context(), run.GetID(), "", w.Lease)
 		if err != nil {
@@ -489,18 +439,9 @@ func save(t *testing.T, c client.Client, id, runID, name string) {
 	}
 	require.NotEmpty(t, history.Events)
 	replayer := worker.NewWorkflowReplayer()
-	replayer.RegisterWorkflowWithOptions(
-		agentrun.Run,
-		workflow.RegisterOptions{Name: w.AgentRunWorkflow},
-	)
-	replayer.RegisterWorkflowWithOptions(
-		session.Run,
-		workflow.RegisterOptions{Name: w.SessionWorkflow},
-	)
-	replayer.RegisterWorkflowWithOptions(
-		sandboxlease.Run,
-		workflow.RegisterOptions{Name: w.SandboxLeaseWorkflow},
-	)
+	replayer.RegisterWorkflowWithOptions(agentrun.Run, workflow.RegisterOptions{Name: w.AgentRunWorkflow})
+	replayer.RegisterWorkflowWithOptions(session.Run, workflow.RegisterOptions{Name: w.SessionWorkflow})
+	replayer.RegisterWorkflowWithOptions(sandboxlease.Run, workflow.RegisterOptions{Name: w.SandboxLeaseWorkflow})
 	require.NoError(t, replayer.ReplayWorkflowHistory(nil, history))
 	if *update {
 		raw, err := protojson.MarshalOptions{Indent: "  "}.Marshal(history)
