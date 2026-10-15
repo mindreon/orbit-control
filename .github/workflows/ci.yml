@@ -43,8 +43,11 @@ jobs:
           ALTER SCHEMA public OWNER TO orbit_owner;
           SQL
       - run: test -z "$(gofmt -l .)"
+      - run: bash scripts/check-style.sh
+      - run: bash scripts/check-workflows.sh
       - run: go vet ./...
       - run: go test -race -count=1 ./...
+      - run: go test -tags workflow_test_limits ./internal/workflows/... -count=1
       - name: Contract generation and cross-language fixture freshness
         run: |
           bash scripts/check-contracts-gen.sh

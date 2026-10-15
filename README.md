@@ -16,7 +16,10 @@ internal/tenancy/       tenants, memberships, groups and workspaces
 internal/policy/        centralized Authorizer and explicit built-in role matrix
 internal/assets/        immutable versions, bounded bundles, Ed25519 signatures
 internal/locks/         signed dependency resolution and per-member run locks
-internal/workflows/assetrelease/  ctl release Workflow, Activities and dispatcher
+internal/workflows/     deterministic session, run, lease and release Workflows
+internal/activities/    ctl projections, release Activities and dispatcher
+internal/sessions/      typed session/run/message/artifact resources and services
+internal/kernelapi/     capability-protected runtime HTTP API
 internal/audit/         RFC 8785 JCS / SHA-256 tenant hash chains
 internal/httpapi/       standard-library routes; OpenAPI correspondence test
 internal/market/snapshots/  preserved ModelScope data; gzip NDJSON import sources
@@ -237,6 +240,8 @@ gofmt -l .
 go vet ./...
 go test ./...
 ORBIT_REQUIRE_PG_TESTS=1 ORBIT_TEST_DATABASE_URL='postgres://postgres:...@127.0.0.1:55441/orbit?sslmode=disable' go test ./...
+bash scripts/check-style.sh
+bash scripts/check-workflows.sh
 bash scripts/check-contracts-gen.sh
 bash scripts/check-openapi.sh
 go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
@@ -463,3 +468,49 @@ uses only `ORBIT_WORKER_SERVICE_TOKEN_SHA256`. Run budgets default to
 `ORBIT_OBJECT_*` variables or the `ORBIT_S3_*` aliases. `orbit-admin seed-dev`
 uses `ORBIT_SEED_MODEL_BASE_URL`, `ORBIT_SEED_MODEL_API_KEY`, and
 `ORBIT_SEED_MODEL_NAME`; unset values select the local mock model.
+
+## Single-agent execution (WP6b)
+
+`orbit-control worker|all` also registers SessionWorkflow, AgentRunWorkflow,
+SandboxLeaseWorkflow and the ctl projection Activities. Runtime Activities stay
+on `agent.standard` and `sandbox`. The Go ctl worker uses `orbit_app`.
+`internal/archtest` enforces these package boundaries.
+
+Versions are pinned in go.mod: Temporal SDK v1.37.0, nats.go v1.47.0 and
+minio-go/v7 v7.0.95. Workflow validation uses workflowcheck v0.6.0; style checks
+use gci v0.13.7 and the repository AST checker (x/tools v0.49.0). Non-generated
+Go source uses keyed struct literals, separate statements, grouped imports and
+lines of at most 140 characters.
+
+The testsuite covers the 36 cases in WP6 §6.1 without external services.
+`TestReplay` replays all 12 committed histories recorded from a real Temporal
+server. `workflow_test_limits` lowers continuation thresholds to three;
+SideEffect records the threshold so those histories also replay in normal builds.
+To regenerate the histories, run
+`go test -tags 'temporal_integration,workflow_test_limits' ./internal/workflows/integration/... -run TestRecordHistories -update -timeout=25m`
+against an isolated namespace. `ORBIT_TEST_TEMPORAL_NAMESPACE` selects the namespace
+(default `orbit-v2-wp6b-histories`). The lease scenario waits the real 15-minute idle period.
+
+```sh
+# Required: disposable PG with the three roles, MinIO bucket, NATS and Temporal.
+# ORBIT_TEST_DATABASE_URL and ORBIT_REQUIRE_PG_TESTS as above.
+export ORBIT_TEST_TEMPORAL_ADDRESS=127.0.0.1:57233
+export ORBIT_TEST_OBJECT_ENDPOINT=127.0.0.1:59100
+export ORBIT_TEST_OBJECT_BUCKET=orbit-v2
+# Set ORBIT_TEST_OBJECT_ACCESS_KEY / ORBIT_TEST_OBJECT_SECRET_KEY securely.
+export ORBIT_TEST_NATS_URL=nats://127.0.0.1:54222
+go test -tags temporal_integration ./internal/workflows/integration/... -count=1 -timeout=25m
+```
+
+The real-service suite exercises API → Session → Run → PostgreSQL projections,
+MinIO input/artifacts and a NATS terminal event with scripted Go runtime
+Activities. Run it separately from the PG suite, which destructively migrates
+its disposable database. Register Keyword search attributes TenantId,
+WorkspaceId and RunKind in the test Temporal namespace before starting workers.
+
+The shared SegmentResult contract has no run/seq fields. RecordSegment instead
+checks the persisted input's tenant/run/session/member/seq and final content-ref
+boundary before projection, including retries. UsageItem has no model-profile
+ID: issuing credentials binds the actual profile UUID and pricing snapshot to
+the segment attempt/model. Usage uses that binding; ambiguous requests for two
+profiles of the same model in one attempt return MODEL_PROFILE_CONFLICT.
