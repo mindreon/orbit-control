@@ -27,6 +27,9 @@ func TestRoutesExactlyMatchOpenAPI(t *testing.T) {
 	expected := []string{}
 	for path, ops := range spec.Paths {
 		for method := range ops {
+			if ops["x-served-by"] == "stream-gateway" {
+				continue
+			}
 			if slices.Contains([]string{"get", "post", "patch", "delete", "put", "options", "head"}, method) {
 				expected = append(expected, strings.ToUpper(method)+" "+path)
 			}

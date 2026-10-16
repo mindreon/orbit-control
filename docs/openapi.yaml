@@ -1853,6 +1853,268 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/Decision'
+  /v1/runs/{r}/events:
+    x-served-by: stream-gateway
+    get:
+      operationId: streamRunsEvents
+      summary: Subscribe to runs events
+      description: |
+        SSE frames contain id (JetStream stream sequence), event (RunEvent.type),
+        and data (the original single-line RunEvent JSON). Starts with retry: 1000;
+        idle heartbeats are comments. Run streams send event: end with
+        data: {"reason":"run_finished"} after run.completed or run.failed,
+        then close after 500ms. Session streams never send end.
+        Last-Event-ID 0 means DeliverAll; positive cursors resume after that sequence.
+        Expired tokens close silently. Query token is a fallback; Bearer takes precedence.
+      security: []
+      parameters:
+        - name: r
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+        - $ref: '#/components/parameters/EventTypes'
+        - $ref: '#/components/parameters/EventExclude'
+        - name: Last-Event-ID
+          in: header
+          schema: {type: string, pattern: '^[0-9]+$'}
+        - name: Authorization
+          in: header
+          schema: {type: string}
+        - name: token
+          in: query
+          schema: {type: string}
+      responses:
+        '200':
+          description: Ordered event stream
+          content:
+            text/event-stream:
+              schema: {type: string}
+        '400':
+          description: INVALID_CURSOR
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: TOKEN_INVALID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: STREAM_FORBIDDEN
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: EVENT_CURSOR_EXPIRED
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: INVALID_FILTER
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: "TOO_MANY_STREAMS (Retry-After: 5)"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Stream unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/runs/{r}/history:
+    get:
+      operationId: getRunsHistory
+      summary: Read persisted runs events
+      description: |
+        Requires session.read. Ordered by stream_seq; excludes transient events.
+        Sink projection may lag. Reconnect SSE with resume_from to catch up.
+        An empty page returns the requested after as resume_from (default 0).
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - name: r
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+        - name: after
+          in: query
+          schema: {type: string, pattern: '^[0-9]+$', default: '0'}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 500, default: 200}
+        - $ref: '#/components/parameters/EventTypes'
+        - $ref: '#/components/parameters/EventExclude'
+      responses:
+        '200':
+          description: Persisted event page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunEventPage'
+        '400':
+          description: Invalid cursor or limit
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Session or run not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: INVALID_FILTER
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/sessions/{s}/events:
+    x-served-by: stream-gateway
+    get:
+      operationId: streamSessionsEvents
+      summary: Subscribe to sessions events
+      description: |
+        SSE frames contain id (JetStream stream sequence), event (RunEvent.type),
+        and data (the original single-line RunEvent JSON). Starts with retry: 1000;
+        idle heartbeats are comments. Run streams send event: end with
+        data: {"reason":"run_finished"} after run.completed or run.failed,
+        then close after 500ms. Session streams never send end.
+        Last-Event-ID 0 means DeliverAll; positive cursors resume after that sequence.
+        Expired tokens close silently. Query token is a fallback; Bearer takes precedence.
+      security: []
+      parameters:
+        - name: s
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+        - $ref: '#/components/parameters/EventTypes'
+        - $ref: '#/components/parameters/EventExclude'
+        - name: Last-Event-ID
+          in: header
+          schema: {type: string, pattern: '^[0-9]+$'}
+        - name: Authorization
+          in: header
+          schema: {type: string}
+        - name: token
+          in: query
+          schema: {type: string}
+      responses:
+        '200':
+          description: Ordered event stream
+          content:
+            text/event-stream:
+              schema: {type: string}
+        '400':
+          description: INVALID_CURSOR
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: TOKEN_INVALID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: STREAM_FORBIDDEN
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: EVENT_CURSOR_EXPIRED
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: INVALID_FILTER
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: "TOO_MANY_STREAMS (Retry-After: 5)"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Stream unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /v1/sessions/{s}/history:
+    get:
+      operationId: getSessionsHistory
+      summary: Read persisted sessions events
+      description: |
+        Requires session.read. Ordered by stream_seq; excludes transient events.
+        Sink projection may lag. Reconnect SSE with resume_from to catch up.
+        An empty page returns the requested after as resume_from (default 0).
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - name: s
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+        - name: after
+          in: query
+          schema: {type: string, pattern: '^[0-9]+$', default: '0'}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 500, default: 200}
+        - $ref: '#/components/parameters/EventTypes'
+        - $ref: '#/components/parameters/EventExclude'
+      responses:
+        '200':
+          description: Persisted event page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunEventPage'
+        '400':
+          description: Invalid cursor or limit
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Session or run not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: INVALID_FILTER
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 components:
   securitySchemes:
     bearerAuth:
@@ -1860,6 +2122,16 @@ components:
       scheme: bearer
       description: OIDC/dev JWT or orbit_ API key; selected tenant requires active membership.
   parameters:
+    EventTypes:
+      name: types
+      in: query
+      description: Comma-separated EventType allowlist; mutually exclusive with exclude.
+      schema: {type: string}
+    EventExclude:
+      name: exclude
+      in: query
+      description: Comma-separated EventType denylist; mutually exclusive with types.
+      schema: {type: string}
     Tenant:
       name: X-Orbit-Tenant
       in: header
@@ -1931,6 +2203,22 @@ components:
           schema:
             $ref: '#/components/schemas/Workspace'
   schemas:
+    RunEvent:
+      $ref: '../contract/v2/schema/run_event.json#/$defs/RunEvent'
+    RunEventPage:
+      type: object
+      required: [items, resume_from]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RunEvent'
+        next_cursor:
+          type: string
+          pattern: '^[0-9]+$'
+        resume_from:
+          type: string
+          pattern: '^[0-9]+$'
     AssetInput:
       type: object
       additionalProperties: false

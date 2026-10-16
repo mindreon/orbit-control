@@ -1311,7 +1311,9 @@ type FinalMessage struct {
 	// Object store reference of the full content.
 	ContentRef *string `json:"content_ref,omitempty,omitzero" yaml:"content_ref,omitempty" mapstructure:"content_ref,omitempty"`
 
-	// Identifier of the message, stable across retries.
+	// Identifier of the message, stable across retries. It is uuid5(NAMESPACE_URL,
+	// "orbit:message:<run>/<member>/<seq>") (without k), used as the messages table
+	// id; it differs from the streamed message.final id (with k, see run_event.json).
 	MessageId string `json:"message_id" yaml:"message_id" mapstructure:"message_id"`
 
 	// Leading part of the content for notifications and previews.

@@ -182,7 +182,7 @@
         "message_id": {
           "type": "string",
           "minLength": 1,
-          "description": "Identifier of the message, stable across retries.",
+          "description": "Identifier of the message, stable across retries. It is uuid5(NAMESPACE_URL, \"orbit:message:<run>/<member>/<seq>\") (without k), used as the messages table id; it differs from the streamed message.final id (with k, see run_event.json).",
           "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$"
         },
         "content_ref": {
