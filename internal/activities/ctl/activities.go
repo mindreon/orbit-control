@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"expvar"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -23,7 +25,10 @@ import (
 	w "github.com/mindreon/orbit-control/internal/workflows"
 )
 
+var publishFailed = expvar.NewInt("ctl_publish_failed_total")
+
 type Activities struct {
+	Logger          *slog.Logger
 	SandboxProvider contract.SandboxProvider
 	DB              *db.DB
 	Obj             objstore.ObjectStore
@@ -70,6 +75,7 @@ func (a *Activities) change(ctx context.Context, in w.RunOp, fn func(context.Con
  WHERE tenant_id=$1
  AND run_id=$2
  AND operation=$3
+ AND published_at IS NULL
  ORDER BY event_id`, in.TenantID, in.RunID, in.EventN)
 			if err != nil {
 				return err
@@ -98,12 +104,28 @@ func (a *Activities) change(ctx context.Context, in w.RunOp, fn func(context.Con
 			return err
 		}
 		if a.NATS != nil {
-			if err = a.NATS.Publish(ctx, w.EventSubject(in.TenantID, in.RunID), m.Id, raw); err != nil {
+			if err = a.NATS.Publish(ctx, w.EventSubject(in.TenantID, in.SessionID, in.RunID), m.Id, raw); err != nil {
+				publishFailed.Add(1)
+				a.logOutboxFailure(ctx, "control event publish failed", err)
+				continue
+			}
+			if err = a.DB.WithTenant(ctx, in.TenantID, func(tx pgx.Tx) error {
+				_, err := tx.Exec(ctx, `UPDATE control_events SET published_at=now()
+ WHERE tenant_id=$1 AND run_id=$2 AND event_id=$3 AND published_at IS NULL`, in.TenantID, in.RunID, m.Id)
 				return err
+			}); err != nil {
+				a.logOutboxFailure(ctx, "control event publish marker failed", err)
 			}
 		}
 	}
 	return nil
+}
+func (a *Activities) logOutboxFailure(ctx context.Context, message string, err error) {
+	logger := a.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.WarnContext(ctx, message, "error_type", fmt.Sprintf("%T", err))
 }
 func runActor(ctx context.Context, tx pgx.Tx, in w.RunOp) (auth.Principal, error) {
 	var p auth.Principal

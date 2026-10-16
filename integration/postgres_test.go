@@ -513,6 +513,8 @@ func testHTTP(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		KeyFile:           t.TempDir() + "/signing.key",
 		PersonalTenants:   true,
 		CapabilityKeyFile: t.TempDir() + "/capability.key",
+		StreamKeyFile:     t.TempDir() + "/stream.key",
+		StreamKeyID:       "test",
 		CapabilityKeyID:   "1",
 		SecretsKeyVersion: 1,
 		SecretsKEKs:       map[int][]byte{1: make([]byte, 32)},

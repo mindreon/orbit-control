@@ -199,35 +199,3 @@ func (s *CapabilitySigner) VerifyCapability(token string) (CapabilityClaims, err
 	}
 	return c, nil
 }
-
-type StreamClaims struct {
-	jwt.RegisteredClaims
-	TenantID  string `json:"tenant_id"`
-	RunID     string `json:"run_id"`
-	SessionID string `json:"session_id"`
-}
-
-func (s *Signer) IssueStream(tenant, run, session string) (string, error) {
-	if !ids.Valid(tenant) || !ids.Valid(run) || !ids.Valid(session) {
-		return "", fmt.Errorf("invalid stream identity")
-	}
-	return jwt.NewWithClaims(jwt.SigningMethodEdDSA,
-		StreamClaims{RegisteredClaims: registered("orbit-stream", "run:"+run, "stream", 15*time.Minute),
-			TenantID:  tenant,
-			RunID:     run,
-			SessionID: session}).
-		SignedString(s.key)
-}
-func (s *Signer) VerifyStream(token string) (StreamClaims, error) {
-	var c StreamClaims
-	_, err := jwt.ParseWithClaims(
-		token,
-		&c,
-		func(t *jwt.Token) (any, error) { return s.key.Public(), nil },
-		jwt.WithValidMethods([]string{"EdDSA"}),
-		jwt.WithIssuer("orbit-stream"),
-		jwt.WithAudience("stream"),
-		jwt.WithExpirationRequired(),
-	)
-	return c, err
-}

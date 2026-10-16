@@ -296,7 +296,7 @@ func (h *Handler) submitDelivery(
 			}
 			return mapped
 		}
-		token, e := h.Auth.Signer.IssueStream(tenant, runID, s.ID)
+		token, e := h.issueRunStream(ctx, runID)
 		if e != nil {
 			return e
 		}

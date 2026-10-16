@@ -283,7 +283,8 @@ func TestRecordHistories(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) { recordRun(t, c, queue, name, f) })
 	}
-	t.Run("session", func(t *testing.T) { recordSession(t, c, queue) })
+	t.Run("session", func(t *testing.T) { recordSession(t, c, queue, "session") })
+	t.Run("session-subject", func(t *testing.T) { recordSession(t, c, queue, "session-subject") })
 	t.Run("lease", func(t *testing.T) { recordLease(t, c, queue) })
 	for _, archived := range []bool{false, true} {
 		name := "lease-maintenance-can"
@@ -367,23 +368,24 @@ func updateWorkflow(t *testing.T, c client.Client, id, name, key string, in, out
 	require.NoError(t, err)
 	require.NoError(t, handle.Get(t.Context(), out))
 }
-func recordSession(t *testing.T, c client.Client, queue string) {
+func recordSession(t *testing.T, c client.Client, queue, name string) {
+	sessionID := queue + ":" + name
 	run, err := c.ExecuteWorkflow(
 		t.Context(),
-		client.StartWorkflowOptions{ID: queue + ":session", TaskQueue: queue},
+		client.StartWorkflowOptions{ID: sessionID, TaskQueue: queue},
 		w.SessionWorkflow,
 		w.SessionInput{
 			V:           1,
 			TenantID:    "tenant",
 			WorkspaceID: "workspace",
-			SessionID:   queue,
+			SessionID:   sessionID,
 			Policy:      "queue",
 		},
 	)
 	require.NoError(t, err)
 	for _, name := range []string{"pause", "complete"} {
 		in := runInput(name)
-		msg := w.SubmitMessageInput{V: 1, RunID: queue + name, Lock: in.Lock, BudgetMillicredits: in.BudgetMillicredits,
+		msg := w.SubmitMessageInput{V: 1, RunID: sessionID + name, Lock: in.Lock, BudgetMillicredits: in.BudgetMillicredits,
 			Limits: in.Limits, Sandbox: in.Sandbox}
 		updateWorkflow(t, c, run.GetID(), w.SubmitMessage, name, msg, nil)
 	}
@@ -396,13 +398,13 @@ func recordSession(t *testing.T, c client.Client, queue string) {
 		return value.Get(&state) == nil && state.ActiveRunID == "" && state.QueueLen == 0
 	}, 15*time.Second, 20*time.Millisecond)
 	for _, name := range []string{"pause", "complete"} {
-		child, err := c.DescribeWorkflowExecution(t.Context(), w.AgentRunWorkflowID("tenant", queue+name), "")
+		child, err := c.DescribeWorkflowExecution(t.Context(), w.AgentRunWorkflowID("tenant", sessionID+name), "")
 		require.NoError(t, err)
 		require.Equal(t, enums.WORKFLOW_EXECUTION_STATUS_COMPLETED, child.WorkflowExecutionInfo.Status)
 	}
 	require.NoError(t, c.SignalWorkflow(t.Context(), run.GetID(), "", w.Archive, w.ArchiveInput{}))
 	require.NoError(t, run.Get(t.Context(), nil))
-	save(t, c, run.GetID(), run.GetRunID(), "session")
+	save(t, c, run.GetID(), run.GetRunID(), name)
 }
 func recordLease(t *testing.T, c client.Client, queue string) {
 	run, err := c.ExecuteWorkflow(

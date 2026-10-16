@@ -39,8 +39,8 @@ func IsolationKey(tenant, session string) string {
 func AgentSessionKey(session, digest string) string {
 	return "sess:" + session + ":" + strings.TrimPrefix(digest, "sha256:")[:12]
 }
-func EventSubject(tenant, run string) string {
-	return "run." + tenant + "." + run
+func EventSubject(tenant, session, run string) string {
+	return "run." + tenant + "." + session + "." + run
 }
 func Terminal(status string) bool {
 	switch status {

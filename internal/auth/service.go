@@ -29,6 +29,7 @@ type Service struct {
 	DB         *db.DB
 	Signer     *Signer
 	Capability *CapabilitySigner
+	Stream     *StreamSigner
 	Replay     httpx.ReplayKeys
 	Config     config.Config
 	verifier   *oidc.IDTokenVerifier
@@ -53,11 +54,22 @@ func New(ctx context.Context, d *db.DB, c config.Config, l *slog.Logger) (*Servi
 	if e != nil {
 		return nil, e
 	}
+	streamKey, e := LoadSigner(c.StreamKeyFile)
+	if e != nil {
+		return nil, fmt.Errorf("ORBIT_STREAM_KEY_FILE: %w", e)
+	}
+	if streamKey.key.Equal(s.key) || streamKey.key.Equal(capKey.key) {
+		return nil, fmt.Errorf("ORBIT_STREAM_KEY_FILE must use a different key from authentication keys")
+	}
+	stream, e := NewStreamSigner(streamKey.key, c.StreamKeyID, c.StreamPublicKeys)
+	if e != nil {
+		return nil, e
+	}
 	replay, e := httpx.NewReplayKeys(c.SecretsKeyVersion, c.SecretsKEKs)
 	if e != nil {
 		return nil, e
 	}
-	a := &Service{DB: d, Signer: s, Capability: capability, Replay: replay, Config: c, Logger: l}
+	a := &Service{DB: d, Signer: s, Capability: capability, Stream: stream, Replay: replay, Config: c, Logger: l}
 	if c.AuthMode == "oidc" {
 		p, e := oidc.NewProvider(ctx, c.Issuer)
 		if e != nil {

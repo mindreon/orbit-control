@@ -216,10 +216,14 @@ func archiveLease(ctx workflow.Context, in w.SessionInput) error {
 	}
 	return err
 }
-func (s *sessionWorkflow) runInput(msg w.SubmitMessageInput) w.RunInput {
+func (s *sessionWorkflow) runInput(ctx workflow.Context, msg w.SubmitMessageInput) w.RunInput {
+	subject := w.EventSubject(s.in.TenantID, s.in.SessionID, msg.RunID)
+	if workflow.GetVersion(ctx, "event-subject-session", workflow.DefaultVersion, 1) == workflow.DefaultVersion {
+		subject = "run." + s.in.TenantID + "." + msg.RunID
+	}
 	return w.RunInput{V: 1, TenantID: s.in.TenantID, WorkspaceID: s.in.WorkspaceID, SessionID: s.in.SessionID,
 		RunID: msg.RunID, PrincipalID: msg.PrincipalID, MessageID: msg.MessageID, Member: "main", Lock: msg.Lock,
-		AgentSessionKey: w.AgentSessionKey(s.in.SessionID, msg.Lock.Digest), EventSubject: w.EventSubject(s.in.TenantID, msg.RunID),
+		AgentSessionKey: w.AgentSessionKey(s.in.SessionID, msg.Lock.Digest), EventSubject: subject,
 		InputRef: msg.InputRef, BudgetMillicredits: msg.BudgetMillicredits, Limits: msg.Limits, Sandbox: msg.Sandbox, Tier: "standard"}
 }
 func (s *sessionWorkflow) startNext(ctx workflow.Context) {
@@ -236,7 +240,7 @@ func (s *sessionWorkflow) startNext(ctx workflow.Context) {
 			temporal.NewSearchAttributeKeyKeyword("WorkspaceId").ValueSet(s.in.WorkspaceID),
 			temporal.NewSearchAttributeKeyKeyword("RunKind").ValueSet("agent")),
 	})
-	s.child = workflow.ExecuteChildWorkflow(cc, w.AgentRunWorkflow, s.runInput(msg))
+	s.child = workflow.ExecuteChildWorkflow(cc, w.AgentRunWorkflow, s.runInput(ctx, msg))
 	future := s.child
 	workflow.Go(ctx, func(ctx workflow.Context) { s.waitChild(ctx, future, msg.RunID) })
 }

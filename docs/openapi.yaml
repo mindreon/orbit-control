@@ -1711,6 +1711,7 @@ paths:
     get:
       operationId: getStreamToken
       summary: Issue a short-lived run stream token
+      description: Requires session.read on the active session. Issues a dedicated Ed25519 token with kid, scope=run and a 900 second lifetime.
       parameters:
         - $ref: '#/components/parameters/Tenant'
         - name: r
@@ -1721,17 +1722,49 @@ paths:
             format: uuid
       responses:
         "200":
-          description: Successful response
+          description: Stream token and lifetime in seconds
           content:
             application/json:
               schema:
                 type: object
+                required: [stream_token, expires_in]
                 properties:
                   stream_token:
                     type: string
                   expires_in:
                     type: integer
                     format: int64
+                    enum: [900]
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/sessions/{s}/stream-token:
+    get:
+      operationId: getSessionStreamToken
+      summary: Issue a short-lived session stream token
+      description: Requires session.read on the active session. Issues a dedicated Ed25519 token with kid, scope=session and a 900 second lifetime.
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - name: s
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Stream token and lifetime in seconds
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [stream_token, expires_in]
+                properties:
+                  stream_token:
+                    type: string
+                  expires_in:
+                    type: integer
+                    format: int64
+                    enum: [900]
         default:
           $ref: '#/components/responses/Error'
   /v1/interactions:

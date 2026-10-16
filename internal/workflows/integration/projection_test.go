@@ -183,7 +183,7 @@ func (f *projectionFixture) configureAPI(t *testing.T) {
 	entry := lock.Entries[0]
 	entry.Files = nil
 	lock.Entries[0] = entry
-	c := config.Config{AuthMode: "dev", KeyFile: t.TempDir() + "/auth.key", CapabilityKeyFile: t.TempDir() + "/cap.key",
+	c := config.Config{AuthMode: "dev", KeyFile: t.TempDir() + "/auth.key", CapabilityKeyFile: t.TempDir() + "/cap.key", StreamKeyFile: t.TempDir() + "/stream.key", StreamKeyID: "test",
 		CapabilityKeyID: "integration", SecretsKeyVersion: 1, SecretsKEKs: map[int][]byte{1: make([]byte, 32)}}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	a, err := auth.New(t.Context(), f.db, c, logger)
@@ -213,10 +213,10 @@ func (f *projectionFixture) request(t *testing.T, method, path string, body any)
 }
 func TestAPIToRunProjection(t *testing.T) {
 	f := newProjectionFixture(t)
-	bus, err := natsx.Connect(testEnv(t, "ORBIT_TEST_NATS_URL"))
+	bus, err := natsx.Connect(testEnv(t, "ORBIT_TEST_NATS_URL"), "orbit-control-test")
 	require.NoError(t, err)
 	t.Cleanup(bus.Close)
-	require.NoError(t, bus.EnsureRunEventsStream())
+	require.NoError(t, bus.EnsureRunEventsStream(t.Context(), 0))
 	sub, err := bus.Conn.SubscribeSync("run." + f.tenant + ".>")
 	require.NoError(t, err)
 	defer sub.Unsubscribe()

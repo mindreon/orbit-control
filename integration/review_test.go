@@ -62,8 +62,8 @@ func testPartitionTimeZone(t *testing.T, admin *pgx.Conn) {
 
 func testUsageAndEvents(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	ctx := t.Context()
-	var tenant, run string
-	if err := admin.QueryRow(ctx, "SELECT tenant_id::text,id::text FROM runs LIMIT 1").Scan(&tenant, &run); err != nil {
+	var tenant, run, session string
+	if err := admin.QueryRow(ctx, "SELECT tenant_id::text,id::text,session_id::text FROM runs LIMIT 1").Scan(&tenant, &run, &session); err != nil {
 		t.Fatal(err)
 	}
 	key := ids.New()
@@ -142,14 +142,14 @@ func testUsageAndEvents(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	event := run + ":leader:1:1:1"
 	if err := d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
 		for range 2 {
-			if _, err := tx.Exec(ctx, `INSERT INTO run_events(tenant_id,run_id,seq,event_id,type,payload,ts)
- VALUES($1,$2,1,$3,'test','{}',$4)
- ON CONFLICT DO NOTHING`, tenant, run, event, at); err != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO run_events(tenant_id,run_id,session_id,member,segment,attempt,stream_seq,event_id,type,payload,ts)
+ VALUES($1,$2,$5,'leader',1,1,1,$3,'test','{}',$4)
+ ON CONFLICT DO NOTHING`, tenant, run, event, at, session); err != nil {
 				return err
 			}
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO run_events(tenant_id,run_id,seq,event_id,type,payload,ts)
- VALUES($1,$2,1,$3,'test','{}',$4)`, tenant, run, run+":follower:1:1:1", at); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO run_events(tenant_id,run_id,session_id,member,segment,attempt,stream_seq,event_id,type,payload,ts)
+ VALUES($1,$2,$5,'follower',1,1,2,$3,'test','{}',$4)`, tenant, run, run+":follower:1:1:1", at, session); err != nil {
 			return err
 		}
 		return tx.QueryRow(ctx, "SELECT count(*) FROM run_events WHERE event_id=$1", event).Scan(&n)
@@ -157,8 +157,8 @@ func testUsageAndEvents(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		t.Fatal("event replay duplicated", n, err)
 	}
 	if err := d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `INSERT INTO run_events(tenant_id,run_id,seq,event_id,type,payload)
- VALUES($1,$2,1,$3,'test','{}')`, tenant, run, ids.New())
+		_, err := tx.Exec(ctx, `INSERT INTO run_events(tenant_id,run_id,session_id,member,segment,attempt,stream_seq,event_id,type,payload)
+ VALUES($1,$2,$4,'leader',1,1,3,$3,'test','{}')`, tenant, run, ids.New(), session)
 		return err
 	}); err == nil {
 		t.Fatal("event timestamp defaulted")
@@ -237,6 +237,8 @@ func testJITProvisioning(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		PersonalTenants:   true,
 		KeyFile:           t.TempDir() + "/dev.key",
 		CapabilityKeyFile: t.TempDir() + "/capability.key",
+		StreamKeyFile:     t.TempDir() + "/stream.key",
+		StreamKeyID:       "test",
 		CapabilityKeyID:   "1",
 		SecretsKeyVersion: 1,
 		SecretsKEKs:       map[int][]byte{1: make([]byte, 32)},

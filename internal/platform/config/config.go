@@ -6,11 +6,15 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
 
 type Config struct {
+	StreamKeyFile, StreamKeyID                                                                                string
+	StreamPublicKeys                                                                                          map[string][]byte
+	NATSStreamMaxBytes                                                                                        int64
 	SandboxProvider                                                                                           string
 	InternalAddr, WorkerServiceTokenSHA256, NATSURL, Environment                                              string
 	DefaultRunBudget                                                                                          int64
@@ -57,6 +61,9 @@ func Load() (Config, error) {
 	}
 	c.PublicOrigin = os.Getenv("ORBIT_PUBLIC_ORIGIN")
 	if err := c.loadCapabilityEnvironment(); err != nil {
+		return c, err
+	}
+	if err := c.loadStreamEnvironment(); err != nil {
 		return c, err
 	}
 	if err := c.loadSecretsEnvironment(); err != nil {
@@ -106,7 +113,7 @@ func (c Config) ValidateAPI() error {
 	if c.KeyFile == "" {
 		return fmt.Errorf("ORBIT_SIGNING_KEY_FILE is required")
 	}
-	return nil
+	return c.validateStreamKeys()
 }
 func (c Config) ValidateAdmin() error {
 	return validateURL("ORBIT_ADMIN_DATABASE_URL", c.AdminDatabaseURL)
@@ -144,6 +151,9 @@ func (c Config) ValidateAssets() error {
 		if v.value == "" {
 			return fmt.Errorf("%s is required", v.name)
 		}
+	}
+	if err := c.validateStreamKeys(); err != nil {
+		return err
 	}
 	if c.AssetKeyFile == c.KeyFile || c.AssetKeyFile == c.CapabilityKeyFile {
 		return fmt.Errorf("ORBIT_ASSET_SIGNING_KEY_FILE must differ from authentication signing keys")
@@ -216,6 +226,14 @@ func (c *Config) loadRunEnvironment() error {
 			return fmt.Errorf("ORBIT_DEFAULT_RUN_BUDGET_MILLICREDITS must be a positive safe integer")
 		}
 		c.DefaultRunBudget = n
+	}
+	c.NATSStreamMaxBytes = 0
+	if value := os.Getenv("ORBIT_NATS_STREAM_MAX_BYTES"); value != "" {
+		n, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || n < 1 {
+			return fmt.Errorf("ORBIT_NATS_STREAM_MAX_BYTES must be positive")
+		}
+		c.NATSStreamMaxBytes = n
 	}
 	c.AssetUploadConcurrency = 2
 	if value := os.Getenv("ORBIT_ASSET_UPLOAD_CONCURRENCY"); value != "" {
@@ -349,6 +367,51 @@ func (c *Config) validateOrigins() error {
 			u.Fragment != "" ||
 			u.User != nil {
 			return fmt.Errorf("ORBIT_PUBLIC_ORIGIN / ORBIT_CORS_ORIGINS must contain exact HTTP origins")
+		}
+	}
+	return nil
+}
+
+func (c *Config) loadStreamEnvironment() error {
+	c.StreamKeyFile = env("ORBIT_STREAM_KEY_FILE", ".orbit-data/stream.key")
+	c.StreamKeyID = env("ORBIT_STREAM_KEY_ID", "1")
+	c.StreamPublicKeys = map[string][]byte{}
+	for pair := range strings.SplitSeq(os.Getenv("ORBIT_STREAM_PUBLIC_KEYS"), ",") {
+		if pair == "" {
+			continue
+		}
+		id, encoded, ok := strings.Cut(pair, ":")
+		key, err := base64.StdEncoding.DecodeString(encoded)
+		if !ok || id == "" || err != nil || len(key) != 32 || c.StreamPublicKeys[id] != nil {
+			return fmt.Errorf("ORBIT_STREAM_PUBLIC_KEYS must contain distinct kid:base64 Ed25519 keys")
+		}
+		c.StreamPublicKeys[id] = key
+	}
+	return nil
+}
+func (c Config) validateStreamKeys() error {
+	if c.StreamKeyFile == "" || c.StreamKeyID == "" {
+		return fmt.Errorf("ORBIT_STREAM_KEY_FILE and ORBIT_STREAM_KEY_ID are required")
+	}
+	if strings.Contains(c.StreamKeyID, ":") {
+		return fmt.Errorf("ORBIT_STREAM_KEY_ID cannot contain a colon")
+	}
+	streamPath, err := filepath.Abs(c.StreamKeyFile)
+	if err != nil {
+		return fmt.Errorf("ORBIT_STREAM_KEY_FILE invalid path")
+	}
+	streamInfo, _ := os.Stat(streamPath)
+	for _, other := range []string{c.KeyFile, c.CapabilityKeyFile, c.AssetKeyFile} {
+		if other == "" {
+			continue
+		}
+		otherPath, err := filepath.Abs(other)
+		if err != nil {
+			return fmt.Errorf("invalid signing key path")
+		}
+		otherInfo, _ := os.Stat(otherPath)
+		if streamPath == otherPath || streamInfo != nil && otherInfo != nil && os.SameFile(streamInfo, otherInfo) {
+			return fmt.Errorf("ORBIT_STREAM_KEY_FILE must differ from authentication and asset signing key files")
 		}
 	}
 	return nil

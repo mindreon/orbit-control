@@ -84,7 +84,7 @@ func run() error {
 		return err
 	}
 	defer tc.Close()
-	bus, err := natsx.Connect(c.NATSURL)
+	bus, err := natsx.Connect(c.NATSURL, "orbit-control")
 	if err != nil {
 		return err
 	}
@@ -182,13 +182,13 @@ func startWorkers(
 	bus *natsx.Bus,
 ) (func(), error) {
 
-	if err := bus.EnsureRunEventsStream(); err != nil {
+	if err := bus.EnsureRunEventsStream(ctx, c.NATSStreamMaxBytes); err != nil {
 		return nil, err
 	}
 	worker := runworker.New(
 		tc,
 		&ctl.Activities{
-			DB: d, Obj: store, NATS: bus, Temporal: tc, Environment: c.Environment,
+			DB: d, Obj: store, NATS: bus, Temporal: tc, Environment: c.Environment, Logger: l,
 			SandboxProvider: contract.SandboxProvider(c.SandboxProvider),
 		},
 	)

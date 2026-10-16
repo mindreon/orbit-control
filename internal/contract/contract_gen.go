@@ -2257,7 +2257,9 @@ func (j *MessageAttachment) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// A chunk of assistant output. Not persisted.
+// A chunk of assistant output. Not persisted. message_id =
+// uuid5(orbit:message:<run>/<member>/<seq>/<k>), where k is the model call number
+// within the segment. Delta and final of the same message share this id.
 type MessageDelta struct {
 	// Text to append.
 	Delta string `json:"delta" yaml:"delta" mapstructure:"delta"`
@@ -2293,8 +2295,10 @@ func (j *MessageDelta) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// The complete assistant message. The projection stores it keyed by (run_id,
-// segment, message_id).
+// The complete assistant message, persisted in run_events. text may be empty when
+// only reasoning was visible. message_id =
+// uuid5(orbit:message:<run>/<member>/<seq>/<k>), where k is the model call number
+// within the segment. Delta and final of the same message share this id.
 type MessageFinal struct {
 	// Object store reference of the full content when it does not.
 	ContentRef *string `json:"content_ref,omitempty,omitzero" yaml:"content_ref,omitempty" mapstructure:"content_ref,omitempty"`
@@ -2791,7 +2795,9 @@ func (j *RailSpec) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// A chunk of the model's reasoning. Not persisted; tenants may disable it.
+// A chunk of model reasoning. Not persisted; clients may exclude it. message_id =
+// uuid5(orbit:message:<run>/<member>/<seq>/<k>), where k is the model call number
+// within the segment. Delta and final of the same message share this id.
 type ReasoningDelta struct {
 	// Text to append.
 	Delta string `json:"delta" yaml:"delta" mapstructure:"delta"`
@@ -3025,8 +3031,9 @@ func (j *RunCompleted) UnmarshalJSON(value []byte) error {
 }
 
 // Envelope orbit.event/v1 of every event of a run, published to NATS JetStream on
-// run.<tenant>.<run> and projected to run_events. A frame is at most 64 KiB;
-// larger content travels as a reference. data has the structure that type selects.
+// run.<tenant>.<session>.<run> and projected to run_events. A frame is at most 64
+// KiB; larger content travels as a reference. data has the structure that type
+// selects. SSE id and run_events.stream_seq are the JetStream stream sequence.
 type RunEvent struct {
 	// Activity attempt that produced the event; 0 outside any segment. A new attempt
 	// supersedes unfinished content of lower attempts of the same segment.
@@ -4370,7 +4377,7 @@ type SegmentInput struct {
 	// BudgetNotice corresponds to the JSON schema field "budget_notice".
 	BudgetNotice BudgetNotice `json:"budget_notice" yaml:"budget_notice" mapstructure:"budget_notice"`
 
-	// NATS subject the worker publishes run events to, run.<tenant>.<run>.
+	// NATS subject the worker publishes run events to, run.<tenant>.<session>.<run>.
 	EventSubject string `json:"event_subject" yaml:"event_subject" mapstructure:"event_subject"`
 
 	// Checkpoint version the segment must start from. The commit is a
@@ -4856,7 +4863,8 @@ func (j *SegmentSignal) UnmarshalJSON(value []byte) error {
 }
 
 // An attempt of a segment began. Consumers drop unfinished content of lower
-// attempts of the same segment.
+// attempts of the same segment. Finalized messages are retained; the final from an
+// older attempt takes precedence.
 type SegmentStarted struct {
 	// Checkpoint version the segment starts from.
 	ExpectedCheckpointVersion int `json:"expected_checkpoint_version" yaml:"expected_checkpoint_version" mapstructure:"expected_checkpoint_version"`

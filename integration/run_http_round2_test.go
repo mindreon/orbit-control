@@ -196,7 +196,7 @@ func testRunHTTPHandler(t *testing.T, d *db.DB, admin *pgx.Conn, tc handlerCase)
 		}
 		return err
 	})
-	c := config.Config{AuthMode: "dev", KeyFile: t.TempDir() + "/auth.key", CapabilityKeyFile: t.TempDir() + "/cap.key",
+	c := config.Config{AuthMode: "dev", KeyFile: t.TempDir() + "/auth.key", CapabilityKeyFile: t.TempDir() + "/cap.key", StreamKeyFile: t.TempDir() + "/stream.key", StreamKeyID: "test",
 		CapabilityKeyID: "test", SecretsKeyVersion: 1, SecretsKEKs: map[int][]byte{1: make([]byte, 32)}, DefaultRunBudget: 200000}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	a, err := auth.New(t.Context(), d, c, logger)

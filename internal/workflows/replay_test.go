@@ -25,7 +25,7 @@ import (
 func TestReplay(t *testing.T) {
 	paths, err := filepath.Glob("testdata/histories/*.json")
 	require.NoError(t, err)
-	require.Len(t, paths, 14, "all WP6 branches need real server histories")
+	require.Len(t, paths, 15, "WP6 branches and the WP7 subject change need real server histories")
 	for _, path := range paths {
 		t.Run(filepath.Base(path), func(t *testing.T) {
 			raw, err := os.ReadFile(path)
@@ -125,11 +125,16 @@ func assertHistoryScenario(t *testing.T, name string, history *historypb.History
 		require.Equal(t, segments[0].Seq, segments[1].Seq)
 	case "lease":
 		assertLeaseHistory(t, history)
-	case "session":
+	case "session", "session-subject":
 		children, archives := 0, 0
 		for _, event := range history.Events {
-			if event.GetStartChildWorkflowExecutionInitiatedEventAttributes() != nil {
+			if child := event.GetStartChildWorkflowExecutionInitiatedEventAttributes(); child != nil {
 				children++
+				if name == "session-subject" {
+					var input w.RunInput
+					require.NoError(t, converter.GetDefaultDataConverter().FromPayloads(child.Input, &input))
+					require.Equal(t, w.EventSubject(input.TenantID, input.SessionID, input.RunID), input.EventSubject)
+				}
 			}
 			if signal := event.GetSignalExternalWorkflowExecutionInitiatedEventAttributes(); signal != nil && signal.SignalName == w.Archive {
 				archives++

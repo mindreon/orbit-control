@@ -74,6 +74,10 @@ URLs are not logged. Configuration uses environment variables only.
 | `ORBIT_SIGNING_KEY_FILE` | Dev JWT key; `.orbit-data/signing.key`, generated Ed25519 PKCS8, mode 0600 |
 | `ORBIT_CAPABILITY_KEY_FILE` | Independent capability key; `.orbit-data/capability.key`, Ed25519 PKCS8, mode 0600 |
 | `ORBIT_CAPABILITY_KEY_ID` | Active capability JWT `kid`, default `1` |
+| `ORBIT_STREAM_KEY_FILE` | Independent stream JWT key; `.orbit-data/stream.key`, Ed25519 PKCS8, mode 0600; must differ from login, capability and asset keys |
+| `ORBIT_STREAM_KEY_ID` | Active stream JWT `kid`, default `1` |
+| `ORBIT_STREAM_PUBLIC_KEYS` | Stream verification rotation keys, comma-separated `kid:base64` raw 32-byte public keys |
+| `ORBIT_NATS_STREAM_MAX_BYTES` | Optional positive byte limit for `RUN_EVENTS`; unset means unlimited in dev |
 | `ORBIT_CAPABILITY_PUBLIC_KEYS` | Additional verification keys for rotation, comma-separated `kid:base64` raw 32-byte public keys |
 | `ORBIT_SECRETS_KEK` | Required base64 32-byte KEK; replay encryption is purpose-derived via HKDF-SHA256 |
 | `ORBIT_SECRETS_KEY_VERSION` | Positive active KEK version, default `1`; stored with each replay response |

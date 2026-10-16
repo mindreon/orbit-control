@@ -98,7 +98,7 @@
         "event_subject": {
           "type": "string",
           "minLength": 1,
-          "description": "NATS subject the worker publishes run events to, run.<tenant>.<run>."
+          "description": "NATS subject the worker publishes run events to, run.<tenant>.<session>.<run>."
         },
         "team": {
           "$ref": "#/$defs/TeamContext"

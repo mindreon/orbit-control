@@ -16,6 +16,8 @@ func TestDevBindGate(t *testing.T) {
 				KeyFile:           "key",
 				CapabilityKeyFile: "capability",
 				CapabilityKeyID:   "1",
+				StreamKeyFile:     "stream.key",
+				StreamKeyID:       "1",
 				SecretsKeyVersion: 1,
 				SecretsKEKs:       map[int][]byte{1: make([]byte, 32)},
 			}
@@ -121,6 +123,8 @@ func TestAssetWorkerConfiguration(t *testing.T) {
 		ObjectSecretKey:   "test",
 		AssetKeyFile:      "asset.key",
 		AssetKeyID:        "1",
+		StreamKeyFile:     "stream.key",
+		StreamKeyID:       "1",
 		KeyFile:           "auth.key",
 		CapabilityKeyFile: "cap.key",
 	}
@@ -130,5 +134,34 @@ func TestAssetWorkerConfiguration(t *testing.T) {
 	c.AssetKeyFile = c.KeyFile
 	if err := c.ValidateAssets(); err == nil {
 		t.Fatal("shared asset/auth key allowed")
+	}
+}
+
+func TestStreamConfiguration(t *testing.T) {
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = c.validateStreamKeys(); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{c.KeyFile, c.CapabilityKeyFile, c.AssetKeyFile, ".orbit-data/../.orbit-data/signing.key"} {
+		next := c
+		next.StreamKeyFile = path
+		if err := next.validateStreamKeys(); err == nil {
+			t.Fatal("shared stream key accepted")
+		}
+	}
+	for _, test := range []struct{ name, value string }{
+		{"ORBIT_STREAM_PUBLIC_KEYS", "kid:bad"},
+		{"ORBIT_STREAM_PUBLIC_KEYS", "kid:" + base64.StdEncoding.EncodeToString(make([]byte, 32)) + ",kid:" + base64.StdEncoding.EncodeToString(make([]byte, 32))},
+		{"ORBIT_NATS_STREAM_MAX_BYTES", "-1"},
+	} {
+		t.Run(test.name+test.value, func(t *testing.T) {
+			t.Setenv(test.name, test.value)
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), test.name) {
+				t.Fatal(err)
+			}
+		})
 	}
 }

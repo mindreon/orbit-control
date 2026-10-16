@@ -55,6 +55,8 @@ func TestOIDCDiscoveryVerificationAndJWKSCache(t *testing.T) {
 		ClientID:          "web",
 		KeyFile:           t.TempDir() + "/signing.key",
 		CapabilityKeyFile: t.TempDir() + "/capability.key",
+		StreamKeyFile:     t.TempDir() + "/stream.key",
+		StreamKeyID:       "test",
 		CapabilityKeyID:   "1",
 		SecretsKeyVersion: 1,
 		SecretsKEKs:       map[int][]byte{1: make([]byte, 32)},

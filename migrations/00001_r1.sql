@@ -79,9 +79,13 @@ CREATE TABLE run_segments (
   tenant_id uuid NOT NULL, run_id uuid NOT NULL, member text NOT NULL, seq int NOT NULL CHECK(seq>=1), status text NOT NULL CHECK(status IN ('running','completed','interrupted','yielded','failed')), checkpoint_version bigint, iterations int NOT NULL DEFAULT 0, usage jsonb NOT NULL DEFAULT '[]', model_profiles jsonb NOT NULL DEFAULT '{}', result_ref text, started_at timestamptz NOT NULL DEFAULT now(), ended_at timestamptz, PRIMARY KEY(tenant_id,run_id,member,seq), FOREIGN KEY(tenant_id,run_id) REFERENCES runs(tenant_id,id)
 );
 -- Event IDs are <run>:<member>:<seq>:<attempt>:<n>; ts is the immutable RunEvent timestamp.
--- Historical reads and cursors order by (ts,event_id); seq is not globally unique.
+-- Historical reads and SSE cursors order by the JetStream stream sequence.
 CREATE TABLE run_events (
-  tenant_id uuid NOT NULL, run_id uuid NOT NULL, seq bigint NOT NULL, event_id text NOT NULL, type text NOT NULL, payload jsonb NOT NULL, ts timestamptz NOT NULL, PRIMARY KEY(tenant_id,run_id,event_id,ts), FOREIGN KEY(tenant_id,run_id) REFERENCES runs(tenant_id,id)
+  tenant_id uuid NOT NULL, run_id uuid NOT NULL, session_id uuid NOT NULL,
+  member text NOT NULL, segment int NOT NULL, attempt int NOT NULL,
+  event_id text NOT NULL, stream_seq bigint NOT NULL, type text NOT NULL, payload jsonb NOT NULL,
+  ts timestamptz NOT NULL, PRIMARY KEY(tenant_id,run_id,event_id,ts),
+  UNIQUE(tenant_id,stream_seq,ts), FOREIGN KEY(tenant_id,run_id) REFERENCES runs(tenant_id,id)
 ) PARTITION BY RANGE (ts);
 CREATE TABLE run_events_default PARTITION OF run_events DEFAULT;
 CREATE TABLE interactions (
@@ -212,12 +216,45 @@ CREATE TABLE idempotency_keys (
 );
 -- Activity events survive commit-before-publish failures without changing their payload.
 CREATE TABLE control_events (
- tenant_id uuid NOT NULL, run_id uuid NOT NULL, event_id text NOT NULL, operation bigint NOT NULL, payload jsonb NOT NULL, PRIMARY KEY(tenant_id,run_id,event_id), FOREIGN KEY(tenant_id,run_id) REFERENCES runs(tenant_id,id)
+ tenant_id uuid NOT NULL, run_id uuid NOT NULL, event_id text NOT NULL, operation bigint NOT NULL, payload jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), published_at timestamptz, PRIMARY KEY(tenant_id,run_id,event_id), FOREIGN KEY(tenant_id,run_id) REFERENCES runs(tenant_id,id)
 );
 ALTER TABLE control_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE control_events FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON control_events USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT ON control_events TO orbit_app;
+GRANT UPDATE (published_at) ON control_events TO orbit_app;
+CREATE INDEX control_events_unpublished ON control_events(created_at) WHERE published_at IS NULL;
+-- +goose StatementBegin
+CREATE FUNCTION protect_control_events_outbox() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF (to_jsonb(NEW)-'published_at') IS DISTINCT FROM (to_jsonb(OLD)-'published_at') THEN
+  RAISE EXCEPTION 'outbox update not permitted' USING ERRCODE='42501';
+ END IF;
+ RETURN NEW;
+END $$;
+-- +goose StatementEnd
+CREATE TRIGGER control_events_outbox_only BEFORE UPDATE ON control_events FOR EACH ROW EXECUTE FUNCTION protect_control_events_outbox();
+REVOKE ALL ON FUNCTION protect_control_events_outbox() FROM PUBLIC;
+-- +goose StatementBegin
+CREATE FUNCTION control_events_unpublished(max_rows int) RETURNS TABLE(tenant_id uuid, run_id uuid, event_id text, payload jsonb)
+LANGUAGE sql SECURITY DEFINER STABLE SET search_path=public,pg_temp AS $$
+ SELECT tenant_id, run_id, event_id, payload FROM control_events
+ WHERE published_at IS NULL AND created_at < now() - interval '30 seconds'
+ ORDER BY created_at LIMIT LEAST(max_rows,500)
+$$;
+-- +goose StatementEnd
+REVOKE ALL ON FUNCTION control_events_unpublished(int) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION control_events_unpublished(int) TO orbit_app;
+CREATE TABLE run_event_rejects (
+ tenant_id uuid NOT NULL, stream_seq bigint NOT NULL, subject text NOT NULL, event_id text,
+ reason text NOT NULL, detail text NOT NULL DEFAULT '', delivered int NOT NULL, payload bytea NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(tenant_id,stream_seq)
+);
+ALTER TABLE run_event_rejects ENABLE ROW LEVEL SECURITY;
+ALTER TABLE run_event_rejects FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON run_event_rejects USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+GRANT SELECT, INSERT ON run_event_rejects TO orbit_app;
+CREATE INDEX ON run_event_rejects(tenant_id,created_at DESC);
 ALTER TABLE runs ADD FOREIGN KEY(tenant_id,lock_id) REFERENCES run_locks(tenant_id,id);
 ALTER TABLE sessions ADD FOREIGN KEY(tenant_id,pinned_lock_id) REFERENCES run_locks(tenant_id,id);
 CREATE INDEX ON memberships(principal_id);
@@ -254,8 +291,8 @@ CREATE INDEX ON messages(tenant_id,session_id);
 CREATE INDEX ON messages(tenant_id,run_id);
 CREATE INDEX ON messages(tenant_id,author_id);
 CREATE INDEX ON messages(tenant_id,created_at DESC);
-CREATE INDEX ON run_events(tenant_id,event_id);
-CREATE INDEX ON run_events(tenant_id,run_id,ts,event_id);
+CREATE INDEX ON run_events(tenant_id,run_id,stream_seq);
+CREATE INDEX ON run_events(tenant_id,session_id,stream_seq);
 CREATE INDEX ON interactions(tenant_id,run_id);
 CREATE INDEX ON interactions(tenant_id,created_at DESC);
 CREATE INDEX ON artifacts(tenant_id,session_id);
@@ -582,7 +619,10 @@ DROP TABLE agent_checkpoints CASCADE;
 DROP TABLE team_runs CASCADE;
 DROP TABLE artifacts CASCADE;
 DROP TABLE interactions CASCADE;
+DROP FUNCTION control_events_unpublished(int);
 DROP TABLE control_events CASCADE;
+DROP FUNCTION protect_control_events_outbox();
+DROP TABLE run_event_rejects;
 DROP TABLE run_events CASCADE;
 DROP TABLE run_segments CASCADE;
 DROP TABLE messages CASCADE;

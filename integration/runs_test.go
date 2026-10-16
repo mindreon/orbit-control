@@ -155,6 +155,8 @@ func (f *runFixture) token(t *testing.T) string {
 	return string(out.Token)
 }
 func testRuns(t *testing.T, d *db.DB, admin *pgx.Conn) {
+	t.Run("StreamOutbox", func(t *testing.T) { testStreamOutbox(t, d, admin) })
+	t.Run("StreamTokens", func(t *testing.T) { testStreamTokens(t, d, admin) })
 	t.Run("SandboxProjection", func(t *testing.T) { testSandboxProjection(t, d, admin) })
 	t.Run("SandboxAcquire", func(t *testing.T) { testSandboxAcquireGenerationAndProvider(t, d, admin) })
 	t.Run("SegmentBoundary", func(t *testing.T) { testSegmentBoundary(t, d, admin) })

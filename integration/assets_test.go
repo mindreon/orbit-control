@@ -79,6 +79,8 @@ func testAssets(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		PersonalTenants:   true,
 		KeyFile:           t.TempDir() + "/auth.key",
 		CapabilityKeyFile: t.TempDir() + "/cap.key",
+		StreamKeyFile:     t.TempDir() + "/stream.key",
+		StreamKeyID:       "test",
 		CapabilityKeyID:   "1",
 		SecretsKeyVersion: 1,
 		SecretsKEKs:       map[int][]byte{1: make([]byte, 32)},

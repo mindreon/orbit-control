@@ -7,7 +7,7 @@
   ],
   "$defs": {
     "RunEvent": {
-      "description": "Envelope orbit.event/v1 of every event of a run, published to NATS JetStream on run.<tenant>.<run> and projected to run_events. A frame is at most 64 KiB; larger content travels as a reference. data has the structure that type selects.",
+      "description": "Envelope orbit.event/v1 of every event of a run, published to NATS JetStream on run.<tenant>.<session>.<run> and projected to run_events. A frame is at most 64 KiB; larger content travels as a reference. data has the structure that type selects. SSE id and run_events.stream_seq are the JetStream stream sequence.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -679,7 +679,7 @@
       "x-extra": "ignore"
     },
     "SegmentStarted": {
-      "description": "An attempt of a segment began. Consumers drop unfinished content of lower attempts of the same segment.",
+      "description": "An attempt of a segment began. Consumers drop unfinished content of lower attempts of the same segment. Finalized messages are retained; the final from an older attempt takes precedence.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -726,7 +726,7 @@
       "x-extra": "ignore"
     },
     "MessageDelta": {
-      "description": "A chunk of assistant output. Not persisted.",
+      "description": "A chunk of assistant output. Not persisted. message_id = uuid5(orbit:message:<run>/<member>/<seq>/<k>), where k is the model call number within the segment. Delta and final of the same message share this id.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -748,7 +748,7 @@
       "x-extra": "ignore"
     },
     "MessageFinal": {
-      "description": "The complete assistant message. The projection stores it keyed by (run_id, segment, message_id).",
+      "description": "The complete assistant message, persisted in run_events. text may be empty when only reasoning was visible. message_id = uuid5(orbit:message:<run>/<member>/<seq>/<k>), where k is the model call number within the segment. Delta and final of the same message share this id.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -790,7 +790,7 @@
       "x-extra": "ignore"
     },
     "ReasoningDelta": {
-      "description": "A chunk of the model's reasoning. Not persisted; tenants may disable it.",
+      "description": "A chunk of model reasoning. Not persisted; clients may exclude it. message_id = uuid5(orbit:message:<run>/<member>/<seq>/<k>), where k is the model call number within the segment. Delta and final of the same message share this id.",
       "type": "object",
       "additionalProperties": false,
       "required": [

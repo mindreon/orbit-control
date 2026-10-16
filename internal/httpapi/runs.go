@@ -18,6 +18,7 @@ import (
 	"github.com/mindreon/orbit-control/internal/platform/httpx"
 	"github.com/mindreon/orbit-control/internal/platform/ids"
 	"github.com/mindreon/orbit-control/internal/sessions"
+	"github.com/mindreon/orbit-control/internal/tenancy"
 	w "github.com/mindreon/orbit-control/internal/workflows"
 )
 
@@ -47,12 +48,52 @@ func (h *Handler) streamToken(out http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	token, err := h.Auth.Signer.IssueStream(auth.Tenant(r.Context()), run.ID, s.ID)
+	token, err := h.issueStream(r.Context(), s, run.ID)
 	if err != nil {
 		return err
 	}
 	httpx.JSON(out, 200, map[string]any{"stream_token": token, "expires_in": 900})
 	return nil
+}
+func (h *Handler) sessionStreamToken(out http.ResponseWriter, r *http.Request) error {
+	s, err := sessions.Get(r.Context(), r.PathValue("s"), "session.read")
+	if err != nil {
+		return err
+	}
+	token, err := h.issueStream(r.Context(), s, "")
+	if err != nil {
+		return err
+	}
+	httpx.JSON(out, 200, map[string]any{"stream_token": token, "expires_in": 900})
+	return nil
+}
+func (h *Handler) issueStream(ctx context.Context, s sessions.Session, runID string) (string, error) {
+	if s.Status == "archived" {
+		return "", httpx.E(409, "SESSION_ARCHIVED", "Session is archived")
+	}
+	scope := "session"
+	if runID != "" {
+		scope = "run"
+	}
+	return h.Auth.Stream.Issue(auth.StreamClaims{TenantID: auth.Tenant(ctx), SessionID: s.ID, RunID: runID, Scope: scope})
+}
+
+// Two-phase mutations recheck access after delivery before issuing a stream token.
+func (h *Handler) issueRunStream(ctx context.Context, runID string) (string, error) {
+	var token string
+	err := h.DB.WithTenant(ctx, auth.Tenant(ctx), func(tx pgx.Tx) error {
+		if err := tenancy.Active(ctx, tx, auth.From(ctx).ID); err != nil {
+			return err
+		}
+		ctx = db.Context(ctx, tx)
+		run, s, err := sessions.GetRun(ctx, runID, "session.read")
+		if err != nil {
+			return err
+		}
+		token, err = h.issueStream(ctx, s, run.ID)
+		return err
+	})
+	return token, err
 }
 func (h *Handler) controlRun(out http.ResponseWriter, r *http.Request) error {
 	return h.twoPhase(out, r, func(ctx context.Context, body []byte) (func(context.Context, *httpx.Recorder) error, error) {
@@ -174,7 +215,7 @@ func (h *Handler) prepareSteer(
 			return err
 		}
 		if submission {
-			token, err := h.Auth.Signer.IssueStream(tenant, runID, s.ID)
+			token, err := h.issueRunStream(ctx, runID)
 			if err != nil {
 				return err
 			}
