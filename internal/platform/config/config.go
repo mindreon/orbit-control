@@ -183,9 +183,8 @@ func (c Config) ValidateRuns(api bool) error {
 	if err := c.ValidateWorker(); err != nil {
 		return err
 	}
-	u, e := url.Parse(c.NATSURL)
-	if e != nil || u.Host == "" || (u.Scheme != "nats" && u.Scheme != "tls") {
-		return fmt.Errorf("ORBIT_NATS_URL must be a NATS URL")
+	if err := validateNATSURL(c.NATSURL); err != nil {
+		return err
 	}
 	if api {
 		if _, _, err := net.SplitHostPort(c.InternalAddr); err != nil {
@@ -406,6 +405,14 @@ func (c Config) validateStreamKeys() error {
 		if streamPath == otherPath || streamInfo != nil && otherInfo != nil && os.SameFile(streamInfo, otherInfo) {
 			return fmt.Errorf("ORBIT_STREAM_KEY_FILE must differ from authentication and asset signing key files")
 		}
+	}
+	return nil
+}
+
+func validateNATSURL(value string) error {
+	u, err := url.Parse(value)
+	if err != nil || u.Host == "" || (u.Scheme != "nats" && u.Scheme != "tls") {
+		return fmt.Errorf("ORBIT_NATS_URL must be a NATS URL")
 	}
 	return nil
 }

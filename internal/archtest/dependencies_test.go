@@ -19,6 +19,7 @@ func TestPackageBoundaries(t *testing.T) {
 		"./internal/workflows/...",
 		"./internal/httpapi",
 		"./internal/kernelapi",
+		"./internal/streamgw",
 	)
 	cmd.Dir = "../.."
 	raw, err := cmd.Output()
@@ -64,6 +65,17 @@ func TestPackageBoundaries(t *testing.T) {
 				}
 			}
 		}
+		if pkg.ImportPath == module+"streamgw" {
+			for _, dep := range pkg.Imports {
+				allowed := standard[dep] || dep == module+"auth" || dep == module+"contract" ||
+					dep == module+"platform/log" || dep == module+"platform/natsx" ||
+					strings.HasPrefix(dep, "github.com/nats-io/nats.go")
+				if !allowed {
+					t.Errorf("%s imports forbidden %s", pkg.ImportPath, dep)
+				}
+			}
+		}
+
 		if pkg.ImportPath == module+"httpapi" || pkg.ImportPath == module+"kernelapi" {
 			for _, dep := range pkg.Imports {
 				if strings.HasPrefix(dep, module+"workflows/") {

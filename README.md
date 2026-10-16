@@ -3,8 +3,7 @@
 The Go 1.27 control plane is Orbit's sole public HTTP API. WP1 supplies identity,
 tenants, workspaces, RBAC and append-only auditing. It uses `net/http`, pgx v5,
 handwritten SQL and goose migrations. Agent execution belongs to orbit-runtime;
-WP5 adds asset storage, releases and run-lock resolution; kernel and streaming
-implementations arrive in later packages.
+WP5 adds asset storage, releases and run-lock resolution; the kernel API and WP7 supplies streaming and event history.
 No v1 data compatibility or in-memory database fallback is provided.
 
 ```
@@ -229,7 +228,7 @@ the owner connection and the deployment's usage retention policy.
 `run_events.ts` is mandatory and comes from the immutable contract RunEvent,
 never the insertion clock. Event IDs are `<run>:<member>:<seq>:<attempt>:<n>`.
 Replay deduplicates by `(tenant_id,run_id,event_id,ts)`; historical reads and
-cursors order by `(ts,event_id)`. `seq` need not be globally unique. Monthly
+cursors order by JetStream `stream_seq`. `seq` need not be globally unique. Monthly
 partition boundaries use UTC regardless of the administrator's session timezone.
 
 ## Validation
@@ -522,3 +521,47 @@ boundary before projection, including retries. UsageItem has no model-profile
 ID: issuing credentials binds the actual profile UUID and pricing snapshot to
 the segment attempt/model. Usage uses that binding; ambiguous requests for two
 profiles of the same model in one attempt return MODEL_PROFILE_CONFLICT.
+
+
+## Event streams and history (WP7)
+
+`stream-gateway` is a separate binary in the control image. It loads no database
+configuration or private keys and verifies stream JWTs offline. Use the gateway
+NATS user and the control-issued `stream_token` as Bearer (preferred) or `?token=`.
+Gateway access diagnostics never include headers, query strings or event bodies.
+
+| Variable | Gateway default / meaning |
+| --- | --- |
+| `ORBIT_STREAM_ADDR` | `0.0.0.0:8082` |
+| `ORBIT_NATS_URL` | Required gateway NATS URL with its service credentials |
+| `ORBIT_STREAM_PUBLIC_KEYS` | Required comma-separated `kid:base64` raw Ed25519 public keys |
+| `ORBIT_STREAM_MAX_CONNECTIONS` | `10000`, process limit |
+| `ORBIT_STREAM_MAX_CONNECTIONS_PER_TENANT` | `1000` |
+| `ORBIT_STREAM_MAX_CONNECTIONS_PER_SUBJECT` | `50`, run or session limit |
+| `ORBIT_STREAM_BUFFER_FRAMES` | `256`, bounded per-connection frame queue |
+| `ORBIT_STREAM_BUFFER_BYTES` | `4194304`, byte budget including the frame being written; minimum `65536` |
+| `ORBIT_STREAM_HEARTBEAT` | `15s`, idle SSE comment interval |
+| `ORBIT_STREAM_WRITE_TIMEOUT` | `10s`, per-frame Write and Flush deadline |
+| `ORBIT_STREAM_MAX_CONNECTION_AGE` | `1h`, additionally bounded by token expiry |
+| `ORBIT_STREAM_INFO_CACHE` | `2s`, stream FirstSeq cache |
+| `ORBIT_STREAM_SHUTDOWN_GRACE` | `5s`, keep existing streams forwarding before closing |
+| `ORBIT_LOG_FORMAT` | `json` or `text`, same as control |
+
+`GET /v1/runs/{r}/events` and `/v1/sessions/{s}/events` are served by the gateway,
+not the control HTTP listener. Subject filters derive exclusively from token
+claims. Each connection uses an ordered pull consumer, a bounded queue and socket
+write deadlines. A slow client cannot block another connection. Heartbeats have
+no id; `Last-Event-ID` is the decimal JetStream stream sequence. Zero means replay
+all retained events. An expired positive cursor returns `409 EVENT_CURSOR_EXPIRED`.
+`types` and `exclude` are mutually exclusive comma-separated contract EventTypes.
+Run streams send a single `end` frame on completion/failure, including a resume
+already past the terminal event; session streams stay open. Expiry/shutdown close
+silently. Clients obtain a new token before every connection and resume using the
+last complete received frame. `GET /healthz` and `/metrics` stay on the internal
+network; shutdown immediately withdraws readiness, then preserves the grace period.
+
+`GET /v1/runs/{r}/history` and `/v1/sessions/{s}/history` require `session.read`.
+They read only `run_events`, in `stream_seq` order, with `after=0`, `limit=200`
+(maximum 500), and the same event filters. Empty pages retain the requested `after`
+as `resume_from`. Rebuild from history, then reconnect SSE with `resume_from` to
+bridge asynchronous sink lag. Delta, usage and sandbox-output events are transient.
