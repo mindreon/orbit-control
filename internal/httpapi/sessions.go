@@ -296,7 +296,7 @@ func (h *Handler) submitDelivery(
 			}
 			return mapped
 		}
-		token, e := h.issueRunStream(ctx, runID)
+		token, e := h.issueStream(ctx, s, runID)
 		if e != nil {
 			return e
 		}

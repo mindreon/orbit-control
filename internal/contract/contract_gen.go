@@ -2257,8 +2257,8 @@ func (j *MessageAttachment) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// A chunk of assistant output. Not persisted. message_id =
-// uuid5(orbit:message:<run>/<member>/<seq>/<k>), where k is the model call number
+// A chunk of assistant output. Not persisted. message_id = uuid5(NAMESPACE_URL,
+// "orbit:message:<run>/<member>/<seq>/<k>"), where k is the model call number
 // within the segment. Delta and final of the same message share this id.
 type MessageDelta struct {
 	// Text to append.
@@ -2296,8 +2296,8 @@ func (j *MessageDelta) UnmarshalJSON(value []byte) error {
 }
 
 // The complete assistant message, persisted in run_events. text may be empty when
-// only reasoning was visible. message_id =
-// uuid5(orbit:message:<run>/<member>/<seq>/<k>), where k is the model call number
+// only reasoning was visible. message_id = uuid5(NAMESPACE_URL,
+// "orbit:message:<run>/<member>/<seq>/<k>"), where k is the model call number
 // within the segment. Delta and final of the same message share this id.
 type MessageFinal struct {
 	// Object store reference of the full content when it does not.
@@ -2796,8 +2796,9 @@ func (j *RailSpec) UnmarshalJSON(value []byte) error {
 }
 
 // A chunk of model reasoning. Not persisted; clients may exclude it. message_id =
-// uuid5(orbit:message:<run>/<member>/<seq>/<k>), where k is the model call number
-// within the segment. Delta and final of the same message share this id.
+// uuid5(NAMESPACE_URL, "orbit:message:<run>/<member>/<seq>/<k>"), where k is the
+// model call number within the segment. Delta and final of the same message share
+// this id.
 type ReasoningDelta struct {
 	// Text to append.
 	Delta string `json:"delta" yaml:"delta" mapstructure:"delta"`

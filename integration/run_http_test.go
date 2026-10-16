@@ -96,7 +96,9 @@ func testRunHTTP(t *testing.T, d *db.DB, admin *pgx.Conn) {
 			entry := lock.Entries[lock.Members[0].AgentEntry]
 			entry.Files = nil
 			lock.Entries[lock.Members[0].AgentEntry] = entry
-			c := config.Config{AuthMode: "dev", KeyFile: t.TempDir() + "/auth.key", CapabilityKeyFile: t.TempDir() + "/cap.key", StreamKeyFile: t.TempDir() + "/stream.key", StreamKeyID: "test",
+			c := config.Config{
+				AuthMode: "dev", KeyFile: t.TempDir() + "/auth.key", CapabilityKeyFile: t.TempDir() + "/cap.key",
+				StreamKeyFile: t.TempDir() + "/stream.key", StreamKeyID: "test",
 				CapabilityKeyID: "test", SecretsKeyVersion: 1, SecretsKEKs: map[int][]byte{1: make([]byte, 32)}}
 			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 			a, err := auth.New(t.Context(), d, c, logger)
@@ -210,7 +212,9 @@ func testRunHTTP(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	f.tx(t, func(ctx context.Context, tx pgx.Tx) error {
 		return tenancy.Bind(ctx, tx, auth.From(ctx), f.tenant, "user", approver, "session.viewer", "session", f.session)
 	})
-	c := config.Config{AuthMode: "dev", KeyFile: t.TempDir() + "/auth.key", CapabilityKeyFile: t.TempDir() + "/cap.key", StreamKeyFile: t.TempDir() + "/stream.key", StreamKeyID: "test",
+	c := config.Config{
+		AuthMode: "dev", KeyFile: t.TempDir() + "/auth.key", CapabilityKeyFile: t.TempDir() + "/cap.key",
+		StreamKeyFile: t.TempDir() + "/stream.key", StreamKeyID: "test",
 		CapabilityKeyID: "test", SecretsKeyVersion: 1, SecretsKEKs: map[int][]byte{1: make([]byte, 32)}}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	a, err := auth.New(t.Context(), d, c, logger)

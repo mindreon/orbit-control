@@ -29,9 +29,12 @@ func Connect(url, name string) (*Bus, error) {
 	return &Bus{Conn: c, JS: js}, nil
 }
 func (b *Bus) EnsureRunEventsStream(ctx context.Context, maxBytes int64) error {
+	return b.ensureRunEventsStream(ctx, "RUN_EVENTS", "run.>", maxBytes)
+}
+func (b *Bus) ensureRunEventsStream(ctx context.Context, name, subject string, maxBytes int64) error {
 	_, err := b.JS.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
-		Name:              "RUN_EVENTS",
-		Subjects:          []string{"run.>"},
+		Name:              name,
+		Subjects:          []string{subject},
 		Storage:           jetstream.FileStorage,
 		Retention:         jetstream.LimitsPolicy,
 		MaxAge:            7 * 24 * time.Hour,
@@ -45,9 +48,12 @@ func (b *Bus) EnsureRunEventsStream(ctx context.Context, maxBytes int64) error {
 	return err
 }
 func (b *Bus) EnsureSinkConsumer(ctx context.Context) (jetstream.Consumer, error) {
-	return b.JS.CreateOrUpdateConsumer(ctx, "RUN_EVENTS", jetstream.ConsumerConfig{
-		Durable:       "run-events-sink",
-		FilterSubject: "run.>",
+	return b.ensureSinkConsumer(ctx, "RUN_EVENTS", "run.>", "run-events-sink")
+}
+func (b *Bus) ensureSinkConsumer(ctx context.Context, stream, subject, durable string) (jetstream.Consumer, error) {
+	return b.JS.CreateOrUpdateConsumer(ctx, stream, jetstream.ConsumerConfig{
+		Durable:       durable,
+		FilterSubject: subject,
 		DeliverPolicy: jetstream.DeliverAllPolicy,
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		AckWait:       30 * time.Second,

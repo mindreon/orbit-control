@@ -240,7 +240,7 @@ CREATE FUNCTION control_events_unpublished(max_rows int) RETURNS TABLE(tenant_id
 LANGUAGE sql SECURITY DEFINER STABLE SET search_path=public,pg_temp AS $$
  SELECT tenant_id, run_id, event_id, payload FROM control_events
  WHERE published_at IS NULL AND created_at < now() - interval '30 seconds'
- ORDER BY created_at LIMIT LEAST(max_rows,500)
+ ORDER BY created_at, operation, event_id LIMIT LEAST(max_rows,500)
 $$;
 -- +goose StatementEnd
 REVOKE ALL ON FUNCTION control_events_unpublished(int) FROM PUBLIC;

@@ -726,7 +726,7 @@
       "x-extra": "ignore"
     },
     "MessageDelta": {
-      "description": "A chunk of assistant output. Not persisted. message_id = uuid5(orbit:message:<run>/<member>/<seq>/<k>), where k is the model call number within the segment. Delta and final of the same message share this id.",
+      "description": "A chunk of assistant output. Not persisted. message_id = uuid5(NAMESPACE_URL, \"orbit:message:<run>/<member>/<seq>/<k>\"), where k is the model call number within the segment. Delta and final of the same message share this id.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -748,7 +748,7 @@
       "x-extra": "ignore"
     },
     "MessageFinal": {
-      "description": "The complete assistant message, persisted in run_events. text may be empty when only reasoning was visible. message_id = uuid5(orbit:message:<run>/<member>/<seq>/<k>), where k is the model call number within the segment. Delta and final of the same message share this id.",
+      "description": "The complete assistant message, persisted in run_events. text may be empty when only reasoning was visible. message_id = uuid5(NAMESPACE_URL, \"orbit:message:<run>/<member>/<seq>/<k>\"), where k is the model call number within the segment. Delta and final of the same message share this id.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -790,7 +790,7 @@
       "x-extra": "ignore"
     },
     "ReasoningDelta": {
-      "description": "A chunk of model reasoning. Not persisted; clients may exclude it. message_id = uuid5(orbit:message:<run>/<member>/<seq>/<k>), where k is the model call number within the segment. Delta and final of the same message share this id.",
+      "description": "A chunk of model reasoning. Not persisted; clients may exclude it. message_id = uuid5(NAMESPACE_URL, \"orbit:message:<run>/<member>/<seq>/<k>\"), where k is the model call number within the segment. Delta and final of the same message share this id.",
       "type": "object",
       "additionalProperties": false,
       "required": [

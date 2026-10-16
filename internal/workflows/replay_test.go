@@ -130,10 +130,13 @@ func assertHistoryScenario(t *testing.T, name string, history *historypb.History
 		for _, event := range history.Events {
 			if child := event.GetStartChildWorkflowExecutionInitiatedEventAttributes(); child != nil {
 				children++
+				var input w.RunInput
+				require.NoError(t, converter.GetDefaultDataConverter().FromPayloads(child.Input, &input))
 				if name == "session-subject" {
-					var input w.RunInput
-					require.NoError(t, converter.GetDefaultDataConverter().FromPayloads(child.Input, &input))
 					require.Equal(t, w.EventSubject(input.TenantID, input.SessionID, input.RunID), input.EventSubject)
+				} else {
+					require.Equal(t, "run."+input.TenantID+"."+input.RunID, input.EventSubject,
+						"histories without the version marker must retain the DefaultVersion subject")
 				}
 			}
 			if signal := event.GetSignalExternalWorkflowExecutionInitiatedEventAttributes(); signal != nil && signal.SignalName == w.Archive {

@@ -152,9 +152,6 @@ func (c Config) ValidateAssets() error {
 			return fmt.Errorf("%s is required", v.name)
 		}
 	}
-	if err := c.validateStreamKeys(); err != nil {
-		return err
-	}
 	if c.AssetKeyFile == c.KeyFile || c.AssetKeyFile == c.CapabilityKeyFile {
 		return fmt.Errorf("ORBIT_ASSET_SIGNING_KEY_FILE must differ from authentication signing keys")
 	}
@@ -284,22 +281,28 @@ func (c *Config) loadStorageEnvironment() error {
 func (c *Config) loadCapabilityEnvironment() error {
 	c.CapabilityKeyFile = env("ORBIT_CAPABILITY_KEY_FILE", ".orbit-data/capability.key")
 	c.CapabilityKeyID = env("ORBIT_CAPABILITY_KEY_ID", "1")
-	c.CapabilityPublicKeys = map[string][]byte{}
-	// Rotation keys are kid:base64(raw Ed25519 public key), comma-separated.
-	if v := os.Getenv("ORBIT_CAPABILITY_PUBLIC_KEYS"); v != "" {
-		for pair := range strings.SplitSeq(v, ",") {
+	var err error
+	c.CapabilityPublicKeys, err = parseKeyList("ORBIT_CAPABILITY_PUBLIC_KEYS")
+	return err
+}
+
+// parseKeyList reads comma-separated kid:base64(raw Ed25519 public key) rotation keys.
+func parseKeyList(name string) (map[string][]byte, error) {
+	keys := map[string][]byte{}
+	if value := os.Getenv(name); value != "" {
+		for pair := range strings.SplitSeq(value, ",") {
 			id, encoded, ok := strings.Cut(pair, ":")
-			b, err := base64.StdEncoding.DecodeString(encoded)
-			if !ok || id == "" || err != nil || len(b) != 32 {
-				return fmt.Errorf("ORBIT_CAPABILITY_PUBLIC_KEYS must contain kid:base64 Ed25519 keys")
+			key, err := base64.StdEncoding.DecodeString(encoded)
+			if !ok || id == "" || err != nil || len(key) != 32 {
+				return nil, fmt.Errorf("%s must contain kid:base64 Ed25519 keys", name)
 			}
-			if _, ok := c.CapabilityPublicKeys[id]; ok {
-				return fmt.Errorf("ORBIT_CAPABILITY_PUBLIC_KEYS duplicate kid")
+			if _, ok := keys[id]; ok {
+				return nil, fmt.Errorf("%s duplicate kid", name)
 			}
-			c.CapabilityPublicKeys[id] = b
+			keys[id] = key
 		}
 	}
-	return nil
+	return keys, nil
 }
 
 func (c *Config) loadSecretsEnvironment() error {
@@ -375,19 +378,9 @@ func (c *Config) validateOrigins() error {
 func (c *Config) loadStreamEnvironment() error {
 	c.StreamKeyFile = env("ORBIT_STREAM_KEY_FILE", ".orbit-data/stream.key")
 	c.StreamKeyID = env("ORBIT_STREAM_KEY_ID", "1")
-	c.StreamPublicKeys = map[string][]byte{}
-	for pair := range strings.SplitSeq(os.Getenv("ORBIT_STREAM_PUBLIC_KEYS"), ",") {
-		if pair == "" {
-			continue
-		}
-		id, encoded, ok := strings.Cut(pair, ":")
-		key, err := base64.StdEncoding.DecodeString(encoded)
-		if !ok || id == "" || err != nil || len(key) != 32 || c.StreamPublicKeys[id] != nil {
-			return fmt.Errorf("ORBIT_STREAM_PUBLIC_KEYS must contain distinct kid:base64 Ed25519 keys")
-		}
-		c.StreamPublicKeys[id] = key
-	}
-	return nil
+	var err error
+	c.StreamPublicKeys, err = parseKeyList("ORBIT_STREAM_PUBLIC_KEYS")
+	return err
 }
 func (c Config) validateStreamKeys() error {
 	if c.StreamKeyFile == "" || c.StreamKeyID == "" {

@@ -18,7 +18,6 @@ import (
 	"github.com/mindreon/orbit-control/internal/platform/httpx"
 	"github.com/mindreon/orbit-control/internal/platform/ids"
 	"github.com/mindreon/orbit-control/internal/sessions"
-	"github.com/mindreon/orbit-control/internal/tenancy"
 	w "github.com/mindreon/orbit-control/internal/workflows"
 )
 
@@ -78,23 +77,6 @@ func (h *Handler) issueStream(ctx context.Context, s sessions.Session, runID str
 	return h.Auth.Stream.Issue(auth.StreamClaims{TenantID: auth.Tenant(ctx), SessionID: s.ID, RunID: runID, Scope: scope})
 }
 
-// Two-phase mutations recheck access after delivery before issuing a stream token.
-func (h *Handler) issueRunStream(ctx context.Context, runID string) (string, error) {
-	var token string
-	err := h.DB.WithTenant(ctx, auth.Tenant(ctx), func(tx pgx.Tx) error {
-		if err := tenancy.Active(ctx, tx, auth.From(ctx).ID); err != nil {
-			return err
-		}
-		ctx = db.Context(ctx, tx)
-		run, s, err := sessions.GetRun(ctx, runID, "session.read")
-		if err != nil {
-			return err
-		}
-		token, err = h.issueStream(ctx, s, run.ID)
-		return err
-	})
-	return token, err
-}
 func (h *Handler) controlRun(out http.ResponseWriter, r *http.Request) error {
 	return h.twoPhase(out, r, func(ctx context.Context, body []byte) (func(context.Context, *httpx.Recorder) error, error) {
 		run, s, err := sessions.GetRun(ctx, r.PathValue("r"), "run.control")
@@ -176,6 +158,9 @@ func (h *Handler) prepareSteer(
 	func(context.Context, *httpx.Recorder) error,
 	error,
 ) {
+	if s.Status == "archived" {
+		return nil, httpx.E(409, "SESSION_ARCHIVED", "Session is archived")
+	}
 	tenant, actor := auth.Tenant(ctx), auth.From(ctx).ID
 	run, _, err := sessions.GetRun(ctx, runID, "run.create")
 	if err != nil {
@@ -214,11 +199,11 @@ func (h *Handler) prepareSteer(
 		}); err != nil {
 			return err
 		}
+		token, err := h.issueStream(ctx, s, runID)
+		if err != nil {
+			return err
+		}
 		if submission {
-			token, err := h.issueRunStream(ctx, runID)
-			if err != nil {
-				return err
-			}
 			httpx.JSON(
 				rec,
 				202,
@@ -231,7 +216,7 @@ func (h *Handler) prepareSteer(
 				},
 			)
 		} else {
-			httpx.JSON(rec, 202, map[string]any{"message_id": messageID, "queued": result.Queued})
+			httpx.JSON(rec, 202, map[string]any{"message_id": messageID, "queued": result.Queued, "stream_token": token})
 		}
 		return nil
 	}, nil

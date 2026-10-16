@@ -1689,6 +1689,8 @@ paths:
                   message_id:
                     type: string
                     format: uuid
+                  stream_token:
+                    type: string
                   queued:
                     type: integer
                     format: int64

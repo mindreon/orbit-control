@@ -123,8 +123,6 @@ func TestAssetWorkerConfiguration(t *testing.T) {
 		ObjectSecretKey:   "test",
 		AssetKeyFile:      "asset.key",
 		AssetKeyID:        "1",
-		StreamKeyFile:     "stream.key",
-		StreamKeyID:       "1",
 		KeyFile:           "auth.key",
 		CapabilityKeyFile: "cap.key",
 	}
@@ -153,9 +151,10 @@ func TestStreamConfiguration(t *testing.T) {
 		}
 	}
 	for _, test := range []struct{ name, value string }{
-		{"ORBIT_STREAM_PUBLIC_KEYS", "kid:bad"},
-		{"ORBIT_STREAM_PUBLIC_KEYS", "kid:" + base64.StdEncoding.EncodeToString(make([]byte, 32)) + ",kid:" + base64.StdEncoding.EncodeToString(make([]byte, 32))},
-		{"ORBIT_NATS_STREAM_MAX_BYTES", "-1"},
+		{name: "ORBIT_STREAM_PUBLIC_KEYS", value: "kid:bad"},
+		{name: "ORBIT_STREAM_PUBLIC_KEYS", value: "kid:" + base64.StdEncoding.EncodeToString(make([]byte, 32)) +
+			",kid:" + base64.StdEncoding.EncodeToString(make([]byte, 32))},
+		{name: "ORBIT_NATS_STREAM_MAX_BYTES", value: "-1"},
 	} {
 		t.Run(test.name+test.value, func(t *testing.T) {
 			t.Setenv(test.name, test.value)

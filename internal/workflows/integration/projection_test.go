@@ -183,7 +183,9 @@ func (f *projectionFixture) configureAPI(t *testing.T) {
 	entry := lock.Entries[0]
 	entry.Files = nil
 	lock.Entries[0] = entry
-	c := config.Config{AuthMode: "dev", KeyFile: t.TempDir() + "/auth.key", CapabilityKeyFile: t.TempDir() + "/cap.key", StreamKeyFile: t.TempDir() + "/stream.key", StreamKeyID: "test",
+	c := config.Config{
+		AuthMode: "dev", KeyFile: t.TempDir() + "/auth.key", CapabilityKeyFile: t.TempDir() + "/cap.key",
+		StreamKeyFile: t.TempDir() + "/stream.key", StreamKeyID: "test",
 		CapabilityKeyID: "integration", SecretsKeyVersion: 1, SecretsKEKs: map[int][]byte{1: make([]byte, 32)}}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	a, err := auth.New(t.Context(), f.db, c, logger)

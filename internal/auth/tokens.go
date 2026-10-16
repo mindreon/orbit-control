@@ -140,28 +140,23 @@ type CapabilityClaims struct {
 	LeaseID string `json:"lease,omitempty"`
 }
 type CapabilitySigner struct {
-	key        ed25519.PrivateKey
-	kid        string
-	publicKeys map[string]ed25519.PublicKey
+	key     ed25519.PrivateKey
+	kid     string
+	keyfunc jwt.Keyfunc
 }
 
 func NewCapabilitySigner(key ed25519.PrivateKey, kid string, publicKeys map[string][]byte) (*CapabilitySigner, error) {
-	if len(key) != ed25519.PrivateKeySize || kid == "" {
-		return nil, fmt.Errorf("invalid capability signing key or kid")
+	keys, err := signingPublicKeys(key, kid, publicKeys, "capability")
+	if err != nil {
+		return nil, err
 	}
-	keys := map[string]ed25519.PublicKey{}
-	for id, k := range publicKeys {
-		if id == "" || len(k) != ed25519.PublicKeySize {
-			return nil, fmt.Errorf("invalid capability public key")
-		}
-		keys[id] = ed25519.PublicKey(k)
+	keyfunc, err := kidKeyfunc(keys, "capability")
+	if err != nil {
+		return nil, err
 	}
-	if previous, ok := keys[kid]; ok && !previous.Equal(key.Public()) {
-		return nil, fmt.Errorf("capability kid conflicts with configured public key")
-	}
-	keys[kid] = key.Public().(ed25519.PublicKey)
-	return &CapabilitySigner{key: key, kid: kid, publicKeys: keys}, nil
+	return &CapabilitySigner{key: key, kid: kid, keyfunc: keyfunc}, nil
 }
+
 func (s *CapabilitySigner) IssueCapability(c CapabilityClaims) (string, error) {
 	if !ids.Valid(c.Tenant) || !ids.Valid(c.Run) || c.Seq < 0 || c.Attempt < 0 ||
 		(c.Purpose == "segment" && (c.Member == "" || c.Seq < 1 || c.Attempt < 1)) ||
@@ -180,14 +175,7 @@ func (s *CapabilitySigner) IssueCapability(c CapabilityClaims) (string, error) {
 // status and authorization belong to the caller, never this offline verifier.
 func (s *CapabilitySigner) VerifyCapability(token string) (CapabilityClaims, error) {
 	var c CapabilityClaims
-	_, err := jwt.ParseWithClaims(token, &c, func(t *jwt.Token) (any, error) {
-		kid, ok := t.Header["kid"].(string)
-		key, known := s.publicKeys[kid]
-		if !ok || !known {
-			return nil, fmt.Errorf("unknown capability kid")
-		}
-		return key, nil
-	},
+	_, err := jwt.ParseWithClaims(token, &c, s.keyfunc,
 		jwt.WithValidMethods([]string{"EdDSA"}),
 		jwt.WithIssuer(CapabilityIssuer),
 		jwt.WithAudience("kernel"),

@@ -63,7 +63,8 @@ func testPartitionTimeZone(t *testing.T, admin *pgx.Conn) {
 func testUsageAndEvents(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	ctx := t.Context()
 	var tenant, run, session string
-	if err := admin.QueryRow(ctx, "SELECT tenant_id::text,id::text,session_id::text FROM runs LIMIT 1").Scan(&tenant, &run, &session); err != nil {
+	if err := admin.QueryRow(ctx, "SELECT tenant_id::text,id::text,session_id::text FROM runs LIMIT 1").
+		Scan(&tenant, &run, &session); err != nil {
 		t.Fatal(err)
 	}
 	key := ids.New()

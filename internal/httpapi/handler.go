@@ -106,7 +106,10 @@ var routes = []route{
 		Pattern: "GET /v1/runs/{r}/segments",
 		Handle:  func(h *Handler) endpoint { return h.runSegments },
 	},
-	{Pattern: "GET /v1/sessions/{s}/stream-token", Handle: func(h *Handler) endpoint { return h.sessionStreamToken }},
+	{
+		Pattern: "GET /v1/sessions/{s}/stream-token",
+		Handle:  func(h *Handler) endpoint { return h.sessionStreamToken },
+	},
 	{
 		Pattern: "GET /v1/runs/{r}/stream-token",
 		Handle:  func(h *Handler) endpoint { return h.streamToken },

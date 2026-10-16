@@ -29,8 +29,9 @@ import (
 
 type handlerTemporal struct {
 	runTemporal
-	err   error
-	calls []string
+	err        error
+	calls      []string
+	onDelivery func()
 }
 
 var _ temporalx.Client = (*handlerTemporal)(nil)
@@ -39,6 +40,9 @@ func (c *handlerTemporal) Update(_ context.Context, _ string, name, _ string, in
 	c.calls = append(c.calls, name)
 	if c.err != nil {
 		return c.err
+	}
+	if c.onDelivery != nil {
+		c.onDelivery()
 	}
 	switch result := out.(type) {
 	case *w.CancelRunOutput:
@@ -49,6 +53,13 @@ func (c *handlerTemporal) Update(_ context.Context, _ string, name, _ string, in
 		result.Accepted = true
 	}
 	return nil
+}
+func (c *handlerTemporal) Submit(ctx context.Context, in w.SessionInput, msg w.SubmitMessageInput) (w.SubmitMessageOutput, error) {
+	result, err := c.runTemporal.Submit(ctx, in, msg)
+	if c.onDelivery != nil {
+		c.onDelivery()
+	}
+	return result, err
 }
 func (c *handlerTemporal) Signal(_ context.Context, _ string, name string, _ any) error {
 	c.calls = append(c.calls, name)
@@ -72,6 +83,7 @@ func testRunHTTPHandlers(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		{method: "PATCH", path: "/v1/sessions/{s}", body: `{"title":"Updated","message_policy":"queue"}`, status: 200},
 		{method: "POST", path: "/v1/sessions/{s}/archive", status: 202},
 		{method: "GET", path: "/v1/sessions/{s}/messages", status: 200},
+		{method: "POST", path: "/v1/sessions/{s}/messages", body: `{"text":"New input"}`, status: 202},
 		{method: "GET", path: "/v1/sessions/{s}/runs", status: 200},
 		{method: "GET", path: "/v1/sessions/{s}/artifacts", status: 200},
 		{method: "GET", path: "/v1/runs/{r}", status: 200},
@@ -140,6 +152,8 @@ func testRunHTTPHandlers(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		handlerCase{name: "resolve unavailable", method: "POST", path: "/v1/interactions/{i}/resolve", role: "ws.editor",
 			body: `{"kind":"ask_user","answer":"Ready"}`, status: 503, code: "TEMPORAL_UNAVAILABLE",
 			temporalError: serviceerror.NewUnavailable("offline")},
+		handlerCase{name: "archived steer", method: "POST", path: "/v1/runs/{r}/steer", role: "ws.editor",
+			setup: "archived", body: `{"text":"Input"}`, status: 409, code: "SESSION_ARCHIVED"},
 		handlerCase{name: "archived submission", method: "POST", path: "/v1/sessions/{s}/messages", role: "ws.editor",
 			setup: "archived", body: `{"text":"Input"}`, status: 409, code: "SESSION_ARCHIVED"},
 		handlerCase{name: "unsupported attachment", method: "POST", path: "/v1/sessions/{s}/messages", role: "ws.editor",
@@ -147,6 +161,16 @@ func testRunHTTPHandlers(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		handlerCase{name: "admission quota", method: "POST", path: "/v1/sessions/{s}/messages", role: "ws.editor",
 			setup: "quota", body: `{"text":"Input"}`, status: 429, code: "QUOTA_EXCEEDED"},
 	)
+	for _, path := range []string{"/v1/sessions/{s}/messages", "/v1/runs/{r}/steer"} {
+		for _, change := range []string{"archive-during-delivery", "revoke-during-delivery"} {
+			cases = append(cases, handlerCase{name: change + " " + path, method: "POST", path: path, role: "ws.editor",
+				body: `{"text":"Input"}`, status: 202, setup: change})
+		}
+	}
+	for _, change := range []string{"steer-policy", "steer-policy-archive-during-delivery", "steer-policy-revoke-during-delivery"} {
+		cases = append(cases, handlerCase{name: change, method: "POST", path: "/v1/sessions/{s}/messages", role: "ws.editor",
+			body: `{"text":"Input"}`, status: 202, setup: change})
+	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) { testRunHTTPHandler(t, d, admin, tc) })
 	}
@@ -179,6 +203,10 @@ func testRunHTTPHandler(t *testing.T, d *db.DB, admin *pgx.Conn, tc handlerCase)
 		ExpiresAt: time.Now().Add(time.Hour)})
 	require.NoError(t, err)
 	f.tx(t, func(ctx context.Context, tx pgx.Tx) error {
+		if strings.HasPrefix(tc.setup, "steer-policy") {
+			_, err := tx.Exec(ctx, `UPDATE sessions SET message_policy='steer' WHERE id=$1`, f.session)
+			return err
+		}
 		var err error
 		switch tc.setup {
 		case "finished":
@@ -196,7 +224,9 @@ func testRunHTTPHandler(t *testing.T, d *db.DB, admin *pgx.Conn, tc handlerCase)
 		}
 		return err
 	})
-	c := config.Config{AuthMode: "dev", KeyFile: t.TempDir() + "/auth.key", CapabilityKeyFile: t.TempDir() + "/cap.key", StreamKeyFile: t.TempDir() + "/stream.key", StreamKeyID: "test",
+	c := config.Config{
+		AuthMode: "dev", KeyFile: t.TempDir() + "/auth.key", CapabilityKeyFile: t.TempDir() + "/cap.key",
+		StreamKeyFile: t.TempDir() + "/stream.key", StreamKeyID: "test",
 		CapabilityKeyID: "test", SecretsKeyVersion: 1, SecretsKEKs: map[int][]byte{1: make([]byte, 32)}, DefaultRunBudget: 200000}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	a, err := auth.New(t.Context(), d, c, logger)
@@ -205,6 +235,21 @@ func testRunHTTPHandler(t *testing.T, d *db.DB, admin *pgx.Conn, tc handlerCase)
 	token, err := a.Signer.DevToken(auth.Principal{ID: f.actor, Kind: "user"})
 	require.NoError(t, err)
 	fake := &handlerTemporal{err: tc.temporalError}
+	if strings.HasPrefix(tc.setup, "steer-policy") {
+		fake.active = f.run
+	}
+	if strings.HasSuffix(tc.setup, "-during-delivery") {
+		fake.onDelivery = func() {
+			f.tx(t, func(ctx context.Context, tx pgx.Tx) error {
+				if strings.Contains(tc.setup, "archive-during-delivery") {
+					_, err := tx.Exec(ctx, `UPDATE sessions SET status='archived' WHERE id=$1`, f.session)
+					return err
+				}
+				_, err := tx.Exec(ctx, `DELETE FROM role_bindings WHERE tenant_id=$1 AND principal_id=$2`, f.tenant, f.actor)
+				return err
+			})
+		}
+	}
 	h := (&httpapi.Handler{DB: d, Auth: a, Config: c, Logger: logger, Temporal: fake,
 		Objects: runObjects{testBlobs: testBlobs{root: t.TempDir()}}, Locks: runResolver{lock: lock}}).Router()
 	replace := strings.NewReplacer("{s}", f.session, "{r}", f.run, "{i}", interaction, "{a}", artifact, "{w}", f.workspace)
@@ -234,8 +279,29 @@ func testRunHTTPHandler(t *testing.T, d *db.DB, admin *pgx.Conn, tc handlerCase)
 	if tc.status == 403 || tc.status == 404 || tc.status == 422 {
 		require.Empty(t, fake.calls, "rejected request must not reach Temporal")
 	}
-	if strings.Contains(tc.path, "stream-token") && tc.status == 200 {
-		require.Contains(t, out.Body.String(), "stream_token")
+	if (strings.Contains(tc.path, "stream-token") && tc.status == 200) ||
+		(tc.status == 202 && (tc.path == "/v1/sessions/{s}/messages" || tc.path == "/v1/runs/{r}/steer")) {
+		var response struct {
+			Token string `json:"stream_token"`
+			RunID string `json:"run_id"`
+		}
+		require.NoError(t, json.Unmarshal(out.Body.Bytes(), &response))
+		claims, err := a.Stream.Verify(response.Token)
+		require.NoError(t, err)
+		expectedRun := f.run
+		if tc.path == "/v1/sessions/{s}/messages" {
+			require.NotEmpty(t, response.RunID)
+			if strings.HasPrefix(tc.setup, "steer-policy") {
+				require.Equal(t, f.run, response.RunID)
+			} else {
+				expectedRun = response.RunID
+			}
+		}
+		require.Equal(t, "run", claims.Scope)
+		require.Equal(t, f.tenant, claims.TenantID)
+		require.Equal(t, f.session, claims.SessionID)
+		require.Equal(t, expectedRun, claims.RunID)
+		require.Equal(t, "run:"+expectedRun, claims.Subject)
 	}
 	if tc.path == "/v1/sessions/{s}/archive" && tc.status == 202 {
 		require.Equal(t, []string{w.Archive}, fake.calls)
