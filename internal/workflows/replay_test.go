@@ -18,14 +18,17 @@ import (
 	"github.com/mindreon/orbit-control/internal/contract"
 	w "github.com/mindreon/orbit-control/internal/workflows"
 	"github.com/mindreon/orbit-control/internal/workflows/agentrun"
+	"github.com/mindreon/orbit-control/internal/workflows/membertask"
 	"github.com/mindreon/orbit-control/internal/workflows/sandboxlease"
+	"github.com/mindreon/orbit-control/internal/workflows/scheduledrun"
 	"github.com/mindreon/orbit-control/internal/workflows/session"
+	"github.com/mindreon/orbit-control/internal/workflows/teamrun"
 )
 
 func TestReplay(t *testing.T) {
 	paths, err := filepath.Glob("testdata/histories/*.json")
 	require.NoError(t, err)
-	require.Len(t, paths, 15, "WP6 branches and the WP7 subject change need real server histories")
+	require.Len(t, paths, 22, "WP6 branches and the WP7 subject change need real server histories")
 	for _, path := range paths {
 		t.Run(filepath.Base(path), func(t *testing.T) {
 			raw, err := os.ReadFile(path)
@@ -37,7 +40,10 @@ func TestReplay(t *testing.T) {
 			replayer.RegisterWorkflowWithOptions(agentrun.Run, workflow.RegisterOptions{Name: w.AgentRunWorkflow})
 			replayer.RegisterWorkflowWithOptions(session.Run, workflow.RegisterOptions{Name: w.SessionWorkflow})
 			replayer.RegisterWorkflowWithOptions(sandboxlease.Run, workflow.RegisterOptions{Name: w.SandboxLeaseWorkflow})
-			require.NoError(t, replayer.ReplayWorkflowHistoryFromJSONFile(nil, path))
+			replayer.RegisterWorkflowWithOptions(teamrun.Run, workflow.RegisterOptions{Name: w.TeamRunWorkflow})
+			replayer.RegisterWorkflowWithOptions(membertask.Run, workflow.RegisterOptions{Name: w.MemberTaskWorkflow})
+			replayer.RegisterWorkflowWithOptions(scheduledrun.Run, workflow.RegisterOptions{Name: w.ScheduledRunWorkflow})
+			require.NoError(t, replayer.ReplayWorkflowHistoryWithOptions(nil, history, worker.ReplayWorkflowHistoryOptions{OriginalExecution: workflow.Execution{ID: history.Events[0].GetWorkflowExecutionStartedEventAttributes().GetWorkflowId()}}))
 		})
 	}
 }
@@ -162,9 +168,68 @@ func assertHistoryScenario(t *testing.T, name string, history *historypb.History
 		require.Len(t, segments, 1)
 		require.Len(t, final, 1)
 		require.Equal(t, "succeeded", final[0].Status)
+	case "teamrun-happy", "teamrun-reject-escalate":
+		finals := historyInputs[w.FinalizeTeamInput](t, history, "FinalizeTeamRun")
+		require.Len(t, finals, 1)
+		require.Equal(t, "succeeded", finals[0].Status)
+		require.Equal(t, "Recorded team summary", finals[0].Summary)
+		require.Contains(t, types, enums.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_COMPLETED)
+		children := childWorkflows(history)
+		require.Contains(t, children, w.MemberTaskWorkflowID("tenant", name, "reviewer", 1))
+		require.Contains(t, children, w.MemberTaskWorkflowID("tenant", name, "leader", 2))
+		require.Contains(t, signalNames(history), w.EndTurn)
+	case "teamrun-can-midflight":
+		require.Equal(t, enums.EVENT_TYPE_WORKFLOW_EXECUTION_CONTINUED_AS_NEW, types[len(types)-1])
+		event := history.Events[len(history.Events)-1].GetWorkflowExecutionContinuedAsNewEventAttributes()
+		var input w.TeamRunInput
+		require.NoError(t, converter.GetDefaultDataConverter().FromPayloads(event.Input, &input))
+		require.NotNil(t, input.Carry)
+		require.Contains(t, input.Carry.Active, "alice", "a member turn is still running across Continue-As-New")
+		require.Contains(t, types, enums.EVENT_TYPE_ACTIVITY_TASK_CANCEL_REQUESTED, "the wait Activity is cancelled and re-created by the next run")
+	case "teamrun-cancel":
+		finals := historyInputs[w.FinalizeTeamInput](t, history, "FinalizeTeamRun")
+		require.Len(t, finals, 1)
+		require.Equal(t, "cancelled", finals[0].Status)
+		require.Equal(t, "CANCELLED", finals[0].Code)
+		require.Contains(t, signalNames(history), w.Cancel)
+	case "membertask-deliver-endturn":
+		require.Len(t, segments, 1)
+		var received []string
+		for _, event := range history.Events {
+			if signal := event.GetWorkflowExecutionSignaledEventAttributes(); signal != nil {
+				received = append(received, signal.SignalName)
+			}
+		}
+		require.Equal(t, []string{w.Deliver, w.EndTurn}, received)
+		require.Equal(t, enums.EVENT_TYPE_WORKFLOW_EXECUTION_COMPLETED, types[len(types)-1])
+	case "scheduledrun-team":
+		require.Len(t, childWorkflows(history), 1)
+		require.Contains(t, types, enums.EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_COMPLETED)
+	case "agentrun-unattended":
+		require.Len(t, final, 1)
+		require.Equal(t, "failed", final[0].Status)
+		require.Equal(t, "UNATTENDED_INTERACTION", final[0].ErrorCode)
 	default:
 		t.Fatalf("missing replay assertions for %s", name)
 	}
+}
+func childWorkflows(history *historypb.History) []string {
+	var ids []string
+	for _, event := range history.Events {
+		if child := event.GetStartChildWorkflowExecutionInitiatedEventAttributes(); child != nil {
+			ids = append(ids, child.WorkflowId)
+		}
+	}
+	return ids
+}
+func signalNames(history *historypb.History) []string {
+	var names []string
+	for _, event := range history.Events {
+		if signal := event.GetSignalExternalWorkflowExecutionInitiatedEventAttributes(); signal != nil {
+			names = append(names, signal.SignalName)
+		}
+	}
+	return names
 }
 func assertLeaseHistory(t *testing.T, history *historypb.History) {
 	t.Helper()

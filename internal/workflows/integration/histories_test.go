@@ -29,8 +29,11 @@ import (
 	"github.com/mindreon/orbit-control/internal/contract"
 	w "github.com/mindreon/orbit-control/internal/workflows"
 	"github.com/mindreon/orbit-control/internal/workflows/agentrun"
+	"github.com/mindreon/orbit-control/internal/workflows/membertask"
 	"github.com/mindreon/orbit-control/internal/workflows/sandboxlease"
+	"github.com/mindreon/orbit-control/internal/workflows/scheduledrun"
 	"github.com/mindreon/orbit-control/internal/workflows/session"
+	"github.com/mindreon/orbit-control/internal/workflows/teamrun"
 )
 
 var update = flag.Bool("update", false, "write real dev-stack histories")
@@ -451,7 +454,10 @@ func save(t *testing.T, c client.Client, id, runID, name string) {
 	replayer.RegisterWorkflowWithOptions(agentrun.Run, workflow.RegisterOptions{Name: w.AgentRunWorkflow})
 	replayer.RegisterWorkflowWithOptions(session.Run, workflow.RegisterOptions{Name: w.SessionWorkflow})
 	replayer.RegisterWorkflowWithOptions(sandboxlease.Run, workflow.RegisterOptions{Name: w.SandboxLeaseWorkflow})
-	require.NoError(t, replayer.ReplayWorkflowHistory(nil, history))
+	replayer.RegisterWorkflowWithOptions(teamrun.Run, workflow.RegisterOptions{Name: w.TeamRunWorkflow})
+	replayer.RegisterWorkflowWithOptions(membertask.Run, workflow.RegisterOptions{Name: w.MemberTaskWorkflow})
+	replayer.RegisterWorkflowWithOptions(scheduledrun.Run, workflow.RegisterOptions{Name: w.ScheduledRunWorkflow})
+	require.NoError(t, replayer.ReplayWorkflowHistoryWithOptions(nil, history, worker.ReplayWorkflowHistoryOptions{OriginalExecution: workflow.Execution{ID: id, RunID: runID}}))
 	if *update {
 		raw, err := protojson.MarshalOptions{Indent: "  "}.Marshal(history)
 		require.NoError(t, err)

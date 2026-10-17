@@ -67,7 +67,7 @@ func testDevSeed(t *testing.T, d *db.DB) {
 		if err := tx.QueryRow(ctx, `SELECT count(*) FROM asset_versions WHERE tenant_id=$1`, first.TenantID).Scan(&count); err != nil {
 			return err
 		}
-		if count != 2 {
+		if count != 3 {
 			t.Fatalf("seed created %d versions", count)
 		}
 		for _, id := range first.Versions {
@@ -124,7 +124,7 @@ func testSeedReviewWait(t *testing.T, d *db.DB, svc *assets.Service, seed devsee
 			seed.TenantID, seed.ReviewerID).Scan(&count); err != nil {
 			return err
 		}
-		if count != 2 {
+		if count != 3 {
 			t.Fatalf("non-idempotent seed approvals: %d", count)
 		}
 		if _, err := tx.Exec(ctx, `UPDATE asset_versions SET state='check_failed' WHERE tenant_id=$1 AND id=$2`,

@@ -23,6 +23,7 @@ import (
 	"github.com/mindreon/orbit-control/internal/locks"
 	"github.com/mindreon/orbit-control/internal/platform/config"
 	"github.com/mindreon/orbit-control/internal/platform/db"
+	"github.com/mindreon/orbit-control/internal/platform/httpx"
 	"github.com/mindreon/orbit-control/internal/platform/ids"
 	"github.com/mindreon/orbit-control/internal/tenancy"
 	w "github.com/mindreon/orbit-control/internal/workflows"
@@ -47,6 +48,9 @@ type runResolver struct{ lock contract.RunLock }
 
 func (s runResolver) Resolve(_ context.Context, in locks.Request) (contract.RunLock, error) {
 	lock := s.lock
+	if in.Entry.Kind != lock.Entry.Kind {
+		return contract.RunLock{}, httpx.E(404, "NOT_FOUND", "Entry not found")
+	}
 	lock.LockId = in.LockID
 	raw, err := json.Marshal(lock)
 	if err == nil {
