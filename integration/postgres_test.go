@@ -98,6 +98,8 @@ func TestPostgresSuite(t *testing.T) {
 	t.Run("Assets", func(t *testing.T) { testAssets(t, app, admin) })
 	t.Run("DevSeed", func(t *testing.T) { testDevSeed(t, app) })
 	t.Run("Runs", func(t *testing.T) { testRuns(t, app, admin) })
+	t.Run("Schedules", func(t *testing.T) { testSchedules(t, app, admin) })
+	t.Run("TeamPersistence", func(t *testing.T) { testTeamPersistence(t, app, admin) })
 	t.Run("TeamProjection", func(t *testing.T) { testTeamProjection(t, app, admin) })
 	t.Run("EventPrune", func(t *testing.T) { testEventPrune(t, app, admin) })
 	t.Run("History", func(t *testing.T) { testHistory(t, app, admin) })
