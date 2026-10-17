@@ -1,6 +1,8 @@
 package teamrun
 
 import (
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -84,4 +86,73 @@ func TestMailboxAndToolLimits(t *testing.T) {
 			Tasks: []contract.NewTask{{Title: "t", Description: "d", NarrowedTools: tools}}}
 		require.ErrorContains(t, r.validateCreate(create), "TEAM_TEXT_TOO_LONG")
 	}
+}
+
+func TestMaximalCarryStaysUnderOneMiB(t *testing.T) {
+	// T-R27 (I5, F44, F77): fill every bounded field of the carry to its limit with the worst escaping characters
+	// and the Temporal payload (encoding/json) must stay below 1 MiB.
+	roster := []contract.RosterEntry{{Name: "leader", Role: "leader", Status: "idle", Description: "lead"},
+		{Name: "alice", Role: "teammate", Status: "idle", Description: "work"}}
+	for i := range team.MaxRoster - 2 {
+		roster = append(roster, contract.RosterEntry{Name: contract.MemberName(fmt.Sprintf("rv%02d", i)), Role: "reviewer",
+			Status: "idle", Description: strings.Repeat("<", 200)})
+	}
+	r := updateRun()
+	r.in.Team.Roster = roster
+	r.st.Board.Roster = roster
+	r.st.Active = map[string]w.ActiveTurn{}
+	for i, entry := range roster {
+		r.st.Active[string(entry.Name)] = w.ActiveTurn{Member: string(entry.Name), Turn: i + 1, Kind: "lead"}
+		r.st.Cursors[string(entry.Name)] = w.MemberCursor{Seq: 1 << 20, CheckpointVersion: 1 << 20, EventN: 1 << 40, Turn: 500, ActiveSeconds: 1 << 30}
+	}
+	leader := new(contract.MemberName("leader"))
+	for i := range team.MaxTasks {
+		in := contract.CreateTasksInput{Caller: leader, RequestId: fmt.Sprintf("create-%d", i), Tasks: []contract.NewTask{{
+			Title: strings.Repeat("<", team.TitleBytes), Description: strings.Repeat("<", team.DescriptionBytes),
+			Assignee: new(contract.MemberName("alice")), NarrowedTools: slices.Repeat([]string{strings.Repeat("<", team.ToolNameBytes)}, team.NarrowedToolsMax)}}}
+		if err := r.validateCreate(in); err != nil {
+			requireCode(t, err, "TEAM_TEXT_TOO_LONG")
+			break
+		}
+		_, err := r.create(nil, in)
+		require.NoError(t, err)
+	}
+	require.LessOrEqual(t, team.EncodedLen(r.st.Board), team.BoardBytesMax, "validators cap the board")
+	for i := range r.st.Board.Tasks {
+		task := &r.st.Board.Tasks[i]
+		task.Status, task.Failures, task.Attempts = "in_review", new(team.MaxTaskFailures), 3
+		task.ResultText = new(team.TruncateEncoded(strings.Repeat("<", 10*team.ResultBytes), team.ResultBytes))
+		for _, reviewer := range task.Review.Reviewers {
+			task.Review.Votes = append(task.Review.Votes, contract.ReviewVote{Reviewer: reviewer, Verdict: "reject", Comment: "reviewer did not submit a verdict"})
+		}
+		task.Review.ReworkNote = new(team.TruncateEncoded(strings.Repeat("<", 10*team.CommentBytes), team.CommentBytes))
+	}
+	for i := 0; ; i++ {
+		to := roster[1+i%(len(roster)-1)].Name
+		in := contract.SendMessageInput{Caller: leader, RequestId: fmt.Sprintf("send-%d", i), To: to, Text: strings.Repeat("<", team.MessageBytes)}
+		if err := r.validateSend(in); err != nil {
+			requireCode(t, err, "TEAM_MAILBOX_FULL")
+			break
+		}
+		r.st.NextMail++
+		r.st.Mail[string(to)] = append(r.st.Mail[string(to)], r.mail(in))
+	}
+	require.LessOrEqual(t, team.EncodedLen(r.st.Mail), team.MailBytesMax)
+	summary := team.TruncateEncoded(strings.Repeat("<", 10*team.SummaryBytes), team.SummaryBytes)
+	r.st.Summary = summary
+	r.st.LastLeaderFinal = &contract.FinalMessage{MessageId: strings.Repeat("m", 64), TextPreview: summary}
+	for i := range team.SteerCap {
+		r.st.UserSteer = append(r.st.UserSteer, contract.SteerItem{ContentRef: new("t/" + strings.Repeat("x", 120) + fmt.Sprint(i))})
+	}
+	for _, entry := range roster {
+		for i := range 20 {
+			result, _ := team.Marshal(contract.CreateTasksOutput{TaskIds: slices.Repeat([]string{"t32"}, team.MaxTasks)})
+			r.st.Applied[fmt.Sprintf("%s-%s-%d", strings.Repeat("r", 40), entry.Name, i)] = w.AppliedUpdate{Member: string(entry.Name), Turn: 500, Result: result}
+		}
+	}
+	for i := range team.MaxTasks {
+		r.st.Escalations = append(r.st.Escalations, fmt.Sprintf("t%d", i))
+	}
+	r.st.Outbox, r.st.Dirty = nil, false // Continue-As-New only happens after the Outbox is flushed
+	require.Less(t, team.EncodedLen(r.st), 1<<20)
 }
