@@ -250,6 +250,13 @@ gofmt -l .
 go vet ./...
 go test ./...
 ORBIT_REQUIRE_PG_TESTS=1 ORBIT_TEST_DATABASE_URL='postgres://postgres:...@127.0.0.1:55441/orbit?sslmode=disable' go test ./...
+# Temporal integration requires Temporal, MinIO, and an unrestricted JetStream NATS server.
+ORBIT_TEST_DATABASE_URL='postgres://postgres:...@127.0.0.1:55441/orbit?sslmode=disable' \
+ORBIT_TEST_OBJECT_ENDPOINT='127.0.0.1:59100' ORBIT_TEST_OBJECT_BUCKET='orbit-wp8b' \
+ORBIT_TEST_OBJECT_ACCESS_KEY='...' ORBIT_TEST_OBJECT_SECRET_KEY='...' \
+ORBIT_TEST_NATS_URL='nats://127.0.0.1:54298' \
+ORBIT_TEST_TEMPORAL_ADDRESS='127.0.0.1:57233' \
+go test -tags temporal_integration ./internal/workflows/integration/... -count=1 -timeout=25m
 bash scripts/check-style.sh
 bash scripts/check-workflows.sh
 bash scripts/check-contracts-gen.sh
