@@ -13,7 +13,7 @@ import (
 	w "github.com/mindreon/orbit-control/internal/workflows"
 )
 
-func TestWaitForRunClosedVersusTransportError(t *testing.T) {
+func TestWaitForWorkflowClosedVersusTransportError(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		result error
@@ -30,7 +30,7 @@ func TestWaitForRunClosedVersusTransportError(t *testing.T) {
 			client.On("GetWorkflow", mock.Anything, w.AgentRunWorkflowID("tenant", "run"), "").Return(run).Once()
 			run.On("Get", mock.Anything, nil).Return(tc.result).Once()
 			a := &Activities{Temporal: client}
-			err := a.WaitForRun(t.Context(), w.RunOp{TenantID: "tenant", RunID: "run"})
+			err := a.waitForWorkflow(t.Context(), w.AgentRunWorkflowID("tenant", "run"))
 			if tc.closed {
 				require.NoError(t, err)
 			} else {

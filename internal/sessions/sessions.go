@@ -29,6 +29,7 @@ type Session struct {
 	LastActivityAt time.Time `json:"last_activity_at"`
 }
 type Run struct {
+	TemporalWorkflowID   string     `json:"temporal_workflow_id"`
 	ID                   string     `json:"id"`
 	SessionID            string     `json:"session_id"`
 	Status               string     `json:"status"`

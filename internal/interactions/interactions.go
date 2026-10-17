@@ -18,18 +18,19 @@ import (
 )
 
 type Interaction struct {
-	ID        string                      `json:"id"`
-	RunID     string                      `json:"run_id"`
-	SessionID string                      `json:"session_id"`
-	Member    string                      `json:"member"`
-	Kind      contract.InteractionKind    `json:"kind"`
-	Request   contract.InteractionRequest `json:"request"`
-	Status    string                      `json:"status"`
-	Approvers []string                    `json:"approvers"`
-	Decision  *contract.Decision          `json:"decision,omitempty"`
-	DecidedBy *string                     `json:"decided_by,omitempty"`
-	ExpiresAt time.Time                   `json:"expires_at"`
-	CreatedAt time.Time                   `json:"created_at"`
+	WorkflowID string                      `json:"-"`
+	ID         string                      `json:"id"`
+	RunID      string                      `json:"run_id"`
+	SessionID  string                      `json:"session_id"`
+	Member     string                      `json:"member"`
+	Kind       contract.InteractionKind    `json:"kind"`
+	Request    contract.InteractionRequest `json:"request"`
+	Status     string                      `json:"status"`
+	Approvers  []string                    `json:"approvers"`
+	Decision   *contract.Decision          `json:"decision,omitempty"`
+	DecidedBy  *string                     `json:"decided_by,omitempty"`
+	ExpiresAt  time.Time                   `json:"expires_at"`
+	CreatedAt  time.Time                   `json:"created_at"`
 }
 
 func Get(ctx context.Context, tenant, id string) (Interaction, error) {
@@ -40,7 +41,7 @@ func Get(ctx context.Context, tenant, id string) (Interaction, error) {
 	return scanInteraction(db.Tx(ctx).
 		QueryRow(ctx,
 			`SELECT id::text,run_id::text,session_id::text,member,kind,request,status,approvers,decision,decided_by::text,
- expires_at,created_at
+ expires_at,created_at,workflow_id
  FROM interactions
  WHERE tenant_id=$1
  AND id=$2`, tenant, id))
@@ -50,7 +51,7 @@ func scanInteraction(row pgx.Row) (Interaction, error) {
 	var i Interaction
 	var req, approvers, decision []byte
 	err := row.Scan(&i.ID, &i.RunID, &i.SessionID, &i.Member, &i.Kind, &req, &i.Status, &approvers, &decision,
-		&i.DecidedBy, &i.ExpiresAt, &i.CreatedAt)
+		&i.DecidedBy, &i.ExpiresAt, &i.CreatedAt, &i.WorkflowID)
 	if err != nil {
 		return i, err
 	}

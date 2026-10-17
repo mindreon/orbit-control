@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -186,8 +187,28 @@ func (x *resolution) roster(root node, kind contract.EntryKind) error {
 			}
 		}
 	}
+	if kind == "team" {
+		seen := map[string]bool{}
+		leaders := 0
+		for _, member := range x.lock.Members {
+			name := string(member.Name)
+			if seen[name] || name == "main" || name == "team" || !memberPattern.MatchString(name) {
+				return assets.Invalid("Invalid expanded team member name")
+			}
+			seen[name] = true
+			if member.Role == "leader" {
+				leaders++
+			}
+		}
+		if len(seen) > 16 || leaders != 1 {
+			return assets.Invalid("Team requires one leader and at most 16 members")
+		}
+	}
 	return nil
 }
+
+var memberPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
+
 func (x *resolution) finish() (contract.RunLock, error) {
 	if len(x.lock.Members) == 0 {
 		return x.lock, assets.Invalid("Empty roster")

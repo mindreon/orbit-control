@@ -48,20 +48,26 @@ func (a *Activities) CreateInteraction(ctx context.Context, in w.InteractionInpu
 		if n.RowsAffected() == 0 {
 			return nil, nil
 		}
-		status := "waiting_approval"
-		if in.Request.Kind == "ask_user" {
-			status = "waiting_input"
+		var statusEvents []event
+		if w.TeamMember(in.Member) {
+			statusEvents, err = refreshTeamRunStatus(ctx, tx, in.RunOp)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			status := "waiting_approval"
+			if in.Request.Kind == "ask_user" {
+				status = "waiting_input"
+			}
+			if _, err = tx.Exec(ctx, `UPDATE runs SET status=$3 WHERE tenant_id=$1 AND id=$2 AND ended_at IS NULL`,
+				in.TenantID, in.RunID, status); err != nil {
+				return nil, err
+			}
 		}
-		if _, err = tx.Exec(ctx, `UPDATE runs SET status=$3 WHERE tenant_id=$1 AND id=$2 AND ended_at IS NULL`,
-			in.TenantID, in.RunID, status); err != nil {
-			return nil, err
-		}
-		return []event{
-			{
-				typ:  "interaction.requested",
-				data: contract.InteractionRequested{Interaction: in.Request, ExpiresAt: &in.ExpiresAt},
-			},
-		}, nil
+		return append(statusEvents, event{
+			typ:  "interaction.requested",
+			data: contract.InteractionRequested{Interaction: in.Request, ExpiresAt: &in.ExpiresAt},
+		}), nil
 	})
 	return out, err
 }
@@ -72,7 +78,13 @@ func (a *Activities) CancelInteraction(ctx context.Context, in w.NotifyInput) er
  WHERE tenant_id=$1
  AND id=$2
  AND status IN ('pending','escalated')`, in.TenantID, in.InteractionID)
-		return nil, err
+		if err != nil {
+			return nil, err
+		}
+		if w.TeamMember(in.Member) {
+			return refreshTeamRunStatus(ctx, tx, in.RunOp)
+		}
+		return nil, nil
 	})
 }
 func (a *Activities) NotifyInteraction(ctx context.Context, in w.NotifyInput) error {
@@ -166,16 +178,22 @@ func (a *Activities) ApplyDecision(ctx context.Context, in w.DecisionInput) erro
 		if err = auditDecision(ctx, tx, in, i.ID, scope); err != nil {
 			return nil, err
 		}
-		if _, err = tx.Exec(ctx,
-			`UPDATE runs SET status='running' WHERE tenant_id=$1 AND id=$2 AND ended_at IS NULL`, in.TenantID, in.RunID); err != nil {
-			return nil, err
+		var statusEvents []event
+		if w.TeamMember(in.Member) {
+			statusEvents, err = refreshTeamRunStatus(ctx, tx, in.RunOp)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			if _, err = tx.Exec(ctx,
+				`UPDATE runs SET status='running' WHERE tenant_id=$1 AND id=$2 AND ended_at IS NULL`, in.TenantID, in.RunID); err != nil {
+				return nil, err
+			}
 		}
-		return []event{
-			{
-				typ:  "interaction.resolved",
-				data: contract.InteractionResolved{InteractionId: i.ID, Decision: in.Decision, Actor: in.Actor},
-			},
-		}, nil
+		return append(statusEvents, event{
+			typ:  "interaction.resolved",
+			data: contract.InteractionResolved{InteractionId: i.ID, Decision: in.Decision, Actor: in.Actor},
+		}), nil
 	})
 }
 func temporalInvalid(message string) error {

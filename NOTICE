@@ -12,3 +12,14 @@ asset_mcp_publish_converter.py, ../skill/archive_store.py,
 ../skill/skill_manager.py:7995-8140, docs/zh/AgentTeam.md:215-231.
 Adaptations live in internal/assets/bundle, internal/market and internal/locks.
 The digest preimage follows Orbit contract v2 rather than upstream's checksum.
+
+Team scheduling adaptations from openjiuwen 0.1.19:
+agent_teams/schema/status.py, agent_teams/agent/scheduling/verdict.py,
+agent_teams/agent/scheduling/scheduler.py and agent_teams/prompts/en/scheduler_*.md.
+Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+Licensed under the Apache License, Version 2.0.
+Adaptations live in internal/team.
+
+This product uses github.com/robfig/cron/v3 v3.0.1.
+Copyright (C) 2012 Rob Figueiredo. All Rights Reserved.
+Licensed under the MIT License (verified in the module's LICENSE).

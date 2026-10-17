@@ -63,7 +63,7 @@ func (a *Activities) acquireLease(ctx context.Context, in w.AcquireSandboxInput,
 				StartWorkflowOperation: start,
 				UpdateOptions: client.UpdateWorkflowOptions{
 					UpdateName:   w.Acquire,
-					UpdateID:     fmt.Sprintf("run:%s:acq:%d", in.RunID, in.Attempt),
+					UpdateID:     acquireUpdateID(in),
 					WaitForStage: client.WorkflowUpdateStageCompleted,
 					Args:         []any{ac},
 				},
@@ -88,7 +88,7 @@ func (a *Activities) acquireLease(ctx context.Context, in w.AcquireSandboxInput,
 func (a *Activities) RecordSandboxState(ctx context.Context, in w.SandboxStateInput) error {
 	if in.Restored != nil {
 		return a.change(ctx, w.RunOp{TenantID: in.TenantID, SessionID: in.SessionID, RunID: in.RunID,
-			EventN: in.EventN, EventAt: in.EventAt}, func(ctx context.Context, tx pgx.Tx) ([]event, error) {
+			EventN: in.EventN, EventAt: in.EventAt, Member: in.Member}, func(ctx context.Context, tx pgx.Tx) ([]event, error) {
 			if err := a.recordSandbox(ctx, tx, in); err != nil {
 				return nil, err
 			}
@@ -167,7 +167,7 @@ func (a *Activities) sandboxAcquireInput(ctx context.Context, in w.AcquireSandbo
 	}
 	mounts := []contract.SandboxMount{}
 	for _, m := range lock.Members {
-		if string(m.Name) == in.Member {
+		if lock.Entry.Kind == "team" || string(m.Name) == in.Member {
 			mounts = append(mounts, contract.SandboxMount{Kind: "agent", LockId: lock.LockId, Entry: m.AgentEntry, Member: m.Name})
 			for _, index := range m.Skills {
 				mounts = append(mounts, contract.SandboxMount{Kind: "skills", LockId: lock.LockId, Entry: index, Member: m.Name})
@@ -192,5 +192,12 @@ func (a *Activities) sandboxAcquireInput(ctx context.Context, in w.AcquireSandbo
 
 	return w.AcquireInput{Provider: provider, Gen: gen, EventN: in.EventN, EventAt: in.EventAt, SpecDigest: specDigest, RunID: in.RunID,
 		SessionID: in.SessionID, WorkspaceID: workspace, Profile: in.Spec.Profile, Egress: in.Spec.Egress, Mounts: mounts,
-		TTLSeconds: in.Spec.TTLSeconds, Reacquire: in.Attempt > 0}, nil
+		TTLSeconds: in.Spec.TTLSeconds, Reacquire: in.Attempt > 0, Holder: in.Holder, Member: in.Member}, nil
+}
+
+func acquireUpdateID(in w.AcquireSandboxInput) string {
+	if w.TeamMember(in.Member) {
+		return fmt.Sprintf("run:%s:%s:%d:acq:%d", in.RunID, in.Member, in.Turn, in.Attempt)
+	}
+	return fmt.Sprintf("run:%s:acq:%d", in.RunID, in.Attempt)
 }

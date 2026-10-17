@@ -25,10 +25,14 @@ import (
 	"github.com/mindreon/orbit-control/internal/platform/ids"
 	"github.com/mindreon/orbit-control/internal/platform/natsx"
 	"github.com/mindreon/orbit-control/internal/platform/objstore"
+	"github.com/mindreon/orbit-control/internal/schedules"
+	"github.com/mindreon/orbit-control/internal/sessions"
 	w "github.com/mindreon/orbit-control/internal/workflows"
 )
 
 type Activities struct {
+	Schedules       *schedules.Service
+	Sessions        sessions.Service
 	Logger          *slog.Logger
 	SandboxProvider contract.SandboxProvider
 	DB              *db.DB
@@ -79,8 +83,9 @@ func (a *Activities) change(ctx context.Context, in w.RunOp, fn func(context.Con
  WHERE tenant_id=$1
  AND run_id=$2
  AND operation=$3
+ AND payload->>'member'=$4
  AND published_at IS NULL AND quarantined_at IS NULL
- ORDER BY event_id`, in.TenantID, in.RunID, in.EventN)
+ ORDER BY event_id`, in.TenantID, in.RunID, in.EventN, eventMember(in.Member))
 			if err != nil {
 				return err
 			}
@@ -184,17 +189,7 @@ func (a *Activities) PrepareRun(ctx context.Context, in w.PrepareInput) (w.Prepa
  AND r.id=$2`, in.TenantID, in.RunID).Scan(&lock, &kind); err != nil {
 			return nil, err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE runs
- SET status='running',started_at=COALESCE(started_at,now())
- WHERE tenant_id=$1
- AND id=$2
- AND status IN ('queued','running')`, in.TenantID, in.RunID); err != nil {
-			return nil, err
-		}
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO budget_reservations(id,tenant_id,run_id,millicredits,status,expires_at)
- VALUES($1,$2,$3,$4,'held',now()+interval '7 days')
- ON CONFLICT DO NOTHING`, ids.Derive(in.RunID, "reservation"), in.TenantID, in.RunID, in.Budget); err != nil {
+		if err := prepareRun(ctx, tx, in.RunOp, in.Budget); err != nil {
 			return nil, err
 		}
 		if err := tx.QueryRow(ctx, `SELECT COALESCE(max(version),0)
@@ -222,6 +217,9 @@ func (a *Activities) StartSegment(ctx context.Context, in w.StartSegmentInput) e
  WHERE run_segments.status='running'`, in.TenantID, in.RunID, in.Member, in.Seq, in.ExpectedVersion)
 		if err != nil {
 			return nil, err
+		}
+		if w.TeamMember(in.Member) {
+			return nil, nil
 		}
 		_, err = tx.Exec(ctx, `UPDATE runs SET status='running' WHERE tenant_id=$1 AND id=$2 AND ended_at IS NULL`, in.TenantID, in.RunID)
 		return nil, err
@@ -269,6 +267,15 @@ func (a *Activities) RecordSegment(ctx context.Context, in w.RecordSegmentInput)
 }
 func (a *Activities) SetRunStatus(ctx context.Context, in w.StatusInput) error {
 	return a.change(ctx, in.RunOp, func(ctx context.Context, tx pgx.Tx) ([]event, error) {
+		if w.TeamMember(in.Member) {
+			return nil, nil
+		}
+		if in.Member == w.MemberTeam {
+			if _, err := tx.Exec(ctx, `UPDATE team_runs SET paused=$3 WHERE tenant_id=$1 AND run_id=$2`, in.TenantID, in.RunID, in.Status == "paused"); err != nil {
+				return nil, err
+			}
+			return refreshTeamRunStatus(ctx, tx, in.RunOp)
+		}
 		_, err := tx.Exec(ctx, `UPDATE runs SET status=$3 WHERE tenant_id=$1 AND id=$2 AND ended_at IS NULL`,
 			in.TenantID, in.RunID, in.Status)
 		return []event{
@@ -349,9 +356,19 @@ func (a *Activities) FinalizeRun(ctx context.Context, in w.FinalizeInput) error 
 }
 
 func (a *Activities) WaitForRun(ctx context.Context, in w.RunOp) error {
+	var workflowID string
+	if err := a.DB.WithTenant(ctx, in.TenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT temporal_workflow_id FROM runs WHERE tenant_id=$1 AND id=$2`, in.TenantID, in.RunID).Scan(&workflowID)
+	}); err != nil {
+		return err
+	}
+	return a.waitForWorkflow(ctx, workflowID)
+}
+
+func (a *Activities) waitForWorkflow(ctx context.Context, workflowID string) error {
 	done := make(chan error, 1)
 	go func() {
-		done <- a.Temporal.GetWorkflow(ctx, w.AgentRunWorkflowID(in.TenantID, in.RunID), "").Get(ctx, nil)
+		done <- a.Temporal.GetWorkflow(ctx, workflowID, "").Get(ctx, nil)
 	}()
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
@@ -387,11 +404,11 @@ func persistEvents(ctx context.Context, tx pgx.Tx, in w.RunOp, evs []event) erro
 		}
 		msg := contract.RunEvent{
 			V:         1,
-			Id:        fmt.Sprintf("%s:main:%d:0:%d", in.RunID, in.Seq, in.EventN*1000+int64(i)+1),
+			Id:        fmt.Sprintf("%s:%s:%d:0:%d", in.RunID, eventMember(in.Member), in.Seq, in.EventN*1000+int64(i)+1),
 			TenantId:  in.TenantID,
 			SessionId: in.SessionID,
 			RunId:     in.RunID,
-			Member:    "main",
+			Member:    eventMember(in.Member),
 			Segment:   in.Seq,
 			Attempt:   0,
 			Ts:        at,
@@ -418,7 +435,7 @@ func recordOutput(ctx context.Context, tx pgx.Tx, in w.RecordSegmentInput, chang
 	var err error
 	evs := []event{}
 	if changed {
-		if f := in.Result.Final; f != nil {
+		if f := in.Result.Final; f != nil && !w.TeamMember(in.Member) {
 			content, err := json.Marshal(map[string]any{"text": f.TextPreview, "truncated": f.ContentRef != nil})
 			if err != nil {
 				return nil, err
@@ -491,4 +508,11 @@ func settleRun(ctx context.Context, tx pgx.Tx, in w.FinalizeInput, used int64) e
 		return err
 	}
 	return nil
+}
+
+func eventMember(member string) string {
+	if member == "" {
+		return w.MemberMain
+	}
+	return member
 }

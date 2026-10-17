@@ -91,7 +91,7 @@ func (svc Service) submissionLock(ctx context.Context, s Session, lockID string)
 		return lock, false, err
 	}
 	lock, err = svc.Locks.Resolve(ctx, locks.Request{TenantID: tenant, LockID: lockID,
-		Entry: locks.Entry{Kind: "agent", Ref: s.EntryRef}, Scope: locks.Scope{WorkspaceID: s.WorkspaceID}})
+		Entry: locks.Entry{Kind: contract.EntryKind(s.EntryKind), Ref: s.EntryRef}, Scope: locks.Scope{WorkspaceID: s.WorkspaceID}})
 	if err != nil {
 		return lock, false, httpx.E(422, "LOCK_RESOLUTION_FAILED", "Agent dependencies could not be resolved")
 	}
@@ -103,7 +103,7 @@ func (svc Service) submissionBudget(ctx context.Context, lock contract.RunLock, 
 		budget = 200000
 	}
 	// Defaults come from immutable locked agent bytes.
-	for _, file := range lock.Entries[lock.Members[0].AgentEntry].Files {
+	for _, file := range lock.Entries[budgetMember(lock).AgentEntry].Files {
 		if file.Path != "agent.json" {
 			continue
 		}
@@ -119,6 +119,9 @@ func (svc Service) submissionBudget(ctx context.Context, lock contract.RunLock, 
 			budget = *manifest.Limits.DefaultRunBudgetMillicredits
 		}
 	}
+	if lock.Entry.Kind == "team" {
+		budget *= int64(min(len(lock.Members), 4))
+	}
 	if requested != nil {
 		budget = *requested
 	}
@@ -132,7 +135,7 @@ func saveSubmissionRun(ctx context.Context, s Session, runID, messageID string, 
 	_, err := tx.Exec(ctx, `INSERT INTO runs(id,tenant_id,session_id,trigger,status,created_by,message_id,
  budget_millicredits,temporal_workflow_id)
  VALUES($1,$2,$3,'user_message','queued',$4,$5,$6,$7)`, runID, tenant, s.ID, auth.From(ctx).ID, messageID,
-		budget, w.AgentRunWorkflowID(tenant, runID))
+		budget, w.RunWorkflowID(s.EntryKind, tenant, runID))
 	if err != nil {
 		return err
 	}
@@ -161,4 +164,15 @@ func (svc Service) saveSubmissionMessage(ctx context.Context, session, run, mess
 		`INSERT INTO messages(id,tenant_id,session_id,run_id,role,author_id,content,content_ref)
  VALUES($1,$2,$3,$4,'user',$5,$6,$7)`, message, tenant, session, run, auth.From(ctx).ID, content, ref)
 	return err
+}
+
+func budgetMember(lock contract.RunLock) contract.LockMember {
+	if lock.Entry.Kind == "team" {
+		for _, member := range lock.Members {
+			if member.Role == "leader" {
+				return member
+			}
+		}
+	}
+	return lock.Members[0]
 }

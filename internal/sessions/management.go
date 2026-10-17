@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/mindreon/orbit-control/internal/auth"
-	"github.com/mindreon/orbit-control/internal/locks"
 	"github.com/mindreon/orbit-control/internal/platform/db"
 	"github.com/mindreon/orbit-control/internal/platform/httpx"
 	"github.com/mindreon/orbit-control/internal/platform/ids"
@@ -15,6 +14,7 @@ import (
 )
 
 type CreateInput struct {
+	EntryKind     string  `json:"entry_kind,omitempty"`
 	WorkspaceID   string  `json:"workspace_id"`
 	EntryRef      string  `json:"entry_ref"`
 	Title         string  `json:"title"`
@@ -42,16 +42,15 @@ func (svc Service) Create(ctx context.Context, in CreateInput) (Session, error) 
 	if err := (policy.Authorizer{}).Require(ctx, "session.create", resource); err != nil {
 		return Session{}, err
 	}
-	_, err := svc.Locks.Resolve(ctx, locks.Request{TenantID: auth.Tenant(ctx), LockID: ids.New(),
-		Entry: locks.Entry{Kind: "agent", Ref: in.EntryRef}, Scope: locks.Scope{WorkspaceID: in.WorkspaceID}})
+	lock, err := ResolveEntry(ctx, svc.Locks, in.WorkspaceID, in.EntryRef, in.EntryKind)
 	if err != nil {
-		return Session{}, httpx.E(422, "LOCK_RESOLUTION_FAILED", "Agent cannot be resolved")
+		return Session{}, err
 	}
 	id, tx := ids.New(), db.Tx(ctx)
 	_, err = tx.Exec(ctx, `INSERT INTO sessions(id,tenant_id,workspace_id,project_id,owner_id,title,entry_kind,
  entry_ref,message_policy,status,pinned)
- VALUES($1,$2,$3,$4,$5,$6,'agent',$7,$8,'idle',$9)`, id, auth.Tenant(ctx), in.WorkspaceID, in.ProjectID,
-		auth.From(ctx).ID, in.Title, in.EntryRef, in.MessagePolicy, in.Pinned)
+ VALUES($1,$2,$3,$4,$5,$6,$10,$7,$8,'idle',$9)`, id, auth.Tenant(ctx), in.WorkspaceID, in.ProjectID,
+		auth.From(ctx).ID, in.Title, in.EntryRef, in.MessagePolicy, in.Pinned, lock.Entry.Kind)
 	if err != nil {
 		return Session{}, err
 	}

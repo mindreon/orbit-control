@@ -13,6 +13,8 @@ import (
 )
 
 type Config struct {
+	SchedulesDefaultLimit, CtlWaitConcurrency                                                                 int
+	ScheduleSweepInterval                                                                                     time.Duration
 	SinkEnabled                                                                                               bool
 	OutboxInterval                                                                                            time.Duration
 	StreamKeyFile, StreamKeyID                                                                                string
@@ -201,6 +203,28 @@ func (c Config) ValidateRuns(api bool) error {
 }
 
 func (c *Config) loadRunEnvironment() error {
+	c.SchedulesDefaultLimit = 20
+	c.CtlWaitConcurrency = 4096
+	for _, setting := range []struct {
+		name   string
+		target *int
+	}{{name: "ORBIT_SCHEDULES_DEFAULT_LIMIT", target: &c.SchedulesDefaultLimit}, {name: "ORBIT_CTL_WAIT_CONCURRENCY", target: &c.CtlWaitConcurrency}} {
+		if value := os.Getenv(setting.name); value != "" {
+			n, err := strconv.Atoi(value)
+			if err != nil || n < 1 {
+				return fmt.Errorf("%s must be positive", setting.name)
+			}
+			*setting.target = n
+		}
+	}
+	c.ScheduleSweepInterval = time.Minute
+	if value := os.Getenv("ORBIT_SCHEDULE_SWEEP_INTERVAL"); value != "" {
+		d, err := time.ParseDuration(value)
+		if err != nil || d <= 0 {
+			return fmt.Errorf("ORBIT_SCHEDULE_SWEEP_INTERVAL must be positive")
+		}
+		c.ScheduleSweepInterval = d
+	}
 	c.SinkEnabled = env("ORBIT_SINK_ENABLED", "true") == "true"
 	if v := os.Getenv("ORBIT_SINK_ENABLED"); v != "" && v != "true" && v != "false" {
 		return fmt.Errorf("ORBIT_SINK_ENABLED must be true or false")

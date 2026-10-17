@@ -22,7 +22,7 @@ func List(ctx context.Context, page httpx.Page, status string) (sessions.Page[In
 	args["tenant"], args["actor"], args["status"], args["cursor"], args["limit"] =
 		auth.Tenant(ctx), auth.From(ctx).ID, status, page.Cursor, page.Limit+1
 	rows, err := db.Tx(ctx).Query(ctx, `SELECT i.id::text,i.run_id::text,i.session_id::text,i.member,i.kind,i.request,i.status,i.approvers,
- i.decision,i.decided_by::text,i.expires_at,i.created_at
+ i.decision,i.decided_by::text,i.expires_at,i.created_at,i.workflow_id
  FROM interactions i
  JOIN sessions s ON s.tenant_id=i.tenant_id
  AND s.id=i.session_id
