@@ -3,7 +3,6 @@ package runworker
 import (
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
-	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 
@@ -28,12 +27,10 @@ func Register(reg worker.Registry, a *ctl.Activities) {
 	reg.RegisterActivity(a)
 }
 func New(c client.Client, a *ctl.Activities) worker.Worker {
-	worker := worker.New(
-		c,
-		contract.TaskQueueCtl,
-		worker.Options{MaxConcurrentActivityExecutionSize: 64, MaxConcurrentWorkflowTaskExecutionSize: 32,
-			Interceptors: []interceptor.WorkerInterceptor{&teamrun.SignalInterceptor{}}},
-	)
+	options := teamrun.WorkerOptions()
+	options.MaxConcurrentActivityExecutionSize = 64
+	options.MaxConcurrentWorkflowTaskExecutionSize = 32
+	worker := worker.New(c, contract.TaskQueueCtl, options)
 	Register(worker, a)
 	return worker
 }

@@ -13,7 +13,6 @@ import (
 	"github.com/mindreon/orbit-control/internal/platform/ids"
 	"github.com/mindreon/orbit-control/internal/schedules"
 	"github.com/mindreon/orbit-control/internal/sessions"
-	"github.com/mindreon/orbit-control/internal/team"
 	w "github.com/mindreon/orbit-control/internal/workflows"
 )
 
@@ -138,6 +137,18 @@ func (h *Handler) triggerSchedule(out http.ResponseWriter, r *http.Request) erro
 		}, nil
 	})
 }
+
+// WaitingStatusSQL shares approval-before-input precedence with the run projection.
+func waitingStatusSQL(tenant, run, member, fallback string) string {
+	predicate := "i.tenant_id=" + tenant + " AND i.run_id=" + run + " AND i.status IN ('pending','escalated')"
+	if member != "" {
+		predicate += " AND i.member=" + member
+	}
+	approval := "CASE WHEN EXISTS(SELECT 1 FROM interactions i WHERE " + predicate + " AND i.kind<>'ask_user') THEN 'waiting_approval'"
+	input := " WHEN EXISTS(SELECT 1 FROM interactions i WHERE " + predicate + " AND i.kind='ask_user') THEN 'waiting_input'"
+	return approval + input + " ELSE " + fallback + " END"
+}
+
 func (h *Handler) teamView(out http.ResponseWriter, r *http.Request) error {
 	run, session, err := sessions.GetRun(r.Context(), r.PathValue("r"), "session.read")
 	if err != nil {
@@ -150,7 +161,7 @@ func (h *Handler) teamView(out http.ResponseWriter, r *http.Request) error {
 	err = db.Tx(r.Context()).QueryRow(r.Context(), `SELECT jsonb_build_object('board',t.board,'finished',t.finished,
  'summary',COALESCE(t.summary,''),'members',COALESCE((SELECT jsonb_agg(jsonb_build_object('name',m.name,'role',m.role,
  'status',CASE WHEN m.status='finished' THEN 'finished' ELSE `+
-		team.WaitingStatusSQL("m.tenant_id", "m.run_id", "m.name", "m.status")+` END,
+		waitingStatusSQL("m.tenant_id", "m.run_id", "m.name", "m.status")+` END,
  'task_id',m.task_id,'turn',m.turn) ORDER BY (SELECT ord FROM jsonb_array_elements(t.board->'roster') WITH ORDINALITY AS roster(value,ord)
 WHERE value->>'name'=m.name)) FROM team_members m WHERE m.tenant_id=t.tenant_id AND m.run_id=t.run_id),'[]'::jsonb))
  FROM team_runs t WHERE t.tenant_id=$1 AND t.run_id=$2`, auth.Tenant(r.Context()), run.ID).Scan(&raw)

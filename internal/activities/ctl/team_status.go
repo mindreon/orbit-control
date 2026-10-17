@@ -6,37 +6,34 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/mindreon/orbit-control/internal/contract"
-	"github.com/mindreon/orbit-control/internal/team"
 	w "github.com/mindreon/orbit-control/internal/workflows"
 )
-
-func teamRunStatus(paused, approval, input bool) string {
-	if paused {
-		return "paused"
-	}
-	if approval {
-		return "waiting_approval"
-	}
-	if input {
-		return "waiting_input"
-	}
-	return "running"
-}
 
 // The caller holds change's run-level transaction lock. Returning the status
 // event lets change assign it a replay-stable operation identity atomically.
 func refreshTeamRunStatus(ctx context.Context, tx pgx.Tx, in w.RunOp) ([]event, error) {
-	var paused, ended bool
-	var status, next string
-	err := tx.QueryRow(ctx, `SELECT t.paused,r.status,r.ended_at IS NOT NULL,`+
-		team.WaitingStatusSQL("r.tenant_id", "r.id", "", "'running'")+`
+	var paused, ended, approval, input bool
+	var status string
+	err := tx.QueryRow(ctx, `SELECT t.paused,r.status,r.ended_at IS NOT NULL,
+ EXISTS(SELECT 1 FROM interactions i WHERE i.tenant_id=r.tenant_id AND i.run_id=r.id
+  AND i.status IN ('pending','escalated') AND i.kind<>'ask_user'),
+ EXISTS(SELECT 1 FROM interactions i WHERE i.tenant_id=r.tenant_id AND i.run_id=r.id
+  AND i.status IN ('pending','escalated') AND i.kind='ask_user')
  FROM runs r JOIN team_runs t ON t.tenant_id=r.tenant_id AND t.run_id=r.id
- WHERE r.tenant_id=$1 AND r.id=$2`, in.TenantID, in.RunID).Scan(&paused, &status, &ended, &next)
+ WHERE r.tenant_id=$1 AND r.id=$2`, in.TenantID, in.RunID).
+		Scan(&paused, &status, &ended, &approval, &input)
 	if err != nil {
 		return nil, err
 	}
 	if ended || status == "queued" {
 		return nil, nil
+	}
+	next := "running"
+	if input {
+		next = "waiting_input"
+	}
+	if approval {
+		next = "waiting_approval"
 	}
 	if paused {
 		next = "paused"

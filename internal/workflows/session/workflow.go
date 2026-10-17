@@ -242,7 +242,7 @@ func (s *sessionWorkflow) startNext(ctx workflow.Context) {
 		TypedSearchAttributes: temporal.NewSearchAttributes(
 			temporal.NewSearchAttributeKeyKeyword("TenantId").ValueSet(s.in.TenantID),
 			temporal.NewSearchAttributeKeyKeyword("WorkspaceId").ValueSet(s.in.WorkspaceID),
-			temporal.NewSearchAttributeKeyKeyword("RunKind").ValueSet(runKind(s.activeKind))),
+			temporal.NewSearchAttributeKeyKeyword("RunKind").ValueSet(s.activeKind)),
 	})
 	if teamChild {
 		s.child = workflow.ExecuteChildWorkflow(cc, w.TeamRunWorkflow,
@@ -273,11 +273,4 @@ func (s *sessionWorkflow) waitChild(ctx workflow.Context, future workflow.ChildW
 	}
 	s.active = ""
 	s.runs++
-}
-
-func runKind(kind string) string {
-	if kind == "team" {
-		return "team"
-	}
-	return "agent"
 }

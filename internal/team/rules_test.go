@@ -58,7 +58,13 @@ func TestStartAndReviewScan(t *testing.T) {
 		{TaskId: "t3", Status: "pending", Assignee: new(contract.MemberName("bob"))},
 	}}
 	busy := []Active{{Member: "alice", Kind: "task", TaskID: "t1"}}
+	board.Tasks = append(board.Tasks, contract.TeamTask{TaskId: "t4", Status: "pending", Assignee: new(contract.MemberName("alice"))})
+	busy = append(busy, Active{Member: "alice", Kind: "task", TaskID: "t4"})
 	updated, actions := StartScan(board, busy, 2, false)
+	require.NotContains(t, actions, Action{Member: "alice", Kind: "task", TaskID: "t4"}, "a pending task is busy by task id")
+	busy = busy[:1]
+	board.Tasks = board.Tasks[:3]
+	updated, actions = StartScan(board, busy, 2, false)
 	require.Equal(t, contract.TaskStatus("blocked"), updated.Tasks[1].Status)
 	require.Equal(t, []Action{{Member: "bob", Kind: "task", TaskID: "t3"}}, actions)
 	updated, actions = StartScan(board, nil, 1, false)

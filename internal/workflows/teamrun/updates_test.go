@@ -53,6 +53,9 @@ func TestBoardCapacityRejectsWithoutMutation(t *testing.T) {
 				Review: &contract.TaskReview{Reviewers: []contract.MemberName{"reviewer"}}}}
 			r.st.Active["alice"] = w.ActiveTurn{Member: "alice", Turn: 1, Kind: "task", TaskID: "t1"}
 			r.st.Active["reviewer"] = w.ActiveTurn{Member: "reviewer", Turn: 1, Kind: "review", TaskID: "t1"}
+			if which == "assign" {
+				r.st.Board.Tasks[0].Status = "failed"
+			}
 			if which == "complete" {
 				r.st.Board.Tasks[0].Status = "in_progress"
 			}
@@ -165,7 +168,7 @@ func TestMaximalCarryStaysUnderOneMiB(t *testing.T) {
 			break
 		}
 		r.st.NextMail++
-		r.st.Mail[string(to)] = append(r.st.Mail[string(to)], r.mail(in))
+		r.st.Mail[string(to)] = append(r.st.Mail[string(to)], r.mail(in, mailTimeMax))
 	}
 	require.LessOrEqual(t, team.EncodedLen(r.st.Mail), team.MailBytesMax)
 	summary := team.TruncateEncoded(strings.Repeat("<", 10*team.SummaryBytes), team.SummaryBytes)

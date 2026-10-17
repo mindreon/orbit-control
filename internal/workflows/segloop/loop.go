@@ -284,8 +284,10 @@ func (l *loop) commit(
 		}
 	}
 	st.Steer = st.Steer[len(seg.Steer):]
-	for _, item := range seg.Mailbox {
-		st.DeliveredMail = append(st.DeliveredMail, item.MessageId)
+	if l.hooks.TrackDeliveries {
+		for _, item := range seg.Mailbox {
+			st.DeliveredMail = append(st.DeliveredMail, item.MessageId)
+		}
 	}
 	st.Mailbox = st.Mailbox[len(seg.Mailbox):]
 	if l.hooks.TrackDeliveries {

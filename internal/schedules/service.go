@@ -77,8 +77,17 @@ type PatchInput struct {
 	Status               *string `json:"status,omitempty"`
 }
 
-const selectSchedule = `SELECT to_jsonb(s)||jsonb_build_object('catchup_window_seconds',extract(epoch FROM catchup_window)::int)
- FROM schedules s WHERE tenant_id=$1 AND id=$2`
+const scheduleJSON = `to_jsonb(s)||jsonb_build_object('catchup_window_seconds',extract(epoch FROM catchup_window)::int)`
+const selectSchedule = `SELECT ` + scheduleJSON + ` FROM schedules s WHERE tenant_id=$1 AND id=$2`
+
+func decodeSchedule(raw []byte) (Schedule, error) {
+	var out Schedule
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return out, err
+	}
+	out.SyncPending = out.SyncedVersion < out.Version
+	return out, nil
+}
 
 func get(ctx context.Context, id string) (Schedule, error) {
 	var out Schedule
@@ -92,9 +101,7 @@ func get(ctx context.Context, id string) (Schedule, error) {
 		}
 		return out, err
 	}
-	err := json.Unmarshal(raw, &out)
-	out.SyncPending = out.SyncedVersion < out.Version
-	return out, err
+	return decodeSchedule(raw)
 }
 func Get(ctx context.Context, id string) (Schedule, error) {
 	out, err := get(ctx, id)
@@ -258,7 +265,7 @@ func List(ctx context.Context, workspace string, page httpx.Page) (sessions.Page
 	}
 	args["tenant"], args["workspace"], args["cursor"], args["limit"] = auth.Tenant(ctx), workspace, page.Cursor, page.Limit+1
 	rows, err := db.Tx(ctx).Query(ctx,
-		`SELECT to_jsonb(s)||jsonb_build_object('catchup_window_seconds',extract(epoch FROM catchup_window)::int)
+		`SELECT `+scheduleJSON+`
  FROM schedules s WHERE tenant_id=@tenant AND status<>'deleted'
  AND (@workspace='' OR workspace_id=NULLIF(@workspace,'')::uuid)
  AND (@cursor='' OR id>NULLIF(@cursor,'')::uuid) AND `+policy.WorkspaceReadPredicate+` ORDER BY id LIMIT @limit`, args)
@@ -275,11 +282,10 @@ func List(ctx context.Context, workspace string, page httpx.Page) (sessions.Page
 			out.NextCursor = httpx.Cursor(out.Items[len(out.Items)-1].ID)
 			break
 		}
-		var item Schedule
-		if err = json.Unmarshal(raw, &item); err != nil {
-			return out, err
+		item, decodeErr := decodeSchedule(raw)
+		if decodeErr != nil {
+			return out, decodeErr
 		}
-		item.SyncPending = item.SyncedVersion < item.Version
 		out.Items = append(out.Items, item)
 	}
 	return out, rows.Err()

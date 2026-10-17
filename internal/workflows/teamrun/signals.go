@@ -3,6 +3,7 @@ package teamrun
 import (
 	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/interceptor"
+	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 
 	w "github.com/mindreon/orbit-control/internal/workflows"
@@ -47,19 +48,8 @@ func (s *signalInbound) HandleSignal(ctx workflow.Context, in *interceptor.Handl
 	return s.Next.HandleSignal(ctx, &interceptor.HandleSignalInput{SignalName: pauseSignal, Arg: arg})
 }
 
-func (r *run) registerPauseSignals(ctx workflow.Context) {
-	workflow.Go(ctx, func(ctx workflow.Context) {
-		ch := workflow.GetSignalChannel(ctx, pauseSignal)
-		for ctx.Err() == nil {
-			var in pauseInput
-			ch.Receive(ctx, &in)
-			r.st.Paused, r.pauseChanged = in.Name == w.Pause, true
-			for _, member := range workflow.DeterministicKeys(r.st.Active) {
-				r.signal(ctx, r.st.Active[member], in.Name, in.Actor)
-			}
-		}
-	})
-}
-func (r *run) pausePending(ctx workflow.Context) bool {
-	return workflow.GetSignalChannel(ctx, pauseSignal).Len() > 0
+// WorkerOptions installs the TeamRun signal-ordering interceptor. It uses Temporal's
+// default data converter; this must be updated if a payload codec is introduced.
+func WorkerOptions() worker.Options {
+	return worker.Options{Interceptors: []interceptor.WorkerInterceptor{&SignalInterceptor{}}}
 }

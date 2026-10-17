@@ -611,9 +611,8 @@ func TestPauseResumeArrivalOrder(t *testing.T) {
 		t.Run(names[0], func(t *testing.T) {
 			h := newHarness(t)
 			h.at(sec, func() {
-				for _, name := range names {
-					h.env.SignalWorkflow(name, w.ActorInput{})
-				}
+				h.env.SignalWorkflowSkippingWorkflowTask(names[0], w.ActorInput{})
+				h.env.SignalWorkflow(names[1], w.ActorInput{})
 			})
 			h.cancelAt(5 * sec)
 			require.NoError(t, h.run())

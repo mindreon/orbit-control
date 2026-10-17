@@ -15,10 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/converter"
-	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
-	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 
 	"github.com/mindreon/orbit-control/internal/contract"
@@ -147,7 +145,7 @@ func (h *harness) remaining(member string, turn int, after time.Duration) time.D
 func (h *harness) newEnv() {
 	var suite testsuite.WorkflowTestSuite
 	h.env = suite.NewTestWorkflowEnvironment()
-	h.env.SetWorkerOptions(worker.Options{Interceptors: []interceptor.WorkerInterceptor{&SignalInterceptor{}}})
+	h.env.SetWorkerOptions(WorkerOptions())
 	// Every execution continues the same virtual clock, so StartedAt arithmetic survives Continue-As-New.
 	h.env.SetStartTime(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Add(h.epoch))
 	h.base = h.env.Now()

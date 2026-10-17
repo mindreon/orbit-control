@@ -46,7 +46,6 @@ func Run(ctx workflow.Context, in w.TeamRunInput) error {
 	if err := r.register(ctx); err != nil {
 		return err
 	}
-	r.registerPauseSignals(ctx)
 	deadlineCtx, cancelDeadline := workflow.WithCancel(ctx)
 	defer cancelDeadline()
 	deadline := workflow.NewTimer(deadlineCtx,
@@ -101,11 +100,19 @@ func Run(ctx workflow.Context, in w.TeamRunInput) error {
 			}
 			r.st.Board = board
 			for _, action := range actions {
+				if r.st.Paused {
+					break
+				}
 				task := r.task(action.TaskID)
 				r.start(ctx, action, contract.SegmentTurn{Kind: "follow_up", Text: new(team.TaskNotice(*task, r.st.Board))})
+				r.drain(ctx)
 			}
 			for _, action := range team.ReviewScan(r.st.Board, r.active(), in.Team.MaxParallel, r.st.Reserve) {
+				if r.st.Paused {
+					break
+				}
 				r.start(ctx, action, contract.SegmentTurn{Kind: "follow_up", Text: new(team.ReviewNotice(*r.task(action.TaskID)))})
+				r.drain(ctx)
 			}
 			r.wake(ctx)
 		}
@@ -115,7 +122,7 @@ func Run(ctx workflow.Context, in w.TeamRunInput) error {
 		r.collectPending(ctx)
 		r.drain(ctx)
 		if len(r.results) == 0 && !r.st.Dirty && len(r.st.Outbox) == 0 && len(r.pending) == 0 &&
-			!r.pauseChanged && !r.pausePending(ctx) && workflow.AllHandlersFinished(ctx) &&
+			!r.pauseChanged && workflow.AllHandlersFinished(ctx) &&
 			(r.st.Steps >= r.limit || workflow.GetInfo(ctx).GetContinueAsNewSuggested()) {
 			r.st.Steps = 0
 			in.Carry = r.st
@@ -218,10 +225,6 @@ func (r *run) start(ctx workflow.Context, action team.Action, input contract.Seg
 		task := r.task(action.TaskID)
 		brief = &contract.TeamTaskBrief{TaskId: task.TaskId, Title: task.Title, Description: task.Description, NarrowedTools: task.NarrowedTools}
 		if action.Kind == "task" {
-			if !team.CanTransition(task.Status, "in_progress") {
-				r.failure = "INVALID_SPEC"
-				return
-			}
 			task.Status = "in_progress"
 			task.Attempts++
 			r.updated(task, false)
@@ -329,7 +332,7 @@ func (r *run) result(ctx workflow.Context, result w.TurnResult) {
 			switch result.Status {
 			case "ended", "cancelled":
 			case "completed":
-				if task.Status == "in_progress" {
+				{
 					preview := ""
 					if result.Final != nil {
 						preview = result.Final.TextPreview
@@ -493,6 +496,15 @@ func (r *run) signals(ctx workflow.Context) bool {
 func (r *run) drain(ctx workflow.Context) {
 	if ctx.Err() != nil && r.st.Cancel == nil {
 		r.st.Cancel = &w.CancelInput{Reason: "parent_cancelled"}
+	}
+	pause := workflow.GetSignalChannel(ctx, pauseSignal)
+	var pauseIn pauseInput
+	for pause.ReceiveAsync(&pauseIn) {
+		r.st.Paused = pauseIn.Name == w.Pause
+		r.pauseChanged = true
+		for _, member := range workflow.DeterministicKeys(r.st.Active) {
+			r.signal(ctx, r.st.Active[member], pauseIn.Name, pauseIn.Actor)
+		}
 	}
 	for _, name := range []string{w.Cancel, w.AssetSuspended} {
 		ch := workflow.GetSignalChannel(ctx, name)

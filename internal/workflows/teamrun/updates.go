@@ -18,7 +18,14 @@ func rejected(code, message string) error {
 	return temporal.NewNonRetryableApplicationError(message, code, nil)
 }
 func textError() error { return rejected("TEAM_TEXT_TOO_LONG", "Team text exceeds its byte limit") }
+
+// mailTimeMax keeps validator sizing independent from workflow time while covering the widest JSON timestamp.
+var mailTimeMax = time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)
+
 func (r *run) common(caller *contract.MemberName, request string) (bool, error) {
+	if len(request) > team.RequestIDBytes {
+		return false, rejected("TEAM_TEXT_TOO_LONG", "Team request id too long")
+	}
 	if _, ok := r.st.Applied[request]; ok {
 		return true, nil
 	}
@@ -162,7 +169,7 @@ func (r *run) validateAssign(in contract.AssignTaskInput) error {
 	if task == nil {
 		return rejected("TEAM_UNKNOWN_TASK", "Unknown task")
 	}
-	if task.Status != "pending" && task.Status != "blocked" && (task.Status != "failed" || !team.CanTransition(task.Status, "pending")) {
+	if !team.CanTransition(task.Status, "pending") {
 		return rejected("TEAM_BAD_TRANSITION", "Task cannot be assigned")
 	}
 	if r.role(string(in.Member)) != "teammate" {
@@ -207,7 +214,7 @@ func (r *run) validateComplete(in contract.CompleteTaskInput) error {
 		return rejected("TEAM_NOT_ASSIGNEE", "Caller is not the assignee")
 	}
 	active := r.st.Active[string(*in.Caller)]
-	if !team.CanTransition(task.Status, "completed") || task.Status != "in_progress" || active.Kind != "task" || active.TaskID != in.TaskId {
+	if !team.CanTransition(task.Status, "in_review") || active.Kind != "task" || active.TaskID != in.TaskId {
 		return rejected("TEAM_BAD_TRANSITION", "Task is not in progress in this turn")
 	}
 	if len(in.ResultText) > team.ResultBytes || len(in.Files) > team.FilesMax {
@@ -252,7 +259,7 @@ func (r *run) validateVerdict(in contract.SubmitVerdictInput) error {
 		return rejected("TEAM_NOT_REVIEWER", "Caller is not a reviewer")
 	}
 	active := r.st.Active[string(*in.Caller)]
-	if !team.CanTransition(task.Status, "completed") || task.Status != "in_review" || active.Kind != "review" || active.TaskID != in.TaskId {
+	if !team.CanTransition(task.Status, "completed") || active.Kind != "review" || active.TaskID != in.TaskId {
 		return rejected("TEAM_BAD_TRANSITION", "Task is not in review in this turn")
 	}
 	for _, vote := range task.Review.Votes {
@@ -279,10 +286,6 @@ func (r *run) verdict(ctx workflow.Context, in contract.SubmitVerdictInput) erro
 }
 func (r *run) settle(ctx workflow.Context, task *contract.TeamTask) {
 	status, review := team.Settle(*task, r.in.Team.ReviewMaxRounds)
-	if status != task.Status && !team.CanTransition(task.Status, status) {
-		r.failure = "INVALID_SPEC"
-		return
-	}
 	task.Status, task.Review = status, &review
 	if status == "failed" {
 		r.st.Escalations = append(r.st.Escalations, task.TaskId)
@@ -307,22 +310,21 @@ func (r *run) validateSend(in contract.SendMessageInput) error {
 	if len(in.Text) > team.MessageBytes {
 		return textError()
 	}
-	msg := r.mail(in)
+	msg := r.mail(in, mailTimeMax)
 	if len(r.st.Mail[string(in.To)]) >= team.MailboxCap || team.EncodedLen(r.st.Mail)+team.EncodedLen(msg) > team.MailBytesMax {
 		return rejected("TEAM_MAILBOX_FULL", "Team mailbox is full")
 	}
 	return nil
 }
-func (r *run) mail(in contract.SendMessageInput) contract.MailboxMessage {
+func (r *run) mail(in contract.SendMessageInput, sentAt time.Time) contract.MailboxMessage {
 	return contract.MailboxMessage{MessageId: fmt.Sprintf("m%d", r.st.NextMail+1), From: string(*in.Caller),
-		Text: new(in.Text), SentAt: time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)}
+		Text: new(in.Text), SentAt: sentAt}
 }
 func (r *run) send(ctx workflow.Context, in contract.SendMessageInput) error {
 	if r.applied(in.RequestId) {
 		return nil
 	}
-	msg := r.mail(in)
-	msg.SentAt = workflow.Now(ctx)
+	msg := r.mail(in, workflow.Now(ctx))
 	r.st.NextMail++
 	to := string(in.To)
 	r.st.Mail[to] = append(r.st.Mail[to], msg)

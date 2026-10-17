@@ -30,17 +30,21 @@ type teamResponse struct {
 	syncID  string
 }
 type teamHandler func(context.Context, auth.CapabilityClaims, *http.Request) (teamResponse, error)
+type teamRoute struct {
+	handler teamHandler
+	team    bool
+}
 
 func (h *Handler) teamRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("POST /internal/v1/runs/{run}/team/updates/{name}", h.teamRequest(true, h.updateTeam))
-	mux.HandleFunc("GET /internal/v1/runs/{run}/team/board", h.teamRequest(true, h.readTeamBoard))
-	mux.HandleFunc("POST /internal/v1/runs/{run}/schedules", h.teamRequest(false, h.createSchedule))
-	mux.HandleFunc("GET /internal/v1/runs/{run}/schedules", h.teamRequest(false, h.listSchedules))
-	mux.HandleFunc("DELETE /internal/v1/runs/{run}/schedules/{id}", h.teamRequest(false, h.deleteSchedule))
+	mux.HandleFunc("POST /internal/v1/runs/{run}/team/updates/{name}", h.teamRequest(teamRoute{handler: h.updateTeam, team: true}))
+	mux.HandleFunc("GET /internal/v1/runs/{run}/team/board", h.teamRequest(teamRoute{handler: h.readTeamBoard, team: true}))
+	mux.HandleFunc("POST /internal/v1/runs/{run}/schedules", h.teamRequest(teamRoute{handler: h.createSchedule, team: false}))
+	mux.HandleFunc("GET /internal/v1/runs/{run}/schedules", h.teamRequest(teamRoute{handler: h.listSchedules, team: false}))
+	mux.HandleFunc("DELETE /internal/v1/runs/{run}/schedules/{id}", h.teamRequest(teamRoute{handler: h.deleteSchedule, team: false}))
 }
 
 // The wrapper authenticates and closes the transaction before any Temporal call.
-func (h *Handler) teamRequest(teamOnly bool, next teamHandler) http.HandlerFunc {
+func (h *Handler) teamRequest(route teamRoute) http.HandlerFunc {
 	return func(out http.ResponseWriter, r *http.Request) {
 		token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		claims, err := h.Signer.VerifyCapability(token)
@@ -60,7 +64,7 @@ func (h *Handler) teamRequest(teamOnly bool, next teamHandler) http.HandlerFunc 
 			if err := check(c, claims); err != nil {
 				return err
 			}
-			if teamOnly {
+			if route.team {
 				lock, err := getLock(c, claims)
 				if err != nil {
 					return err
@@ -81,7 +85,7 @@ func (h *Handler) teamRequest(teamOnly bool, next teamHandler) http.HandlerFunc 
 				}
 			}
 			var err error
-			response, err = next(c, claims, r)
+			response, err = route.handler(c, claims, r)
 			return err
 		})
 		if err != nil {

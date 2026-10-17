@@ -11,7 +11,6 @@ import (
 	"go.temporal.io/api/enums/v1"
 	historypb "go.temporal.io/api/history/v1"
 	"go.temporal.io/sdk/converter"
-	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -38,7 +37,7 @@ func TestReplay(t *testing.T) {
 			require.NoError(t, protojson.Unmarshal(raw, history))
 			assertHistoryScenario(t, strings.TrimSuffix(filepath.Base(path), ".json"), history)
 			replayer, err := worker.NewWorkflowReplayerWithOptions(
-				worker.WorkflowReplayerOptions{Interceptors: []interceptor.WorkerInterceptor{&teamrun.SignalInterceptor{}}})
+				worker.WorkflowReplayerOptions{Interceptors: teamrun.WorkerOptions().Interceptors})
 			require.NoError(t, err)
 			replayer.RegisterWorkflowWithOptions(agentrun.Run, workflow.RegisterOptions{Name: w.AgentRunWorkflow})
 			replayer.RegisterWorkflowWithOptions(session.Run, workflow.RegisterOptions{Name: w.SessionWorkflow})
