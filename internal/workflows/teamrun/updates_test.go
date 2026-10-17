@@ -235,6 +235,8 @@ func TestCompleteRejectsInvalidSourceTransition(t *testing.T) {
 	r := updateRun()
 	r.st.Board.Tasks = []contract.TeamTask{{TaskId: "t1", Status: "pending", Assignee: new(contract.MemberName("alice"))}}
 	r.st.Active["alice"] = w.ActiveTurn{Member: "alice", Turn: 1, Kind: "task", TaskID: "t1"}
-	err := r.validateComplete(contract.CompleteTaskInput{Caller: new(contract.MemberName("alice")), RequestId: "bad-source", TaskId: "t1", ResultText: "result"})
+	err := r.validateComplete(contract.CompleteTaskInput{
+		Caller: new(contract.MemberName("alice")), RequestId: "bad-source", TaskId: "t1", ResultText: "result",
+	})
 	requireCode(t, err, "TEAM_BAD_TRANSITION")
 }
