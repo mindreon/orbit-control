@@ -103,6 +103,9 @@ URLs are not logged. Configuration uses environment variables only.
 | `ORBIT_TEMPORAL_TLS_CA_FILE` | Optional private CA PEM; otherwise system roots |
 | `ORBIT_TEMPORAL_TLS_CERT_FILE` / `ORBIT_TEMPORAL_TLS_KEY_FILE` | Optional paired client certificate/key for mTLS |
 | `ORBIT_TEMPORAL_TLS_SERVER_NAME` | Optional certificate server-name override |
+| `ORBIT_SCHEDULES_DEFAULT_LIMIT` | Maximum active or paused schedules per workspace when no `schedules` quota policy applies, default `20` |
+| `ORBIT_SCHEDULE_SWEEP_INTERVAL` | Interval of the sweeper that synchronizes schedules to Temporal, Go duration, default `1m` |
+| `ORBIT_CTL_WAIT_CONCURRENCY` | Maximum concurrent `WaitForRun`/`WaitForTurn` long-polls on the `ctl-wait` task queue, default `4096` |
 | `ORBIT_SANDBOX_PROVIDER` | `local` in dev, `opensandbox` in prod; prod forbids `local` before acquisition |
 | `ORBIT_TEST_DATABASE_URL` | Superuser URL to a **disposable** test database |
 | `ORBIT_REQUIRE_PG_TESTS` | `1` makes missing PG configuration fail instead of skip |
@@ -495,7 +498,7 @@ Go source uses keyed struct literals, separate statements, grouped imports and
 lines of at most 140 characters.
 
 The testsuite covers the 36 cases in WP6 §6.1 without external services.
-`TestReplay` replays all 14 committed histories recorded from a real Temporal
+`TestReplay` replays all 22 committed histories recorded from a real Temporal
 server. `workflow_test_limits` lowers continuation thresholds to three;
 SideEffect records the threshold so those histories also replay in normal builds.
 To regenerate the histories, run
@@ -527,6 +530,46 @@ ID: issuing credentials binds the actual profile UUID and pricing snapshot to
 the segment attempt/model. Usage uses that binding; ambiguous requests for two
 profiles of the same model in one attempt return MODEL_PROFILE_CONFLICT.
 
+
+## Team runs and scheduled tasks (WP8b)
+
+`orbit-control worker|all` also registers TeamRunWorkflow, MemberTaskWorkflow and
+ScheduledRunWorkflow. A team session has `entry_kind=team`; when a reference
+resolves as both an agent and a team the caller must name the kind
+(`ENTRY_KIND_AMBIGUOUS`). The run is one TeamRun (a single `runs` row, counted once
+by `runs_concurrent`) whose members are MemberTask child workflows that share
+the event subject, with member events distinguished by `member`. Members never
+change `runs.status`; the TeamRun derives it (`paused`, then `waiting_approval`,
+then `waiting_input`, then `running`) so the session list shows when a team waits
+for a person. Member turns end with the
+runtime's `RunAgentSegment` on `agent.standard`; team tools reach the TeamRun
+only through `POST /internal/v1/runs/{run}/team/updates/{name}`, where the
+capability names the caller and the request body cannot override it.
+
+`WaitForRun` and `WaitForTurn` hold a long poll each, so they run on their own
+`ctl-wait` task queue with `ORBIT_CTL_WAIT_CONCURRENCY` slots; a worker that
+omits that worker cannot make team progress. The TeamRun bounds its history with
+Continue-As-New (every 300 steps) and carries a board, mail and cursors that are
+kept under 1 MiB by byte caps on mail, board text and narrowed tools.
+
+Schedules are rows first and Temporal schedules second. Create, PATCH and DELETE
+commit (with audit) before synchronization; a failed synchronization leaves
+`sync_pending` and the sweeper retries every `ORBIT_SCHEDULE_SWEEP_INTERVAL`.
+Synchronization of one schedule is serialized by a session advisory lock and
+re-reads the row after taking it, so a slower caller cannot overwrite a newer
+configuration. A schedule created through the API has the id
+`Derive(tenant, principal|schedule|Idempotency-Key)` and the key stays bound to it.
+A non-owner who changes the content of a schedule (prompt, budget, cron, timezone,
+overlap policy or catch-up window) becomes its owner and is authorized, resolved and
+admitted again; renames, pause/resume and delete do not transfer ownership.
+Each firing creates one session and one run with the owner's authority and
+`unattended` set, so a human prompt (approval, question, uncertain effect) fails the
+run with `UNATTENDED_INTERACTION` instead of waiting.
+
+Test notes: the NATS suite (`-tags nats_integration`) creates its own JetStream
+streams and needs an unrestricted server, not the permission-restricted stack
+NATS; start `nats:2 -js` on a spare port. The development stack seeds a
+`review-team` asset (leader, two writers, one reviewer).
 
 ## Event streams and history (WP7)
 
