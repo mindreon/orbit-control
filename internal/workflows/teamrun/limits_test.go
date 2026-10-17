@@ -109,8 +109,12 @@ func TestCancelSurvivesContinueAsNew(t *testing.T) {
 	h := newHarness(t)
 	h.at(5*sec, func() {
 		h.create("leader", "c1", newTask("t1", "alice"))
-		h.env.SignalWorkflow(w.Cancel, w.CancelInput{Reason: "test"})
 	})
+	h.onMemberStart = func(in w.MemberTaskInput) {
+		if in.Member == "alice" {
+			h.env.SignalWorkflow(w.Cancel, w.CancelInput{Reason: "test"})
+		}
+	}
 	h.turn("leader", 1, 30*sec, w.TurnResult{Status: "cancelled"})
 	h.turn("alice", 1, 30*sec, w.TurnResult{Status: "cancelled"})
 	require.NoError(t, h.run())

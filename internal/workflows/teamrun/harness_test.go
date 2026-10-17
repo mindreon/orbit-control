@@ -62,27 +62,28 @@ type callback struct {
 // re-schedules whatever has not happened yet, so a test reads the same with or
 // without the workflow_test_limits build tag.
 type harness struct {
-	t           *testing.T
-	env         *testsuite.TestWorkflowEnvironment
-	in          w.TeamRunInput
-	mu          sync.Mutex
-	starts      []memberStart
-	signals     []signalRecord
-	boards      []w.RecordBoardInput
-	statuses    []w.StatusInput
-	waits       []w.TurnOp
-	calls       []string
-	final       *w.FinalizeTeamInput
-	scripts     []turnScript
-	callbacks   []*callback
-	carries     []w.TeamRunInput
-	epoch       time.Duration
-	base        time.Time
-	ended       time.Time
-	runs        int
-	epochs      []time.Duration
-	signalDelay time.Duration
-	seq         int
+	t             *testing.T
+	env           *testsuite.TestWorkflowEnvironment
+	in            w.TeamRunInput
+	mu            sync.Mutex
+	starts        []memberStart
+	signals       []signalRecord
+	boards        []w.RecordBoardInput
+	statuses      []w.StatusInput
+	waits         []w.TurnOp
+	calls         []string
+	final         *w.FinalizeTeamInput
+	scripts       []turnScript
+	callbacks     []*callback
+	carries       []w.TeamRunInput
+	epoch         time.Duration
+	base          time.Time
+	ended         time.Time
+	runs          int
+	epochs        []time.Duration
+	signalDelay   time.Duration
+	seq           int
+	onMemberStart func(w.MemberTaskInput)
 }
 
 func roster() []contract.RosterEntry {
@@ -159,6 +160,9 @@ func (h *harness) newEnv() {
 		h.mu.Lock()
 		h.starts = append(h.starts, memberStart{In: in, At: h.vnow(workflow.Now(ctx))})
 		h.mu.Unlock()
+		if h.onMemberStart != nil {
+			h.onMemberStart(in)
+		}
 		id := workflow.GetInfo(ctx).WorkflowExecution.ID
 		for _, name := range []string{w.Deliver, w.EndTurn, w.Cancel, w.Pause, w.Resume} {
 			workflow.Go(ctx, func(ctx workflow.Context) {
