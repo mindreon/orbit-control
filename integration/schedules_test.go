@@ -251,7 +251,11 @@ func testSchedules(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	})
 	t.Run("T-P7/Quota", func(t *testing.T) {
 		r := newScheduleRig(t, d, admin)
-		r.svc.DefaultLimit = 1
+		r.tx(t, func(ctx context.Context, tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `INSERT INTO quota_policies(id,tenant_id,scope_type,scope_id,metric,"limit",period,action)
+ VALUES($1,$2,'workspace',$3,'schedules',1,'total','block')`, ids.New(), r.tenant, r.workspace)
+			return err
+		})
 		row := r.create(t)
 		r.patch(t, row.ID, schedules.PatchInput{Status: new("paused")})
 		err := d.WithTenant(t.Context(), r.tenant, func(tx pgx.Tx) error {
@@ -302,6 +306,11 @@ func testSchedules(t *testing.T, d *db.DB, admin *pgx.Conn) {
 				`SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND usename='orbit_app' AND xact_start IS NOT NULL`).Scan(&open)
 			require.NoError(t, err)
 			require.Zero(t, open, "Temporal called inside a tenant transaction")
+			var locks int
+			err = admin.QueryRow(t.Context(), `SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid=l.pid
+ WHERE a.datname=current_database() AND a.usename='orbit_app' AND l.locktype='advisory' AND l.granted`).Scan(&locks)
+			require.NoError(t, err)
+			require.Equal(t, 1, locks, "only the F75 per-schedule session lock may span Temporal calls")
 		}
 		require.NoError(t, r.svc.SweepOnce(t.Context()))
 		synced := r.row(t, row.ID)
@@ -402,7 +411,7 @@ func testScheduleLockSeeds(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		t.Fatal("Create stayed blocked after the quota lock was released")
 	}
 }
-func (r *scheduleRig) request(t *testing.T, method, path, body, key string, mutate ...func(*scheduleRig)) (int, []byte) {
+func (r *scheduleRig) request(t *testing.T, method, path, body, key string) (int, []byte) {
 	t.Helper()
 	h, token := r.api(t, r.agentLock(t), &teamTemporal{}, func(h *httpapi.Handler) { h.Schedules = &r.svc })
 	return r.call(t, h, token, method, path, body, key)

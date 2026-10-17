@@ -443,6 +443,11 @@ func testTeamPersistence(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		// Three member turns plus the team run itself would already exceed a limit of two if they were counted.
 		require.NoError(t, submit())
 		scheduleCode(t, submit(), "QUOTA_EXCEEDED")
+		r.tx(t, func(ctx context.Context, tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `UPDATE quota_policies SET "limit"=1 WHERE tenant_id=$1`, r.tenant)
+			return err
+		})
+		scheduleCode(t, submit(), "QUOTA_EXCEEDED")
 	})
 }
 
