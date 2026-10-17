@@ -169,7 +169,7 @@ func (r *run) validateAssign(in contract.AssignTaskInput) error {
 	if task == nil {
 		return rejected("TEAM_UNKNOWN_TASK", "Unknown task")
 	}
-	if !team.CanTransition(task.Status, "pending") {
+	if task.Status != "pending" && task.Status != "blocked" && task.Status != "failed" {
 		return rejected("TEAM_BAD_TRANSITION", "Task cannot be assigned")
 	}
 	if r.role(string(in.Member)) != "teammate" {
@@ -214,7 +214,7 @@ func (r *run) validateComplete(in contract.CompleteTaskInput) error {
 		return rejected("TEAM_NOT_ASSIGNEE", "Caller is not the assignee")
 	}
 	active := r.st.Active[string(*in.Caller)]
-	if !team.CanTransition(task.Status, "in_review") || active.Kind != "task" || active.TaskID != in.TaskId {
+	if task.Status != "in_progress" || active.Kind != "task" || active.TaskID != in.TaskId {
 		return rejected("TEAM_BAD_TRANSITION", "Task is not in progress in this turn")
 	}
 	if len(in.ResultText) > team.ResultBytes || len(in.Files) > team.FilesMax {
@@ -259,7 +259,7 @@ func (r *run) validateVerdict(in contract.SubmitVerdictInput) error {
 		return rejected("TEAM_NOT_REVIEWER", "Caller is not a reviewer")
 	}
 	active := r.st.Active[string(*in.Caller)]
-	if !team.CanTransition(task.Status, "completed") || active.Kind != "review" || active.TaskID != in.TaskId {
+	if task.Status != "in_review" || active.Kind != "review" || active.TaskID != in.TaskId {
 		return rejected("TEAM_BAD_TRANSITION", "Task is not in review in this turn")
 	}
 	for _, vote := range task.Review.Votes {
@@ -359,7 +359,7 @@ func (r *run) finish(ctx workflow.Context, in contract.FinishTeamInput) error {
 	r.st.Finished, r.st.Summary = true, team.TruncateEncoded(in.Summary, team.SummaryBytes)
 	for i := range r.st.Board.Tasks {
 		task := &r.st.Board.Tasks[i]
-		if (task.Status == "pending" || task.Status == "blocked") && team.CanTransition(task.Status, "cancelled") {
+		if task.Status == "pending" || task.Status == "blocked" {
 			task.Status = "cancelled"
 			r.updated(task, false)
 		}

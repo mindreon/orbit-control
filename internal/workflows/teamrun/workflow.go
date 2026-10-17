@@ -105,14 +105,12 @@ func Run(ctx workflow.Context, in w.TeamRunInput) error {
 				}
 				task := r.task(action.TaskID)
 				r.start(ctx, action, contract.SegmentTurn{Kind: "follow_up", Text: new(team.TaskNotice(*task, r.st.Board))})
-				r.drain(ctx)
 			}
 			for _, action := range team.ReviewScan(r.st.Board, r.active(), in.Team.MaxParallel, r.st.Reserve) {
 				if r.st.Paused {
 					break
 				}
 				r.start(ctx, action, contract.SegmentTurn{Kind: "follow_up", Text: new(team.ReviewNotice(*r.task(action.TaskID)))})
-				r.drain(ctx)
 			}
 			r.wake(ctx)
 		}
@@ -373,7 +371,7 @@ func (r *run) summary() string {
 	return team.TruncateEncoded(r.st.LastLeaderFinal.TextPreview, team.SummaryBytes)
 }
 func (r *run) wake(ctx workflow.Context) {
-	if _, active := r.st.Active[r.in.Team.Leader]; active || r.st.Finished {
+	if r.st.Paused || r.st.Cancel != nil || r.st.Finished || r.st.Active[r.in.Team.Leader].Member != "" {
 		return
 	}
 	text := ""
@@ -474,7 +472,7 @@ func (r *run) shutdown(ctx workflow.Context, status, code string) error {
 	}
 	for i := range r.st.Board.Tasks {
 		task := &r.st.Board.Tasks[i]
-		if !team.Terminal(task.Status) && team.CanTransition(task.Status, "cancelled") {
+		if !team.Terminal(task.Status) {
 			task.Status = "cancelled"
 			r.updated(task, false)
 		}
