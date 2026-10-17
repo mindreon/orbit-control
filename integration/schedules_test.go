@@ -301,15 +301,18 @@ func testSchedules(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		r.client.fail = false
 		// F75 permits a session-level seed-10 lock, but no transaction may span Temporal calls.
 		r.client.onCall = func() {
-			var open int
-			err := admin.QueryRow(t.Context(),
-				`SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND usename='orbit_app' AND xact_start IS NOT NULL`).Scan(&open)
+			// Tests log in as the DB owner then SET ROLE orbit_app: pg_stat_activity.usename still names
+			// the login, not current_user. Find the sync connection by its seed-10 advisory lock instead.
+			var pid, locks int
+			var inTransaction bool
+			err := admin.QueryRow(t.Context(), `SELECT l.pid,a.xact_start IS NOT NULL,
+ (SELECT count(*) FROM pg_locks held WHERE held.pid=l.pid AND held.locktype='advisory' AND held.granted)
+ FROM pg_locks l JOIN pg_stat_activity a ON a.pid=l.pid
+ WHERE a.datname=current_database() AND l.locktype='advisory' AND l.granted AND l.objsubid=1
+`).Scan(&pid, &inTransaction, &locks)
 			require.NoError(t, err)
-			require.Zero(t, open, "Temporal called inside a tenant transaction")
-			var locks int
-			err = admin.QueryRow(t.Context(), `SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid=l.pid
- WHERE a.datname=current_database() AND a.usename='orbit_app' AND l.locktype='advisory' AND l.granted`).Scan(&locks)
-			require.NoError(t, err)
+			require.Positive(t, pid)
+			require.False(t, inTransaction, "Temporal called inside a tenant transaction")
 			require.Equal(t, 1, locks, "only the F75 per-schedule session lock may span Temporal calls")
 		}
 		require.NoError(t, r.svc.SweepOnce(t.Context()))
