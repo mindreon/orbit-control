@@ -48,6 +48,9 @@ type projectionFixture struct {
 	tenant, actor, workspace string
 	api                      http.Handler
 	token                    string
+	// Team runs replace the scripted agent Activity and the lock the fake resolver returns.
+	agentSegment func(context.Context, contract.SegmentInput) (contract.SegmentResult, error)
+	lock         *contract.RunLock
 }
 
 func testEnv(t *testing.T, name string) string {
@@ -128,6 +131,9 @@ func (f *projectionFixture) start(t *testing.T, bus *natsx.Bus) {
 	ctlWorker := runworker.New(f.temporal, a)
 	require.NoError(t, ctlWorker.Start())
 	t.Cleanup(ctlWorker.Stop)
+	waitWorker := runworker.NewWait(f.temporal, a, 0)
+	require.NoError(t, waitWorker.Start())
+	t.Cleanup(waitWorker.Stop)
 	sandbox := worker.New(f.temporal, contract.TaskQueueSandbox, worker.Options{})
 	sandbox.RegisterActivityWithOptions(func(_ context.Context, in contract.SandboxAcquireInput) (contract.SandboxLease, error) {
 		return contract.SandboxLease{
@@ -147,7 +153,11 @@ func (f *projectionFixture) start(t *testing.T, bus *natsx.Bus) {
 	require.NoError(t, sandbox.Start())
 	t.Cleanup(sandbox.Stop)
 	agent := worker.New(f.temporal, contract.TaskQueueAgentStandard, worker.Options{})
-	agent.RegisterActivityWithOptions(f.segment, activity.RegisterOptions{Name: contract.ActivityRunAgentSegment})
+	segment := f.segment
+	if f.agentSegment != nil {
+		segment = f.agentSegment
+	}
+	agent.RegisterActivityWithOptions(segment, activity.RegisterOptions{Name: contract.ActivityRunAgentSegment})
 	require.NoError(t, agent.Start())
 	t.Cleanup(agent.Stop)
 }
@@ -183,6 +193,9 @@ func (f *projectionFixture) configureAPI(t *testing.T) {
 	entry := lock.Entries[0]
 	entry.Files = nil
 	lock.Entries[0] = entry
+	if f.lock != nil {
+		lock = *f.lock
+	}
 	c := config.Config{
 		AuthMode: "dev", KeyFile: t.TempDir() + "/auth.key", CapabilityKeyFile: t.TempDir() + "/cap.key",
 		StreamKeyFile: t.TempDir() + "/stream.key", StreamKeyID: "test",
@@ -229,7 +242,7 @@ func TestAPIToRunProjection(t *testing.T) {
 		ID string `json:"id"`
 	}
 	require.NoError(t, json.Unmarshal(f.request(t, "POST", "/v1/sessions", map[string]any{
-		"workspace_id": f.workspace, "entry_ref": "fixture/agent", "title": "Projection"}), &session))
+		"workspace_id": f.workspace, "entry_ref": "fixture/agent", "entry_kind": "agent", "title": "Projection"}), &session))
 	var submission struct {
 		RunID string `json:"run_id"`
 	}
