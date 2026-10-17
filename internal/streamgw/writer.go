@@ -100,7 +100,7 @@ func (s *Server) writeEvents(ctx context.Context, w http.ResponseWriter, q *fram
 					return s.writeFailure(err), frames
 				}
 				frames++
-				s.metrics.add(fmt.Sprintf("streamgw_frames_sent_total{type=%q}", f.kind), 1)
+				add(s.metrics.frames, "type", f.kind)
 			}
 			if f.terminal {
 				if err := writeFrame(w, s.cfg.WriteTimeout, []byte("event: end\ndata: {\"reason\":\"run_finished\"}\n\n")); err != nil {
@@ -119,7 +119,7 @@ func (s *Server) writeEvents(ctx context.Context, w http.ResponseWriter, q *fram
 
 func (s *Server) writeFailure(err error) string {
 	if e, ok := err.(interface{ Timeout() bool }); ok && e.Timeout() {
-		s.metrics.add("streamgw_slow_client_closed_total", 1)
+		add(s.metrics.slow, "", "")
 		return "write_timeout"
 	}
 	return "write_error"

@@ -69,11 +69,14 @@ func streamSubject(c StreamClaims) (string, error) {
 	return "", fmt.Errorf("invalid stream scope or identity")
 }
 func (s *StreamSigner) Issue(c StreamClaims) (string, error) {
+	return s.issue(c, 15*time.Minute)
+}
+func (s *StreamSigner) issue(c StreamClaims, ttl time.Duration) (string, error) {
 	sub, err := streamSubject(c)
 	if err != nil {
 		return "", err
 	}
-	c.RegisteredClaims = registered(StreamIssuer, sub, "stream", 15*time.Minute)
+	c.RegisteredClaims = registered(StreamIssuer, sub, "stream", ttl)
 	c.NotBefore = c.IssuedAt
 	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, c)
 	token.Header["kid"] = s.kid

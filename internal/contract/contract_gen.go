@@ -2260,8 +2260,13 @@ func (j *MessageAttachment) UnmarshalJSON(value []byte) error {
 }
 
 // A chunk of assistant output. Not persisted. message_id = uuid5(NAMESPACE_URL,
-// "orbit:message:<run>/<member>/<seq>/<k>"), where k is the model call number
-// within the segment. Delta and final of the same message share this id.
+// "orbit:message:<run>/<member>/<seq>/<k>"), where k advances from zero or after
+// the current message has a final; otherwise an unfinished call, retry, or
+// recovery reuses k. Calls without visible output have no final and do not advance
+// k. Delta and final of the same message share this id. A retry final replaces all
+// earlier deltas for its id. Only the last in-flight message may lack a final in
+// an attempt that failed, was cancelled, or ended without segment.ended (for
+// example a transient failure or a worker crash).
 type MessageDelta struct {
 	// Text to append.
 	Delta string `json:"delta" yaml:"delta" mapstructure:"delta"`
@@ -2299,8 +2304,13 @@ func (j *MessageDelta) UnmarshalJSON(value []byte) error {
 
 // The complete assistant message, persisted in run_events. text may be empty when
 // only reasoning was visible. message_id = uuid5(NAMESPACE_URL,
-// "orbit:message:<run>/<member>/<seq>/<k>"), where k is the model call number
-// within the segment. Delta and final of the same message share this id.
+// "orbit:message:<run>/<member>/<seq>/<k>"), where k advances from zero or after
+// the current message has a final; otherwise an unfinished call, retry, or
+// recovery reuses k. Calls without visible output have no final and do not advance
+// k. Delta and final of the same message share this id. A retry final replaces all
+// earlier deltas for its id. Only the last in-flight message may lack a final in
+// an attempt that failed, was cancelled, or ended without segment.ended (for
+// example a transient failure or a worker crash).
 type MessageFinal struct {
 	// Object store reference of the full content when it does not.
 	ContentRef *string `json:"content_ref,omitempty,omitzero" yaml:"content_ref,omitempty" mapstructure:"content_ref,omitempty"`
@@ -2798,9 +2808,13 @@ func (j *RailSpec) UnmarshalJSON(value []byte) error {
 }
 
 // A chunk of model reasoning. Not persisted; clients may exclude it. message_id =
-// uuid5(NAMESPACE_URL, "orbit:message:<run>/<member>/<seq>/<k>"), where k is the
-// model call number within the segment. Delta and final of the same message share
-// this id.
+// uuid5(NAMESPACE_URL, "orbit:message:<run>/<member>/<seq>/<k>"), where k advances
+// from zero or after the current message has a final; otherwise an unfinished
+// call, retry, or recovery reuses k. Calls without visible output have no final
+// and do not advance k. Delta and final of the same message share this id. A retry
+// final replaces all earlier deltas for its id. Only the last in-flight message
+// may lack a final in an attempt that failed, was cancelled, or ended without
+// segment.ended (for example a transient failure or a worker crash).
 type ReasoningDelta struct {
 	// Text to append.
 	Delta string `json:"delta" yaml:"delta" mapstructure:"delta"`

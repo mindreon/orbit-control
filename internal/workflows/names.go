@@ -42,6 +42,7 @@ func AgentSessionKey(session, digest string) string {
 func EventSubject(tenant, session, run string) string {
 	return "run." + tenant + "." + session + "." + run
 }
+
 func Terminal(status string) bool {
 	switch status {
 	case "succeeded", "failed", "cancelled", "budget_exhausted", "timed_out":

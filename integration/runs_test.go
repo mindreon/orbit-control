@@ -50,6 +50,12 @@ func newRunFixture(t *testing.T, d *db.DB, admin *pgx.Conn) *runFixture {
 		run:       ids.New(),
 		lock:      ids.New(),
 	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, err := admin.Exec(ctx, `DELETE FROM control_events WHERE tenant_id=$1`, f.tenant)
+		require.NoError(t, err)
+	})
 	_, err := admin.Exec(t.Context(), `INSERT INTO principals(id,kind,email,display_name,idp_subject)
  VALUES($1,'user','fixture@example.test','Run fixture',$1::uuid::text)`, f.actor)
 	require.NoError(t, err)

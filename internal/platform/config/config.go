@@ -9,9 +9,12 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Config struct {
+	SinkEnabled                                                                                               bool
+	OutboxInterval                                                                                            time.Duration
 	StreamKeyFile, StreamKeyID                                                                                string
 	StreamPublicKeys                                                                                          map[string][]byte
 	NATSStreamMaxBytes                                                                                        int64
@@ -198,6 +201,18 @@ func (c Config) ValidateRuns(api bool) error {
 }
 
 func (c *Config) loadRunEnvironment() error {
+	c.SinkEnabled = env("ORBIT_SINK_ENABLED", "true") == "true"
+	if v := os.Getenv("ORBIT_SINK_ENABLED"); v != "" && v != "true" && v != "false" {
+		return fmt.Errorf("ORBIT_SINK_ENABLED must be true or false")
+	}
+	c.OutboxInterval = 10 * time.Second
+	if v := os.Getenv("ORBIT_OUTBOX_INTERVAL"); v != "" {
+		var err error
+		c.OutboxInterval, err = time.ParseDuration(v)
+		if err != nil || c.OutboxInterval <= 0 {
+			return fmt.Errorf("ORBIT_OUTBOX_INTERVAL must be a positive duration")
+		}
+	}
 	c.InternalAddr = env("ORBIT_INTERNAL_ADDR", "127.0.0.1:8081")
 	c.NATSURL = env("ORBIT_NATS_URL", "nats://127.0.0.1:4222")
 	c.WorkerServiceTokenSHA256 = os.Getenv("ORBIT_WORKER_SERVICE_TOKEN_SHA256")

@@ -25,14 +25,14 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) (auth.StreamC
 	claims, err := s.verifier.Verify(token)
 	// JWT clock tolerance must never extend the actual connection lifetime.
 	if err != nil || !time.Now().Before(claims.ExpiresAt.Time) || claims.NotBefore.Time.After(time.Now()) {
-		s.metrics.add("streamgw_auth_failures_total{reason=\"invalid\"}", 1)
+		add(s.metrics.auth, "reason", "invalid")
 		writeError(w, 401, "TOKEN_INVALID", "Invalid or expired stream token")
 		return claims, false
 	}
 	allowed := claims.Scope == "run" && claims.RunID == r.PathValue("r") && r.PathValue("r") != "" ||
 		claims.Scope == "session" && claims.SessionID == r.PathValue("s") && r.PathValue("s") != ""
 	if !allowed {
-		s.metrics.add("streamgw_auth_failures_total{reason=\"forbidden\"}", 1)
+		add(s.metrics.auth, "reason", "forbidden")
 		writeError(w, 403, "STREAM_FORBIDDEN", "Stream token does not authorize this path")
 		return claims, false
 	}

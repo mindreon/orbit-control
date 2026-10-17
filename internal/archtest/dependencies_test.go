@@ -69,7 +69,7 @@ func TestPackageBoundaries(t *testing.T) {
 			for _, dep := range pkg.Imports {
 				allowed := standard[dep] || dep == module+"auth" || dep == module+"contract" ||
 					dep == module+"platform/log" || dep == module+"platform/natsx" ||
-					strings.HasPrefix(dep, "github.com/nats-io/nats.go")
+					strings.HasPrefix(dep, "github.com/nats-io/nats.go") || strings.HasPrefix(dep, "go.opentelemetry.io/otel")
 				if !allowed {
 					t.Errorf("%s imports forbidden %s", pkg.ImportPath, dep)
 				}

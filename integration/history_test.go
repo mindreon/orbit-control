@@ -22,6 +22,12 @@ import (
 	"github.com/mindreon/orbit-control/internal/tenancy"
 )
 
+type fixedFloor struct {
+	value uint64
+	err   error
+}
+
+func (f fixedFloor) Floor(context.Context) (uint64, error) { return f.value, f.err }
 func testHistory(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	f := newRunFixture(t, d, admin)
 	otherRun := ids.New()
@@ -57,7 +63,8 @@ func testHistory(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	defer a.Close()
 	token, err := a.Signer.DevToken(auth.Principal{ID: f.actor, Kind: "user"})
 	require.NoError(t, err)
-	router := (&httpapi.Handler{DB: d, Auth: a, Config: c, Logger: logger}).Router()
+	floor := &fixedFloor{value: 5}
+	router := (&httpapi.Handler{DB: d, Auth: a, Config: c, Logger: logger, EventFloor: floor}).Router()
 	request := func(path string, code int) sessions.EventPage {
 		r := httptest.NewRequest("GET", path, nil)
 		r.Header.Set("Authorization", "Bearer "+token)
@@ -83,9 +90,45 @@ func testHistory(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	empty := request(base+"?after=999", 200)
 	require.Empty(t, empty.Items)
 	require.Equal(t, "999", empty.ResumeFrom)
+	for _, after := range []string{"9223372036854775808", "18446744073709551615"} {
+		page := request(base+"?after="+after, 200)
+		require.Empty(t, page.Items)
+		require.Equal(t, after, page.ResumeFrom)
+	}
+	f.tx(t, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `SET LOCAL enable_seqscan=off`)
+		require.NoError(t, err)
+		rows, err := tx.Query(ctx, `EXPLAIN SELECT stream_seq,payload FROM run_events
+ WHERE tenant_id=$1 AND session_id=$2 AND stream_seq>$3::bigint AND stream_seq<=$4::bigint ORDER BY stream_seq LIMIT 201`,
+			f.tenant, f.session, int64(1), int64(5))
+		require.NoError(t, err)
+		defer rows.Close()
+		var plan string
+		for rows.Next() {
+			var line string
+			require.NoError(t, rows.Scan(&line))
+			plan += line + "\n"
+		}
+		require.NoError(t, rows.Err())
+		require.Contains(t, plan, "Index Cond:")
+		require.Contains(t, plan, "stream_seq >")
+		require.Contains(t, plan, "stream_seq <=")
+		require.NotContains(t, plan, "numeric")
+		return nil
+	})
 	filtered := request(base+"?types=run.status", 200)
 	require.Len(t, filtered.Items, 1)
-	require.Equal(t, "3", filtered.ResumeFrom)
+	require.Equal(t, "5", filtered.ResumeFrom)
+	floor.value = 3
+	bounded := request(base, 200)
+	require.Len(t, bounded.Items, 2, "seq 5 is stored but not safe at floor 3")
+	require.Equal(t, "3", bounded.ResumeFrom)
+	floor.value = 9
+	filteredEmpty := request(base+"?types=run.failed", 200)
+	require.Empty(t, filteredEmpty.Items)
+	require.Empty(t, filteredEmpty.NextCursor)
+	require.Equal(t, "9", filteredEmpty.ResumeFrom)
+	floor.value = 5
 	require.Len(t, request(base+"?exclude=run.status", 200).Items, 2)
 	require.Len(t, request("/v1/runs/"+f.run+"/history", 200).Items, 2)
 	request(base+"?types=bad", 422)

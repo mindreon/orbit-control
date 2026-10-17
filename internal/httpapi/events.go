@@ -23,10 +23,23 @@ func (h *Handler) history(out http.ResponseWriter, r *http.Request) error {
 	} else if _, err := sessions.Get(ctx, session, "session.read"); err != nil {
 		return err
 	}
+	if h.EventFloor == nil {
+		return streamUnavailable()
+	}
+	query.Floor, err = h.EventFloor.Floor(ctx)
+	if err != nil {
+		return streamUnavailable()
+	}
 	page, err := sessions.Events(ctx, session, run, query)
 	if err != nil {
 		return err
 	}
 	httpx.JSON(out, 200, page)
 	return nil
+}
+
+func streamUnavailable() *httpx.Error {
+	e := httpx.E(503, "STREAM_UNAVAILABLE", "Stream unavailable")
+	e.Retryable = true
+	return e
 }

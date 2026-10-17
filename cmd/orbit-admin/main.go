@@ -16,6 +16,7 @@ import (
 	"github.com/mindreon/orbit-control/internal/platform/db"
 	"github.com/mindreon/orbit-control/internal/platform/httpx"
 	"github.com/mindreon/orbit-control/internal/platform/ids"
+	"github.com/mindreon/orbit-control/internal/sessions"
 	"github.com/mindreon/orbit-control/internal/tenancy"
 	"github.com/mindreon/orbit-control/internal/usage"
 	"github.com/mindreon/orbit-control/migrations"
@@ -38,6 +39,9 @@ func run(args []string) error {
 	c, e := config.Load()
 	if e != nil {
 		return e
+	}
+	if args[0] == "issue-stream-token" {
+		return issueStreamToken(c, args[1:])
 	}
 	if e = c.ValidateAdmin(); e != nil {
 		return e
@@ -62,6 +66,9 @@ func run(args []string) error {
 		return e
 	}
 	defer d.Close()
+	if len(args) >= 2 && args[0] == "maintenance" && args[1] == "requeue-control-events" {
+		return requeueControlEvents(ctx, d, args[2:])
+	}
 	if args[0] == "market" {
 		return importMarket(ctx, d, c, args[1:])
 	}
@@ -122,6 +129,9 @@ type adminOptions struct {
 	issuer,
 	subject,
 	usageBefore,
+	runEventsBefore,
+	rejectsBefore,
+	controlEventsBefore,
 	group string
 }
 
@@ -140,6 +150,9 @@ func parseAdminOptions(args []string) (adminOptions, error) {
 	issuer := f.String("issuer", auth.DevIssuer, "identity issuer")
 	subject := f.String("subject", "", "identity provider subject")
 	usageBefore := f.String("usage-before", "", "RFC3339 retention cutoff for both usage ledger and dedup keys")
+	runEventsBefore := f.String("run-events-before", "", "RFC3339 cutoff for complete event partitions")
+	rejectsBefore := f.String("rejects-before", "", "RFC3339 reject retention cutoff")
+	controlEventsBefore := f.String("control-events-before", "", "RFC3339 published outbox retention cutoff")
 	group := f.String("group", "", "group UUID")
 	rest := args[1:]
 	if args[0] == "maintenance" {
@@ -161,21 +174,22 @@ func parseAdminOptions(args []string) (adminOptions, error) {
 		return adminOptions{}, fmt.Errorf("unexpected arguments")
 	}
 	return adminOptions{
-		command:     args[0],
-		tenant:      *tenant,
-		pid:         *pid,
-		actor:       *actor,
-		email:       *email,
-		name:        *name,
-		slug:        *slug,
-		role:        *role,
-		scopeType:   *scopeType,
-		scopeID:     *scopeID,
-		subjectType: *subjectType,
-		issuer:      *issuer,
-		subject:     *subject,
-		usageBefore: *usageBefore,
-		group:       *group,
+		command:         args[0],
+		tenant:          *tenant,
+		pid:             *pid,
+		actor:           *actor,
+		email:           *email,
+		name:            *name,
+		slug:            *slug,
+		role:            *role,
+		scopeType:       *scopeType,
+		scopeID:         *scopeID,
+		subjectType:     *subjectType,
+		issuer:          *issuer,
+		subject:         *subject,
+		usageBefore:     *usageBefore,
+		runEventsBefore: *runEventsBefore, rejectsBefore: *rejectsBefore, controlEventsBefore: *controlEventsBefore,
+		group: *group,
 	}, nil
 }
 
@@ -192,7 +206,28 @@ func (o adminOptions) pruneUsage(ctx context.Context, d *db.DB) error {
 		}
 		cutoff = &v
 	}
-	return usage.Prune(ctx, d, cutoff)
+	eventCutoffs := make([]*time.Time, 3)
+	for i, option := range []struct{ name, value string }{
+		{name: "run-events-before", value: o.runEventsBefore},
+		{name: "rejects-before", value: o.rejectsBefore},
+		{name: "control-events-before", value: o.controlEventsBefore},
+	} {
+		if option.value == "" {
+			continue
+		}
+		parsed, err := time.Parse(time.RFC3339, option.value)
+		if err != nil || parsed.After(time.Now()) {
+			return fmt.Errorf("--%s must be RFC3339 and not in the future", option.name)
+		}
+		eventCutoffs[i] = &parsed
+	}
+	if err := usage.Prune(ctx, d, cutoff); err != nil {
+		return err
+	}
+	if eventCutoffs[0] == nil && eventCutoffs[1] == nil && eventCutoffs[2] == nil {
+		return nil
+	}
+	return sessions.PruneEvents(ctx, d, eventCutoffs[0], eventCutoffs[1], eventCutoffs[2])
 
 }
 

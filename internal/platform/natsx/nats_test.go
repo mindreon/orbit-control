@@ -76,7 +76,7 @@ func testRunEventsStream(t *testing.T, bus *Bus, mode string) {
 	require.Equal(t, "sink", consumerInfo.Config.Durable)
 	require.Equal(t, filter, consumerInfo.Config.FilterSubject)
 	require.Equal(t, jetstream.AckExplicitPolicy, consumerInfo.Config.AckPolicy)
-	require.Equal(t, 10, consumerInfo.Config.MaxDeliver)
+	require.Equal(t, -1, consumerInfo.Config.MaxDeliver)
 	require.Equal(t, 2000, consumerInfo.Config.MaxAckPending)
 	require.Equal(t,
 		[]time.Duration{time.Second, 5 * time.Second, 15 * time.Second, 30 * time.Second, 60 * time.Second},
@@ -97,4 +97,36 @@ func testRunEventsStream(t *testing.T, bus *Bus, mode string) {
 	require.EqualValues(t, 1, info.State.Subjects[subject+".dedup"])
 	_, err = stream.GetLastMsgForSubject(t.Context(), subject+".existing")
 	require.NoError(t, err)
+}
+
+func TestE35ExistingSinkUnlimitedDeliveries(t *testing.T) {
+	url := os.Getenv("ORBIT_TEST_NATS_URL")
+	if url == "" {
+		t.Fatal("ORBIT_TEST_NATS_URL required")
+	}
+	bus, err := Connect(url, "e35-consumer")
+	require.NoError(t, err)
+	defer bus.Close()
+	name, subj := "TEST_"+ids.New(), "test."+ids.New()
+	require.NoError(t, bus.ensureRunEventsStream(t.Context(), name, subj, 0))
+	defer bus.JS.DeleteStream(context.Background(), name)
+	_, err = bus.JS.CreateOrUpdateConsumer(t.Context(), name, jetstream.ConsumerConfig{
+		Durable: "sink", FilterSubject: subj, AckPolicy: jetstream.AckExplicitPolicy, MaxDeliver: 10,
+	})
+	require.NoError(t, err)
+	consumer, err := bus.ensureSinkConsumer(t.Context(), name, subj, "sink")
+	require.NoError(t, err)
+	info, err := consumer.Info(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, -1, info.Config.MaxDeliver)
+	require.Equal(t, SinkBackOff()[0], info.Config.AckWait, "JetStream applies the first backoff step as ack wait")
+	require.NoError(t, bus.Publish(t.Context(), subj, "blocked", []byte(`{}`)))
+	for range 15 {
+		msg, err := consumer.Next(jetstream.FetchMaxWait(time.Second))
+		require.NoError(t, err)
+		require.NoError(t, msg.Nak())
+		info, err = consumer.Info(t.Context())
+		require.NoError(t, err)
+		require.Zero(t, info.AckFloor.Stream, "Nak cannot advance past an unpersisted event")
+	}
 }

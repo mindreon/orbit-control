@@ -68,7 +68,8 @@ func testStreamOutbox(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	require.Error(t, err)
 	// A fixture row can be inserted old; stored event contents remain immutable.
 	_, err = admin.Exec(t.Context(), `INSERT INTO control_events(tenant_id,run_id,event_id,operation,payload,created_at)
- SELECT tenant_id,run_id,event_id||':old',operation,payload,now()-interval '1 minute' FROM control_events WHERE run_id=$1`, f.run)
+ SELECT tenant_id,run_id,event_id||'0',operation,jsonb_set(payload,'{id}',to_jsonb(event_id||'0')),
+ now()-interval '1 minute' FROM control_events WHERE run_id=$1`, f.run)
 	require.NoError(t, err)
 	require.NoError(t, d.Global(t.Context(), func(tx pgx.Tx) error {
 		return tx.QueryRow(t.Context(), `SELECT count(*) FROM control_events_unpublished(500) WHERE run_id=$1`, f.run).Scan(&count)

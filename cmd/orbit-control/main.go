@@ -8,9 +8,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/nats-io/nats.go/jetstream"
 	"go.temporal.io/sdk/client"
 
 	releaseactivities "github.com/mindreon/orbit-control/internal/activities/assetrelease"
@@ -28,6 +30,7 @@ import (
 	"github.com/mindreon/orbit-control/internal/platform/temporalx"
 	"github.com/mindreon/orbit-control/internal/runworker"
 	"github.com/mindreon/orbit-control/internal/secrets"
+	"github.com/mindreon/orbit-control/internal/sink"
 )
 
 func main() {
@@ -89,8 +92,14 @@ func run() error {
 		return err
 	}
 	defer bus.Close()
+	metrics, err := sink.NewMetrics(nil)
+	if err != nil {
+		return err
+	}
 	if os.Args[1] != "api" {
-		cleanup, err := startWorkers(ctx, d, c, l, assetService, store, tc, bus)
+		workerCtx, cancelWorker := context.WithCancel(context.WithoutCancel(ctx))
+		defer cancelWorker()
+		cleanup, err := startWorkers(workerCtx, d, c, l, assetService, store, tc, bus, metrics)
 		if err != nil {
 			return err
 		}
@@ -100,7 +109,7 @@ func run() error {
 			return nil
 		}
 	}
-	return serveAPI(ctx, startup, d, c, l, assetService, store, tc)
+	return serveAPI(ctx, startup, d, c, l, assetService, store, tc, bus)
 }
 
 func serveAPI(
@@ -111,20 +120,26 @@ func serveAPI(
 	assetService *assets.Service,
 	store *objstore.S3,
 	tc client.Client,
+	bus *natsx.Bus,
 ) error {
+	floor, e := natsx.NewEventFloor(bus)
+	if e != nil {
+		return e
+	}
 	a, e := auth.New(startup, d, c, l)
 	if e != nil {
 		return e
 	}
 	defer a.Close()
 	h := &httpapi.Handler{
-		DB:       d,
-		Auth:     a,
-		Config:   c,
-		Logger:   l,
-		Assets:   assetService,
-		Objects:  store,
-		Temporal: temporalx.Service{Client: tc},
+		EventFloor: floor,
+		DB:         d,
+		Auth:       a,
+		Config:     c,
+		Logger:     l,
+		Assets:     assetService,
+		Objects:    store,
+		Temporal:   temporalx.Service{Client: tc},
 	}
 	server := &http.Server{
 		Addr:              c.Addr,
@@ -137,11 +152,9 @@ func serveAPI(
 	internal := &http.Server{
 		Addr: c.InternalAddr,
 		Handler: (&kernelapi.Handler{DB: d,
-			Signer: a.Capability,
-			Secrets: secrets.Keys{Current: c.SecretsKeyVersion,
-				KEKs: c.SecretsKEKs},
-			Obj:                store,
-			ServiceTokenSHA256: c.WorkerServiceTokenSHA256}).Router(),
+			Signer:  a.Capability,
+			Secrets: secrets.Keys{Current: c.SecretsKeyVersion, KEKs: c.SecretsKEKs},
+			Obj:     store, ServiceTokenSHA256: c.WorkerServiceTokenSHA256}).Router(),
 
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
@@ -180,10 +193,19 @@ func startWorkers(
 	store *objstore.S3,
 	tc client.Client,
 	bus *natsx.Bus,
+	metrics *sink.Metrics,
 ) (func(), error) {
 
 	if err := bus.EnsureRunEventsStream(ctx, c.NATSStreamMaxBytes); err != nil {
 		return nil, err
+	}
+	var consumer jetstream.Consumer
+	if c.SinkEnabled {
+		var err error
+		consumer, err = bus.EnsureSinkConsumer(ctx)
+		if err != nil {
+			return nil, err
+		}
 	}
 	worker := runworker.New(
 		tc,
@@ -198,9 +220,22 @@ func startWorkers(
 	}
 	dispatchCtx, cancelDispatch := context.WithCancel(ctx)
 	dispatchDone := make(chan struct{})
+	var projections sync.WaitGroup
+	if c.SinkEnabled {
+		projection := sink.New(d, consumer, l, metrics)
+		projections.Go(func() {
+			if err := projection.Run(dispatchCtx); err != nil {
+				l.Error("sink stopped", "error_type", fmt.Sprintf("%T", err))
+			}
+		})
+		projections.Go(func() { projection.SamplePending(dispatchCtx) })
+		outbox := &sink.Outbox{DB: d, Publisher: bus, Logger: l, Interval: c.OutboxInterval}
+		projections.Go(func() { outbox.Run(dispatchCtx) })
+	}
 	cleanup := func() {
 		cancelDispatch()
 		<-dispatchDone
+		projections.Wait()
 		worker.Stop()
 	}
 	go func() {

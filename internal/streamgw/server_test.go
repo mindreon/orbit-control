@@ -18,6 +18,8 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/require"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/mindreon/orbit-control/internal/auth"
 	"github.com/mindreon/orbit-control/internal/contract"
@@ -37,13 +39,41 @@ func testServer(t *testing.T) (*Server, auth.StreamClaims, ed25519.PrivateKey, *
 	v, err := auth.NewStreamVerifier(map[string][]byte{"test": pub})
 	require.NoError(t, err)
 	var logs bytes.Buffer
-	s := New(&natsx.Bus{Conn: &nats.Conn{}}, v, testConfig(), slog.New(slog.NewJSONHandler(&logs, nil)))
+	cfg := testConfig()
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	cfg.Meter = provider.Meter("streamgw-test")
+	t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.Background())) })
+	s, err := New(&natsx.Bus{Conn: &nats.Conn{}}, v, cfg, slog.New(slog.NewJSONHandler(&logs, nil)))
+	require.NoError(t, err)
+	metricReaders.Store(s, reader)
+	t.Cleanup(func() { metricReaders.Delete(s) })
 	s.connected = func() bool { return true }
 	c := auth.StreamClaims{TenantID: ids.New(), SessionID: ids.New(), RunID: ids.New(), Scope: "run",
 		Issuer: auth.StreamIssuer, Audience: jwt.ClaimStrings{"stream"}, IssuedAt: jwt.NewNumericDate(time.Now()),
 		NotBefore: jwt.NewNumericDate(time.Now()), ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Minute))}
 	c.Subject = "run:" + c.RunID
 	return s, c, key, &logs
+}
+
+var metricReaders sync.Map
+
+func metricCount(t *testing.T, s *Server, name string) int64 {
+	t.Helper()
+	value, _ := metricReaders.Load(s)
+	var data metricdata.ResourceMetrics
+	require.NoError(t, value.(*sdkmetric.ManualReader).Collect(t.Context(), &data))
+	var total int64
+	for _, scope := range data.ScopeMetrics {
+		for _, item := range scope.Metrics {
+			if item.Name == name {
+				for _, point := range item.Data.(metricdata.Sum[int64]).DataPoints {
+					total += point.Value
+				}
+			}
+		}
+	}
+	return total
 }
 
 func signed(t *testing.T, c auth.StreamClaims, key ed25519.PrivateKey, kid string) string {
@@ -53,6 +83,46 @@ func signed(t *testing.T, c auth.StreamClaims, key ed25519.PrivateKey, kid strin
 	raw, err := token.SignedString(key)
 	require.NoError(t, err)
 	return raw
+}
+
+func TestMetricNamesLabelsAndNoEndpoint(t *testing.T) {
+	s, _, _, _ := testServer(t)
+	release, ok := s.acquire("tenant", "subject", "run")
+	require.True(t, ok)
+	release()
+	add(s.metrics.frames, "type", "message.final")
+	add(s.metrics.resumes, "", "")
+	add(s.metrics.expired, "", "")
+	add(s.metrics.slow, "", "")
+	add(s.metrics.auth, "reason", "invalid")
+	add(s.metrics.invalid, "", "")
+	add(s.metrics.order, "", "")
+	add(s.metrics.rejected, "reason", "limit")
+	value, _ := metricReaders.Load(s)
+	var data metricdata.ResourceMetrics
+	require.NoError(t, value.(*sdkmetric.ManualReader).Collect(t.Context(), &data))
+	seen := map[string]bool{}
+	for _, scope := range data.ScopeMetrics {
+		for _, item := range scope.Metrics {
+			seen[item.Name] = true
+			for _, point := range item.Data.(metricdata.Sum[int64]).DataPoints {
+				for _, attr := range point.Attributes.ToSlice() {
+					require.Contains(t, []string{"scope", "type", "reason"}, string(attr.Key))
+				}
+				if item.Name == "streamgw_connections" {
+					require.Zero(t, point.Value)
+				}
+			}
+		}
+	}
+	for _, name := range []string{"streamgw_connections", "streamgw_frames_sent_total", "streamgw_resumes_total",
+		"streamgw_cursor_expired_total", "streamgw_slow_client_closed_total", "streamgw_auth_failures_total",
+		"streamgw_invalid_frames_total", "streamgw_order_violation_total", "streamgw_rejected_total"} {
+		require.True(t, seen[name], name)
+	}
+	out := httptest.NewRecorder()
+	s.Router().ServeHTTP(out, httptest.NewRequest("GET", "/metrics", nil))
+	require.Equal(t, 404, out.Code)
 }
 
 func TestAuthorization(t *testing.T) {
@@ -216,7 +286,9 @@ func TestWriterAndBackpressure(t *testing.T) {
 		q.release(<-q.frames)
 		require.True(t, q.push(t.Context(), frame{seq: 7, kind: "run.completed", data: []byte(`{}`), terminal: true}))
 		w := &deadlineWriter{headers: http.Header{}}
+		started := time.Now()
 		reason, n := s.writeEvents(t.Context(), w, q)
+		require.Equal(t, 500*time.Millisecond, time.Since(started), "end is flushed before the bounded close grace")
 		require.Equal(t, "run_finished", reason)
 		require.Equal(t, 1, n)
 		expected := `retry: 1000
@@ -233,7 +305,7 @@ data: {"reason":"run_finished"}
 		w.blocked = true
 		reason, _ = s.writeEvents(t.Context(), w, newFrameQueue(1, 4))
 		require.Equal(t, "write_timeout", reason)
-		require.EqualValues(t, 1, s.metrics.values["streamgw_slow_client_closed_total"])
+		require.EqualValues(t, 1, metricCount(t, s, "streamgw_slow_client_closed_total"))
 		encoded := encodeFrame(frame{seq: 1, kind: "message.final", data: []byte(`{"text":"a\nb"}`)})
 		require.Equal(t, 4, bytes.Count(encoded, []byte("\n")))
 	})

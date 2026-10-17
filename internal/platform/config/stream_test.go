@@ -34,4 +34,18 @@ func TestStreamGatewayConfig(t *testing.T) {
 			require.ErrorContains(t, err, v.key)
 		})
 	}
+	for _, tc := range []struct {
+		value string
+		ok    bool
+	}{{value: "65536"}, {value: "131071"}, {value: "131072", ok: true}} {
+		t.Run("ORBIT_STREAM_BUFFER_BYTES="+tc.value, func(t *testing.T) {
+			t.Setenv("ORBIT_STREAM_BUFFER_BYTES", tc.value)
+			_, err := LoadStreamGateway()
+			if tc.ok {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, "ORBIT_STREAM_BUFFER_BYTES must be at least 131072")
+		})
+	}
 }

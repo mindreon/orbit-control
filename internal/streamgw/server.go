@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/mindreon/orbit-control/internal/auth"
 	"github.com/mindreon/orbit-control/internal/contract"
@@ -22,6 +24,7 @@ import (
 )
 
 type Config struct {
+	Meter                                          metric.Meter
 	MaxConnections, PerTenant, PerSubject          int
 	BufferFrames, BufferBytes                      int
 	Heartbeat, WriteTimeout, ShutdownGrace, MaxAge time.Duration
@@ -45,11 +48,18 @@ type Server struct {
 	cancel    context.CancelFunc
 }
 
-func New(bus *natsx.Bus, verifier *auth.StreamVerifier, cfg Config, logger *slog.Logger) *Server {
+func New(bus *natsx.Bus, verifier *auth.StreamVerifier, cfg Config, logger *slog.Logger) (*Server, error) {
+	if cfg.Meter == nil {
+		cfg.Meter = otel.Meter("github.com/mindreon/orbit-control/internal/streamgw")
+	}
+	instruments, err := newMetrics(cfg.Meter)
+	if err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Server{js: bus.JS, connected: bus.Conn.IsConnected, stream: "RUN_EVENTS", verifier: verifier, cfg: cfg, logger: logger,
-		ctx: ctx, cancel: cancel, metrics: metrics{values: map[string]uint64{}},
-		limits: limits{tenants: map[string]int{}, subjects: map[string]int{}, scopes: map[string]int{}}}
+		ctx: ctx, cancel: cancel, metrics: instruments,
+		limits: limits{tenants: map[string]int{}, subjects: map[string]int{}, scopes: map[string]int{}}}, nil
 }
 
 func (s *Server) Router() http.Handler {
@@ -57,7 +67,6 @@ func (s *Server) Router() http.Handler {
 	mux.HandleFunc("GET /v1/runs/{r}/events", s.events)
 	mux.HandleFunc("GET /v1/sessions/{s}/events", s.events)
 	mux.HandleFunc("GET /healthz", s.health)
-	mux.HandleFunc("GET /metrics", s.serveMetrics)
 	return mux
 }
 
@@ -139,7 +148,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	defer s.wg.Done()
 	release, ok := s.acquire(claims.TenantID, subject(claims), claims.Scope)
 	if !ok {
-		s.metrics.add("streamgw_rejected_total{reason=\"limit\"}", 1)
+		add(s.metrics.rejected, "reason", "limit")
 		w.Header().Set("Retry-After", "5")
 		writeError(w, 429, "TOO_MANY_STREAMS", "Too many concurrent streams")
 		return
@@ -159,31 +168,36 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if cursor+1 < first {
-			s.metrics.add("streamgw_cursor_expired_total", 1)
+			add(s.metrics.expired, "", "")
 			writeError(w, 409, "EVENT_CURSOR_EXPIRED", "Event cursor has expired; rebuild from history")
 			return
 		}
-		s.metrics.add("streamgw_resumes_total", 1)
+		add(s.metrics.resumes, "", "")
+	}
+	ended := false
+	endQueued := false
+	if claims.Scope == "run" && cursor > 0 {
+		ended, err = s.endMarkerPresent(setup, claims, cursor)
+		if err != nil {
+			s.unavailable(w, err)
+			return
+		}
 	}
 	consumer, err := s.js.OrderedConsumer(setup, s.stream, cfg)
 	if err != nil {
 		s.unavailable(w, err)
 		return
 	}
-	finished := false
-	if claims.Scope == "run" && cursor > 0 && consumer.CachedInfo().NumPending == 0 {
-		finished, err = s.finishedAt(setup, claims, cursor)
-		if err != nil {
-			s.unavailable(w, err)
-			return
-		}
-	}
 	queue := newFrameQueue(s.cfg.BufferFrames, s.cfg.BufferBytes)
-	if finished {
+	if ended && consumer.CachedInfo().NumPending == 0 {
+		endQueued = true
 		queue.push(ctx, frame{terminal: true})
 	}
 	last := cursor
 	consume, err := consumer.Consume(func(msg jetstream.Msg) {
+		if endQueued {
+			return
+		}
 		meta, err := msg.Metadata()
 		if err != nil {
 			s.logger.Error("stream metadata failed", "error_type", fmt.Sprintf("%T", err))
@@ -191,19 +205,28 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if meta.Sequence.Stream <= last {
-			s.metrics.add("streamgw_order_violation_total", 1)
+			add(s.metrics.order, "", "")
 			cancel()
 			return
 		}
 		last = meta.Sequence.Stream
+		defer func() {
+			if ended && !endQueued && meta.NumPending == 0 && ctx.Err() == nil {
+				endQueued = true
+				queue.push(ctx, frame{terminal: true})
+			}
+		}()
+		if claims.Scope == "session" && natsx.IsEndSubject(msg.Subject()) {
+			return
+		}
 		raw := msg.Data()
-		if len(raw) > 64<<10 || contract.Validate("RunEvent", raw) != nil {
-			s.metrics.add("streamgw_invalid_frames_total", 1)
+		if len(raw) > natsx.MaxMessageSize || contract.Validate("RunEvent", raw) != nil {
+			add(s.metrics.invalid, "", "")
 			return
 		}
 		var event contract.RunEvent
 		if err := json.Unmarshal(raw, &event); err != nil || !matches(claims, event, msg.Subject()) {
-			s.metrics.add("streamgw_invalid_frames_total", 1)
+			add(s.metrics.invalid, "", "")
 			return
 		}
 		// Normalize framing whitespace only for pretty-printed JSON; escaped newlines stay untouched.
@@ -216,18 +239,22 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 			raw = value
 		}
 		terminal := claims.Scope == "run" && (event.Type == "run.completed" || event.Type == "run.failed")
-		f := frame{seq: last, kind: string(event.Type), data: raw, terminal: terminal}
+		f := frame{seq: last, kind: string(event.Type), data: raw}
 		if !filter.Allows(f.kind) {
-			if !terminal {
-				return
+			if terminal {
+				ended = true
 			}
-			f.data = nil
+			return
+		}
+		if terminal {
+			ended = true
 		}
 		queue.push(ctx, f)
-	}, jetstream.PullMaxMessages(1), jetstream.ConsumeErrHandler(func(_ jetstream.ConsumeContext, err error) {
-		s.logger.Warn("stream consumer failed", "error_type", fmt.Sprintf("%T", err))
-		cancel()
-	}))
+	}, jetstream.PullMaxMessagesWithBytesLimit(s.cfg.BufferFrames, s.cfg.BufferBytes),
+		jetstream.ConsumeErrHandler(func(_ jetstream.ConsumeContext, err error) {
+			s.logger.Warn("stream consumer failed", "error_type", fmt.Sprintf("%T", err))
+			cancel()
+		}))
 	if err != nil {
 		s.unavailable(w, err)
 		return

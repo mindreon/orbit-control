@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+if [[ $# -gt 0 ]]; then
+  if [[ $# -ne 2 || "$1" != "--edge-config" ]]; then
+    printf 'usage: %s [--edge-config <Caddyfile>]\n' "$0" >&2
+    exit 2
+  fi
+  # Go regexp matches Caddy's RE2 syntax; require every gateway-owned route.
+  go run ./scripts/edgecheck --edge-config "$2" --openapi docs/openapi.yaml
+fi
 # Redocly 1.x rejects JSON Schema's boolean `then`/`else` schemas. Lint an
 # equivalent temporary representation while retaining the canonical contract refs.
 check_dir="$(mktemp -d "$PWD/.openapi-lint.XXXXXX")"

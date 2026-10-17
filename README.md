@@ -8,7 +8,8 @@ No v1 data compatibility or in-memory database fallback is provided.
 
 ```
 cmd/orbit-control/       api | worker | all (API and ctl worker)
-cmd/orbit-admin/         migrations, provisioning and audit verification
+cmd/orbit-admin/         migrations, provisioning, event retention and audit verification
+cmd/stream-gateway/      independent NATS-to-SSE listener
 internal/platform/      config, logging, pgx transactions, UUIDv7, HTTP middleware
 internal/auth/          OIDC/JWKS, dev Ed25519, API keys, run capabilities
 internal/tenancy/       tenants, memberships, groups and workspaces
@@ -17,7 +18,9 @@ internal/assets/        immutable versions, bounded bundles, Ed25519 signatures
 internal/locks/         signed dependency resolution and per-member run locks
 internal/workflows/     deterministic session, run, lease and release Workflows
 internal/activities/    ctl projections, release Activities and dispatcher
-internal/sessions/      typed session/run/message/artifact resources and services
+internal/sessions/      typed session/run/message/artifact resources and history
+internal/streamgw/      offline-authorized SSE gateway
+internal/sink/          durable event projection and control outbox redelivery
 internal/kernelapi/     capability-protected runtime HTTP API
 internal/audit/         RFC 8785 JCS / SHA-256 tenant hash chains
 internal/httpapi/       standard-library routes; OpenAPI correspondence test
@@ -248,6 +251,8 @@ bash scripts/check-style.sh
 bash scripts/check-workflows.sh
 bash scripts/check-contracts-gen.sh
 bash scripts/check-openapi.sh
+# WP7d requires this strict check against the infra routing configuration:
+bash scripts/check-openapi.sh --edge-config ../deploy/v2/Caddyfile
 go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
 ```
 
@@ -557,11 +562,70 @@ all retained events. An expired positive cursor returns `409 EVENT_CURSOR_EXPIRE
 Run streams send a single `end` frame on completion/failure, including a resume
 already past the terminal event; session streams stay open. Expiry/shutdown close
 silently. Clients obtain a new token before every connection and resume using the
-last complete received frame. `GET /healthz` and `/metrics` stay on the internal
-network; shutdown immediately withdraws readiness, then preserves the grace period.
+last complete received frame. `GET /healthz` stays on the internal network;
+shutdown immediately withdraws readiness, then preserves the grace period.
+Gateway and sink use the OTel metric API with fixed low-cardinality labels.
+The provider is no-op by default: WP-O will install the SDK and OTLP exporter.
+There are no Prometheus HTTP endpoints; exporter/operational metrics acceptance
+is not part of WP7b completion.
 
 `GET /v1/runs/{r}/history` and `/v1/sessions/{s}/history` require `session.read`.
 They read only `run_events`, in `stream_seq` order, with `after=0`, `limit=200`
 (maximum 500), and the same event filters. Empty pages retain the requested `after`
 as `resume_from`. Rebuild from history, then reconnect SSE with `resume_from` to
 bridge asynchronous sink lag. Delta, usage and sandbox-output events are transient.
+
+
+`orbit-control worker|all` starts the durable `run-events-sink` consumer before
+Temporal workers, then runs sink and outbox loops. Set `ORBIT_SINK_ENABLED=false`
+(default `true`) on replicas that should run neither loop. Each batch fetches at
+most 256 messages; subjects are serial within a batch and at most eight groups
+write concurrently. Every message uses a tenant transaction. Immutable envelope
+`ts` and event ID provide idempotency, including re-publication outside the NATS
+10-minute duplicate window. Invalid envelopes, subject mismatches, missing runs,
+CHECK failures and final-delivery messages are retained in `run_event_rejects`
+before ack. Unknown deterministic database failures have bounded redelivery;
+infrastructure failures pause further fetching and retry with capped backoff until
+recovery or shutdown. `InProgress` protects the held batch even during long outages.
+Sink metric
+instruments share the process OTel provider; they open no listener.
+
+The outbox scans every `ORBIT_OUTBOX_INTERVAL=10s`, selecting only unpublished
+rows older than 30 seconds through the restricted SECURITY DEFINER function,
+in `created_at, operation, event_id` order. A transaction advisory lock serializes
+replicas through publish/mark in one connection, with a 30-second transaction
+bound and a separate 20-second publication budget. Tenant-local `set_config` keeps
+each marker update under RLS; publication failure/budget exhaustion commits the
+successful prefix and quarantine decisions, leaving the remainder for recovery.
+DB/commit failures roll back the batch and stable msg IDs absorb any replay.
+The payload supplies the session subject.
+Publish failures stop that scan and leave the operation for the next interval.
+The known 30-second delay and possible ordering differences across operations
+remain; ordering within an operation and publication msg IDs are preserved.
+Deterministically invalid outbox rows are quarantined with a fixed reason, never
+deleted or marked published, and the batch continues across tenants and runs.
+NATS/DB/timeout failures never quarantine. To count or requeue immutable rows:
+`orbit-admin maintenance requeue-control-events --tenant UUID [--run UUID]
+[--event-id ID] [--reason identity_mismatch] [--dry-run]`.
+Only orbit_owner can clear quarantine; unchanged invalid rows are quarantined again.
+Quarantine counters use the same no-op-by-default OTel provider.
+
+Owner-only `orbit-admin maintenance prune` accepts `--control-events-before`,
+`--rejects-before`, and `--run-events-before`, all nonfuture RFC3339 cutoffs.
+Outbox pruning removes only already-published rows; event pruning drops only
+whole partitions whose actual upper bounds are at/before the cutoff, retaining
+the default and partial-month partitions. Existing usage/replay pruning remains.
+
+For development acceptance only, `ORBIT_ENV=dev orbit-admin issue-stream-token
+--tenant UUID --session UUID [--run UUID] --ttl=-1s` issues a test stream token.
+The stream key must already exist; the command needs no DB, refuses non-dev mode
+and never extends tokens beyond 15 minutes. Treat its JSON output as a bearer
+credential, not a log entry.
+
+Real-service tests use disposable databases and unique NATS streams. For example:
+`ORBIT_TEST_NATS_URL=... ORBIT_TEST_DATABASE_URL=... go test -tags nats_integration
+./internal/streamgw/... ./internal/sink/... ./internal/platform/natsx/... -count=1`.
+The suite includes 100 random reconnection seeds over 10,000 source events, real
+socket backpressure, graceful drain, shared-consumer replicas, a test-owned PG
+network proxy for a 20-second outage, and an isolated authenticated NATS container
+using the specification appendix B permissions. Permission tests require Docker.

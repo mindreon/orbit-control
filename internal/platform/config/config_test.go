@@ -135,6 +135,22 @@ func TestAssetWorkerConfiguration(t *testing.T) {
 	}
 }
 
+func TestSinkConfiguration(t *testing.T) {
+	for _, test := range []struct{ name, value string }{
+		{name: "ORBIT_SINK_ENABLED", value: "yes"},
+		{name: "ORBIT_OUTBOX_INTERVAL", value: "0s"},
+		{name: "ORBIT_OUTBOX_INTERVAL", value: "bad"},
+	} {
+		t.Run(test.name+test.value, func(t *testing.T) {
+			t.Setenv(test.name, test.value)
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), test.name) {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestStreamConfiguration(t *testing.T) {
 	c, err := Load()
 	if err != nil {

@@ -1861,9 +1861,14 @@ paths:
       description: |
         SSE frames contain id (JetStream stream sequence), event (RunEvent.type),
         and data (the original single-line RunEvent JSON). Starts with retry: 1000;
-        idle heartbeats are comments. Run streams send event: end with
-        data: {"reason":"run_finished"} after run.completed or run.failed,
-        then close after 500ms. Session streams never send end.
+        idle heartbeats are comments. Run streams send event: end with data
+        {"reason":"run_finished"} only when a terminal event is known and the
+        consumer is caught up (NumPending is zero), then close after 500ms.
+        Terminal knowledge comes from run.completed/run.failed on this connection
+        (even if filtered), or a DeliverLast lookup of the run's end marker when
+        Last-Event-ID is positive. Already queued late events precede end;
+        no more frames are queued afterward. Marker lookup failure returns 503.
+        Session streams silently skip marker subjects and never send end.
         Last-Event-ID 0 means DeliverAll; positive cursors resume after that sequence.
         Expired tokens close silently. Query token is a fallback; Bearer takes precedence.
       security: []
@@ -1938,7 +1943,11 @@ paths:
       description: |
         Requires session.read. Ordered by stream_seq; excludes transient events.
         Sink projection may lag. Reconnect SSE with resume_from to catch up.
-        An empty page returns the requested after as resume_from (default 0).
+        The response is bounded by the sink safety floor B; a non-final page sets
+        next_cursor and resume_from to its last returned sequence. A final page,
+        including an empty or filtered page, sets resume_from to max(after, B).
+        If the safety floor is unavailable, the endpoint returns 503 STREAM_UNAVAILABLE
+        with retryable true.
       parameters:
         - $ref: '#/components/parameters/Tenant'
         - name: r
@@ -1984,6 +1993,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '503':
+          description: STREAM_UNAVAILABLE (no cached safety floor); retryable is true.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /v1/sessions/{s}/events:
     x-served-by: stream-gateway
     get:
@@ -1992,9 +2007,14 @@ paths:
       description: |
         SSE frames contain id (JetStream stream sequence), event (RunEvent.type),
         and data (the original single-line RunEvent JSON). Starts with retry: 1000;
-        idle heartbeats are comments. Run streams send event: end with
-        data: {"reason":"run_finished"} after run.completed or run.failed,
-        then close after 500ms. Session streams never send end.
+        idle heartbeats are comments. Run streams send event: end with data
+        {"reason":"run_finished"} only when a terminal event is known and the
+        consumer is caught up (NumPending is zero), then close after 500ms.
+        Terminal knowledge comes from run.completed/run.failed on this connection
+        (even if filtered), or a DeliverLast lookup of the run's end marker when
+        Last-Event-ID is positive. Already queued late events precede end;
+        no more frames are queued afterward. Marker lookup failure returns 503.
+        Session streams silently skip marker subjects and never send end.
         Last-Event-ID 0 means DeliverAll; positive cursors resume after that sequence.
         Expired tokens close silently. Query token is a fallback; Bearer takes precedence.
       security: []
@@ -2069,7 +2089,11 @@ paths:
       description: |
         Requires session.read. Ordered by stream_seq; excludes transient events.
         Sink projection may lag. Reconnect SSE with resume_from to catch up.
-        An empty page returns the requested after as resume_from (default 0).
+        The response is bounded by the sink safety floor B; a non-final page sets
+        next_cursor and resume_from to its last returned sequence. A final page,
+        including an empty or filtered page, sets resume_from to max(after, B).
+        If the safety floor is unavailable, the endpoint returns 503 STREAM_UNAVAILABLE
+        with retryable true.
       parameters:
         - $ref: '#/components/parameters/Tenant'
         - name: s
@@ -2111,6 +2135,12 @@ paths:
                 $ref: '#/components/schemas/Error'
         '422':
           description: INVALID_FILTER
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: STREAM_UNAVAILABLE (no cached safety floor); retryable is true.
           content:
             application/json:
               schema:
@@ -2215,9 +2245,11 @@ components:
             $ref: '#/components/schemas/RunEvent'
         next_cursor:
           type: string
+          description: Present only for a non-final history page; use as after to continue history with the same filter.
           pattern: '^[0-9]+$'
         resume_from:
           type: string
+          description: Safe SSE cursor for the same filter; last returned sequence on non-final pages, max(after, safety floor) on final pages.
           pattern: '^[0-9]+$'
     AssetInput:
       type: object

@@ -5,6 +5,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/mindreon/orbit-control/internal/platform/natsx"
 )
 
 // StreamGateway contains only public verification keys and NATS/HTTP settings.
@@ -51,8 +53,8 @@ func LoadStreamGateway() (StreamGateway, error) {
 			}
 		}
 	}
-	if c.BufferBytes < 64<<10 {
-		return c, fmt.Errorf("ORBIT_STREAM_BUFFER_BYTES must be at least 65536")
+	if c.BufferBytes < 2*natsx.MaxMessageSize {
+		return c, fmt.Errorf("ORBIT_STREAM_BUFFER_BYTES must be at least %d", 2*natsx.MaxMessageSize)
 	}
 	for _, v := range []struct {
 		name string

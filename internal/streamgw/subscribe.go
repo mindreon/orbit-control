@@ -2,7 +2,6 @@ package streamgw
 
 import (
 	"context"
-	"encoding/json/v2"
 	"fmt"
 	"math"
 	"sync"
@@ -11,7 +10,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/mindreon/orbit-control/internal/auth"
-	"github.com/mindreon/orbit-control/internal/contract"
+	"github.com/mindreon/orbit-control/internal/platform/natsx"
 )
 
 type eventSource interface {
@@ -57,11 +56,10 @@ func (s *Server) firstSequence(ctx context.Context) (uint64, error) {
 	return s.info.first, nil
 }
 
-// A last-message ordered snapshot lets a run resume after its terminal event
-// with just end. It uses the same consumer permissions, never direct message GET.
-func (s *Server) finishedAt(ctx context.Context, claims auth.StreamClaims, cursor uint64) (bool, error) {
+// A last-message marker lookup is independent of pending event frames.
+func (s *Server) endMarkerPresent(ctx context.Context, claims auth.StreamClaims, cursor uint64) (bool, error) {
 	c, err := s.js.OrderedConsumer(ctx, s.stream, jetstream.OrderedConsumerConfig{
-		FilterSubjects: []string{subject(claims)}, DeliverPolicy: jetstream.DeliverLastPolicy,
+		FilterSubjects: []string{natsx.EndSubject(claims.TenantID, claims.SessionID, claims.RunID)}, DeliverPolicy: jetstream.DeliverLastPolicy,
 		InactiveThreshold: 30 * time.Second,
 	})
 	if err != nil {
@@ -73,18 +71,11 @@ func (s *Server) finishedAt(ctx context.Context, claims auth.StreamClaims, curso
 	}
 	finished := false
 	for msg := range batch.Messages() {
-		meta, err := msg.Metadata()
+		_, err := msg.Metadata()
 		if err != nil {
 			return false, err
 		}
-		if meta.Sequence.Stream > cursor || contract.Validate("RunEvent", msg.Data()) != nil {
-			continue
-		}
-		var event contract.RunEvent
-		if err := json.Unmarshal(msg.Data(), &event); err != nil {
-			return false, err
-		}
-		finished = matches(claims, event, msg.Subject()) && (event.Type == "run.completed" || event.Type == "run.failed")
+		finished = true
 	}
 	return finished, batch.Error()
 }

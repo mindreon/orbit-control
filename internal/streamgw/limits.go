@@ -1,6 +1,12 @@
 package streamgw
 
-import "sync"
+import (
+	"context"
+	"sync"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+)
 
 type limits struct {
 	mu                        sync.Mutex
@@ -19,7 +25,9 @@ func (s *Server) acquire(tenant, subject, scope string) (func(), bool) {
 	l.tenants[tenant]++
 	l.subjects[subject]++
 	l.scopes[scope]++
+	s.metrics.connections.Add(context.Background(), 1, metric.WithAttributes(attribute.String("scope", scope)))
 	return func() {
+		s.metrics.connections.Add(context.Background(), -1, metric.WithAttributes(attribute.String("scope", scope)))
 		l.mu.Lock()
 		defer l.mu.Unlock()
 		l.total--

@@ -30,7 +30,13 @@ import (
 	"github.com/mindreon/orbit-control/internal/tenancy"
 )
 
+// EventFloor provides the durable sink's safe history boundary before SELECT.
+type EventFloor interface {
+	Floor(context.Context) (uint64, error)
+}
+
 type Handler struct {
+	EventFloor      EventFloor
 	Temporal        temporalx.Client
 	Objects         objstore.ObjectStore
 	Locks           locks.Resolver

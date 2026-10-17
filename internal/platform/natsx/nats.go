@@ -40,13 +40,26 @@ func (b *Bus) ensureRunEventsStream(ctx context.Context, name, subject string, m
 		MaxAge:            7 * 24 * time.Hour,
 		MaxMsgsPerSubject: 500000,
 		Duplicates:        10 * time.Minute,
-		MaxMsgSize:        64 << 10,
+		MaxMsgSize:        MaxMessageSize,
 		Discard:           jetstream.DiscardOld,
 		Compression:       jetstream.S2Compression,
 		MaxBytes:          maxBytes,
 	})
 	return err
 }
+
+// MaxMessageSize is the stream's per-message limit. A pull request's byte
+// budget also counts the subject and ack reply, so gateway buffers must be at
+// least twice this to always deliver a maximum-size message.
+const MaxMessageSize = 64 << 10
+
+// SinkBackOff is the sink consumer's redelivery schedule. JetStream applies its
+// first step as the ack wait of a first delivery, so progress heartbeats must
+// be sent well inside it.
+func SinkBackOff() []time.Duration {
+	return []time.Duration{time.Second, 5 * time.Second, 15 * time.Second, 30 * time.Second, 60 * time.Second}
+}
+
 func (b *Bus) EnsureSinkConsumer(ctx context.Context) (jetstream.Consumer, error) {
 	return b.ensureSinkConsumer(ctx, "RUN_EVENTS", "run.>", "run-events-sink")
 }
@@ -56,10 +69,10 @@ func (b *Bus) ensureSinkConsumer(ctx context.Context, stream, subject, durable s
 		FilterSubject: subject,
 		DeliverPolicy: jetstream.DeliverAllPolicy,
 		AckPolicy:     jetstream.AckExplicitPolicy,
-		AckWait:       30 * time.Second,
-		MaxDeliver:    10,
+		AckWait:       SinkBackOff()[0],
+		MaxDeliver:    -1,
 		MaxAckPending: 2000,
-		BackOff:       []time.Duration{time.Second, 5 * time.Second, 15 * time.Second, 30 * time.Second, 60 * time.Second},
+		BackOff:       SinkBackOff(),
 		ReplayPolicy:  jetstream.ReplayInstantPolicy,
 	})
 }

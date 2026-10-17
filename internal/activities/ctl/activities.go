@@ -7,9 +7,13 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/temporal"
@@ -32,6 +36,9 @@ type Activities struct {
 	NATS            natsx.Publisher
 	Temporal        client.Client
 	Environment     string
+	Meter           metric.Meter
+	outboxOnce      sync.Once
+	outboxFailures  metric.Int64Counter
 }
 type event struct {
 	typ  string
@@ -72,7 +79,7 @@ func (a *Activities) change(ctx context.Context, in w.RunOp, fn func(context.Con
  WHERE tenant_id=$1
  AND run_id=$2
  AND operation=$3
- AND published_at IS NULL
+ AND published_at IS NULL AND quarantined_at IS NULL
  ORDER BY event_id`, in.TenantID, in.RunID, in.EventN)
 			if err != nil {
 				return err
@@ -102,26 +109,52 @@ func (a *Activities) change(ctx context.Context, in w.RunOp, fn func(context.Con
 		}
 		if a.NATS != nil {
 			if err = a.NATS.Publish(ctx, w.EventSubject(in.TenantID, in.SessionID, in.RunID), m.Id, raw); err != nil {
-				a.logOutboxFailure(ctx, "control event publish failed", in.RunID, m.Id, in.EventN, err)
+				a.logOutboxFailure(ctx, "publish", in.RunID, m.Id, in.EventN, err)
 				break
+			}
+			if m.Type == contract.EventTypeRunCompleted || m.Type == contract.EventTypeRunFailed {
+				markerSubject, markerID, markerBody, markerErr := natsx.EndMarker(in.TenantID, in.SessionID, in.RunID, m.Id)
+				if markerErr == nil {
+					markerErr = a.NATS.Publish(ctx, markerSubject, markerID, markerBody)
+				}
+				if err = markerErr; err != nil {
+					a.logOutboxFailure(ctx, "end_marker", in.RunID, m.Id, in.EventN, err)
+					break
+				}
 			}
 			if err = a.DB.WithTenant(ctx, in.TenantID, func(tx pgx.Tx) error {
 				_, err := tx.Exec(ctx, `UPDATE control_events SET published_at=now()
- WHERE tenant_id=$1 AND run_id=$2 AND event_id=$3 AND published_at IS NULL`, in.TenantID, in.RunID, m.Id)
+ WHERE tenant_id=$1 AND run_id=$2 AND event_id=$3 AND published_at IS NULL AND quarantined_at IS NULL`, in.TenantID, in.RunID, m.Id)
 				return err
 			}); err != nil {
-				a.logOutboxFailure(ctx, "control event publish marker failed", in.RunID, m.Id, in.EventN, err)
+				a.logOutboxFailure(ctx, "mark_published", in.RunID, m.Id, in.EventN, err)
 			}
 		}
 	}
 	return nil
 }
-func (a *Activities) logOutboxFailure(ctx context.Context, message, runID, eventID string, operation int64, err error) {
+
+func (a *Activities) logOutboxFailure(ctx context.Context, stage, runID, eventID string, operation int64, err error) {
+	a.outboxOnce.Do(func() {
+		meter := a.Meter
+		if meter == nil {
+			meter = otel.Meter("github.com/mindreon/orbit-control/internal/activities/ctl")
+		}
+		counter, metricErr := meter.Int64Counter("control_outbox_failures_total")
+		if metricErr == nil {
+			a.outboxFailures = counter
+		}
+	})
+	if a.outboxFailures != nil {
+		a.outboxFailures.Add(ctx, 1, metric.WithAttributes(attribute.String("stage", stage)))
+	}
 	logger := a.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
-	logger.WarnContext(ctx, message, "run_id", runID, "event_id", eventID, "operation", operation, "error_type", fmt.Sprintf("%T", err))
+	logger.WarnContext(ctx, "control event outbox failure",
+		"run_id", runID, "event_id", eventID, "operation", operation,
+		"error_type", fmt.Sprintf("%T", err))
 }
 func runActor(ctx context.Context, tx pgx.Tx, in w.RunOp) (auth.Principal, error) {
 	var p auth.Principal

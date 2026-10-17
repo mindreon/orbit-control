@@ -39,11 +39,14 @@ func run() error {
 	}
 	defer bus.Close()
 	logger := orbitlog.New(os.Stdout, c.LogFormat)
-	gateway := streamgw.New(bus, verifier, streamgw.Config{
+	gateway, err := streamgw.New(bus, verifier, streamgw.Config{
 		MaxConnections: c.MaxConnections, PerTenant: c.PerTenant, PerSubject: c.PerSubject,
 		BufferFrames: c.BufferFrames, BufferBytes: c.BufferBytes, Heartbeat: c.Heartbeat, WriteTimeout: c.WriteTimeout,
 		ShutdownGrace: c.ShutdownGrace, MaxAge: c.MaxAge, InfoCache: c.InfoCache,
 	}, logger)
+	if err != nil {
+		return err
+	}
 	server := &http.Server{Addr: c.Addr, Handler: gateway.Router(), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: time.Minute}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

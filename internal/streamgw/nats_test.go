@@ -7,7 +7,9 @@ import (
 	"cmp"
 	"context"
 	"crypto/ed25519"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -51,7 +53,7 @@ func realGateway(t *testing.T, maxMsgs int64) (*Server, *natsx.Bus, auth.StreamC
 	s.logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	s.stream = "TEST_" + ids.New()
 	_, err = bus.JS.CreateStream(t.Context(), jetstream.StreamConfig{Name: s.stream, Subjects: []string{"run." + c.TenantID + ".>"},
-		Storage: jetstream.MemoryStorage, MaxMsgs: maxMsgs, MaxMsgSize: 64 << 10, Duplicates: 10 * time.Minute})
+		Storage: jetstream.MemoryStorage, MaxMsgs: maxMsgs, MaxMsgSize: natsx.MaxMessageSize, Duplicates: 10 * time.Minute})
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -161,36 +163,98 @@ func TestReconnectExactlyOnce(t *testing.T) {
 	}
 	require.Len(t, events, count)
 	slices.SortFunc(events, func(a, b published) int { return cmp.Compare(a.seq, b.seq) })
+	seedSlots := make(chan struct{}, 8)
 	for seed := range 100 {
-		rng := rand.New(rand.NewPCG(uint64(seed), 17))
-		filter := rng.IntN(3)
-		query := []string{"", "?types=run.status,message.final", "?exclude=reasoning.delta"}[filter]
-		want := slices.DeleteFunc(slices.Clone(events), func(e published) bool {
-			return filter == 1 && (e.kind == "reasoning.delta" || e.kind == "message.delta") || filter == 2 && e.kind == "reasoning.delta"
-		})
-		var cursor uint64
-		index := 0
-		for index < len(want) {
-			response := connect("/v1/runs/"+c.RunID+"/events", cursor, query)
-			require.Equal(t, 200, response.StatusCode)
-			scan := bufio.NewScanner(response.Body)
-			scan.Buffer(make([]byte, 4096), 128<<10)
-			batch := min(1+rng.IntN(200), len(want)-index)
-			for range batch {
-				got, end := readSSE(t, scan)
-				require.False(t, end)
-				require.Equal(t, want[index], got, "seed=%d index=%d", seed, index)
-				require.Greater(t, got.seq, cursor)
-				cursor = got.seq
-				index++
+		t.Run(fmt.Sprintf("seed-%03d", seed), func(t *testing.T) {
+			t.Parallel()
+			seedSlots <- struct{}{}
+			defer func() { <-seedSlots }()
+			started := time.Now()
+			connections := 0
+			var cursor uint64
+			index := 0
+			defer func() {
+				t.Logf("seed=%d published=%d read=%d cursor=%d reconnects=%d elapsed=%s",
+					seed, len(events), index, cursor, connections, time.Since(started))
+				if t.Failed() {
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+					defer cancel()
+					stream, err := bus.JS.Stream(ctx, s.stream)
+					if err == nil {
+						info, infoErr := stream.Info(ctx)
+						if infoErr == nil {
+							t.Logf("stream messages=%d consumers=%d", info.State.Msgs, info.State.Consumers)
+						}
+						list := stream.ListConsumers(ctx)
+						for info := range list.Info() {
+							t.Logf("consumer=%s pending=%d waiting=%d delivered_stream=%d delivered_consumer=%d",
+								info.Name, info.NumPending, info.NumWaiting, info.Delivered.Stream, info.Delivered.Consumer)
+						}
+					}
+				}
+			}()
+			rng := rand.New(rand.NewPCG(uint64(seed), 17))
+			filter := rng.IntN(3)
+			query := []string{"", "?types=run.status,message.final", "?exclude=reasoning.delta"}[filter]
+			want := slices.DeleteFunc(slices.Clone(events), func(e published) bool {
+				return filter == 1 && (e.kind == "reasoning.delta" || e.kind == "message.delta") || filter == 2 && e.kind == "reasoning.delta"
+			})
+			for index < len(want) {
+				connections++
+				response := connect("/v1/runs/"+c.RunID+"/events", cursor, query)
+				t.Cleanup(func() { response.Body.Close() })
+				require.Equal(t, 200, response.StatusCode)
+				scan := bufio.NewScanner(response.Body)
+				scan.Buffer(make([]byte, 4096), 128<<10)
+				batch := min(1+rng.IntN(200), len(want)-index)
+				for range batch {
+					got, end := readSSE(t, scan)
+					require.False(t, end)
+					require.Equal(t, want[index], got, "seed=%d index=%d", seed, index)
+					require.Greater(t, got.seq, cursor)
+					cursor = got.seq
+					index++
+				}
+				require.NoError(t, response.Body.Close())
 			}
-			require.NoError(t, response.Body.Close())
+		})
+	}
+	require.Zero(t, metricCount(t, s, "streamgw_order_violation_total"))
+	t.Log("selected reconnection seeds over 10,000 source events; concurrent publish and 10% duplicate retries verified")
+}
+
+// A pull request's byte budget also counts the subject and ack reply, so the
+// largest message the stream accepts must still arrive at the minimum buffer.
+func TestLargestAcceptedMessageReachesMinimumBuffer(t *testing.T) {
+	s, bus, c, connect := realGateway(t, -1)
+	s.cfg.BufferBytes = 2 * natsx.MaxMessageSize
+	padded := func(size int) []byte {
+		var event map[string]any
+		require.NoError(t, json.Unmarshal(eventBytes(t, c, 1, "run.status"), &event))
+		event["future_field"] = ""
+		base, err := json.Marshal(event)
+		require.NoError(t, err)
+		event["future_field"] = strings.Repeat("x", size-len(base))
+		raw, err := json.Marshal(event)
+		require.NoError(t, err)
+		require.Len(t, raw, size)
+		return raw
+	}
+	var largest int
+	for size := natsx.MaxMessageSize; size > natsx.MaxMessageSize-1024; size-- {
+		if bus.Publish(t.Context(), subject(c), ids.New(), padded(size)) == nil {
+			largest = size
+			break
 		}
 	}
-	s.metrics.mu.Lock()
-	require.Zero(t, s.metrics.values["streamgw_order_violation_total"])
-	s.metrics.mu.Unlock()
-	t.Log("100 seeds × 10,000 source events; concurrent publish, 10% duplicate retries; exact ordered filtered sets verified")
+	require.NotZero(t, largest, "the stream accepts a message just under its limit")
+	require.Less(t, largest, natsx.MaxMessageSize, "subject and headers count toward the stream limit")
+	response := connect("/v1/runs/"+c.RunID+"/events", 0, "")
+	defer response.Body.Close()
+	require.Equal(t, 200, response.StatusCode)
+	frame, end := readSSE(t, bufio.NewScanner(response.Body))
+	require.False(t, end)
+	require.EqualValues(t, 1, frame.seq)
 }
 
 func TestSessionOrderAndTerminalResume(t *testing.T) {
@@ -223,6 +287,8 @@ func TestSessionOrderAndTerminalResume(t *testing.T) {
 		require.NoError(t, response.Body.Close())
 	}
 	require.NoError(t, bus.Publish(t.Context(), subject(c), ids.New(), eventBytes(t, c, 11, "run.completed")))
+	marker := []byte(fmt.Sprintf(`{"run_id":%q,"event_id":%q}`, c.RunID, c.RunID+":main:0:0:11"))
+	require.NoError(t, bus.Publish(t.Context(), natsx.EndSubject(c.TenantID, c.SessionID, c.RunID), "end:"+c.RunID, marker))
 	response := connect("/v1/runs/"+c.RunID+"/events", last, "")
 	scan := bufio.NewScanner(response.Body)
 	terminal, end := readSSE(t, scan)
@@ -257,7 +323,7 @@ func TestExpiredCursorAndZero(t *testing.T) {
 
 func TestSlowClientIsolationAndResume(t *testing.T) {
 	s, bus, c, connect := realGateway(t, -1)
-	s.cfg.WriteTimeout = 50 * time.Millisecond
+	s.cfg.WriteTimeout = 100 * time.Millisecond
 	slow := connect("/v1/runs/"+c.RunID+"/events", 0, "")
 	defer slow.Body.Close()
 	const count = 700
@@ -274,9 +340,7 @@ func TestSlowClientIsolationAndResume(t *testing.T) {
 	require.EqualValues(t, count+1, got.seq)
 	require.NoError(t, fast.Body.Close())
 	require.Eventually(t, func() bool {
-		s.metrics.mu.Lock()
-		defer s.metrics.mu.Unlock()
-		return s.metrics.values["streamgw_slow_client_closed_total"] > 0
+		return metricCount(t, s, "streamgw_slow_client_closed_total") > 0
 	}, 5*time.Second, 10*time.Millisecond)
 	resumed := connect("/v1/runs/"+c.RunID+"/events", 0, "")
 	scan := bufio.NewScanner(resumed.Body)
@@ -310,7 +374,8 @@ func TestGracefulShutdownAndResume(t *testing.T) {
 	require.NoError(t, <-done)
 	require.NoError(t, response.Body.Close())
 	require.NoError(t, bus.Publish(t.Context(), subject(c), ids.New(), eventBytes(t, c, 2, "run.status")))
-	next := New(bus, s.verifier, testConfig(), s.logger)
+	next, err := New(bus, s.verifier, testConfig(), s.logger)
+	require.NoError(t, err)
 	next.stream = s.stream
 	h := httptest.NewServer(next.Router())
 	defer h.Close()
@@ -332,4 +397,133 @@ func TestGracefulShutdownAndResume(t *testing.T) {
 	got, end := readSSE(t, bufio.NewScanner(resumed.Body))
 	require.False(t, end)
 	require.EqualValues(t, 2, got.seq)
+}
+
+func TestInvalidFramesFiltersAndConnectionAge(t *testing.T) {
+	s, bus, c, connect := realGateway(t, -1)
+	// Malformed and cross-tenant envelopes never reach the client. Pretty JSON
+	// remains semantically identical but is compacted to one SSE data line.
+	require.NoError(t, bus.Publish(t.Context(), subject(c), ids.New(), []byte(`{"secret":"do not forward"}`)))
+	wrong := c
+	wrong.TenantID = ids.New()
+	require.NoError(t, bus.Publish(t.Context(), subject(c), ids.New(), eventBytes(t, wrong, 2, "run.status")))
+	raw := eventBytes(t, c, 3, "run.status")
+	var pretty any
+	require.NoError(t, json.Unmarshal(raw, &pretty))
+	raw, err := json.Marshal(pretty, jsontext.Multiline(true))
+	require.NoError(t, err)
+	require.NoError(t, bus.Publish(t.Context(), subject(c), ids.New(), raw))
+	require.NoError(t, bus.Publish(t.Context(), subject(c), ids.New(), eventBytes(t, c, 4, "run.completed")))
+	response := connect("/v1/runs/"+c.RunID+"/events", 0, "?types=run.status")
+	scan := bufio.NewScanner(response.Body)
+	got, end := readSSE(t, scan)
+	require.False(t, end)
+	require.EqualValues(t, 3, got.seq)
+	_, end = readSSE(t, scan)
+	require.True(t, end, "filtering the terminal event must still end the run stream")
+	require.NoError(t, response.Body.Close())
+	require.EqualValues(t, 2, metricCount(t, s, "streamgw_invalid_frames_total"))
+	// Session scope never ends on a run terminal, and hard connection age closes
+	// silently. The separate writer/token unit tests use a virtual clock.
+	s.cfg.MaxAge = 50 * time.Millisecond
+	response = connect("/v1/sessions/"+c.SessionID+"/events", 0, "")
+	raw, err = io.ReadAll(response.Body)
+	require.True(t, err == nil || errors.Is(err, io.ErrUnexpectedEOF))
+	require.NotContains(t, string(raw), "event: end")
+	require.Contains(t, string(raw), "event: run.completed")
+	require.NoError(t, response.Body.Close())
+}
+
+func TestE35LateTerminalMatrix(t *testing.T) {
+	s, bus, c, connect := realGateway(t, -1)
+	terminal, err := bus.JS.Publish(t.Context(), subject(c), eventBytes(t, c, 1, "run.completed"))
+	require.NoError(t, err)
+	endSubject := natsx.EndSubject(c.TenantID, c.SessionID, c.RunID)
+	require.NoError(t, bus.Publish(t.Context(), endSubject, "end:"+c.RunID, []byte(`{"run_id":"r","event_id":"terminal"}`)))
+	late, err := bus.JS.Publish(t.Context(), subject(c), eventBytes(t, c, 2, "run.status"))
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name   string
+		cursor uint64
+		query  string
+		seqs   []uint64
+	}{
+		{name: "zero", cursor: 0, query: "", seqs: []uint64{terminal.Sequence, late.Sequence}},
+		{name: "terminal", cursor: terminal.Sequence, query: "", seqs: []uint64{late.Sequence}},
+		{name: "late", cursor: late.Sequence, query: "", seqs: nil},
+		{name: "filter-terminal", cursor: 0, query: "?types=run.status", seqs: []uint64{late.Sequence}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			response := connect("/v1/runs/"+c.RunID+"/events", tc.cursor, tc.query)
+			defer response.Body.Close()
+			require.Equal(t, 200, response.StatusCode)
+			scan := bufio.NewScanner(response.Body)
+			for _, seq := range tc.seqs {
+				frame, end := readSSE(t, scan)
+				require.False(t, end)
+				require.Equal(t, seq, frame.seq)
+			}
+			_, end := readSSE(t, scan)
+			require.True(t, end)
+		})
+	}
+	s.cfg.MaxAge = 30 * time.Millisecond
+	response := connect("/v1/sessions/"+c.SessionID+"/events", 0, "")
+	raw, err := io.ReadAll(response.Body)
+	response.Body.Close()
+	require.True(t, err == nil || errors.Is(err, io.ErrUnexpectedEOF))
+	require.NotContains(t, string(raw), "event: end")
+	require.Equal(t, 2, strings.Count(string(raw), "id: "))
+	require.Zero(t, metricCount(t, s, "streamgw_invalid_frames_total"))
+}
+
+func TestE35NoMarkerIdleThenLiveTerminal(t *testing.T) {
+	s, bus, c, connect := realGateway(t, -1)
+	s.cfg.Heartbeat = 5 * time.Millisecond
+	ack, err := bus.JS.Publish(t.Context(), subject(c), eventBytes(t, c, 1, "run.status"))
+	require.NoError(t, err)
+	response := connect("/v1/runs/"+c.RunID+"/events", ack.Sequence, "")
+	defer response.Body.Close()
+	scan := bufio.NewScanner(response.Body)
+	found := false
+	for scan.Scan() {
+		require.NotEqual(t, "event: end", scan.Text())
+		if scan.Text() == ": ping" {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "tail without marker stays live and heartbeats")
+	require.NoError(t, bus.Publish(t.Context(), subject(c), "terminal", eventBytes(t, c, 2, "run.completed")))
+	require.NoError(t, bus.Publish(t.Context(), natsx.EndSubject(c.TenantID, c.SessionID, c.RunID), "end:"+c.RunID, []byte(`{}`)))
+	frame, end := readSSE(t, scan)
+	require.False(t, end)
+	require.Equal(t, "run.completed", frame.kind)
+	_, end = readSSE(t, scan)
+	require.True(t, end)
+}
+
+// The main event consumer succeeds, but the marker lookup goes to a missing
+// stream and receives an actual JetStream API error before any SSE headers.
+type missingMarkerStream struct{ eventSource }
+
+func (s missingMarkerStream) OrderedConsumer(
+	ctx context.Context, stream string, cfg jetstream.OrderedConsumerConfig,
+) (jetstream.Consumer, error) {
+	if strings.HasSuffix(cfg.FilterSubjects[0], ".end") {
+		stream = "MISSING_" + stream
+	}
+	return s.eventSource.OrderedConsumer(ctx, stream, cfg)
+}
+func TestE35MarkerLookupUnavailable(t *testing.T) {
+	s, bus, c, connect := realGateway(t, -1)
+	ack, err := bus.JS.Publish(t.Context(), subject(c), eventBytes(t, c, 1, "run.status"))
+	require.NoError(t, err)
+	s.js = missingMarkerStream{eventSource: s.js}
+	response := connect("/v1/runs/"+c.RunID+"/events", ack.Sequence, "")
+	defer response.Body.Close()
+	require.Equal(t, 503, response.StatusCode)
+	raw, err := io.ReadAll(response.Body)
+	require.NoError(t, err)
+	require.Contains(t, string(raw), "STREAM_UNAVAILABLE")
 }
