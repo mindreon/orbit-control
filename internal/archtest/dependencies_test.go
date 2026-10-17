@@ -57,10 +57,18 @@ func TestPackageBoundaries(t *testing.T) {
 	for _, pkg := range packages {
 		if strings.HasPrefix(pkg.ImportPath, module+"workflows") {
 			for _, dep := range pkg.Imports {
-				allowed := standard[dep] || dep == module+"contract" || dep == module+"workflows" ||
+				allowed := standard[dep] || dep == module+"contract" || dep == module+"team" || dep == module+"workflows" ||
 					strings.HasPrefix(dep, module+"workflows/") || strings.HasPrefix(dep, "go.temporal.io/sdk/") ||
 					strings.HasPrefix(dep, "go.temporal.io/api/")
 				if !allowed {
+					t.Errorf("%s imports forbidden %s", pkg.ImportPath, dep)
+				}
+			}
+		}
+		if pkg.ImportPath == module+"team" {
+			for _, dep := range pkg.Imports {
+				if dep != "go.temporal.io/sdk/workflow" && strings.HasPrefix(dep, "go.temporal.io/") ||
+					strings.HasPrefix(dep, module+"platform/db") || strings.HasPrefix(dep, module+"httpapi") {
 					t.Errorf("%s imports forbidden %s", pkg.ImportPath, dep)
 				}
 			}

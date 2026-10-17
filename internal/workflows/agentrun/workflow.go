@@ -8,5 +8,5 @@ import (
 )
 
 func Run(ctx workflow.Context, in w.RunInput) error {
-	return segloop.Run(ctx, in)
+	return segloop.Run(ctx, in, nil)
 }

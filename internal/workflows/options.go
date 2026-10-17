@@ -13,7 +13,7 @@ func Ctl(ctx workflow.Context, name string) workflow.Context {
 	d := 30 * time.Second
 	attempts := int32(5)
 	switch name {
-	case "WaitForRun":
+	case "WaitForRun", "WaitForTurn":
 		d = 7 * 24 * time.Hour
 		attempts = 10
 	case "AcquireSandbox":
@@ -21,9 +21,9 @@ func Ctl(ctx workflow.Context, name string) workflow.Context {
 		attempts = 3
 	case "StartSegment", "SetRunStatus", "RecordSandboxState", "CancelInteraction", "ReconcileCheckpoint":
 		d = 10 * time.Second
-	case "RecordSegment", "ApplyDecision":
+	case "RecordSegment", "RecordBoard", "ApplyDecision":
 		attempts = 10
-	case "FinalizeRun":
+	case "FinalizeRun", "PrepareTeamRun", "FinalizeTeamRun":
 		d = time.Minute
 		attempts = 10
 	}
@@ -37,8 +37,11 @@ func Ctl(ctx workflow.Context, name string) workflow.Context {
 			MaximumAttempts:    attempts,
 		},
 	}
-	if name == "AcquireSandbox" || name == "WaitForRun" {
+	if name == "AcquireSandbox" || name == "WaitForRun" || name == "WaitForTurn" {
 		opts.HeartbeatTimeout = 30 * time.Second
+	}
+	if name == "WaitForRun" || name == "WaitForTurn" {
+		opts.TaskQueue = TaskQueueCtlWait
 	}
 	return workflow.WithActivityOptions(ctx, opts)
 }

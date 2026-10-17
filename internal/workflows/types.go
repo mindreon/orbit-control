@@ -20,6 +20,8 @@ type SessionCarry struct {
 	Policy string               `json:"policy"`
 }
 type SubmitMessageInput struct {
+	EntryKind          string                  `json:"entry_kind,omitempty"`
+	Team               *TeamSpec               `json:"team,omitempty"`
 	V                  int                     `json:"v"`
 	RunID              string                  `json:"run_id"`
 	MessageID          string                  `json:"message_id"`
@@ -71,6 +73,7 @@ type SandboxSpec struct {
 	TTLSeconds   int      `json:"ttl_seconds"`
 }
 type RunInput struct {
+	Unattended         bool                    `json:"unattended,omitempty"`
 	V                  int                     `json:"v"`
 	TenantID           string                  `json:"tenant_id"`
 	WorkspaceID        string                  `json:"workspace_id"`
@@ -99,25 +102,30 @@ type Pending struct {
 	Expired   bool                     `json:"expired"`
 }
 type RunCarry struct {
-	CancelCode        string                `json:"cancel_code,omitempty"`
-	ContinuedAt       int                   `json:"continued_at"`
-	Status            string                `json:"status"`
-	CommittedSeq      int                   `json:"committed_seq"`
-	CheckpointVersion int                   `json:"checkpoint_version"`
-	PendingTurn       contract.SegmentTurn  `json:"pending_turn"`
-	Steer             []contract.SteerItem  `json:"steer,omitempty"`
-	UsedMillicredits  int64                 `json:"used_millicredits"`
-	ActiveSeconds     int64                 `json:"active_seconds"`
-	NoProgress        int                   `json:"no_progress"`
-	Paused            bool                  `json:"paused"`
-	Cancel            *CancelInput          `json:"cancel,omitempty"`
-	Interaction       *Pending              `json:"interaction,omitempty"`
-	Lease             contract.SandboxLease `json:"lease"`
-	EventN            int64                 `json:"event_n"`
-	CompactedFor      int                   `json:"compacted_for"`
-	Acquisitions      int                   `json:"acquisitions"`
-	SandboxRetries    int                   `json:"sandbox_retries"`
-	ResumeTurn        *contract.SegmentTurn `json:"resume_turn,omitempty"`
+	Mailbox           []contract.MailboxMessage `json:"mailbox,omitempty"`
+	DeliveredMail     []string                  `json:"delivered_mail,omitempty"`
+	DeliveredSteer    []string                  `json:"delivered_steer,omitempty"`
+	EndTurn           bool                      `json:"end_turn,omitempty"`
+	LastFinal         *contract.FinalMessage    `json:"last_final,omitempty"`
+	CancelCode        string                    `json:"cancel_code,omitempty"`
+	ContinuedAt       int                       `json:"continued_at"`
+	Status            string                    `json:"status"`
+	CommittedSeq      int                       `json:"committed_seq"`
+	CheckpointVersion int                       `json:"checkpoint_version"`
+	PendingTurn       contract.SegmentTurn      `json:"pending_turn"`
+	Steer             []contract.SteerItem      `json:"steer,omitempty"`
+	UsedMillicredits  int64                     `json:"used_millicredits"`
+	ActiveSeconds     int64                     `json:"active_seconds"`
+	NoProgress        int                       `json:"no_progress"`
+	Paused            bool                      `json:"paused"`
+	Cancel            *CancelInput              `json:"cancel,omitempty"`
+	Interaction       *Pending                  `json:"interaction,omitempty"`
+	Lease             contract.SandboxLease     `json:"lease"`
+	EventN            int64                     `json:"event_n"`
+	CompactedFor      int                       `json:"compacted_for"`
+	Acquisitions      int                       `json:"acquisitions"`
+	SandboxRetries    int                       `json:"sandbox_retries"`
+	ResumeTurn        *contract.SegmentTurn     `json:"resume_turn,omitempty"`
 }
 type ResolveInteractionInput struct {
 	InteractionID string            `json:"interaction_id"`
@@ -168,8 +176,10 @@ type SessionState struct {
 	Status      string `json:"status"`
 }
 type TouchInput struct {
-	RunID string `json:"run_id"`
-	InUse bool   `json:"in_use"`
+	Holder string `json:"holder,omitempty"`
+	Member string `json:"member,omitempty"`
+	RunID  string `json:"run_id"`
+	InUse  bool   `json:"in_use"`
 }
 type LeaseInput struct {
 	TenantID     string      `json:"tenant_id"`
@@ -196,6 +206,8 @@ type LeaseCarry struct {
 	Spec             AcquireInput           `json:"spec"`
 }
 type AcquireInput struct {
+	Holder      string                   `json:"holder,omitempty"`
+	Member      string                   `json:"member,omitempty"`
 	Provider    contract.SandboxProvider `json:"provider"`
 	Gen         int                      `json:"gen"`
 	EventN      int64                    `json:"event_n"`
@@ -231,6 +243,8 @@ type PrepareOutput struct {
 	StartedAt         time.Time `json:"started_at"`
 }
 type AcquireSandboxInput struct {
+	Holder string `json:"holder,omitempty"`
+	Turn   int    `json:"turn,omitempty"`
 	RunOp
 	Spec    SandboxSpec `json:"spec"`
 	LockID  string      `json:"lock_id"`
@@ -293,6 +307,8 @@ type FinalizeInput struct {
 	NeverStarted   bool   `json:"never_started"`
 }
 type SandboxStateInput struct {
+	Holder       string                   `json:"holder,omitempty"`
+	Member       string                   `json:"member,omitempty"`
 	Provider     contract.SandboxProvider `json:"provider"`
 	RunID        string                   `json:"run_id"`
 	Restored     *bool                    `json:"restored,omitempty"`

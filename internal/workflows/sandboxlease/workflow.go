@@ -86,9 +86,17 @@ func (l *leaseWorkflow) touch(ctx workflow.Context, in w.TouchInput) {
 	l.st.LastTouch = workflow.Now(ctx)
 	l.st.Touches++
 	if in.InUse {
-		l.st.InUse[in.RunID] = l.st.LastTouch
+		holder := in.Holder
+		if holder == "" {
+			holder = in.RunID
+		}
+		l.st.InUse[holder] = l.st.LastTouch
 	} else {
-		delete(l.st.InUse, in.RunID)
+		holder := in.Holder
+		if holder == "" {
+			holder = in.RunID
+		}
+		delete(l.st.InUse, holder)
 	}
 }
 func (l *leaseWorkflow) drainSignals(ctx workflow.Context) {
@@ -115,7 +123,7 @@ func (l *leaseWorkflow) record(ctx workflow.Context, restored *bool) error {
 		TenantID: l.in.TenantID, IsolationKey: l.in.IsolationKey, SessionID: l.st.Spec.SessionID,
 		Gen: l.st.Gen, State: l.st.State, Lease: l.st.Lease, SnapshotID: l.st.SnapshotID,
 		Profile: l.st.Spec.Profile, RunID: l.st.Spec.RunID, Restored: l.st.PendingRestored, Provider: l.st.Spec.Provider,
-		EventN: l.st.Spec.EventN, EventAt: l.st.Spec.EventAt,
+		EventN: l.st.Spec.EventN, EventAt: l.st.Spec.EventAt, Member: l.st.Spec.Member, Holder: l.st.Spec.Holder,
 	}
 	err := workflow.ExecuteActivity(w.Ctl(ctx, "RecordSandboxState"), "RecordSandboxState", in).Get(ctx, nil)
 	if err == nil {
@@ -212,7 +220,11 @@ func (l *leaseWorkflow) acquire(ctx workflow.Context, ac w.AcquireInput) (contra
 	}
 	st.LastTouch = workflow.Now(ctx)
 	st.NextRenew = st.LastTouch.Add(time.Duration(ac.TTLSeconds) * time.Second / 2)
-	st.InUse[ac.RunID] = st.LastTouch
+	holder := ac.Holder
+	if holder == "" {
+		holder = ac.RunID
+	}
+	st.InUse[holder] = st.LastTouch
 	var event *bool
 	if restored {
 		event = new(fromSnapshot)

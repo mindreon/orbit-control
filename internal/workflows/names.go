@@ -1,7 +1,47 @@
 // Package workflows defines control-only payloads and durable names.
 package workflows
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
+
+const (
+	TeamRunWorkflow      = "TeamRunWorkflow"
+	MemberTaskWorkflow   = "MemberTaskWorkflow"
+	ScheduledRunWorkflow = "ScheduledRunWorkflow"
+	Deliver              = "Deliver"
+	EndTurn              = "EndTurn"
+	Board                = "Board"
+	MemberMain           = "main"
+	MemberTeam           = "team"
+	TaskQueueCtlWait     = "ctl-wait"
+)
+
+func TeamRunWorkflowID(tenant, run string) string { return "team:" + tenant + ":" + run }
+func MemberTaskWorkflowID(tenant, run, member string, turn int) string {
+	return "member:" + tenant + ":" + run + ":" + member + ":" + strconv.Itoa(turn)
+}
+func RunWorkflowID(kind, tenant, run string) string {
+	if kind == "team" {
+		return TeamRunWorkflowID(tenant, run)
+	}
+	return AgentRunWorkflowID(tenant, run)
+}
+func TeamSessionKey(run, member string) string  { return "team:" + run + ":" + member }
+func ScheduleID(tenant, schedule string) string { return "sched:" + tenant + ":" + schedule }
+func ScheduledRunWorkflowIDBase(tenant, schedule string) string {
+	return "schedrun:" + tenant + ":" + schedule
+}
+func TeamMember(member string) bool {
+	return member != "" && member != MemberMain && member != MemberTeam
+}
+func LeaseHolder(run, member string) string {
+	if TeamMember(member) {
+		return run + "/" + member
+	}
+	return run
+}
 
 const (
 	SessionWorkflow      = "SessionWorkflow"

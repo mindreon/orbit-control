@@ -15,15 +15,16 @@ import (
 )
 
 type sessionWorkflow struct {
-	in       w.SessionInput
-	queue    []w.SubmitMessageInput
-	policy   string
-	active   string
-	child    workflow.ChildWorkflowFuture
-	external bool
-	archived bool
-	runs     int
-	limit    int
+	in         w.SessionInput
+	queue      []w.SubmitMessageInput
+	policy     string
+	active     string
+	activeKind string
+	child      workflow.ChildWorkflowFuture
+	external   bool
+	archived   bool
+	runs       int
+	limit      int
 }
 
 func Run(ctx workflow.Context, in w.SessionInput) error {
@@ -176,7 +177,7 @@ func (s *sessionWorkflow) cancel(ctx workflow.Context, in w.CancelRunInput) (w.C
 }
 func (s *sessionWorkflow) signalActive(ctx workflow.Context, in w.CancelInput) error {
 	if s.external {
-		return workflow.SignalExternalWorkflow(ctx, w.AgentRunWorkflowID(s.in.TenantID, s.active), "", w.Cancel, in).Get(ctx, nil)
+		return workflow.SignalExternalWorkflow(ctx, w.RunWorkflowID(s.activeKind, s.in.TenantID, s.active), "", w.Cancel, in).Get(ctx, nil)
 	}
 	return s.child.SignalChildWorkflow(ctx, w.Cancel, in).Get(ctx, nil)
 }
@@ -221,26 +222,28 @@ func (s *sessionWorkflow) runInput(ctx workflow.Context, msg w.SubmitMessageInpu
 	if workflow.GetVersion(ctx, "event-subject-session", workflow.DefaultVersion, 1) == workflow.DefaultVersion {
 		subject = "run." + s.in.TenantID + "." + msg.RunID
 	}
-	return w.RunInput{V: 1, TenantID: s.in.TenantID, WorkspaceID: s.in.WorkspaceID, SessionID: s.in.SessionID,
-		RunID: msg.RunID, PrincipalID: msg.PrincipalID, MessageID: msg.MessageID, Member: "main", Lock: msg.Lock,
-		AgentSessionKey: w.AgentSessionKey(s.in.SessionID, msg.Lock.Digest), EventSubject: subject,
-		InputRef: msg.InputRef, BudgetMillicredits: msg.BudgetMillicredits, Limits: msg.Limits, Sandbox: msg.Sandbox, Tier: "standard"}
+	return w.NewRunInput(s.in, msg, subject)
 }
 func (s *sessionWorkflow) startNext(ctx workflow.Context) {
 	msg := s.queue[0]
 	s.queue = s.queue[1:]
 	s.active = msg.RunID
+	s.activeKind = msg.EntryKind
 	s.external = false
 	cc := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
-		WorkflowID: w.AgentRunWorkflowID(s.in.TenantID, msg.RunID), TaskQueue: contract.TaskQueueCtl,
+		WorkflowID: w.RunWorkflowID(msg.EntryKind, s.in.TenantID, msg.RunID), TaskQueue: contract.TaskQueueCtl,
 		ParentClosePolicy: enums.PARENT_CLOSE_POLICY_REQUEST_CANCEL, WaitForCancellation: true,
 		WorkflowIDReusePolicy: enums.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
 		TypedSearchAttributes: temporal.NewSearchAttributes(
 			temporal.NewSearchAttributeKeyKeyword("TenantId").ValueSet(s.in.TenantID),
 			temporal.NewSearchAttributeKeyKeyword("WorkspaceId").ValueSet(s.in.WorkspaceID),
-			temporal.NewSearchAttributeKeyKeyword("RunKind").ValueSet("agent")),
+			temporal.NewSearchAttributeKeyKeyword("RunKind").ValueSet(runKind(msg.EntryKind))),
 	})
-	s.child = workflow.ExecuteChildWorkflow(cc, w.AgentRunWorkflow, s.runInput(ctx, msg))
+	if msg.EntryKind == "team" && workflow.GetVersion(ctx, "session-team-child", workflow.DefaultVersion, 1) != workflow.DefaultVersion {
+		s.child = workflow.ExecuteChildWorkflow(cc, w.TeamRunWorkflow, w.NewTeamRunInput(s.in, msg, w.EventSubject(s.in.TenantID, s.in.SessionID, msg.RunID)))
+	} else {
+		s.child = workflow.ExecuteChildWorkflow(cc, w.AgentRunWorkflow, s.runInput(ctx, msg))
+	}
 	future := s.child
 	workflow.Go(ctx, func(ctx workflow.Context) { s.waitChild(ctx, future, msg.RunID) })
 }
@@ -264,4 +267,11 @@ func (s *sessionWorkflow) waitChild(ctx workflow.Context, future workflow.ChildW
 	}
 	s.active = ""
 	s.runs++
+}
+
+func runKind(kind string) string {
+	if kind == "team" {
+		return "team"
+	}
+	return "agent"
 }
