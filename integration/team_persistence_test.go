@@ -67,7 +67,7 @@ type teamTemporal struct {
 var _ temporalx.Client = (*teamTemporal)(nil)
 
 func (c *teamTemporal) Update(_ context.Context, workflow, name, key string, in, out any) error {
-	c.calls = append(c.calls, temporalCall{"update", workflow, name, key})
+	c.calls = append(c.calls, temporalCall{Kind: "update", Workflow: workflow, Name: name, Key: key})
 	c.updates = append(c.updates, in)
 	if c.onUpdate != nil {
 		c.onUpdate()
@@ -86,7 +86,7 @@ func (c *teamTemporal) Update(_ context.Context, workflow, name, key string, in,
 	return nil
 }
 func (c *teamTemporal) Signal(_ context.Context, workflow, name string, _ any) error {
-	c.calls = append(c.calls, temporalCall{"signal", workflow, name, ""})
+	c.calls = append(c.calls, temporalCall{Kind: "signal", Workflow: workflow, Name: name, Key: ""})
 	return nil
 }
 func (c *teamTemporal) Submit(_ context.Context, _ w.SessionInput, msg w.SubmitMessageInput) (w.SubmitMessageOutput, error) {
@@ -199,7 +199,8 @@ func (r *teamRig) decide(t *testing.T, member, interaction, body string, expired
 }
 
 // api builds the public handler for the fixture principal, who holds ws.editor.
-func (f *runFixture) api(t *testing.T, lock contract.RunLock, tc temporalx.Client, mutate ...func(*httpapi.Handler)) (http.Handler, string) {
+func (f *runFixture) api(t *testing.T, lock contract.RunLock, tc temporalx.Client, mutate ...func(*httpapi.Handler)) (http.Handler,
+	string) {
 	t.Helper()
 	f.tx(t, func(ctx context.Context, tx pgx.Tx) error {
 		return tenancy.Bind(ctx, tx, auth.From(ctx), f.tenant, "user", f.actor, "ws.editor", "workspace", f.workspace)
@@ -270,7 +271,8 @@ func testTeamPersistence(t *testing.T, d *db.DB, admin *pgx.Conn) {
 			require.NoError(t, tx.QueryRow(ctx, `SELECT count(*) FROM control_events WHERE tenant_id=$1 AND run_id=$2 AND payload->>'type'=$3`,
 				r.tenant, r.run, string(example.Type)).Scan(&events))
 			require.NoError(t, tx.QueryRow(ctx, `SELECT count(*) FROM team_tasks WHERE tenant_id=$1 AND run_id=$2`, r.tenant, r.run).Scan(&tasks))
-			require.NoError(t, tx.QueryRow(ctx, `SELECT board_version FROM team_runs WHERE tenant_id=$1 AND run_id=$2`, r.tenant, r.run).Scan(&version))
+			require.NoError(t, tx.QueryRow(ctx, `SELECT board_version FROM team_runs WHERE tenant_id=$1 AND run_id=$2`, r.tenant,
+				r.run).Scan(&version))
 			require.Equal(t, 1, events)
 			require.Equal(t, 1, tasks)
 			require.Equal(t, 5, version)
@@ -351,7 +353,8 @@ func testTeamPersistence(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		h, token := r.api(t, r.agentLock, fake)
 		status, raw := r.call(t, h, token, "POST", "/v1/interactions/"+interaction+"/resolve", `{"kind":"ask_user","answer":"Ready"}`, "")
 		require.Equal(t, 200, status, string(raw))
-		require.Equal(t, []temporalCall{{"update", "member:" + r.tenant + ":" + r.run + ":alice:1", w.ResolveInteraction, "resolve:" + interaction}}, fake.calls)
+		require.Equal(t, []temporalCall{{Kind: "update", Workflow: "member:" + r.tenant + ":" + r.run + ":alice:1", Name: w.ResolveInteraction,
+			Key: "resolve:" + interaction}}, fake.calls)
 	})
 	t.Run("T-P4d/WaitForTeamWorkflow", func(t *testing.T) {
 		r := newTeamRig(t, d, admin)
@@ -377,7 +380,7 @@ func testTeamPersistence(t *testing.T, d *db.DB, admin *pgx.Conn) {
 			require.Equal(t, 202, status, string(raw))
 			require.Len(t, fake.calls, 1)
 			if trigger == "schedule" {
-				require.Equal(t, temporalCall{"signal", id, w.Cancel, ""}, fake.calls[0])
+				require.Equal(t, temporalCall{Kind: "signal", Workflow: id, Name: w.Cancel, Key: ""}, fake.calls[0])
 			} else {
 				require.Equal(t, w.CancelRun, fake.calls[0].Name)
 				require.Equal(t, w.SessionWorkflowID(r.tenant, r.session), fake.calls[0].Workflow)
@@ -400,8 +403,9 @@ func testTeamPersistence(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		a := &ctl.Activities{DB: d, Temporal: fake}
 		for _, member := range []string{"leader", "researcher", "reviewer"} {
 			op := r.op(member, 1)
-			_, err := a.AcquireSandbox(t.Context(), w.AcquireSandboxInput{RunOp: op, Spec: w.SandboxSpec{IsolationKey: w.IsolationKey(r.tenant, r.session)},
-				LockID: r.lock, Holder: r.run, Turn: 1})
+			_, err := a.AcquireSandbox(t.Context(),
+				w.AcquireSandboxInput{RunOp: op, Spec: w.SandboxSpec{IsolationKey: w.IsolationKey(r.tenant, r.session)},
+					LockID: r.lock, Holder: r.run, Turn: 1})
 			require.NoError(t, err)
 		}
 		require.Len(t, inputs, 3)
@@ -422,7 +426,7 @@ func testTeamPersistence(t *testing.T, d *db.DB, admin *pgx.Conn) {
  VALUES($1,$2,'tenant',$2,'runs_concurrent',2,'total','block')`, ids.New(), r.tenant)
 			return err
 		})
-		svc := sessions.Service{Locks: runResolver{lock: r.agentLock}, Objects: runObjects{testBlobs{root: t.TempDir()}}}
+		svc := sessions.Service{Locks: runResolver{lock: r.agentLock}, Objects: runObjects{testBlobs: testBlobs{root: t.TempDir()}}}
 		submit := func() error {
 			session := ids.New()
 			return d.WithTenant(t.Context(), r.tenant, func(tx pgx.Tx) error {
@@ -489,7 +493,8 @@ func testKernelTeam(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	body := `{"caller":"leader","request_id":"req-1","tasks":[{"title":"Task","description":"Do it"}]}`
 	status, raw := update(body)
 	require.Equal(t, 200, status, string(raw))
-	require.Equal(t, contract.MemberName("researcher"), *fake.updates[0].(*contract.CreateTasksInput).Caller, "the token, not the body, names the caller")
+	require.Equal(t, contract.MemberName("researcher"), *fake.updates[0].(*contract.CreateTasksInput).Caller,
+		"the token, not the body, names the caller")
 	require.Equal(t, "req-1", fake.calls[0].Key)
 
 	fake.updateFn = func(_ int, _ any) error { return temporal.NewApplicationError("not leader", "TEAM_NOT_LEADER") }

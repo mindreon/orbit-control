@@ -240,7 +240,8 @@ func (s *sessionWorkflow) startNext(ctx workflow.Context) {
 			temporal.NewSearchAttributeKeyKeyword("RunKind").ValueSet(runKind(msg.EntryKind))),
 	})
 	if msg.EntryKind == "team" && workflow.GetVersion(ctx, "session-team-child", workflow.DefaultVersion, 1) != workflow.DefaultVersion {
-		s.child = workflow.ExecuteChildWorkflow(cc, w.TeamRunWorkflow, w.NewTeamRunInput(s.in, msg, w.EventSubject(s.in.TenantID, s.in.SessionID, msg.RunID)))
+		s.child = workflow.ExecuteChildWorkflow(cc, w.TeamRunWorkflow,
+			w.NewTeamRunInput(s.in, msg, w.EventSubject(s.in.TenantID, s.in.SessionID, msg.RunID)))
 	} else {
 		s.child = workflow.ExecuteChildWorkflow(cc, w.AgentRunWorkflow, s.runInput(ctx, msg))
 	}

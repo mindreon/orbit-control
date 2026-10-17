@@ -252,7 +252,8 @@ func (r *run) start(ctx workflow.Context, action team.Action, input contract.Seg
 	}
 	r.st.Active[action.Member] = active
 	r.wait(active)
-	r.emit("team.member.status", contract.TeamMemberStatus{Name: contract.MemberName(action.Member), Status: "working", TaskId: optional(action.TaskID)})
+	r.emit("team.member.status",
+		contract.TeamMemberStatus{Name: contract.MemberName(action.Member), Status: "working", TaskId: optional(action.TaskID)})
 	r.turns = append(r.turns, w.TurnRow{Member: action.Member, Turn: cursor.Turn, Kind: action.Kind, TaskID: action.TaskID,
 		Status: "running", StartedAt: workflow.Now(ctx)})
 }
@@ -474,7 +475,8 @@ func (r *run) shutdown(ctx workflow.Context, status, code string) error {
 	if err := r.flush(ctx); err != nil {
 		return err
 	}
-	return r.exec(ctx, "FinalizeTeamRun", w.FinalizeTeamInput{RunOp: r.op(ctx), Status: status, Code: code, Summary: r.st.Summary, Board: r.st.Board}, nil)
+	return r.exec(ctx, "FinalizeTeamRun",
+		w.FinalizeTeamInput{RunOp: r.op(ctx), Status: status, Code: code, Summary: r.st.Summary, Board: r.st.Board}, nil)
 }
 func (r *run) signals(ctx workflow.Context) bool {
 	for _, name := range []string{w.Cancel, w.Pause, w.Resume, w.AssetSuspended} {

@@ -135,7 +135,8 @@ func serveAPI(
 	}
 	defer a.Close()
 	h := &httpapi.Handler{
-		Schedules:  &schedules.Service{DB: d, Locks: locks.NewResolver(assetService), Temporal: tc.ScheduleClient(), DefaultLimit: c.SchedulesDefaultLimit, SweepInterval: c.ScheduleSweepInterval},
+		Schedules: &schedules.Service{DB: d, Locks: locks.NewResolver(assetService), Temporal: tc.ScheduleClient(),
+			DefaultLimit: c.SchedulesDefaultLimit, SweepInterval: c.ScheduleSweepInterval},
 		EventFloor: floor,
 		DB:         d,
 		Auth:       a,
@@ -212,7 +213,8 @@ func startWorkers(
 			return nil, err
 		}
 	}
-	scheduleService := &schedules.Service{DB: d, Locks: locks.NewResolver(assetService), Temporal: tc.ScheduleClient(), DefaultLimit: c.SchedulesDefaultLimit, SweepInterval: c.ScheduleSweepInterval}
+	scheduleService := &schedules.Service{DB: d, Locks: locks.NewResolver(assetService), Temporal: tc.ScheduleClient(),
+		DefaultLimit: c.SchedulesDefaultLimit, SweepInterval: c.ScheduleSweepInterval}
 	activities := &ctl.Activities{DB: d, Obj: store, NATS: bus, Temporal: tc, Environment: c.Environment, Logger: l,
 		SandboxProvider: contract.SandboxProvider(c.SandboxProvider), Schedules: scheduleService,
 		Sessions: sessions.Service{Objects: store, Locks: locks.NewResolver(assetService), DefaultRunBudget: c.DefaultRunBudget}}

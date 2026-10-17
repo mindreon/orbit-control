@@ -679,7 +679,8 @@ func (l *loop) unattended(ctx workflow.Context, req *contract.InteractionRequest
 	now := workflow.Now(ctx)
 	var out w.InteractionOutput
 	if err := l.exec(ctx, "CreateInteraction", w.InteractionInput{RunOp: l.committedOp(ctx), Request: *req,
-		RemindAt: now.Add(l.in.Limits.RemindAfter), EscalateAt: now.Add(l.in.Limits.EscalateAfter), ExpiresAt: now.Add(l.in.Limits.ExpireAfter)}, &out); err != nil {
+		RemindAt: now.Add(l.in.Limits.RemindAfter), EscalateAt: now.Add(l.in.Limits.EscalateAfter),
+		ExpiresAt: now.Add(l.in.Limits.ExpireAfter)}, &out); err != nil {
 		return err
 	}
 	return l.exec(ctx, "CancelInteraction", w.NotifyInput{RunOp: l.op(ctx), InteractionID: req.InteractionId}, nil)

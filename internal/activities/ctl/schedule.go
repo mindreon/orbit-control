@@ -64,17 +64,20 @@ func (a *Activities) CreateScheduledSession(ctx context.Context, in w.ScheduledS
 			}
 		}
 		var principal auth.Principal
-		if err = tx.QueryRow(ctx, `SELECT id::text,kind FROM principals WHERE id=$1`, schedule.OwnerID).Scan(&principal.ID, &principal.Kind); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT id::text,kind FROM principals WHERE id=$1`, schedule.OwnerID).Scan(&principal.ID,
+			&principal.Kind); err != nil {
 			return err
 		}
 		c := auth.Context(db.Context(ctx, tx), principal, in.TenantID)
 		if !existing {
 			var active bool
 			if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM memberships m JOIN principals p ON p.id=m.principal_id
- WHERE m.tenant_id=$1 AND m.principal_id=$2 AND m.status='active' AND p.status='active')`, in.TenantID, principal.ID).Scan(&active); err != nil {
+ WHERE m.tenant_id=$1 AND m.principal_id=$2 AND m.status='active' AND p.status='active')`, in.TenantID, principal.ID).Scan(&active); err !=
+				nil {
 				return err
 			}
-			if !active || (policy.Authorizer{}).Require(c, "session.create", policy.Resource{Type: "workspace", ID: schedule.WorkspaceID, WorkspaceID: schedule.WorkspaceID}) != nil {
+			if !active || (policy.Authorizer{}).Require(c, "session.create",
+				policy.Resource{Type: "workspace", ID: schedule.WorkspaceID, WorkspaceID: schedule.WorkspaceID}) != nil {
 				pause = true
 				out.Skip = "OWNER_UNAUTHORIZED"
 				return failedFire(c, tx, in, out.Skip, true)
@@ -93,12 +96,15 @@ func (a *Activities) CreateScheduledSession(ctx context.Context, in w.ScheduledS
 		defer business.Rollback(context.WithoutCancel(c))
 		bc := auth.Context(db.Context(c, business), principal, in.TenantID)
 		if !existing {
-			_, err = business.Exec(c, `INSERT INTO sessions(id,tenant_id,workspace_id,owner_id,title,entry_kind,entry_ref,message_policy,status,schedule_id)
- VALUES($1,$2,$3,$4,$5,$6,$7,'queue','idle',$8)`, sessionID, in.TenantID, schedule.WorkspaceID, principal.ID, session.Title, schedule.EntryKind, schedule.EntryRef, schedule.ID)
+			_, err = business.Exec(c,
+				`INSERT INTO sessions(id,tenant_id,workspace_id,owner_id,title,entry_kind,entry_ref,message_policy,status,schedule_id)
+ VALUES($1,$2,$3,$4,$5,$6,$7,'queue','idle',$8)`, sessionID, in.TenantID, schedule.WorkspaceID, principal.ID, session.Title,
+				schedule.EntryKind, schedule.EntryRef, schedule.ID)
 			if err != nil {
 				return err
 			}
-			if err = tenancy.Bind(c, business, principal, in.TenantID, principal.Kind, principal.ID, "session.owner", "session", sessionID); err != nil {
+			if err = tenancy.Bind(c, business, principal, in.TenantID, principal.Kind, principal.ID, "session.owner", "session",
+				sessionID); err != nil {
 				return err
 			}
 		}
@@ -132,7 +138,8 @@ func (a *Activities) CreateScheduledSession(ctx context.Context, in w.ScheduledS
 				return err
 			}
 		}
-		si := w.SessionInput{V: 1, TenantID: in.TenantID, WorkspaceID: schedule.WorkspaceID, SessionID: sessionID, OwnerID: principal.ID, Policy: "queue"}
+		si := w.SessionInput{V: 1, TenantID: in.TenantID, WorkspaceID: schedule.WorkspaceID, SessionID: sessionID, OwnerID: principal.ID,
+			Policy: "queue"}
 		subject := w.EventSubject(in.TenantID, sessionID, runID)
 		out.Kind = schedule.EntryKind
 		if schedule.EntryKind == "team" {

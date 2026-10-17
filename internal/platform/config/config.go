@@ -208,7 +208,8 @@ func (c *Config) loadRunEnvironment() error {
 	for _, setting := range []struct {
 		name   string
 		target *int
-	}{{name: "ORBIT_SCHEDULES_DEFAULT_LIMIT", target: &c.SchedulesDefaultLimit}, {name: "ORBIT_CTL_WAIT_CONCURRENCY", target: &c.CtlWaitConcurrency}} {
+	}{{name: "ORBIT_SCHEDULES_DEFAULT_LIMIT", target: &c.SchedulesDefaultLimit}, {name: "ORBIT_CTL_WAIT_CONCURRENCY",
+		target: &c.CtlWaitConcurrency}} {
 		if value := os.Getenv(setting.name); value != "" {
 			n, err := strconv.Atoi(value)
 			if err != nil || n < 1 {

@@ -113,7 +113,8 @@ func hitl(t *testing.T) (*rig, w.TurnResult) {
 	r.at(5*sec, func() {
 		r.env.UpdateWorkflow(w.ResolveInteraction, "resolve", &testsuite.TestUpdateCallback{
 			OnAccept: func() {}, OnReject: func(err error) { t.Errorf("resolve rejected: %v", err) }, OnComplete: func(any, error) {},
-		}, w.ResolveInteractionInput{InteractionID: "i1", ActorID: "owner", Decision: contract.Decision{Kind: "tool_approval", Choice: new(contract.DecisionChoice("allow_once"))}})
+		}, w.ResolveInteractionInput{InteractionID: "i1", ActorID: "owner", Decision: contract.Decision{Kind: "tool_approval",
+			Choice: new(contract.DecisionChoice("allow_once"))}})
 	})
 	result, err := r.run()
 	require.NoError(t, err)
@@ -175,8 +176,9 @@ func TestMemberNeverOwnsRunLifecycle(t *testing.T) {
 	// T-M9 (F50): whatever the outcome, a member turn never prepares the run, acquires the first sandbox or finalizes the run.
 	for name, step := range map[string]step{
 		"completed": {result: completed(8)},
-		"failed":    {result: contract.SegmentResult{V: 1, Status: "failed", CheckpointVersion: 8, Error: &contract.SegmentError{Code: "model_error"}}},
-		"policy":    {err: temporal.NewNonRetryableApplicationError("denied", contract.ErrorPolicyDenied, nil)},
+		"failed": {result: contract.SegmentResult{V: 1, Status: "failed", CheckpointVersion: 8,
+			Error: &contract.SegmentError{Code: "model_error"}}},
+		"policy": {err: temporal.NewNonRetryableApplicationError("denied", contract.ErrorPolicyDenied, nil)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := newRig(t, step)

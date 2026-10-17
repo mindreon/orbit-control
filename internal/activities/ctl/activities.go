@@ -271,7 +271,8 @@ func (a *Activities) SetRunStatus(ctx context.Context, in w.StatusInput) error {
 			return nil, nil
 		}
 		if in.Member == w.MemberTeam {
-			if _, err := tx.Exec(ctx, `UPDATE team_runs SET paused=$3 WHERE tenant_id=$1 AND run_id=$2`, in.TenantID, in.RunID, in.Status == "paused"); err != nil {
+			if _, err := tx.Exec(ctx, `UPDATE team_runs SET paused=$3 WHERE tenant_id=$1 AND run_id=$2`, in.TenantID, in.RunID,
+				in.Status == "paused"); err != nil {
 				return nil, err
 			}
 			return refreshTeamRunStatus(ctx, tx, in.RunOp)

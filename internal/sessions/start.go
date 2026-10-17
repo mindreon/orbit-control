@@ -49,7 +49,8 @@ func (svc Service) StartInput(ctx context.Context, session Session, runID, messa
 func (svc Service) teamSpec(ctx context.Context, lock contract.RunLock) (w.TeamSpec, error) {
 	spec := w.TeamSpec{MaxParallel: 2, ReviewMaxRounds: 3}
 	for _, member := range lock.Members {
-		spec.Roster = append(spec.Roster, contract.RosterEntry{Name: member.Name, Role: contract.TeamRole(member.Role), Status: "idle", Description: member.Description})
+		spec.Roster = append(spec.Roster,
+			contract.RosterEntry{Name: member.Name, Role: contract.TeamRole(member.Role), Status: "idle", Description: member.Description})
 		if member.Role == "leader" {
 			spec.Leader = string(member.Name)
 		}

@@ -15,7 +15,8 @@ import (
 
 func seedTeam(ctx context.Context, tx pgx.Tx, svc *assets.Service, out *Result) error {
 	var assetID string
-	err := tx.QueryRow(ctx, `SELECT id::text FROM assets WHERE tenant_id=$1 AND publisher='dev' AND kind='team' AND name='review-team'`, out.TenantID).Scan(&assetID)
+	err := tx.QueryRow(ctx, `SELECT id::text FROM assets WHERE tenant_id=$1 AND publisher='dev' AND kind='team' AND name='review-team'`,
+		out.TenantID).Scan(&assetID)
 	var asset assets.Asset
 	if errors.Is(err, pgx.ErrNoRows) {
 		asset, err = svc.Create(ctx, "team", "review-team", "private", out.WorkspaceID)
@@ -26,7 +27,8 @@ func seedTeam(ctx context.Context, tx pgx.Tx, svc *assets.Service, out *Result) 
 		return err
 	}
 	var versionID string
-	err = tx.QueryRow(ctx, `SELECT id::text FROM asset_versions WHERE tenant_id=$1 AND asset_id=$2 AND version='1.0.0'`, out.TenantID, asset.ID).Scan(&versionID)
+	err = tx.QueryRow(ctx, `SELECT id::text FROM asset_versions WHERE tenant_id=$1 AND asset_id=$2 AND version='1.0.0'`, out.TenantID,
+		asset.ID).Scan(&versionID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		files, err := teamFiles()
 		if err != nil {
@@ -68,9 +70,12 @@ func teamFiles() (map[string][]byte, error) {
 	}
 	files["team.json"] = raw
 	for role, prompt := range map[string]string{
-		"leader":   "You lead a review team. Break requested work into tasks for writer-1 and writer-2, wait for review, then call team_finish with a useful summary. Use read_file and write_file when needed.",
-		"writer":   "Complete the assigned task. Write the requested file under /workspace, inspect it, then call team_complete_task with its relative path.",
-		"reviewer": "Inspect the submitted files under /workspace against the acceptance criteria. Call team_submit_verdict with approve or reject and concrete feedback.",
+		"leader": "You lead a review team. Break requested work into tasks for writer-1 and writer-2, wait for review, " +
+			"then call team_finish with a useful summary. Use read_file and write_file when needed.",
+		"writer": "Complete the assigned task. Write the requested file under /workspace, inspect it, " +
+			"then call team_complete_task with its relative path.",
+		"reviewer": "Inspect the submitted files under /workspace against the acceptance criteria. " +
+			"Call team_submit_verdict with approve or reject and concrete feedback.",
 	} {
 		agent, err := fs.ReadFile(seeds.Bundles, "bundles/echo-agent/agent.json")
 		if err != nil {

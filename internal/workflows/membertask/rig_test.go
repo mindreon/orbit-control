@@ -80,7 +80,8 @@ func newRig(t *testing.T, steps ...step) *rig {
 			}
 		}
 	})
-	r.env.RegisterActivityWithOptions(func(context.Context, w.StartSegmentInput) error { return nil }, activity.RegisterOptions{Name: "StartSegment"})
+	r.env.RegisterActivityWithOptions(func(context.Context, w.StartSegmentInput) error { return nil },
+		activity.RegisterOptions{Name: "StartSegment"})
 	r.env.RegisterActivityWithOptions(func(context.Context, w.RecordSegmentInput) (w.RecordSegmentOutput, error) {
 		return w.RecordSegmentOutput{RunUsedMillicredits: 200}, nil
 	}, activity.RegisterOptions{Name: "RecordSegment"})
@@ -102,7 +103,8 @@ func newRig(t *testing.T, steps ...step) *rig {
 		r.mu.Unlock()
 		return nil
 	}, activity.RegisterOptions{Name: "CancelInteraction"})
-	r.env.RegisterActivityWithOptions(func(context.Context, w.DecisionInput) error { return nil }, activity.RegisterOptions{Name: "ApplyDecision"})
+	r.env.RegisterActivityWithOptions(func(context.Context, w.DecisionInput) error { return nil },
+		activity.RegisterOptions{Name: "ApplyDecision"})
 	r.env.RegisterActivityWithOptions(func(context.Context, contract.SegmentInput) (contract.SegmentResult, error) {
 		return contract.SegmentResult{}, nil
 	}, activity.RegisterOptions{Name: contract.ActivityRunAgentSegment})

@@ -212,7 +212,8 @@ func (h *harness) newEnv() {
 		}
 	})
 	// Signals to members that live in an earlier execution (or never existed here) reach this mock.
-	external := h.env.OnSignalExternalWorkflow(mock.Anything, mock.Anything, "", mock.Anything, mock.Anything).Return(nil).Run(func(args mock.Arguments) {
+	external := h.env.OnSignalExternalWorkflow(mock.Anything, mock.Anything, "", mock.Anything,
+		mock.Anything).Return(nil).Run(func(args mock.Arguments) {
 		h.mu.Lock()
 		defer h.mu.Unlock()
 		h.signals = append(h.signals, signalRecord{Workflow: args.String(1), Name: args.String(3), Arg: args.Get(4), At: h.vnow(h.env.Now())})
@@ -367,7 +368,8 @@ func (h *harness) create(caller, request string, tasks ...contract.NewTask) *out
 	return h.update("CreateTasks", request, contract.CreateTasksInput{Caller: h.member(caller), RequestId: request, Tasks: tasks})
 }
 func (h *harness) completeTask(caller, request, task string) *outcome {
-	return h.update("CompleteTask", request, contract.CompleteTaskInput{Caller: h.member(caller), RequestId: request, TaskId: task, ResultText: "ready"})
+	return h.update("CompleteTask", request,
+		contract.CompleteTaskInput{Caller: h.member(caller), RequestId: request, TaskId: task, ResultText: "ready"})
 }
 func (h *harness) verdict(caller, request, task string, verdict contract.Verdict) *outcome {
 	return h.update("SubmitVerdict", request, contract.SubmitVerdictInput{Caller: h.member(caller), RequestId: request, TaskId: task,
@@ -377,7 +379,8 @@ func (h *harness) finish(caller, request, summary string) *outcome {
 	return h.update("FinishTeam", request, contract.FinishTeamInput{Caller: h.member(caller), RequestId: request, Summary: summary})
 }
 func (h *harness) send(caller, request, to, text string) *outcome {
-	return h.update("SendMessage", request, contract.SendMessageInput{Caller: h.member(caller), RequestId: request, To: contract.MemberName(to), Text: text})
+	return h.update("SendMessage", request,
+		contract.SendMessageInput{Caller: h.member(caller), RequestId: request, To: contract.MemberName(to), Text: text})
 }
 
 func requireCode(t *testing.T, err error, code string) {

@@ -457,7 +457,8 @@ func save(t *testing.T, c client.Client, id, runID, name string) {
 	replayer.RegisterWorkflowWithOptions(teamrun.Run, workflow.RegisterOptions{Name: w.TeamRunWorkflow})
 	replayer.RegisterWorkflowWithOptions(membertask.Run, workflow.RegisterOptions{Name: w.MemberTaskWorkflow})
 	replayer.RegisterWorkflowWithOptions(scheduledrun.Run, workflow.RegisterOptions{Name: w.ScheduledRunWorkflow})
-	require.NoError(t, replayer.ReplayWorkflowHistoryWithOptions(nil, history, worker.ReplayWorkflowHistoryOptions{OriginalExecution: workflow.Execution{ID: id, RunID: runID}}))
+	require.NoError(t, replayer.ReplayWorkflowHistoryWithOptions(nil, history,
+		worker.ReplayWorkflowHistoryOptions{OriginalExecution: workflow.Execution{ID: id, RunID: runID}}))
 	if *update {
 		raw, err := protojson.MarshalOptions{Indent: "  "}.Marshal(history)
 		require.NoError(t, err)

@@ -29,7 +29,8 @@ func (a *Activities) PrepareTeamRun(ctx context.Context, in w.PrepareTeamInput) 
 			return nil, err
 		}
 		if _, err = tx.Exec(ctx, `INSERT INTO team_runs(tenant_id,run_id,board,max_parallel,review_max_rounds,roster,dispatch_mode)
- VALUES($1,$2,$3,$4,$5,$6,'scheduled') ON CONFLICT DO NOTHING`, in.TenantID, in.RunID, board, in.Team.MaxParallel, in.Team.ReviewMaxRounds, roster); err != nil {
+ VALUES($1,$2,$3,$4,$5,$6,'scheduled') ON CONFLICT DO NOTHING`, in.TenantID, in.RunID, board, in.Team.MaxParallel, in.Team.ReviewMaxRounds,
+			roster); err != nil {
 			return nil, err
 		}
 		for _, member := range in.Team.Roster {
@@ -51,7 +52,8 @@ func prepareRun(ctx context.Context, tx pgx.Tx, in w.RunOp, budget int64) error 
 		return err
 	}
 	_, err := tx.Exec(ctx, `INSERT INTO budget_reservations(id,tenant_id,run_id,millicredits,status,expires_at)
- VALUES($1,$2,$3,$4,'held',now()+interval '7 days') ON CONFLICT DO NOTHING`, ids.Derive(in.RunID, "reservation"), in.TenantID, in.RunID, budget)
+ VALUES($1,$2,$3,$4,'held',now()+interval '7 days') ON CONFLICT DO NOTHING`, ids.Derive(in.RunID, "reservation"), in.TenantID, in.RunID,
+		budget)
 	return err
 }
 func (a *Activities) RecordBoard(ctx context.Context, in w.RecordBoardInput) error {
@@ -195,10 +197,12 @@ func (a *Activities) FinalizeTeamRun(ctx context.Context, in w.FinalizeTeamInput
  WHERE tenant_id=$1 AND run_id=$2 AND status IN ('pending','blocked','in_progress','in_review')`, in.TenantID, in.RunID); err != nil {
 			return nil, err
 		}
-		if _, err = tx.Exec(ctx, `UPDATE team_members SET status='finished' WHERE tenant_id=$1 AND run_id=$2`, in.TenantID, in.RunID); err != nil {
+		if _, err = tx.Exec(ctx, `UPDATE team_members SET status='finished' WHERE tenant_id=$1 AND run_id=$2`, in.TenantID,
+			in.RunID); err != nil {
 			return nil, err
 		}
-		if _, err = tx.Exec(ctx, `UPDATE sessions SET last_activity_at=now() WHERE tenant_id=$1 AND id=$2`, in.TenantID, in.SessionID); err != nil {
+		if _, err = tx.Exec(ctx, `UPDATE sessions SET last_activity_at=now() WHERE tenant_id=$1 AND id=$2`, in.TenantID,
+			in.SessionID); err != nil {
 			return nil, err
 		}
 		var messageID *string
@@ -219,6 +223,7 @@ func (a *Activities) FinalizeTeamRun(ctx context.Context, in w.FinalizeTeamInput
 		if in.Status == "failed" {
 			return []event{{typ: "run.failed", data: contract.RunFailed{Code: in.Code, Message: "Team run failed"}}}, nil
 		}
-		return []event{{typ: "run.completed", data: contract.RunCompleted{Status: contract.RunCompletedStatus(in.Status), FinalMessageId: messageID}}}, nil
+		return []event{{typ: "run.completed",
+			data: contract.RunCompleted{Status: contract.RunCompletedStatus(in.Status), FinalMessageId: messageID}}}, nil
 	})
 }

@@ -167,7 +167,8 @@ func (s Service) quota(ctx context.Context, workspace, owner string, userOnly bo
 	}
 	rows, err := tx.Query(ctx, `SELECT scope_type,scope_id::text,"limit"::bigint FROM quota_policies
  WHERE tenant_id=$1 AND metric='schedules' AND action='block' AND
- ((scope_type='tenant' AND scope_id=$1) OR (scope_type='workspace' AND scope_id=$2) OR (scope_type='user' AND scope_id=$3))`, tenant, workspace, owner)
+ ((scope_type='tenant' AND scope_id=$1) OR (scope_type='workspace' AND scope_id=$2) OR (scope_type='user' AND scope_id=$3))`, tenant,
+		workspace, owner)
 	if err != nil {
 		return err
 	}
@@ -225,7 +226,8 @@ func (s Service) Delete(ctx context.Context, id string) (Schedule, error) {
  WHERE tenant_id=$1 AND id=$2`, auth.Tenant(ctx), id); err != nil {
 		return out, err
 	}
-	if err = audit.Append(ctx, db.Tx(ctx), auth.From(ctx), auth.Tenant(ctx), "schedule.deleted", "schedule", id, map[string]any{}); err != nil {
+	if err = audit.Append(ctx, db.Tx(ctx), auth.From(ctx), auth.Tenant(ctx), "schedule.deleted", "schedule", id,
+		map[string]any{}); err != nil {
 		return out, err
 	}
 	return get(ctx, id)
@@ -251,7 +253,8 @@ func List(ctx context.Context, workspace string, page httpx.Page) (sessions.Page
 		return out, httpx.E(422, "INVALID_INPUT", "Invalid workspace")
 	}
 	rows, err := db.Tx(ctx).Query(ctx, `SELECT id::text FROM schedules WHERE tenant_id=$1 AND status<>'deleted'
- AND ($2='' OR workspace_id=NULLIF($2,'')::uuid) AND ($3='' OR id>NULLIF($3,'')::uuid) ORDER BY id`, auth.Tenant(ctx), workspace, page.Cursor)
+ AND ($2='' OR workspace_id=NULLIF($2,'')::uuid) AND ($3='' OR id>NULLIF($3,'')::uuid) ORDER BY id`, auth.Tenant(ctx), workspace,
+		page.Cursor)
 	if err != nil {
 		return out, err
 	}

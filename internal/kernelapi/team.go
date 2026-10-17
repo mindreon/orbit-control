@@ -61,7 +61,8 @@ func (h *Handler) teamRequest(out http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return err
 			}
-			if lock.Entry.Kind != "team" || !slices.ContainsFunc(lock.Members, func(m contract.LockMember) bool { return string(m.Name) == claims.Member }) {
+			if lock.Entry.Kind != "team" || !slices.ContainsFunc(lock.Members,
+				func(m contract.LockMember) bool { return string(m.Name) == claims.Member }) {
 				return httpx.E(403, "TOKEN_SUPERSEDED", "Capability is not a team member")
 			}
 			if update {
@@ -70,7 +71,8 @@ func (h *Handler) teamRequest(out http.ResponseWriter, r *http.Request) {
 				return err
 			}
 			var raw []byte
-			if err := tx.QueryRow(c, `SELECT board FROM team_runs WHERE tenant_id=$1 AND run_id=$2`, claims.Tenant, claims.Run).Scan(&raw); err != nil {
+			if err := tx.QueryRow(c, `SELECT board FROM team_runs WHERE tenant_id=$1 AND run_id=$2`, claims.Tenant,
+				claims.Run).Scan(&raw); err != nil {
 				return err
 			}
 			return json.Unmarshal(raw, &board)

@@ -37,10 +37,14 @@ func registerWP8(reg worker.Worker, c client.Client) {
 	reg.RegisterWorkflowWithOptions(teamrun.Run, workflow.RegisterOptions{Name: w.TeamRunWorkflow})
 	reg.RegisterWorkflowWithOptions(membertask.Run, workflow.RegisterOptions{Name: w.MemberTaskWorkflow})
 	reg.RegisterWorkflowWithOptions(scheduledrun.Run, workflow.RegisterOptions{Name: w.ScheduledRunWorkflow})
-	reg.RegisterActivityWithOptions(func(context.Context, w.PrepareTeamInput) error { return nil }, activity.RegisterOptions{Name: "PrepareTeamRun"})
-	reg.RegisterActivityWithOptions(func(context.Context, w.RecordBoardInput) error { return nil }, activity.RegisterOptions{Name: "RecordBoard"})
-	reg.RegisterActivityWithOptions(func(context.Context, w.FinalizeTeamInput) error { return nil }, activity.RegisterOptions{Name: "FinalizeTeamRun"})
-	reg.RegisterActivityWithOptions(func(context.Context, w.NotifyInput) error { return nil }, activity.RegisterOptions{Name: "CancelInteraction"})
+	reg.RegisterActivityWithOptions(func(context.Context, w.PrepareTeamInput) error { return nil },
+		activity.RegisterOptions{Name: "PrepareTeamRun"})
+	reg.RegisterActivityWithOptions(func(context.Context, w.RecordBoardInput) error { return nil },
+		activity.RegisterOptions{Name: "RecordBoard"})
+	reg.RegisterActivityWithOptions(func(context.Context, w.FinalizeTeamInput) error { return nil },
+		activity.RegisterOptions{Name: "FinalizeTeamRun"})
+	reg.RegisterActivityWithOptions(func(context.Context, w.NotifyInput) error { return nil },
+		activity.RegisterOptions{Name: "CancelInteraction"})
 	reg.RegisterActivityWithOptions(func(ctx context.Context, in w.TurnOp) (w.TurnResult, error) {
 		var result w.TurnResult
 		err := c.GetWorkflow(ctx, w.MemberTaskWorkflowID(in.TenantID, in.RunID, in.Member, in.Turn), "").Get(ctx, &result)
@@ -51,7 +55,8 @@ func registerWP8(reg worker.Worker, c client.Client) {
 		team.Unattended = true
 		return w.ScheduledStart{Kind: "team", Team: &team}, nil
 	}, activity.RegisterOptions{Name: "CreateScheduledSession"})
-	reg.RegisterActivityWithOptions(func(context.Context, w.RecordScheduleInput) error { return nil }, activity.RegisterOptions{Name: "RecordScheduleRun"})
+	reg.RegisterActivityWithOptions(func(context.Context, w.RecordScheduleInput) error { return nil },
+		activity.RegisterOptions{Name: "RecordScheduleRun"})
 }
 func historyUpdate(ctx context.Context, c client.Client, run, name, key string, input any) error {
 	handle, err := c.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{WorkflowID: w.TeamRunWorkflowID("tenant", run),
@@ -64,7 +69,8 @@ func historyUpdate(ctx context.Context, c client.Client, run, name, key string, 
 func wp8Segment(c client.Client) func(context.Context, contract.SegmentInput) (contract.SegmentResult, error) {
 	return func(ctx context.Context, in contract.SegmentInput) (contract.SegmentResult, error) {
 		result := contract.SegmentResult{V: 1, Status: "completed", CheckpointVersion: in.ExpectedCheckpointVersion + 1,
-			Progress: contract.SegmentProgress{NewOutput: true}, Final: &contract.FinalMessage{MessageId: "summary", TextPreview: "Recorded team summary"}}
+			Progress: contract.SegmentProgress{NewOutput: true}, Final: &contract.FinalMessage{MessageId: "summary",
+				TextPreview: "Recorded team summary"}}
 		if in.RunId == "agentrun-unattended" {
 			result.Status = "interrupted"
 			result.Interaction = &contract.InteractionRequest{InteractionId: "unattended", Kind: "effect_uncertain"}
@@ -105,7 +111,8 @@ func wp8Segment(c client.Client) func(context.Context, contract.SegmentInput) (c
 					Tasks: []contract.NewTask{{Title: "Recorded task", Description: "Write and review", Assignee: new(contract.MemberName("alice"))}}})
 				return result, err
 			}
-			return result, historyUpdate(ctx, c, in.RunId, "FinishTeam", key, contract.FinishTeamInput{Caller: caller, RequestId: key, Summary: "Recorded team summary"})
+			return result, historyUpdate(ctx, c, in.RunId, "FinishTeam", key,
+				contract.FinishTeamInput{Caller: caller, RequestId: key, Summary: "Recorded team summary"})
 		case "teammate":
 			if strings.Contains(in.RunId, "can-midflight") {
 				timer := time.NewTimer(250 * time.Millisecond)
@@ -116,13 +123,15 @@ func wp8Segment(c client.Client) func(context.Context, contract.SegmentInput) (c
 					return result, ctx.Err()
 				}
 			}
-			return result, historyUpdate(ctx, c, in.RunId, "CompleteTask", key, contract.CompleteTaskInput{Caller: caller, RequestId: key, TaskId: in.Team.Task.TaskId, ResultText: "ready"})
+			return result, historyUpdate(ctx, c, in.RunId, "CompleteTask", key,
+				contract.CompleteTaskInput{Caller: caller, RequestId: key, TaskId: in.Team.Task.TaskId, ResultText: "ready"})
 		case "reviewer":
 			verdict := contract.Verdict("approve")
 			if strings.Contains(in.RunId, "reject-escalate") {
 				verdict = "reject"
 			}
-			return result, historyUpdate(ctx, c, in.RunId, "SubmitVerdict", key, contract.SubmitVerdictInput{Caller: caller, RequestId: key, TaskId: in.Team.Task.TaskId, Verdict: verdict, Comment: "recorded"})
+			return result, historyUpdate(ctx, c, in.RunId, "SubmitVerdict", key,
+				contract.SubmitVerdictInput{Caller: caller, RequestId: key, TaskId: in.Team.Task.TaskId, Verdict: verdict, Comment: "recorded"})
 		}
 		return result, nil
 	}
@@ -148,7 +157,8 @@ func TestRecordWP8Histories(t *testing.T) {
 	for _, name := range []string{"teamrun-happy", "teamrun-reject-escalate", "teamrun-can-midflight", "teamrun-cancel"} {
 		t.Run(name, func(t *testing.T) {
 			in := teamHistoryInput(name)
-			run, err := c.ExecuteWorkflow(t.Context(), client.StartWorkflowOptions{ID: w.TeamRunWorkflowID("tenant", name), TaskQueue: queue}, w.TeamRunWorkflow, in)
+			run, err := c.ExecuteWorkflow(t.Context(), client.StartWorkflowOptions{ID: w.TeamRunWorkflowID("tenant", name), TaskQueue: queue},
+				w.TeamRunWorkflow, in)
 			require.NoError(t, err)
 			first := run.GetRunID()
 			if name == "teamrun-cancel" {
@@ -178,14 +188,16 @@ func TestRecordWP8Histories(t *testing.T) {
 			Sandbox: base.Sandbox, Lease: contract.SandboxLease{Provider: "local", SandboxId: "fixture"}, Tier: "standard"}
 		run, err := c.ExecuteWorkflow(t.Context(), client.StartWorkflowOptions{ID: queue + name, TaskQueue: queue}, w.MemberTaskWorkflow, in)
 		require.NoError(t, err)
-		require.NoError(t, c.SignalWorkflow(t.Context(), run.GetID(), "", w.Deliver, w.DeliverInput{Mailbox: []contract.MailboxMessage{{MessageId: "m1", From: "leader", Text: new("hello"), SentAt: time.Now()}}}))
+		require.NoError(t, c.SignalWorkflow(t.Context(), run.GetID(), "", w.Deliver,
+			w.DeliverInput{Mailbox: []contract.MailboxMessage{{MessageId: "m1", From: "leader", Text: new("hello"), SentAt: time.Now()}}}))
 		require.NoError(t, c.SignalWorkflow(t.Context(), run.GetID(), "", w.EndTurn, struct{}{}))
 		require.NoError(t, run.Get(t.Context(), nil))
 		saveWP8(t, c, run.GetID(), run.GetRunID(), name)
 	})
 	t.Run("scheduledrun-team", func(t *testing.T) {
 		id := w.ScheduledRunWorkflowIDBase("tenant", queue) + "-" + time.Now().UTC().Truncate(time.Second).Format(time.RFC3339)
-		run, err := c.ExecuteWorkflow(t.Context(), client.StartWorkflowOptions{ID: id, TaskQueue: queue}, w.ScheduledRunWorkflow, w.ScheduledRunInput{TenantID: "tenant", ScheduleID: queue})
+		run, err := c.ExecuteWorkflow(t.Context(), client.StartWorkflowOptions{ID: id, TaskQueue: queue}, w.ScheduledRunWorkflow,
+			w.ScheduledRunInput{TenantID: "tenant", ScheduleID: queue})
 		require.NoError(t, err)
 		require.NoError(t, run.Get(t.Context(), nil))
 		saveWP8(t, c, run.GetID(), run.GetRunID(), "scheduledrun-team")
@@ -193,7 +205,8 @@ func TestRecordWP8Histories(t *testing.T) {
 	t.Run("agentrun-unattended", func(t *testing.T) {
 		in := runInput("agentrun-unattended")
 		in.Unattended = true
-		run, err := c.ExecuteWorkflow(t.Context(), client.StartWorkflowOptions{ID: queue + "unattended", TaskQueue: queue}, w.AgentRunWorkflow, in)
+		run, err := c.ExecuteWorkflow(t.Context(), client.StartWorkflowOptions{ID: queue + "unattended", TaskQueue: queue}, w.AgentRunWorkflow,
+			in)
 		require.NoError(t, err)
 		require.NoError(t, run.Get(t.Context(), nil))
 		saveWP8(t, c, run.GetID(), run.GetRunID(), "agentrun-unattended")

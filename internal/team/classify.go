@@ -32,4 +32,7 @@ func Classify(code string) FailureClass {
 }
 
 // Classified lets tests distinguish an explicitly reviewed code from a fallback.
-func Classified(code string) bool { _, ok := failureClasses[code]; return ok }
+func Classified(code string) bool {
+	_, ok := failureClasses[code]
+	return ok
+}

@@ -135,7 +135,7 @@ func newScheduleRig(t *testing.T, d *db.DB, admin *pgx.Conn) *scheduleRig {
 	r := &scheduleRig{runFixture: f, admin: admin, client: c, svc: schedules.Service{DB: d, Locks: runResolver{lock: lock}, Temporal: c},
 		input: schedules.CreateInput{WorkspaceID: f.workspace, Name: "Scheduled work", Cron: "0 * * * *", Timezone: "UTC",
 			EntryKind: "agent", EntryRef: lock.Entry.Ref, Prompt: "Do the scheduled work", BudgetMillicredits: 200000}}
-	f.activities.Sessions = sessions.Service{Locks: r.svc.Locks, Objects: runObjects{testBlobs{root: t.TempDir()}}}
+	f.activities.Sessions = sessions.Service{Locks: r.svc.Locks, Objects: runObjects{testBlobs: testBlobs{root: t.TempDir()}}}
 	f.activities.Schedules = &r.svc
 	return r
 }
@@ -193,13 +193,16 @@ func testSchedules(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		require.Equal(t, first, again)
 		// BuildStart on the same admitted session reads the saved immutable lock.
 		r.tx(t, func(ctx context.Context, tx pgx.Tx) error {
-			s := sessions.Session{ID: first.Run.SessionID, WorkspaceID: r.workspace, OwnerID: r.actor, EntryKind: "agent", EntryRef: r.input.EntryRef}
+			s := sessions.Session{ID: first.Run.SessionID, WorkspaceID: r.workspace, OwnerID: r.actor, EntryKind: "agent",
+				EntryRef: r.input.EntryRef}
 			_, _, message := sessions.ScheduledIDs(row.ID, now.Format(time.RFC3339))
-			msg, err := r.activities.Sessions.BuildStart(ctx, tx, s, auth.From(ctx), first.Run.RunID, message, r.input.Prompt, &r.input.BudgetMillicredits)
+			msg, err := r.activities.Sessions.BuildStart(ctx, tx, s, auth.From(ctx), first.Run.RunID, message, r.input.Prompt,
+				&r.input.BudgetMillicredits)
 			if err != nil {
 				return err
 			}
-			want := w.NewRunInput(w.SessionInput{V: 1, TenantID: r.tenant, WorkspaceID: r.workspace, SessionID: s.ID, OwnerID: r.actor, Policy: "queue"}, msg, first.Run.EventSubject)
+			want := w.NewRunInput(w.SessionInput{V: 1, TenantID: r.tenant, WorkspaceID: r.workspace, SessionID: s.ID, OwnerID: r.actor,
+				Policy: "queue"}, msg, first.Run.EventSubject)
 			want.Unattended = true
 			require.Equal(t, want, *first.Run)
 			return nil
@@ -207,7 +210,7 @@ func testSchedules(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		for _, tc := range []struct {
 			age  int
 			skip string
-		}{{3719, ""}, {3721, "STALE_FIRE"}} {
+		}{{age: 3719, skip: ""}, {age: 3721, skip: "STALE_FIRE"}} {
 			in.FireAt = now.Add(-time.Duration(tc.age) * time.Second)
 			out, err := r.activities.CreateScheduledSession(t.Context(), in)
 			require.NoError(t, err)
@@ -233,11 +236,14 @@ func testSchedules(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		r := newScheduleRig(t, d, admin)
 		row := r.create(t)
 		r.tx(t, func(ctx context.Context, tx pgx.Tx) error {
-			_, err := tx.Exec(ctx, `INSERT INTO quota_policies(id,tenant_id,scope_type,scope_id,metric,"limit",period,action) VALUES($1,$2,'workspace',$3,'runs_concurrent',0,'total','block')`, ids.New(), r.tenant, r.workspace)
+			_, err := tx.Exec(ctx,
+				`INSERT INTO quota_policies(id,tenant_id,scope_type,scope_id,metric,"limit",period,action)
+ VALUES($1,$2,'workspace',$3,'runs_concurrent',0,'total','block')`, ids.New(), r.tenant, r.workspace)
 			return err
 		})
 		now := time.Now().UTC().Truncate(time.Second)
-		out, err := r.activities.CreateScheduledSession(t.Context(), w.ScheduledSessionInput{TenantID: r.tenant, ScheduleID: row.ID, FireAt: now, Now: now})
+		out, err := r.activities.CreateScheduledSession(t.Context(),
+			w.ScheduledSessionInput{TenantID: r.tenant, ScheduleID: row.ID, FireAt: now, Now: now})
 		require.NoError(t, err)
 		require.Equal(t, "QUOTA_EXCEEDED", out.Skip)
 		require.Equal(t, "active", r.row(t, row.ID).Status)
@@ -267,7 +273,10 @@ func testSchedules(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		start := make(chan struct{})
 		results := make(chan error, 2)
 		for range 2 {
-			go func() { <-start; results <- r.createError(t) }()
+			go func() {
+				<-start
+				results <- r.createError(t)
+			}()
 		}
 		close(start)
 		a, b := <-results, <-results
@@ -289,14 +298,18 @@ func testSchedules(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		// F75 permits a session-level seed-10 lock, but no transaction may span Temporal calls.
 		r.client.onCall = func() {
 			var open int
-			err := admin.QueryRow(t.Context(), `SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND usename='orbit_app' AND xact_start IS NOT NULL`).Scan(&open)
+			err := admin.QueryRow(t.Context(),
+				`SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND usename='orbit_app' AND xact_start IS NOT NULL`).Scan(&open)
 			require.NoError(t, err)
 			require.Zero(t, open, "Temporal called inside a tenant transaction")
 		}
 		require.NoError(t, r.svc.SweepOnce(t.Context()))
 		synced := r.row(t, row.ID)
 		require.Equal(t, synced.Version, synced.SyncedVersion)
-		r.tx(t, func(ctx context.Context, tx pgx.Tx) error { _, err := r.svc.Delete(ctx, row.ID); return err })
+		r.tx(t, func(ctx context.Context, tx pgx.Tx) error {
+			_, err := r.svc.Delete(ctx, row.ID)
+			return err
+		})
 		require.NoError(t, r.svc.SweepOnce(t.Context()))
 		require.Equal(t, 1, r.client.deletes)
 	})
@@ -311,7 +324,12 @@ func testSchedules(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		r.client.exists = true
 		entered, release := make(chan struct{}), make(chan struct{})
 		var once sync.Once
-		r.client.onUpdate = func() { once.Do(func() { close(entered); <-release }) }
+		r.client.onUpdate = func() {
+			once.Do(func() {
+				close(entered)
+				<-release
+			})
+		}
 		done := make(chan error, 1)
 		go func() {
 			pending, err := r.svc.Sync(t.Context(), r.tenant, row.ID)
@@ -412,7 +430,8 @@ func (r *scheduleRig) addOwner(t *testing.T, role string) string {
 	_, err := r.admin.Exec(t.Context(), `INSERT INTO principals(id,kind,email,display_name,idp_subject)
  VALUES($1::uuid,'user',$1::text||'@example.test','Other',$1::text)`, id)
 	require.NoError(t, err)
-	_, err = r.admin.Exec(t.Context(), `INSERT INTO memberships(tenant_id,principal_id,status,source) VALUES($1,$2,'active','direct')`, r.tenant, id)
+	_, err = r.admin.Exec(t.Context(), `INSERT INTO memberships(tenant_id,principal_id,status,source) VALUES($1,$2,'active','direct')`,
+		r.tenant, id)
 	require.NoError(t, err)
 	_, err = r.admin.Exec(t.Context(), `INSERT INTO role_bindings(id,tenant_id,principal_type,principal_id,role,scope_type,scope_id,created_by)
  VALUES($1,$2,'user',$3,$4,'workspace',$5,$3)`, ids.New(), r.tenant, id, role, r.workspace)
@@ -458,7 +477,8 @@ func testScheduleOwnerTransfer(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	require.Equal(t, 1, audits)
 	// The next firing is authorized, admitted and attributed to the new owner.
 	now := time.Now().UTC().Truncate(time.Second)
-	out, err := r.activities.CreateScheduledSession(t.Context(), w.ScheduledSessionInput{TenantID: r.tenant, ScheduleID: row.ID, FireAt: now, Now: now})
+	out, err := r.activities.CreateScheduledSession(t.Context(),
+		w.ScheduledSessionInput{TenantID: r.tenant, ScheduleID: row.ID, FireAt: now, Now: now})
 	require.NoError(t, err)
 	require.NotNil(t, out.Run)
 	var createdBy string
@@ -477,7 +497,8 @@ func testScheduleIdentity(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	tenant, workspace := ids.New(), ids.New()
 	_, err := admin.Exec(t.Context(), `INSERT INTO tenants(id,slug,name) VALUES($1::uuid,$1::text,'Second')`, tenant)
 	require.NoError(t, err)
-	_, err = admin.Exec(t.Context(), `INSERT INTO memberships(tenant_id,principal_id,status,source) VALUES($1,$2,'active','direct')`, tenant, r.actor)
+	_, err = admin.Exec(t.Context(), `INSERT INTO memberships(tenant_id,principal_id,status,source) VALUES($1,$2,'active','direct')`, tenant,
+		r.actor)
 	require.NoError(t, err)
 	_, err = admin.Exec(t.Context(), `INSERT INTO workspaces(id,tenant_id,name) VALUES($1,$2,'Second')`, workspace, tenant)
 	require.NoError(t, err)

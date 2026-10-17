@@ -43,7 +43,9 @@ func TestReplay(t *testing.T) {
 			replayer.RegisterWorkflowWithOptions(teamrun.Run, workflow.RegisterOptions{Name: w.TeamRunWorkflow})
 			replayer.RegisterWorkflowWithOptions(membertask.Run, workflow.RegisterOptions{Name: w.MemberTaskWorkflow})
 			replayer.RegisterWorkflowWithOptions(scheduledrun.Run, workflow.RegisterOptions{Name: w.ScheduledRunWorkflow})
-			require.NoError(t, replayer.ReplayWorkflowHistoryWithOptions(nil, history, worker.ReplayWorkflowHistoryOptions{OriginalExecution: workflow.Execution{ID: history.Events[0].GetWorkflowExecutionStartedEventAttributes().GetWorkflowId()}}))
+			require.NoError(t, replayer.ReplayWorkflowHistoryWithOptions(nil, history,
+				worker.ReplayWorkflowHistoryOptions{OriginalExecution: workflow.Execution{
+					ID: history.Events[0].GetWorkflowExecutionStartedEventAttributes().GetWorkflowId()}}))
 		})
 	}
 }
@@ -185,7 +187,8 @@ func assertHistoryScenario(t *testing.T, name string, history *historypb.History
 		require.NoError(t, converter.GetDefaultDataConverter().FromPayloads(event.Input, &input))
 		require.NotNil(t, input.Carry)
 		require.Contains(t, input.Carry.Active, "alice", "a member turn is still running across Continue-As-New")
-		require.Contains(t, types, enums.EVENT_TYPE_ACTIVITY_TASK_CANCEL_REQUESTED, "the wait Activity is cancelled and re-created by the next run")
+		require.Contains(t, types, enums.EVENT_TYPE_ACTIVITY_TASK_CANCEL_REQUESTED,
+			"the wait Activity is cancelled and re-created by the next run")
 	case "teamrun-cancel":
 		finals := historyInputs[w.FinalizeTeamInput](t, history, "FinalizeTeamRun")
 		require.Len(t, finals, 1)

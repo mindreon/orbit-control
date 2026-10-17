@@ -90,7 +90,8 @@ func (s Service) Patch(ctx context.Context, id string, in PatchInput) (Schedule,
 			return out, err
 		}
 	}
-	if err = audit.Append(ctx, db.Tx(ctx), auth.From(ctx), auth.Tenant(ctx), "schedule.updated", "schedule", id, map[string]any{}); err != nil {
+	if err = audit.Append(ctx, db.Tx(ctx), auth.From(ctx), auth.Tenant(ctx), "schedule.updated", "schedule", id,
+		map[string]any{}); err != nil {
 		return out, err
 	}
 	return get(ctx, id)

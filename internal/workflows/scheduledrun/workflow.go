@@ -25,7 +25,8 @@ func Run(ctx workflow.Context, in w.ScheduledRunInput) error {
 	}
 	var start w.ScheduledStart
 	if err = workflow.ExecuteActivity(w.Ctl(ctx, "CreateScheduledSession"), "CreateScheduledSession",
-		w.ScheduledSessionInput{TenantID: in.TenantID, ScheduleID: in.ScheduleID, FireAt: fireAt, Now: workflow.Now(ctx)}).Get(ctx, &start); err != nil {
+		w.ScheduledSessionInput{TenantID: in.TenantID, ScheduleID: in.ScheduleID, FireAt: fireAt,
+			Now: workflow.Now(ctx)}).Get(ctx, &start); err != nil {
 		return err
 	}
 	if start.Skip != "" {

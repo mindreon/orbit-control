@@ -80,7 +80,9 @@ func (h *Handler) getSchedule(out http.ResponseWriter, r *http.Request) error {
 		if err != nil {
 			return nil, err
 		}
-		rows, err := db.Tx(ctx).Query(ctx, `SELECT to_jsonb(sr) FROM schedule_runs sr WHERE tenant_id=$1 AND schedule_id=$2 ORDER BY fire_at DESC LIMIT 20`, auth.Tenant(ctx), row.ID)
+		rows, err := db.Tx(ctx).Query(ctx,
+			`SELECT to_jsonb(sr) FROM schedule_runs sr
+ WHERE tenant_id=$1 AND schedule_id=$2 ORDER BY fire_at DESC LIMIT 20`, auth.Tenant(ctx), row.ID)
 		if err != nil {
 			return nil, err
 		}

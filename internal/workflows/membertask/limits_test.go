@@ -19,7 +19,10 @@ func TestContinueAsNewCarriesMailboxAndEndTurn(t *testing.T) {
 	r := newRig(t, step{after: sec, result: yielded(8)}, step{after: sec, result: yielded(9)}, step{after: 10 * sec, result: yielded(10)})
 	r.in.Cursor.Seq = 3
 	r.in.Mailbox = []contract.MailboxMessage{mail("first", "one")}
-	r.at(8*sec, func() { deliverMail(r, "second"); endTurn(r) })
+	r.at(8*sec, func() {
+		deliverMail(r, "second")
+		endTurn(r)
+	})
 	_, err := r.run()
 	var next *workflow.ContinueAsNewError
 	require.ErrorAs(t, err, &next)

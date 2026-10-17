@@ -183,7 +183,8 @@ func (h *Handler) prepareSubmission(ctx context.Context, r *http.Request, body [
 		}
 	}
 	var scheduled bool
-	if err := db.Tx(ctx).QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM schedule_runs WHERE tenant_id=$1 AND session_id=$2 AND status='running')`, tenant, s.ID).Scan(&scheduled); err != nil {
+	if err := db.Tx(ctx).QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM schedule_runs WHERE tenant_id=$1 AND session_id=$2 AND status='running')`,
+		tenant, s.ID).Scan(&scheduled); err != nil {
 		return nil, err
 	}
 	if scheduled {

@@ -32,7 +32,8 @@ func (d *DB) WithSessionLock(ctx context.Context, key string, seed int, fn func(
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		var unlocked bool
-		if err := conn.QueryRow(cleanup, `SELECT pg_advisory_unlock(hashtextextended($1,$2))`, key, seed).Scan(&unlocked); err != nil || !unlocked {
+		if err := conn.QueryRow(cleanup, `SELECT pg_advisory_unlock(hashtextextended($1,$2))`, key,
+			seed).Scan(&unlocked); err != nil || !unlocked {
 			// A connection with an uncertain lock must never return to the pool.
 			_ = conn.Conn().Close(cleanup)
 		}

@@ -96,7 +96,7 @@ func TestTeamDefaultBudgetScalesWithMembers(t *testing.T) {
 		kind    contract.EntryKind
 		members int
 		want    int64
-	}{{"agent", 1, 30000}, {"team", 3, 90000}, {"team", 6, 120000}} {
+	}{{kind: "agent", members: 1, want: 30000}, {kind: "team", members: 3, want: 90000}, {kind: "team", members: 6, want: 120000}} {
 		got, err := service.submissionBudget(tenantContext(), lock(tc.kind, tc.members), nil)
 		require.NoError(t, err)
 		require.Equal(t, tc.want, got, "%s with %d members", tc.kind, tc.members)

@@ -74,7 +74,8 @@ func (f *projectionFixture) teamSegment(ctx context.Context, in contract.Segment
 		}
 		return result, update("FinishTeam", contract.FinishTeamInput{Caller: caller, RequestId: key, Summary: "Team report ready"})
 	case "teammate":
-		return result, update("CompleteTask", contract.CompleteTaskInput{Caller: caller, RequestId: key, TaskId: in.Team.Task.TaskId, ResultText: "findings"})
+		return result, update("CompleteTask",
+			contract.CompleteTaskInput{Caller: caller, RequestId: key, TaskId: in.Team.Task.TaskId, ResultText: "findings"})
 	default:
 		return result, update("SubmitVerdict", contract.SubmitVerdictInput{Caller: caller, RequestId: key, TaskId: in.Team.Task.TaskId,
 			Verdict: "approve", Comment: "accepted"})
@@ -104,7 +105,8 @@ func TestAPIToTeamRunProjection(t *testing.T) {
 	var submission struct {
 		RunID string `json:"run_id"`
 	}
-	require.NoError(t, json.Unmarshal(f.request(t, "POST", "/v1/sessions/"+session.ID+"/messages", map[string]string{"text": "research it"}), &submission))
+	require.NoError(t, json.Unmarshal(f.request(t, "POST", "/v1/sessions/"+session.ID+"/messages", map[string]string{"text": "research it"}),
+		&submission))
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
 	require.NoError(t, f.temporal.GetWorkflow(ctx, w.TeamRunWorkflowID(f.tenant, submission.RunID), "").Get(ctx, nil))
@@ -115,7 +117,8 @@ func TestAPIToTeamRunProjection(t *testing.T) {
 		var turns int
 		require.NoError(t, tx.QueryRow(t.Context(), `SELECT status FROM team_tasks WHERE run_id=$1`, submission.RunID).Scan(&status))
 		require.Equal(t, "completed", status)
-		require.NoError(t, tx.QueryRow(t.Context(), `SELECT count(*) FROM team_turns WHERE run_id=$1 AND ended_at IS NOT NULL`, submission.RunID).Scan(&turns))
+		require.NoError(t, tx.QueryRow(t.Context(), `SELECT count(*) FROM team_turns WHERE run_id=$1 AND ended_at IS NOT NULL`,
+			submission.RunID).Scan(&turns))
 		require.GreaterOrEqual(t, turns, 3)
 		require.NoError(t, tx.QueryRow(t.Context(), `SELECT entry_kind FROM sessions WHERE id=$1`, session.ID).Scan(&entry))
 		require.Equal(t, "team", entry)

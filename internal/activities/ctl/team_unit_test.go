@@ -51,14 +51,14 @@ func TestTeamRunStatusPrecedence(t *testing.T) {
 		paused, approval, input bool
 		want                    string
 	}{
-		{false, false, false, "running"},
-		{false, false, true, "waiting_input"},
-		{false, true, false, "waiting_approval"},
-		{false, true, true, "waiting_approval"},
-		{true, false, false, "paused"},
-		{true, false, true, "paused"},
-		{true, true, false, "paused"},
-		{true, true, true, "paused"},
+		{paused: false, approval: false, input: false, want: "running"},
+		{paused: false, approval: false, input: true, want: "waiting_input"},
+		{paused: false, approval: true, input: false, want: "waiting_approval"},
+		{paused: false, approval: true, input: true, want: "waiting_approval"},
+		{paused: true, approval: false, input: false, want: "paused"},
+		{paused: true, approval: false, input: true, want: "paused"},
+		{paused: true, approval: true, input: false, want: "paused"},
+		{paused: true, approval: true, input: true, want: "paused"},
 	} {
 		require.Equal(t, tc.want, teamRunStatus(tc.paused, tc.approval, tc.input), "%+v", tc)
 	}

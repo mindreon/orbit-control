@@ -49,7 +49,8 @@ func TestBoardCapacityRejectsWithoutMutation(t *testing.T) {
 		t.Run(which, func(t *testing.T) {
 			r := updateRun()
 			r.st.Board.Tasks = []contract.TeamTask{{TaskId: "t1", Title: "t", Description: strings.Repeat("<", team.BoardBytesMax/6),
-				Assignee: new(contract.MemberName("alice")), Status: "pending", Review: &contract.TaskReview{Reviewers: []contract.MemberName{"reviewer"}}}}
+				Assignee: new(contract.MemberName("alice")), Status: "pending",
+				Review: &contract.TaskReview{Reviewers: []contract.MemberName{"reviewer"}}}}
 			r.st.Active["alice"] = w.ActiveTurn{Member: "alice", Turn: 1, Kind: "task", TaskID: "t1"}
 			r.st.Active["reviewer"] = w.ActiveTurn{Member: "reviewer", Turn: 1, Kind: "review", TaskID: "t1"}
 			if which == "complete" {
@@ -62,13 +63,17 @@ func TestBoardCapacityRejectsWithoutMutation(t *testing.T) {
 			var err error
 			switch which {
 			case "create":
-				err = r.validateCreate(contract.CreateTasksInput{Caller: new(contract.MemberName("leader")), RequestId: "r", Tasks: []contract.NewTask{{Title: "t", Description: "d"}}})
+				err = r.validateCreate(contract.CreateTasksInput{Caller: new(contract.MemberName("leader")), RequestId: "r",
+					Tasks: []contract.NewTask{{Title: "t", Description: "d"}}})
 			case "assign":
-				err = r.validateAssign(contract.AssignTaskInput{Caller: new(contract.MemberName("leader")), RequestId: "r", TaskId: "t1", Member: "alice"})
+				err = r.validateAssign(contract.AssignTaskInput{Caller: new(contract.MemberName("leader")), RequestId: "r", TaskId: "t1",
+					Member: "alice"})
 			case "complete":
-				err = r.validateComplete(contract.CompleteTaskInput{Caller: new(contract.MemberName("alice")), RequestId: "r", TaskId: "t1", ResultText: "result"})
+				err = r.validateComplete(contract.CompleteTaskInput{Caller: new(contract.MemberName("alice")), RequestId: "r", TaskId: "t1",
+					ResultText: "result"})
 			case "verdict":
-				err = r.validateVerdict(contract.SubmitVerdictInput{Caller: new(contract.MemberName("reviewer")), RequestId: "r", TaskId: "t1", Verdict: "approve", Comment: "yes"})
+				err = r.validateVerdict(contract.SubmitVerdictInput{Caller: new(contract.MemberName("reviewer")), RequestId: "r", TaskId: "t1",
+					Verdict: "approve", Comment: "yes"})
 			}
 			require.ErrorContains(t, err, "TEAM_TEXT_TOO_LONG")
 			after, _ := team.Marshal(r.st)
@@ -103,13 +108,15 @@ func TestMaximalCarryStaysUnderOneMiB(t *testing.T) {
 	r.st.Active = map[string]w.ActiveTurn{}
 	for i, entry := range roster {
 		r.st.Active[string(entry.Name)] = w.ActiveTurn{Member: string(entry.Name), Turn: i + 1, Kind: "lead"}
-		r.st.Cursors[string(entry.Name)] = w.MemberCursor{Seq: 1 << 20, CheckpointVersion: 1 << 20, EventN: 1 << 40, Turn: 500, ActiveSeconds: 1 << 30}
+		r.st.Cursors[string(entry.Name)] = w.MemberCursor{Seq: 1 << 20, CheckpointVersion: 1 << 20, EventN: 1 << 40, Turn: 500,
+			ActiveSeconds: 1 << 30}
 	}
 	leader := new(contract.MemberName("leader"))
 	for i := range team.MaxTasks {
 		in := contract.CreateTasksInput{Caller: leader, RequestId: fmt.Sprintf("create-%d", i), Tasks: []contract.NewTask{{
 			Title: strings.Repeat("<", team.TitleBytes), Description: strings.Repeat("<", team.DescriptionBytes),
-			Assignee: new(contract.MemberName("alice")), NarrowedTools: slices.Repeat([]string{strings.Repeat("<", team.ToolNameBytes)}, team.NarrowedToolsMax)}}}
+			Assignee: new(contract.MemberName("alice")), NarrowedTools: slices.Repeat([]string{strings.Repeat("<", team.ToolNameBytes)},
+				team.NarrowedToolsMax)}}}
 		if err := r.validateCreate(in); err != nil {
 			requireCode(t, err, "TEAM_TEXT_TOO_LONG")
 			break
@@ -123,13 +130,15 @@ func TestMaximalCarryStaysUnderOneMiB(t *testing.T) {
 		task.Status, task.Failures, task.Attempts = "in_review", new(team.MaxTaskFailures), 3
 		task.ResultText = new(team.TruncateEncoded(strings.Repeat("<", 10*team.ResultBytes), team.ResultBytes))
 		for _, reviewer := range task.Review.Reviewers {
-			task.Review.Votes = append(task.Review.Votes, contract.ReviewVote{Reviewer: reviewer, Verdict: "reject", Comment: "reviewer did not submit a verdict"})
+			task.Review.Votes = append(task.Review.Votes,
+				contract.ReviewVote{Reviewer: reviewer, Verdict: "reject", Comment: "reviewer did not submit a verdict"})
 		}
 		task.Review.ReworkNote = new(team.TruncateEncoded(strings.Repeat("<", 10*team.CommentBytes), team.CommentBytes))
 	}
 	for i := 0; ; i++ {
 		to := roster[1+i%(len(roster)-1)].Name
-		in := contract.SendMessageInput{Caller: leader, RequestId: fmt.Sprintf("send-%d", i), To: to, Text: strings.Repeat("<", team.MessageBytes)}
+		in := contract.SendMessageInput{Caller: leader, RequestId: fmt.Sprintf("send-%d", i), To: to,
+			Text: strings.Repeat("<", team.MessageBytes)}
 		if err := r.validateSend(in); err != nil {
 			requireCode(t, err, "TEAM_MAILBOX_FULL")
 			break
@@ -147,7 +156,8 @@ func TestMaximalCarryStaysUnderOneMiB(t *testing.T) {
 	for _, entry := range roster {
 		for i := range 20 {
 			result, _ := team.Marshal(contract.CreateTasksOutput{TaskIds: slices.Repeat([]string{"t32"}, team.MaxTasks)})
-			r.st.Applied[fmt.Sprintf("%s-%s-%d", strings.Repeat("r", 40), entry.Name, i)] = w.AppliedUpdate{Member: string(entry.Name), Turn: 500, Result: result}
+			r.st.Applied[fmt.Sprintf("%s-%s-%d", strings.Repeat("r", 40), entry.Name, i)] = w.AppliedUpdate{Member: string(entry.Name), Turn: 500,
+				Result: result}
 		}
 	}
 	for i := range team.MaxTasks {

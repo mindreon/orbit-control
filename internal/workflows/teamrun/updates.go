@@ -60,7 +60,10 @@ func (r *run) capacity(value any) error {
 	}
 	return nil
 }
-func (r *run) applied(id string) bool { _, ok := r.st.Applied[id]; return ok }
+func (r *run) applied(id string) bool {
+	_, ok := r.st.Applied[id]
+	return ok
+}
 func (r *run) remember(id string, caller *contract.MemberName, result any) {
 	raw, _ := team.Marshal(result)
 	member := string(*caller)
