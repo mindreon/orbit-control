@@ -60,7 +60,8 @@ func StartScan(board contract.TeamBoard, active []Active, maxParallel int, reser
 		if task.Status == "blocked" {
 			task.Status = "pending"
 		}
-		if reserve || remaining <= 0 || task.Status != "pending" || task.Assignee == nil || busy[string(*task.Assignee)] {
+		if reserve || remaining <= 0 || task.Status != "pending" || task.Assignee == nil || Busy(task.TaskId,
+			active) || busy[string(*task.Assignee)] {
 			continue
 		}
 		member := string(*task.Assignee)

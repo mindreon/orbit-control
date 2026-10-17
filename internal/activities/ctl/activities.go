@@ -315,34 +315,8 @@ func (a *Activities) ReconcileCheckpoint(ctx context.Context, in w.ReconcileInpu
 }
 func (a *Activities) FinalizeRun(ctx context.Context, in w.FinalizeInput) error {
 	return a.change(ctx, in.RunOp, func(ctx context.Context, tx pgx.Tx) ([]event, error) {
-		var used int64
-		if err := tx.QueryRow(ctx, `SELECT COALESCE(sum(millicredits),0)::bigint
- FROM usage_ledger
- WHERE tenant_id=$1
- AND run_id=$2`, in.TenantID, in.RunID).Scan(&used); err != nil {
-			return nil, err
-		}
-		n, err := tx.Exec(ctx, `UPDATE runs
- SET status=$3,error_code=NULLIF($4,''),summary=NULLIF($5,''),ended_at=now(),used_millicredits=$6
- WHERE tenant_id=$1
- AND id=$2
- AND ended_at IS NULL`, in.TenantID, in.RunID, in.Status, in.ErrorCode, in.Reason, used)
-		if err != nil {
-			return nil, err
-		}
-		if n.RowsAffected() == 0 {
-			return nil, nil
-		}
-		if err = settleRun(ctx, tx, in, used); err != nil {
-			return nil, err
-		}
-		if _, err = tx.Exec(ctx, `UPDATE sessions SET last_activity_at=now() WHERE tenant_id=$1 AND id=$2`,
-			in.TenantID, in.SessionID); err != nil {
-			return nil, err
-		}
-		if err = auditRun(
-			ctx, tx, in.RunOp, "run.finish", in.RunID, map[string]any{"status": in.Status, "error_code": in.ErrorCode},
-		); err != nil {
+		changed, err := finalizeRun(ctx, tx, in)
+		if err != nil || !changed {
 			return nil, err
 		}
 		if in.Status == "failed" {
@@ -516,4 +490,28 @@ func eventMember(member string) string {
 		return w.MemberMain
 	}
 	return member
+}
+
+// finalizeRun atomically settles the shared run lifecycle. Team and agent projections add only their own output.
+func finalizeRun(ctx context.Context, tx pgx.Tx, in w.FinalizeInput) (bool, error) {
+	var used int64
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(sum(millicredits),0)::bigint FROM usage_ledger
+ WHERE tenant_id=$1 AND run_id=$2`, in.TenantID, in.RunID).Scan(&used); err != nil {
+		return false, err
+	}
+	n, err := tx.Exec(ctx, `UPDATE runs SET status=$3,error_code=NULLIF($4,''),summary=NULLIF($5,''),
+ ended_at=now(),used_millicredits=$6 WHERE tenant_id=$1 AND id=$2 AND ended_at IS NULL`,
+		in.TenantID, in.RunID, in.Status, in.ErrorCode, in.Reason, used)
+	if err != nil || n.RowsAffected() == 0 {
+		return false, err
+	}
+	if err = settleRun(ctx, tx, in, used); err != nil {
+		return false, err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE sessions SET last_activity_at=now() WHERE tenant_id=$1 AND id=$2`, in.TenantID,
+		in.SessionID); err != nil {
+		return false, err
+	}
+	err = auditRun(ctx, tx, in.RunOp, "run.finish", in.RunID, map[string]any{"status": in.Status, "error_code": in.ErrorCode})
+	return err == nil, err
 }

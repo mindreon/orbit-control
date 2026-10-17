@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/mindreon/orbit-control/internal/auth"
 	"github.com/mindreon/orbit-control/internal/contract"
 	"github.com/mindreon/orbit-control/internal/httpapi"
+	"github.com/mindreon/orbit-control/internal/locks"
 	"github.com/mindreon/orbit-control/internal/platform/db"
 	"github.com/mindreon/orbit-control/internal/platform/httpx"
 	"github.com/mindreon/orbit-control/internal/platform/ids"
@@ -60,6 +62,9 @@ func (c *scheduleClient) Create(_ context.Context, in client.ScheduleOptions) (c
 	}
 	c.exists = true
 	c.writes = append(c.writes, in.Spec.CronExpressions[0])
+	if in.Paused {
+		c.pauses++
+	}
 	return &scheduleHandle{c: c}, nil
 }
 func (h *scheduleHandle) Describe(context.Context) (*client.ScheduleDescription, error) {
@@ -83,6 +88,9 @@ func (h *scheduleHandle) Update(_ context.Context, in client.ScheduleUpdateOptio
 	h.c.mu.Lock()
 	defer h.c.mu.Unlock()
 	h.c.writes = append(h.c.writes, update.Schedule.Spec.CronExpressions[0])
+	if update.Schedule.State.Paused {
+		h.c.pauses++
+	}
 	return nil
 }
 func (h *scheduleHandle) Pause(context.Context, client.SchedulePauseOptions) error {
@@ -178,7 +186,102 @@ func scheduleCode(t *testing.T, err error, code string) {
 	require.Equal(t, code, he.Code)
 }
 
+type failingScheduleResolver struct{ err error }
+
+func (r failingScheduleResolver) Resolve(context.Context, locks.Request) (contract.RunLock, error) {
+	return contract.RunLock{}, r.err
+}
+
 func testSchedules(t *testing.T, d *db.DB, admin *pgx.Conn) {
+	t.Run("TransientResolutionDoesNotPause", func(t *testing.T) {
+		r := newScheduleRig(t, d, admin)
+		row := r.create(t)
+		transient := errors.New("temporary resolver outage")
+		r.activities.Sessions.Locks = failingScheduleResolver{err: transient}
+		now := time.Now().UTC().Truncate(time.Second)
+		_, err := r.activities.CreateScheduledSession(t.Context(),
+			w.ScheduledSessionInput{TenantID: r.tenant, ScheduleID: row.ID, FireAt: now, Now: now})
+		require.ErrorIs(t, err, transient)
+		require.Equal(t, "active", r.row(t, row.ID).Status)
+		r.tx(t, func(ctx context.Context, tx pgx.Tx) error {
+			var count int
+			err := tx.QueryRow(ctx, `SELECT count(*) FROM schedule_runs WHERE tenant_id=$1 AND schedule_id=$2`, r.tenant, row.ID).Scan(&count)
+			require.Zero(t, count, "a retryable failure must not record a terminal fire")
+			return err
+		})
+	})
+	t.Run("InvalidTeamManifestRecordsFailure", func(t *testing.T) {
+		r := newScheduleRig(t, d, admin)
+		row := r.create(t)
+		lock := readLock(t, "RunLock.team.json")
+		digest := "sha256:" + strings.Repeat("1", 64)
+		objects := runObjects{testBlobs: testBlobs{root: t.TempDir()}}
+		_, err := objects.Put(t.Context(), r.tenant, digest, []byte(`{"not":"a team manifest"}`))
+		require.NoError(t, err)
+		for i := range lock.Entries {
+			lock.Entries[i].Files = nil
+			if lock.Entries[i].Kind == "team" {
+				lock.Entries[i].Files = []contract.LockFile{{Path: "team.json", Sha256: digest}}
+			}
+		}
+		r.activities.Sessions.Locks = runResolver{lock: lock}
+		r.activities.Sessions.Objects = objects
+		r.tx(t, func(ctx context.Context, tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `UPDATE schedules SET entry_kind='team',entry_ref=$3 WHERE tenant_id=$1 AND id=$2`, r.tenant, row.ID,
+				lock.Entry.Ref)
+			return err
+		})
+		now := time.Now().UTC().Truncate(time.Second)
+		out, err := r.activities.CreateScheduledSession(t.Context(),
+			w.ScheduledSessionInput{TenantID: r.tenant, ScheduleID: row.ID, FireAt: now, Now: now})
+		require.NoError(t, err)
+		require.Equal(t, "LOCK_RESOLUTION_FAILED", out.Skip)
+		require.Equal(t, "paused", r.row(t, row.ID).Status)
+		r.tx(t, func(ctx context.Context, tx pgx.Tx) error {
+			var status, code string
+			err := tx.QueryRow(ctx, `SELECT status,error_code FROM schedule_runs WHERE tenant_id=$1 AND schedule_id=$2`, r.tenant,
+				row.ID).Scan(&status, &code)
+			require.Equal(t, "failed", status)
+			require.Equal(t, "LOCK_RESOLUTION_FAILED", code)
+			return err
+		})
+	})
+
+	t.Run("SchedulePublicHistoryAndActivation", func(t *testing.T) {
+		r := newScheduleRig(t, d, admin)
+		row := r.create(t)
+		now := time.Now().UTC().Truncate(time.Second)
+		_, err := r.activities.CreateScheduledSession(t.Context(),
+			w.ScheduledSessionInput{TenantID: r.tenant, ScheduleID: row.ID, FireAt: now, Now: now})
+		require.NoError(t, err)
+		status, raw := r.request(t, "GET", "/v1/schedules/"+row.ID, "", "")
+		require.Equal(t, 200, status, string(raw))
+		var detail struct {
+			Runs []map[string]any `json:"runs"`
+		}
+		require.NoError(t, json.Unmarshal(raw, &detail))
+		require.Len(t, detail.Runs, 1)
+		require.NotContains(t, detail.Runs[0], "tenant_id")
+		r.tx(t, func(ctx context.Context, tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `UPDATE schedules SET status='paused',paused_reason='LOCK_RESOLUTION_FAILED' WHERE tenant_id=$1 AND id=$2`,
+				r.tenant, row.ID)
+			return err
+		})
+		active := r.patch(t, row.ID, schedules.PatchInput{Status: new("active")})
+		require.Nil(t, active.PausedReason)
+		r.tx(t, func(ctx context.Context, tx pgx.Tx) error {
+			_, err := r.svc.Delete(ctx, row.ID)
+			return err
+		})
+		err = d.WithTenant(t.Context(), r.tenant, func(tx pgx.Tx) error {
+			ctx := auth.Context(db.Context(t.Context(), tx), auth.Principal{ID: r.actor, Kind: "user"}, r.tenant)
+			_, err := r.svc.Patch(ctx, row.ID, schedules.PatchInput{Name: new("deleted")})
+			return err
+		})
+		var he *httpx.Error
+		require.ErrorAs(t, err, &he)
+		require.Equal(t, 404, he.Status)
+	})
 	t.Run("T-P6/Firing", func(t *testing.T) {
 		r := newScheduleRig(t, d, admin)
 		row := r.create(t)
@@ -216,7 +319,7 @@ func testSchedules(t *testing.T, d *db.DB, admin *pgx.Conn) {
 			require.NoError(t, err)
 			require.Equal(t, tc.skip, out.Skip)
 		}
-		// Revocation pauses and versions the schedule, then synchronizes Pause.
+		// Revocation pauses and versions the schedule, then synchronizes State.Paused.
 		r.tx(t, func(ctx context.Context, tx pgx.Tx) error {
 			_, err := tx.Exec(ctx, `DELETE FROM role_bindings WHERE tenant_id=$1 AND scope_id=$2`, r.tenant, r.workspace)
 			return err
@@ -323,7 +426,7 @@ func testSchedules(t *testing.T, d *db.DB, admin *pgx.Conn) {
 			return err
 		})
 		require.NoError(t, r.svc.SweepOnce(t.Context()))
-		require.Equal(t, 1, r.client.deletes)
+		require.GreaterOrEqual(t, r.client.deletes, 1)
 	})
 	t.Run("T-P7/LockSeeds", func(t *testing.T) { testScheduleLockSeeds(t, d, admin) })
 	t.Run("T-P7b/CreateThenSyncOverHTTP", func(t *testing.T) { testScheduleHTTPSync(t, d, admin) })

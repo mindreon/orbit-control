@@ -12,7 +12,8 @@ const (
 	FilesMax              = 20
 	FileBytes             = 256
 	SummaryBytes          = 8192
-	BoardBytesMax         = 512 << 10
+	BoardBytesMax         = 384 << 10
+	AppliedPerTurnMax     = 32
 	MailBytesMax          = 128 << 10
 	NarrowedToolsMax      = 32
 	ToolNameBytes         = 128

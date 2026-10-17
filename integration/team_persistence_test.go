@@ -346,6 +346,33 @@ func testTeamPersistence(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		require.Equal(t, "succeeded", r.status(t))
 		require.Equal(t, before, r.statusEvents(t))
 	})
+	t.Run("TeamViewKeepsRosterOrderAndWaitingPrecedence", func(t *testing.T) {
+		r := newTeamRig(t, d, admin)
+		r.interaction(t, "researcher", "ask_user")
+		r.interaction(t, "researcher", "tool_approval")
+		h, token := r.api(t, r.agentLock, &teamTemporal{})
+		status, raw := r.call(t, h, token, "GET", "/v1/runs/"+r.run+"/team", "", "")
+		require.Equal(t, 200, status, string(raw))
+		var view struct {
+			Members []struct {
+				Name   string `json:"name"`
+				Status string `json:"status"`
+			} `json:"members"`
+		}
+		require.NoError(t, json.Unmarshal(raw, &view))
+		names := []string{}
+		for _, member := range view.Members {
+			names = append(names, member.Name)
+			if member.Name == "researcher" {
+				require.Equal(t, "waiting_approval", member.Status)
+			}
+		}
+		want := []string{}
+		for _, entry := range r.roster {
+			want = append(want, string(entry.Name))
+		}
+		require.Equal(t, want, names)
+	})
 	t.Run("T-P4c/ResolveRoutesToMemberWorkflow", func(t *testing.T) {
 		r := newTeamRig(t, d, admin)
 		interaction := r.interaction(t, "researcher", "ask_user")
@@ -506,6 +533,13 @@ func testKernelTeam(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	status, raw = update(body)
 	require.Equal(t, 409, status, string(raw))
 	require.Equal(t, "TEAM_NOT_LEADER", errorCode(t, raw))
+	fake.updateFn = func(int, any) error {
+		return temporal.NewApplicationError("The team board is full; shorten task text", "TEAM_TEXT_TOO_LONG")
+	}
+	status, raw = update(body)
+	require.Equal(t, 409, status, string(raw))
+	require.Equal(t, "TEAM_TEXT_TOO_LONG", errorCode(t, raw))
+	require.Contains(t, string(raw), "The team board is full; shorten task text")
 
 	// A NotFound while the run has not ended is the Continue-As-New gap: retry with the same Update ID.
 	fake.calls = nil

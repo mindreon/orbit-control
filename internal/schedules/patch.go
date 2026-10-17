@@ -19,7 +19,7 @@ func (s Service) Patch(ctx context.Context, id string, in PatchInput) (Schedule,
 		return out, err
 	}
 	if out.Status == "deleted" {
-		return out, httpx.E(409, "SCHEDULE_NOT_FOUND", "Schedule is deleted")
+		return out, httpx.E(404, "SCHEDULE_NOT_FOUND", "Schedule is deleted")
 	}
 	next := CreateInput{WorkspaceID: out.WorkspaceID, Name: out.Name, Description: out.Description, Cron: out.Cron, Timezone: out.Timezone,
 		EntryKind: out.EntryKind, EntryRef: out.EntryRef, Prompt: out.Prompt, BudgetMillicredits: out.BudgetMillicredits,
@@ -77,7 +77,7 @@ func (s Service) Patch(ctx context.Context, id string, in PatchInput) (Schedule,
 	}
 	_, err = db.Tx(ctx).Exec(ctx, `UPDATE schedules SET name=$3,description=$4,cron=$5,timezone=$6,prompt=$7,
  budget_millicredits=$8,overlap_policy=$9,catchup_window=$10*interval '1 second',status=COALESCE($11,status),owner_id=$12,
- paused_reason=CASE WHEN $13 THEN NULL ELSE paused_reason END,version=version+1,updated_at=now()
+ paused_reason=CASE WHEN $13 OR $11='active' THEN NULL ELSE paused_reason END,version=version+1,updated_at=now()
  WHERE tenant_id=$1 AND id=$2`, auth.Tenant(ctx), id, next.Name, next.Description, next.Cron, next.Timezone, next.Prompt,
 		next.BudgetMillicredits, next.OverlapPolicy, next.CatchupWindowSeconds, in.Status, owner, transfer)
 	if err != nil {

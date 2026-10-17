@@ -17,7 +17,7 @@ var failureClasses = map[string]FailureClass{
 	"INVALID_SEGMENT_RESULT": Invariant, "INVALID_SPEC": Invariant, "SEGMENT_SUPERSEDED": Invariant,
 	"START_SEGMENT_FAILED": Invariant, "RECORD_SEGMENT_FAILED": Invariant,
 	"RECONCILE_FAILED": Invariant, "STATUS_FAILED": Invariant, "SANDBOX_UNAVAILABLE": Invariant,
-	"TURN_LOST": Invariant, "TURN_START_CONFLICT": Invariant,
+	"RECORD_BOARD_FAILED": Invariant, "TURN_LOST": Invariant, "TURN_START_CONFLICT": Invariant,
 	"POLICY_DENIED": TaskFailure, "TOOL_POLICY_ERROR": TaskFailure, "INTERACTION_FAILED": TaskFailure,
 	"UNATTENDED_INTERACTION": TaskFailure, "PREPARE_FAILED": TaskFailure,
 	"QUEUE_FULL": TaskFailure, "RUN_NOT_ACTIVE": TaskFailure, "INTERACTION_NOT_PENDING": TaskFailure,

@@ -106,7 +106,7 @@ func (s Service) syncAttempt(ctx context.Context, row Schedule) error {
 		_, err = s.Temporal.Create(ctx, client.ScheduleOptions{ID: w.ScheduleID(row.TenantID, row.ID), Spec: spec,
 			Action: action, Overlap: overlap, CatchupWindow: catchup, Paused: row.Status == "paused"})
 		if err == nil {
-			return s.setPaused(ctx, handle, row)
+			return nil
 		}
 		if !errors.Is(err, temporal.ErrScheduleAlreadyRunning) {
 			if _, exists := errors.AsType[*serviceerror.AlreadyExists](err); !exists {
@@ -123,17 +123,7 @@ func (s Service) syncAttempt(ctx context.Context, row Schedule) error {
 	}}); err != nil {
 		return err
 	}
-	return s.setPaused(ctx, handle, row)
-}
-func (s Service) setPaused(ctx context.Context, handle client.ScheduleHandle, row Schedule) error {
-	if row.Status == "paused" {
-		note := "paused"
-		if row.PausedReason != nil {
-			note = *row.PausedReason
-		}
-		return handle.Pause(ctx, client.SchedulePauseOptions{Note: note})
-	}
-	return handle.Unpause(ctx, client.ScheduleUnpauseOptions{Note: "active"})
+	return nil
 }
 
 // SweepOnce isolates tenants and bounds every tenant's pending batch.

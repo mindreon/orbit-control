@@ -49,3 +49,10 @@ func TestValidTools(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "\"\\u003c\"", string(raw))
 }
+
+func TestTruncateEncodedUsesDecodedWidthForInvalidUTF8(t *testing.T) {
+	input := "a\xffb"
+	got := TruncateEncoded(input, EncodedLen("a\xff"))
+	require.Equal(t, "a\xff", got)
+	require.LessOrEqual(t, EncodedLen(got), EncodedLen("a\xff"))
+}

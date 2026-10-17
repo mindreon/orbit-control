@@ -252,39 +252,35 @@ func List(ctx context.Context, workspace string, page httpx.Page) (sessions.Page
 	if workspace != "" && !ids.Valid(workspace) {
 		return out, httpx.E(422, "INVALID_INPUT", "Invalid workspace")
 	}
-	rows, err := db.Tx(ctx).Query(ctx, `SELECT id::text FROM schedules WHERE tenant_id=$1 AND status<>'deleted'
- AND ($2='' OR workspace_id=NULLIF($2,'')::uuid) AND ($3='' OR id>NULLIF($3,'')::uuid) ORDER BY id`, auth.Tenant(ctx), workspace,
-		page.Cursor)
+	args, err := (policy.Authorizer{}).WorkspaceReadFilter(ctx)
 	if err != nil {
 		return out, err
 	}
-	identities := []string{}
+	args["tenant"], args["workspace"], args["cursor"], args["limit"] = auth.Tenant(ctx), workspace, page.Cursor, page.Limit+1
+	rows, err := db.Tx(ctx).Query(ctx,
+		`SELECT to_jsonb(s)||jsonb_build_object('catchup_window_seconds',extract(epoch FROM catchup_window)::int)
+ FROM schedules s WHERE tenant_id=@tenant AND status<>'deleted'
+ AND (@workspace='' OR workspace_id=NULLIF(@workspace,'')::uuid)
+ AND (@cursor='' OR id>NULLIF(@cursor,'')::uuid) AND `+policy.WorkspaceReadPredicate+` ORDER BY id LIMIT @limit`, args)
+	if err != nil {
+		return out, err
+	}
+	defer rows.Close()
 	for rows.Next() {
-		var id string
-		if err = rows.Scan(&id); err != nil {
-			rows.Close()
-			return out, err
-		}
-		identities = append(identities, id)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return out, err
-	}
-	for _, id := range identities {
-		item, err := Get(ctx, id)
-		if err != nil {
-			if he, ok := err.(*httpx.Error); ok && he.Status == 404 {
-				continue
-			}
+		var raw []byte
+		if err = rows.Scan(&raw); err != nil {
 			return out, err
 		}
 		if len(out.Items) == page.Limit {
 			out.NextCursor = httpx.Cursor(out.Items[len(out.Items)-1].ID)
 			break
 		}
+		var item Schedule
+		if err = json.Unmarshal(raw, &item); err != nil {
+			return out, err
+		}
+		item.SyncPending = item.SyncedVersion < item.Version
 		out.Items = append(out.Items, item)
 	}
-	return out, nil
+	return out, rows.Err()
 }

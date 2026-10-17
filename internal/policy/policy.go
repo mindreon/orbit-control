@@ -286,13 +286,29 @@ const SessionReadPredicate = `EXISTS (
       OR (b.scope_type='session' AND b.scope_id=s.id)))`
 
 func (Authorizer) SessionReadFilter(ctx context.Context) (pgx.NamedArgs, error) {
+	return readFilter(ctx, "session.read")
+}
+
+// WorkspaceReadPredicate expects a row alias s exposing tenant_id and workspace_id.
+const WorkspaceReadPredicate = `EXISTS (
+ SELECT 1 FROM role_bindings b WHERE b.tenant_id=s.tenant_id AND b.role=ANY(@read_roles::text[])
+ AND ((b.principal_type IN ('user','service') AND b.principal_id=@read_principal)
+ OR (b.principal_type='group' AND EXISTS (SELECT 1 FROM group_members gm
+ WHERE gm.tenant_id=b.tenant_id AND gm.group_id=b.principal_id AND gm.principal_id=@read_principal)))
+ AND ((b.scope_type='tenant' AND b.scope_id=s.tenant_id)
+ OR (b.scope_type='workspace' AND b.scope_id=s.workspace_id)))`
+
+func (Authorizer) WorkspaceReadFilter(ctx context.Context) (pgx.NamedArgs, error) {
+	return readFilter(ctx, "workspace.read")
+}
+func readFilter(ctx context.Context, action string) (pgx.NamedArgs, error) {
 	p := auth.From(ctx)
-	if p.APIKey && !slices.Contains(p.Scopes, "session.read") {
+	if p.APIKey && !slices.Contains(p.Scopes, action) {
 		return nil, httpx.E(403, "FORBIDDEN", "API key scope does not permit this action")
 	}
 	roles := []string{}
 	for role, actions := range Matrix {
-		if slices.Contains(actions, "session.read") {
+		if slices.Contains(actions, action) {
 			roles = append(roles, role)
 		}
 	}

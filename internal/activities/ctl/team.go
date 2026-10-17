@@ -169,20 +169,8 @@ func (a *Activities) WaitForTurn(ctx context.Context, in w.TurnOp) (w.TurnResult
 }
 func (a *Activities) FinalizeTeamRun(ctx context.Context, in w.FinalizeTeamInput) error {
 	return a.change(ctx, in.RunOp, func(ctx context.Context, tx pgx.Tx) ([]event, error) {
-		var used int64
-		if err := tx.QueryRow(ctx, `SELECT COALESCE(sum(millicredits),0)::bigint FROM usage_ledger WHERE tenant_id=$1 AND run_id=$2`,
-			in.TenantID, in.RunID).Scan(&used); err != nil {
-			return nil, err
-		}
-		n, err := tx.Exec(ctx, `UPDATE runs SET status=$3,error_code=NULLIF($4,''),summary=NULLIF($5,''),ended_at=now(),used_millicredits=$6
- WHERE tenant_id=$1 AND id=$2 AND ended_at IS NULL`, in.TenantID, in.RunID, in.Status, in.Code, in.Summary, used)
-		if err != nil {
-			return nil, err
-		}
-		if n.RowsAffected() == 0 {
-			return nil, nil
-		}
-		if err = settleRun(ctx, tx, w.FinalizeInput{RunOp: in.RunOp}, used); err != nil {
+		changed, err := finalizeRun(ctx, tx, w.FinalizeInput{RunOp: in.RunOp, Status: in.Status, ErrorCode: in.Code, Reason: in.Summary})
+		if err != nil || !changed {
 			return nil, err
 		}
 		board, err := json.Marshal(in.Board)
@@ -201,10 +189,6 @@ func (a *Activities) FinalizeTeamRun(ctx context.Context, in w.FinalizeTeamInput
 			in.RunID); err != nil {
 			return nil, err
 		}
-		if _, err = tx.Exec(ctx, `UPDATE sessions SET last_activity_at=now() WHERE tenant_id=$1 AND id=$2`, in.TenantID,
-			in.SessionID); err != nil {
-			return nil, err
-		}
 		var messageID *string
 		if in.Summary != "" {
 			messageID = new(ids.Derive(in.RunID, "team-summary"))
@@ -216,9 +200,6 @@ func (a *Activities) FinalizeTeamRun(ctx context.Context, in w.FinalizeTeamInput
  VALUES($1,$2,$3,$4,'assistant',$5) ON CONFLICT DO NOTHING`, messageID, in.TenantID, in.SessionID, in.RunID, raw); err != nil {
 				return nil, err
 			}
-		}
-		if err = auditRun(ctx, tx, in.RunOp, "run.finish", in.RunID, map[string]any{"status": in.Status, "error_code": in.Code}); err != nil {
-			return nil, err
 		}
 		if in.Status == "failed" {
 			return []event{{typ: "run.failed", data: contract.RunFailed{Code: in.Code, Message: "Team run failed"}}}, nil

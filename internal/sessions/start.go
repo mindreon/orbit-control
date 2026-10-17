@@ -3,13 +3,13 @@ package sessions
 import (
 	"context"
 	"encoding/json/v2"
-	"fmt"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/mindreon/orbit-control/internal/auth"
 	"github.com/mindreon/orbit-control/internal/contract"
 	"github.com/mindreon/orbit-control/internal/platform/db"
+	"github.com/mindreon/orbit-control/internal/platform/httpx"
 	"github.com/mindreon/orbit-control/internal/platform/ids"
 	w "github.com/mindreon/orbit-control/internal/workflows"
 )
@@ -68,8 +68,11 @@ func (svc Service) teamSpec(ctx context.Context, lock contract.RunLock) (w.TeamS
 				return spec, err
 			}
 			var manifest contract.TeamManifest
+			if err = contract.Validate("TeamManifest", raw); err != nil {
+				return spec, httpx.E(422, "LOCK_RESOLUTION_FAILED", "Invalid team manifest")
+			}
 			if err = json.Unmarshal(raw, &manifest); err != nil {
-				return spec, err
+				return spec, httpx.E(422, "LOCK_RESOLUTION_FAILED", "Invalid team manifest")
 			}
 			if manifest.MaxParallelMembers != nil {
 				spec.MaxParallel = *manifest.MaxParallelMembers
@@ -78,13 +81,13 @@ func (svc Service) teamSpec(ctx context.Context, lock contract.RunLock) (w.TeamS
 				spec.ReviewMaxRounds = manifest.Review.MaxRounds
 			}
 			if spec.Leader == "" || len(spec.Roster) < 2 {
-				return spec, fmt.Errorf("invalid team roster")
+				return spec, httpx.E(422, "LOCK_RESOLUTION_FAILED", "Invalid team roster")
 			}
 			spec.MaxParallel = max(1, min(spec.MaxParallel, len(spec.Roster)-1))
 			return spec, nil
 		}
 	}
-	return spec, fmt.Errorf("team manifest missing from run lock")
+	return spec, httpx.E(422, "LOCK_RESOLUTION_FAILED", "Team manifest missing from run lock")
 }
 
 // ScheduledIDs derives the single session/run pair belonging to a firing.

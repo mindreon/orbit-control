@@ -93,7 +93,10 @@ func (svc Service) submissionLock(ctx context.Context, s Session, lockID string)
 	lock, err = svc.Locks.Resolve(ctx, locks.Request{TenantID: tenant, LockID: lockID,
 		Entry: locks.Entry{Kind: contract.EntryKind(s.EntryKind), Ref: s.EntryRef}, Scope: locks.Scope{WorkspaceID: s.WorkspaceID}})
 	if err != nil {
-		return lock, false, httpx.E(422, "LOCK_RESOLUTION_FAILED", "Agent dependencies could not be resolved")
+		if business, ok := errors.AsType[*httpx.Error](err); ok && business.Status >= 400 && business.Status < 500 {
+			return lock, false, httpx.E(422, "LOCK_RESOLUTION_FAILED", "Entry dependencies could not be resolved")
+		}
+		return lock, false, err
 	}
 	return lock, pin, nil
 }

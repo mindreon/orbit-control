@@ -21,13 +21,15 @@ func TruncateEncoded(s string, n int) string {
 		return s
 	}
 	used, end := 2, 0
-	for pos, r := range s {
+	for pos := 0; pos < len(s); {
+		r, width := utf8.DecodeRuneInString(s[pos:])
 		cost := EncodedLen(string(r)) - 2
 		if used+cost > n {
 			break
 		}
 		used += cost
-		end = pos + utf8.RuneLen(r)
+		end = pos + width
+		pos = end
 	}
 	return s[:end]
 }

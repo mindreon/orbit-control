@@ -2,8 +2,8 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json/jsontext"
 	"net/http"
+	"time"
 
 	"go.temporal.io/sdk/client"
 
@@ -13,6 +13,7 @@ import (
 	"github.com/mindreon/orbit-control/internal/platform/ids"
 	"github.com/mindreon/orbit-control/internal/schedules"
 	"github.com/mindreon/orbit-control/internal/sessions"
+	"github.com/mindreon/orbit-control/internal/team"
 	w "github.com/mindreon/orbit-control/internal/workflows"
 )
 
@@ -81,19 +82,20 @@ func (h *Handler) getSchedule(out http.ResponseWriter, r *http.Request) error {
 			return nil, err
 		}
 		rows, err := db.Tx(ctx).Query(ctx,
-			`SELECT to_jsonb(sr) FROM schedule_runs sr
+			`SELECT schedule_id::text,fire_at,run_id::text,session_id::text,status,error_code,started_at,ended_at FROM schedule_runs sr
  WHERE tenant_id=$1 AND schedule_id=$2 ORDER BY fire_at DESC LIMIT 20`, auth.Tenant(ctx), row.ID)
 		if err != nil {
 			return nil, err
 		}
 		defer rows.Close()
-		runs := []jsontext.Value{}
+		runs := []scheduleRun{}
 		for rows.Next() {
-			var raw []byte
-			if err = rows.Scan(&raw); err != nil {
+			var item scheduleRun
+			if err = rows.Scan(&item.ScheduleID, &item.FireAt, &item.RunID, &item.SessionID, &item.Status, &item.ErrorCode, &item.StartedAt,
+				&item.EndedAt); err != nil {
 				return nil, err
 			}
-			runs = append(runs, raw)
+			runs = append(runs, item)
 		}
 		if err = rows.Err(); err != nil {
 			return nil, err
@@ -147,11 +149,10 @@ func (h *Handler) teamView(out http.ResponseWriter, r *http.Request) error {
 	var raw []byte
 	err = db.Tx(r.Context()).QueryRow(r.Context(), `SELECT jsonb_build_object('board',t.board,'finished',t.finished,
  'summary',COALESCE(t.summary,''),'members',COALESCE((SELECT jsonb_agg(jsonb_build_object('name',m.name,'role',m.role,
- 'status',CASE WHEN m.status='finished' THEN 'finished' WHEN EXISTS(SELECT 1 FROM interactions i WHERE i.tenant_id=m.tenant_id
- AND i.run_id=m.run_id AND i.member=m.name AND i.status IN ('pending','escalated') AND i.kind<>'ask_user') THEN 'waiting_approval'
- WHEN EXISTS(SELECT 1 FROM interactions i WHERE i.tenant_id=m.tenant_id AND i.run_id=m.run_id AND i.member=m.name
- AND i.status IN ('pending','escalated') AND i.kind='ask_user') THEN 'waiting_input' ELSE m.status END,
- 'task_id',m.task_id,'turn',m.turn) ORDER BY m.name) FROM team_members m WHERE m.tenant_id=t.tenant_id AND m.run_id=t.run_id),'[]'::jsonb))
+ 'status',CASE WHEN m.status='finished' THEN 'finished' ELSE `+
+		team.WaitingStatusSQL("m.tenant_id", "m.run_id", "m.name", "m.status")+` END,
+ 'task_id',m.task_id,'turn',m.turn) ORDER BY (SELECT ord FROM jsonb_array_elements(t.board->'roster') WITH ORDINALITY AS roster(value,ord)
+WHERE value->>'name'=m.name)) FROM team_members m WHERE m.tenant_id=t.tenant_id AND m.run_id=t.run_id),'[]'::jsonb))
  FROM team_runs t WHERE t.tenant_id=$1 AND t.run_id=$2`, auth.Tenant(r.Context()), run.ID).Scan(&raw)
 	if err != nil {
 		return err
@@ -159,4 +160,16 @@ func (h *Handler) teamView(out http.ResponseWriter, r *http.Request) error {
 	out.Header().Set("Content-Type", "application/json")
 	_, err = out.Write(raw)
 	return err
+}
+
+// scheduleRun is the public history shape; tenant identity is never serialized.
+type scheduleRun struct {
+	ScheduleID string     `json:"schedule_id"`
+	FireAt     time.Time  `json:"fire_at"`
+	RunID      *string    `json:"run_id"`
+	SessionID  *string    `json:"session_id"`
+	Status     string     `json:"status"`
+	ErrorCode  *string    `json:"error_code"`
+	StartedAt  time.Time  `json:"started_at"`
+	EndedAt    *time.Time `json:"ended_at"`
 }
