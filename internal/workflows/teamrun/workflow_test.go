@@ -666,6 +666,38 @@ func TestPauseSignalsBatchIdleAndMidScan(t *testing.T) {
 	})
 }
 
+func TestPauseMidScanDoesNotWakeLeaderUntilResume(t *testing.T) {
+	h := newHarness(t)
+	h.at(sec, func() {
+		h.create("leader", "create", newTask("t1", "alice"), newTask("t2", "bob"))
+	})
+	h.onMemberStart = func(in w.MemberTaskInput) {
+		if in.Member == "alice" && in.Turn == 1 {
+			h.update(w.Steer, "leader-steer", w.SteerInput{ContentRef: "t/tenant/runs/run/steer/leader"})
+			h.env.SignalWorkflowSkippingWorkflowTask(w.Resume, w.ActorInput{})
+			h.env.SignalWorkflow(w.Pause, w.ActorInput{})
+		}
+	}
+	h.at(15*sec, func() { h.env.SignalWorkflow(w.Resume, w.ActorInput{}) })
+	h.turn("leader", 1, 20*sec, w.TurnResult{Status: "ended"})
+	h.turn("alice", 1, 20*sec, w.TurnResult{Status: "ended"})
+	h.turn("bob", 1, 20*sec, w.TurnResult{Status: "ended"})
+	h.turn("leader", 2, 10*sec, w.TurnResult{Status: "ended"})
+	h.cancelAt(35 * sec)
+	require.NoError(t, h.run())
+	leaderStarts := h.startsOf("leader")
+	require.GreaterOrEqual(t, len(leaderStarts), 2, "leader wakes after Resume for queued steering")
+	require.NotEmpty(t, leaderStarts[1].In.Steer)
+	pauseSignals := map[string]bool{}
+	for _, sig := range h.signalsNamed(w.Pause) {
+		pauseSignals[sig.Workflow] = true
+	}
+	require.True(t, pauseSignals[w.MemberTaskWorkflowID("tenant", "run", "leader", 1)])
+	require.True(t, pauseSignals[w.MemberTaskWorkflowID("tenant", "run", "alice", 1)])
+	require.True(t, pauseSignals[w.MemberTaskWorkflowID("tenant", "run", "bob", 1)])
+	require.False(t, pauseSignals[w.MemberTaskWorkflowID("tenant", "run", "leader", 2)])
+}
+
 func TestPublicSteerUsesAgentErrorCodes(t *testing.T) {
 	h := newHarness(t)
 	var invalid, overflow *outcome
