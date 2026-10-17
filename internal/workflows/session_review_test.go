@@ -206,3 +206,26 @@ func TestArchivedSessionRejectsNewMessages(t *testing.T) {
 	require.True(t, rejected)
 	require.Len(t, h.started, 1)
 }
+
+func TestTeamChildDefaultVersionKeepsAgentIdentity(t *testing.T) {
+	h := newSessionHarness(t)
+	h.env.OnGetVersion("session-team-child", workflow.DefaultVersion, 1).Return(workflow.DefaultVersion)
+	h.env.SetOnChildWorkflowStartedListener(func(info *workflow.Info, _ workflow.Context, _ converter.EncodedValues) {
+		require.Equal(t, w.AgentRunWorkflow, info.WorkflowType.Name)
+		require.Equal(t, w.AgentRunWorkflowID("tenant", "legacy-team"), info.WorkflowExecution.ID)
+		var kind string
+		require.NoError(t, converter.GetDefaultDataConverter().FromPayload(info.SearchAttributes.IndexedFields["RunKind"], &kind))
+		require.Equal(t, "agent", kind)
+	})
+	h.env.RegisterDelayedCallback(func() {
+		input := sessionMessage("legacy-team")
+		input.EntryKind = "team"
+		h.env.UpdateWorkflow(w.SubmitMessage, "legacy-team",
+			&testsuite.TestUpdateCallback{OnReject: func(err error) { require.NoError(t, err) },
+				OnComplete: func(_ any, err error) { require.NoError(t, err) }}, input)
+	}, time.Millisecond)
+	h.env.RegisterDelayedCallback(func() { h.env.SignalWorkflow(w.Archive, w.ArchiveInput{}) }, 11*time.Second)
+	h.env.ExecuteWorkflow(session.Run, h.in)
+	require.NoError(t, h.env.GetWorkflowError())
+	require.Len(t, h.started, 1)
+}

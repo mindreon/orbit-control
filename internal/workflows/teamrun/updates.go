@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
@@ -17,20 +18,30 @@ func rejected(code, message string) error {
 	return temporal.NewNonRetryableApplicationError(message, code, nil)
 }
 func textError() error { return rejected("TEAM_TEXT_TOO_LONG", "Team text exceeds its byte limit") }
-func (r *run) common(caller *contract.MemberName, request string) error {
+func (r *run) common(caller *contract.MemberName, request string) (bool, error) {
 	if _, ok := r.st.Applied[request]; ok {
-		return nil
+		return true, nil
 	}
 	if caller == nil || r.role(string(*caller)) == "" {
-		return rejected("TEAM_UNKNOWN_MEMBER", "Unknown caller")
+		return false, rejected("TEAM_UNKNOWN_MEMBER", "Unknown caller")
 	}
-	if _, ok := r.st.Active[string(*caller)]; !ok {
-		return rejected("TEAM_NOT_IN_TURN", "Caller has no active turn")
+	active, ok := r.st.Active[string(*caller)]
+	if !ok {
+		return false, rejected("TEAM_NOT_IN_TURN", "Caller has no active turn")
 	}
 	if w.Terminal(r.st.Status) || r.st.Finished {
-		return rejected("TEAM_FINISHED", "Team has finished")
+		return false, rejected("TEAM_FINISHED", "Team has finished")
 	}
-	return nil
+	count := 0
+	for _, entry := range r.st.Applied {
+		if entry.Member == string(*caller) && entry.Turn == active.Turn {
+			count++
+		}
+	}
+	if count >= team.AppliedPerTurnMax || len(request) > 256 {
+		return false, rejected("TEAM_TEXT_TOO_LONG", "Too many team writes in this turn; finish the turn before writing more")
+	}
+	return false, nil
 }
 func (r *run) leader(caller *contract.MemberName) error {
 	if caller == nil || string(*caller) != r.in.Team.Leader {
@@ -85,11 +96,8 @@ func (r *run) end(ctx workflow.Context, member string) {
 	}
 }
 func (r *run) validateCreate(in contract.CreateTasksInput) error {
-	if err := r.common(in.Caller, in.RequestId); err != nil {
+	if applied, err := r.common(in.Caller, in.RequestId); applied || err != nil {
 		return err
-	}
-	if r.applied(in.RequestId) {
-		return nil
 	}
 	if err := r.leader(in.Caller); err != nil {
 		return err
@@ -119,7 +127,11 @@ func (r *run) validateCreate(in contract.CreateTasksInput) error {
 			}
 		}
 	}
-	return r.capacity(in.Tasks)
+	tasks := make([]contract.TeamTask, len(in.Tasks))
+	for i, input := range in.Tasks {
+		tasks[i] = r.newTask(input, r.st.NextTask+i+1)
+	}
+	return r.capacity(tasks)
 }
 func (r *run) create(_ workflow.Context, in contract.CreateTasksInput) (contract.CreateTasksOutput, error) {
 	if applied, ok := r.st.Applied[in.RequestId]; ok {
@@ -130,20 +142,7 @@ func (r *run) create(_ workflow.Context, in contract.CreateTasksInput) (contract
 	out := contract.CreateTasksOutput{TaskIds: []string{}}
 	for _, input := range in.Tasks {
 		r.st.NextTask++
-		reviewers := slices.Clone(input.Reviewers)
-		if len(reviewers) == 0 {
-			for _, entry := range r.st.Board.Roster {
-				if entry.Role == "reviewer" {
-					reviewers = append(reviewers, entry.Name)
-				}
-			}
-		}
-		task := contract.TeamTask{TaskId: fmt.Sprintf("t%d", r.st.NextTask), Title: input.Title, Description: input.Description,
-			Deps: slices.Clone(input.Deps), Assignee: input.Assignee, NarrowedTools: slices.Clone(input.NarrowedTools),
-			Status: "pending", Failures: new(0), Review: &contract.TaskReview{Reviewers: reviewers, Round: new(0)}}
-		if !team.DependenciesReady(task, r.st.Board, r.active()) {
-			task.Status = "blocked"
-		}
+		task := r.newTask(input, r.st.NextTask)
 		r.st.Board.Tasks = append(r.st.Board.Tasks, task)
 		out.TaskIds = append(out.TaskIds, task.TaskId)
 		r.emit("team.task.created", contract.TeamTaskCreated{Task: task})
@@ -153,11 +152,8 @@ func (r *run) create(_ workflow.Context, in contract.CreateTasksInput) (contract
 	return out, nil
 }
 func (r *run) validateAssign(in contract.AssignTaskInput) error {
-	if err := r.common(in.Caller, in.RequestId); err != nil {
+	if applied, err := r.common(in.Caller, in.RequestId); applied || err != nil {
 		return err
-	}
-	if r.applied(in.RequestId) {
-		return nil
 	}
 	if err := r.leader(in.Caller); err != nil {
 		return err
@@ -166,7 +162,7 @@ func (r *run) validateAssign(in contract.AssignTaskInput) error {
 	if task == nil {
 		return rejected("TEAM_UNKNOWN_TASK", "Unknown task")
 	}
-	if task.Status != "pending" && task.Status != "blocked" && task.Status != "failed" {
+	if task.Status != "pending" && task.Status != "blocked" && (task.Status != "failed" || !team.CanTransition(task.Status, "pending")) {
 		return rejected("TEAM_BAD_TRANSITION", "Task cannot be assigned")
 	}
 	if r.role(string(in.Member)) != "teammate" {
@@ -175,7 +171,9 @@ func (r *run) validateAssign(in contract.AssignTaskInput) error {
 	if !team.ValidTools(in.NarrowedTools) {
 		return textError()
 	}
-	return r.capacity(in.NarrowedTools)
+	stored := *task
+	stored.Assignee, stored.NarrowedTools = new(in.Member), slices.Clone(in.NarrowedTools)
+	return r.taskCapacity(*task, stored)
 }
 func (r *run) assign(_ workflow.Context, in contract.AssignTaskInput) error {
 	if r.applied(in.RequestId) {
@@ -198,11 +196,8 @@ func (r *run) assign(_ workflow.Context, in contract.AssignTaskInput) error {
 	return nil
 }
 func (r *run) validateComplete(in contract.CompleteTaskInput) error {
-	if err := r.common(in.Caller, in.RequestId); err != nil {
+	if applied, err := r.common(in.Caller, in.RequestId); applied || err != nil {
 		return err
-	}
-	if r.applied(in.RequestId) {
-		return nil
 	}
 	task := r.task(in.TaskId)
 	if task == nil {
@@ -212,7 +207,7 @@ func (r *run) validateComplete(in contract.CompleteTaskInput) error {
 		return rejected("TEAM_NOT_ASSIGNEE", "Caller is not the assignee")
 	}
 	active := r.st.Active[string(*in.Caller)]
-	if task.Status != "in_progress" || active.Kind != "task" || active.TaskID != in.TaskId {
+	if !team.CanTransition(task.Status, "completed") || task.Status != "in_progress" || active.Kind != "task" || active.TaskID != in.TaskId {
 		return rejected("TEAM_BAD_TRANSITION", "Task is not in progress in this turn")
 	}
 	if len(in.ResultText) > team.ResultBytes || len(in.Files) > team.FilesMax {
@@ -223,10 +218,9 @@ func (r *run) validateComplete(in contract.CompleteTaskInput) error {
 			return textError()
 		}
 	}
-	return r.capacity(struct {
-		Result string
-		Files  []string
-	}{Result: in.ResultText, Files: in.Files})
+	stored := *task
+	stored.ResultText, stored.Files = new(in.ResultText), slices.Clone(in.Files)
+	return r.taskCapacity(*task, stored)
 }
 func (r *run) complete(ctx workflow.Context, in contract.CompleteTaskInput) error {
 	if r.applied(in.RequestId) {
@@ -247,11 +241,8 @@ func (r *run) completeTask(task *contract.TeamTask) {
 	}
 }
 func (r *run) validateVerdict(in contract.SubmitVerdictInput) error {
-	if err := r.common(in.Caller, in.RequestId); err != nil {
+	if applied, err := r.common(in.Caller, in.RequestId); applied || err != nil {
 		return err
-	}
-	if r.applied(in.RequestId) {
-		return nil
 	}
 	task := r.task(in.TaskId)
 	if task == nil {
@@ -261,7 +252,7 @@ func (r *run) validateVerdict(in contract.SubmitVerdictInput) error {
 		return rejected("TEAM_NOT_REVIEWER", "Caller is not a reviewer")
 	}
 	active := r.st.Active[string(*in.Caller)]
-	if task.Status != "in_review" || active.Kind != "review" || active.TaskID != in.TaskId {
+	if !team.CanTransition(task.Status, "completed") || task.Status != "in_review" || active.Kind != "review" || active.TaskID != in.TaskId {
 		return rejected("TEAM_BAD_TRANSITION", "Task is not in review in this turn")
 	}
 	for _, vote := range task.Review.Votes {
@@ -272,7 +263,8 @@ func (r *run) validateVerdict(in contract.SubmitVerdictInput) error {
 	if len(in.Comment) > team.CommentBytes {
 		return textError()
 	}
-	return r.capacity(contract.ReviewVote{Reviewer: *in.Caller, Verdict: in.Verdict, Comment: in.Comment})
+	vote := contract.ReviewVote{Reviewer: *in.Caller, Verdict: in.Verdict, Comment: in.Comment}
+	return r.capacity([]contract.ReviewVote{vote})
 }
 func (r *run) verdict(ctx workflow.Context, in contract.SubmitVerdictInput) error {
 	if r.applied(in.RequestId) {
@@ -287,6 +279,10 @@ func (r *run) verdict(ctx workflow.Context, in contract.SubmitVerdictInput) erro
 }
 func (r *run) settle(ctx workflow.Context, task *contract.TeamTask) {
 	status, review := team.Settle(*task, r.in.Team.ReviewMaxRounds)
+	if status != task.Status && !team.CanTransition(task.Status, status) {
+		r.failure = "INVALID_SPEC"
+		return
+	}
 	task.Status, task.Review = status, &review
 	if status == "failed" {
 		r.st.Escalations = append(r.st.Escalations, task.TaskId)
@@ -302,11 +298,8 @@ func (r *run) settle(ctx workflow.Context, task *contract.TeamTask) {
 	r.updated(task, false)
 }
 func (r *run) validateSend(in contract.SendMessageInput) error {
-	if err := r.common(in.Caller, in.RequestId); err != nil {
+	if applied, err := r.common(in.Caller, in.RequestId); applied || err != nil {
 		return err
-	}
-	if r.applied(in.RequestId) {
-		return nil
 	}
 	if r.role(string(in.To)) == "" || in.To == *in.Caller {
 		return rejected("TEAM_UNKNOWN_MEMBER", "Invalid recipient")
@@ -322,7 +315,7 @@ func (r *run) validateSend(in contract.SendMessageInput) error {
 }
 func (r *run) mail(in contract.SendMessageInput) contract.MailboxMessage {
 	return contract.MailboxMessage{MessageId: fmt.Sprintf("m%d", r.st.NextMail+1), From: string(*in.Caller),
-		Text: new(in.Text), SentAt: r.now}
+		Text: new(in.Text), SentAt: time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)}
 }
 func (r *run) send(ctx workflow.Context, in contract.SendMessageInput) error {
 	if r.applied(in.RequestId) {
@@ -334,8 +327,6 @@ func (r *run) send(ctx workflow.Context, in contract.SendMessageInput) error {
 	to := string(in.To)
 	r.st.Mail[to] = append(r.st.Mail[to], msg)
 	if active, ok := r.st.Active[to]; ok {
-		active.SentMail = append(active.SentMail, msg.MessageId)
-		r.st.Active[to] = active
 		r.signal(ctx, active, w.Deliver, w.DeliverInput{Mailbox: []contract.MailboxMessage{msg}})
 	}
 	r.emit("team.message", contract.TeamMessage{From: *in.Caller, To: in.To, Text: new(in.Text), MessageId: msg.MessageId})
@@ -343,11 +334,8 @@ func (r *run) send(ctx workflow.Context, in contract.SendMessageInput) error {
 	return nil
 }
 func (r *run) validateFinish(in contract.FinishTeamInput) error {
-	if err := r.common(in.Caller, in.RequestId); err != nil {
+	if applied, err := r.common(in.Caller, in.RequestId); applied || err != nil {
 		return err
-	}
-	if r.applied(in.RequestId) {
-		return nil
 	}
 	if err := r.leader(in.Caller); err != nil {
 		return err
@@ -369,7 +357,7 @@ func (r *run) finish(ctx workflow.Context, in contract.FinishTeamInput) error {
 	r.st.Finished, r.st.Summary = true, team.TruncateEncoded(in.Summary, team.SummaryBytes)
 	for i := range r.st.Board.Tasks {
 		task := &r.st.Board.Tasks[i]
-		if task.Status == "pending" || task.Status == "blocked" {
+		if (task.Status == "pending" || task.Status == "blocked") && team.CanTransition(task.Status, "cancelled") {
 			task.Status = "cancelled"
 			r.updated(task, false)
 		}
@@ -399,19 +387,44 @@ func (r *run) register(ctx workflow.Context) error {
 	return workflow.SetUpdateHandlerWithOptions(ctx, w.Steer, func(ctx workflow.Context, in w.SteerInput) (w.SteerOutput, error) {
 		r.st.UserSteer = append(r.st.UserSteer, contract.SteerItem{ContentRef: new(in.ContentRef)})
 		if active, ok := r.st.Active[r.in.Team.Leader]; ok {
-			active.SentSteer = append(active.SentSteer, in.ContentRef)
-			r.st.Active[r.in.Team.Leader] = active
 			r.signal(ctx, active, w.Deliver, w.DeliverInput{Steer: []contract.SteerItem{{ContentRef: new(in.ContentRef)}}})
 		}
 		r.st.Dirty, r.st.Steps = true, r.st.Steps+1
 		return w.SteerOutput{Queued: len(r.st.UserSteer)}, nil
 	}, workflow.UpdateHandlerOptions{Validator: func(in w.SteerInput) error {
 		if w.Terminal(r.st.Status) || r.st.Finished {
-			return rejected("TEAM_FINISHED", "Team has finished")
+			return rejected("RUN_NOT_ACTIVE", "Run is not active")
 		}
-		if len(r.st.UserSteer) >= team.SteerCap || !strings.HasPrefix(in.ContentRef, "t/"+r.in.TenantID+"/runs/"+r.in.RunID+"/steer/") {
-			return rejected("TEAM_TEXT_TOO_LONG", "Invalid or full steer queue")
+		if len(r.st.UserSteer) >= team.SteerCap {
+			return rejected("QUEUE_FULL", "Steer queue is full")
+		}
+		if !strings.HasPrefix(in.ContentRef, "t/"+r.in.TenantID+"/runs/"+r.in.RunID+"/steer/") {
+			return rejected("RUN_NOT_ACTIVE", "Run is not active")
 		}
 		return nil
 	}})
+}
+
+func (r *run) newTask(input contract.NewTask, id int) contract.TeamTask {
+	reviewers := slices.Clone(input.Reviewers)
+	if len(reviewers) == 0 {
+		for _, entry := range r.st.Board.Roster {
+			if entry.Role == "reviewer" {
+				reviewers = append(reviewers, entry.Name)
+			}
+		}
+	}
+	task := contract.TeamTask{TaskId: fmt.Sprintf("t%d", id), Title: input.Title, Description: input.Description,
+		Deps: slices.Clone(input.Deps), Assignee: input.Assignee, NarrowedTools: slices.Clone(input.NarrowedTools),
+		Status: "pending", Failures: new(0), Review: &contract.TaskReview{Reviewers: reviewers, Round: new(0)}}
+	if !team.DependenciesReady(task, r.st.Board, r.active()) {
+		task.Status = "blocked"
+	}
+	return task
+}
+func (r *run) taskCapacity(old, next contract.TeamTask) error {
+	if team.EncodedLen(r.st.Board)-team.EncodedLen(old)+team.EncodedLen(next) > team.BoardBytesMax {
+		return rejected("TEAM_TEXT_TOO_LONG", "The team board is full; shorten task text")
+	}
+	return nil
 }

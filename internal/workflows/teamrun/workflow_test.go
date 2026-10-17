@@ -1,6 +1,7 @@
 package teamrun
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -74,12 +75,12 @@ func TestRejectRoundsEscalateAndReassign(t *testing.T) {
 	h.at(5*sec, func() { h.create("leader", "c1", newTask("t1", "alice")) })
 	for round := range 3 {
 		request := string(rune('1' + round))
-		h.at(time.Duration(7+8*round)*sec, func() { h.completeTask("alice", "a"+request, "t1") })
-		h.at(time.Duration(13+8*round)*sec, func() { h.verdict("reviewer", "v"+request, "t1", "reject") })
+		h.at(time.Duration(7+12*round)*sec, func() { h.completeTask("alice", "a"+request, "t1") })
+		h.at(time.Duration(13+12*round)*sec, func() { h.verdict("reviewer", "v"+request, "t1", "reject") })
 		h.turn("alice", round+1, 6*sec, w.TurnResult{Status: "ended"})
 		h.turn("reviewer", round+1, 6*sec, w.TurnResult{Status: "ended"})
 	}
-	h.at(31*sec, func() {
+	h.at(40*sec, func() {
 		h.update("AssignTask", "as1", contract.AssignTaskInput{Caller: h.member("leader"), RequestId: "as1", TaskId: "t1", Member: "bob"})
 	})
 	h.turn("leader", 1, 20*sec, w.TurnResult{Status: "completed"})
@@ -87,7 +88,7 @@ func TestRejectRoundsEscalateAndReassign(t *testing.T) {
 	require.NoError(t, h.run())
 	leader := h.startsOf("leader")
 	require.Len(t, leader, 2)
-	require.Equal(t, 29*sec, leader[1].At, "the escalation wakes the idle leader at the third reject")
+	require.Equal(t, 37*sec, leader[1].At, "the escalation wakes the idle leader at the third reject")
 	require.Contains(t, *leader[1].In.Input.Text, "[Tasks Escalated]")
 	require.Len(t, h.startsOf("bob"), 1)
 	require.True(t, h.sawStatus("t1", "failed"))
@@ -145,7 +146,7 @@ func TestSendMessageDeliveryPaths(t *testing.T) {
 	h.at(11*sec, func() { m2 = h.send("leader", "m2", "bob", "to bob") })
 	h.at(12*sec, func() { h.completeTask("alice", "a1", "t1") })
 	h.at(30*sec, func() { h.create("leader", "c2", newTask("t2", "alice")) })
-	h.at(31*sec, func() { h.create("leader", "c3", newTask("t3", "bob")) })
+	h.at(40*sec, func() { h.create("leader", "c3", newTask("t3", "bob")) })
 	h.turn("leader", 1, 300*sec, w.TurnResult{Status: "ended"})
 	h.turn("alice", 1, 20*sec, w.TurnResult{Status: "ended"})
 	h.cancelAt(100 * sec)
@@ -502,4 +503,142 @@ func TestRunDeadlineTimesOutAndCancelsTurns(t *testing.T) {
 	signals := h.signalsNamed(w.Cancel)
 	require.NotEmpty(t, signals)
 	require.Equal(t, 600*sec, signals[0].At)
+}
+
+func TestDeliveredTaskIgnoresLateTurnFailures(t *testing.T) {
+	for _, result := range []w.TurnResult{{Status: "budget_exhausted"}, {Status: "failed", Code: "SEGMENT_LIMIT"}, {Status: "timed_out"}} {
+		t.Run(result.Status, func(t *testing.T) {
+			h := newHarness(t)
+			h.at(5*sec, func() { h.create("leader", "create", newTask("t1", "alice")) })
+			h.at(10*sec, func() { h.completeTask("alice", "complete", "t1") })
+			h.turn("leader", 1, 100*sec, w.TurnResult{Status: "ended"})
+			h.turn("alice", 1, 20*sec, result)
+			h.cancelAt(40 * sec)
+			require.NoError(t, h.run())
+			require.Len(t, h.startsOf("alice"), 1, "an already delivered task must not be requeued")
+			require.NotEmpty(t, h.startsOf("reviewer"), "the delivery still proceeds to review")
+		})
+	}
+}
+
+func TestReviewCancellationAndBudgetDoNotVote(t *testing.T) {
+	for _, status := range []string{"cancelled", "budget_exhausted"} {
+		t.Run(status, func(t *testing.T) {
+			h := newHarness(t)
+			h.at(5*sec, func() { h.create("leader", "create", newTask("t1", "alice")) })
+			h.turn("leader", 1, 100*sec, w.TurnResult{Status: "ended"})
+			h.turn("alice", 1, 10*sec, w.TurnResult{Status: "completed"})
+			h.turn("reviewer", 1, 5*sec, w.TurnResult{Status: status})
+			h.turn("reviewer", 2, 100*sec, w.TurnResult{Status: "cancelled"})
+			h.cancelAt(30 * sec)
+			require.NoError(t, h.run())
+			for _, board := range h.boards {
+				for _, task := range board.Board.Tasks {
+					require.Empty(t, task.Review.Votes)
+					require.Zero(t, *task.Review.Round)
+				}
+			}
+		})
+	}
+}
+
+func TestRejectWaitsForOtherReviewTurnBeforeRework(t *testing.T) {
+	h := newHarness(t)
+	h.in.Team.Roster = append(h.in.Team.Roster, contract.RosterEntry{Name: "reviewer2", Role: "reviewer", Status: "idle"})
+	h.at(5*sec, func() { h.create("leader", "create", newTask("t1", "alice")) })
+	h.turn("leader", 1, 100*sec, w.TurnResult{Status: "ended"})
+	h.turn("alice", 1, 10*sec, w.TurnResult{Status: "completed"})
+	h.at(20*sec, func() { h.verdict("reviewer", "reject", "t1", "reject") })
+	h.turn("reviewer", 1, 10*sec, w.TurnResult{Status: "ended"})
+	h.turn("reviewer2", 1, 30*sec, w.TurnResult{Status: "ended"})
+	h.cancelAt(55 * sec)
+	require.NoError(t, h.run())
+	starts := h.startsOf("alice")
+	require.Len(t, starts, 2)
+	require.GreaterOrEqual(t, starts[1].At, 45*sec)
+}
+
+func TestLeaderPlatformFailureKeepsItsCode(t *testing.T) {
+	for _, code := range []string{"TURN_LOST", "CHECKPOINT_CONFLICT"} {
+		t.Run(code, func(t *testing.T) {
+			h := newHarness(t)
+			h.turn("leader", 1, sec, w.TurnResult{Status: "failed", Code: code})
+			require.NoError(t, h.run())
+			require.Equal(t, "failed", h.final.Status)
+			require.Equal(t, code, h.final.Code)
+		})
+	}
+}
+
+func TestProjectionFailuresFinalizeTheRun(t *testing.T) {
+	for activity, code := range map[string]string{"PrepareTeamRun": "PREPARE_FAILED", "SetRunStatus": "STATUS_FAILED",
+		"RecordBoard": "RECORD_BOARD_FAILED"} {
+		t.Run(activity, func(t *testing.T) {
+			h := newHarness(t)
+			h.failActivity = activity
+			h.at(5*sec, func() {
+				if activity == "SetRunStatus" {
+					h.env.SignalWorkflow(w.Pause, w.ActorInput{})
+				} else {
+					h.create("leader", "create", newTask("t1", "alice"))
+				}
+			})
+			require.NoError(t, h.run())
+			require.NotNil(t, h.final)
+			require.Equal(t, "failed", h.final.Status)
+			require.Equal(t, code, h.final.Code)
+			count := 0
+			for _, name := range h.calls {
+				if name == activity {
+					count++
+				}
+			}
+			require.GreaterOrEqual(t, count, 5, "persistent failures must exhaust the real Activity retry policy")
+		})
+	}
+}
+
+func TestFinalizationFailureReturnsTheActivityError(t *testing.T) {
+	h := newHarness(t)
+	h.failActivity = "FinalizeTeamRun"
+	h.cancelAt(sec)
+	require.Error(t, h.run())
+	require.NotNil(t, h.final)
+}
+
+func TestPauseResumeArrivalOrder(t *testing.T) {
+	for _, names := range [][]string{{w.Resume, w.Pause}, {w.Pause, w.Resume}} {
+		t.Run(names[0], func(t *testing.T) {
+			h := newHarness(t)
+			h.at(sec, func() {
+				for _, name := range names {
+					h.env.SignalWorkflow(name, w.ActorInput{})
+				}
+			})
+			h.cancelAt(5 * sec)
+			require.NoError(t, h.run())
+			require.NotEmpty(t, h.statuses)
+			want := "running"
+			if names[1] == w.Pause {
+				want = "paused"
+			}
+			require.Equal(t, want, h.statuses[len(h.statuses)-1].Status)
+		})
+	}
+}
+
+func TestPublicSteerUsesAgentErrorCodes(t *testing.T) {
+	h := newHarness(t)
+	var invalid, overflow *outcome
+	h.at(sec, func() {
+		invalid = h.update(w.Steer, "invalid", w.SteerInput{ContentRef: "t/other/runs/run/steer/a"})
+		for i := range team.SteerCap {
+			h.update(w.Steer, fmt.Sprint(i), w.SteerInput{ContentRef: fmt.Sprintf("t/tenant/runs/run/steer/%d", i)})
+		}
+		overflow = h.update(w.Steer, "overflow", w.SteerInput{ContentRef: "t/tenant/runs/run/steer/overflow"})
+	})
+	h.cancelAt(5 * sec)
+	require.NoError(t, h.run())
+	requireCode(t, invalid.Err, "RUN_NOT_ACTIVE")
+	requireCode(t, overflow.Err, "QUEUE_FULL")
 }

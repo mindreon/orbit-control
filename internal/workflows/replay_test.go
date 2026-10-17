@@ -11,6 +11,7 @@ import (
 	"go.temporal.io/api/enums/v1"
 	historypb "go.temporal.io/api/history/v1"
 	"go.temporal.io/sdk/converter"
+	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -36,7 +37,9 @@ func TestReplay(t *testing.T) {
 			history := &historypb.History{}
 			require.NoError(t, protojson.Unmarshal(raw, history))
 			assertHistoryScenario(t, strings.TrimSuffix(filepath.Base(path), ".json"), history)
-			replayer := worker.NewWorkflowReplayer()
+			replayer, err := worker.NewWorkflowReplayerWithOptions(
+				worker.WorkflowReplayerOptions{Interceptors: []interceptor.WorkerInterceptor{&teamrun.SignalInterceptor{}}})
+			require.NoError(t, err)
 			replayer.RegisterWorkflowWithOptions(agentrun.Run, workflow.RegisterOptions{Name: w.AgentRunWorkflow})
 			replayer.RegisterWorkflowWithOptions(session.Run, workflow.RegisterOptions{Name: w.SessionWorkflow})
 			replayer.RegisterWorkflowWithOptions(sandboxlease.Run, workflow.RegisterOptions{Name: w.SandboxLeaseWorkflow})
@@ -190,6 +193,15 @@ func assertHistoryScenario(t *testing.T, name string, history *historypb.History
 		require.Contains(t, types, enums.EVENT_TYPE_ACTIVITY_TASK_CANCEL_REQUESTED,
 			"the wait Activity is cancelled and re-created by the next run")
 	case "teamrun-cancel":
+		require.Equal(t, []string{w.Resume, w.Pause, w.Resume, w.Pause, w.Resume}, receivedPauseSignals(history))
+		timers := 0
+		for _, event := range history.Events {
+			if timer := event.GetTimerStartedEventAttributes(); timer != nil && timer.StartToFireTimeout.AsDuration() == 4*time.Hour {
+				timers++
+			}
+		}
+		require.Equal(t, 1, timers, "one deadline timer per execution, not per loop iteration")
+
 		finals := historyInputs[w.FinalizeTeamInput](t, history, "FinalizeTeamRun")
 		require.Len(t, finals, 1)
 		require.Equal(t, "cancelled", finals[0].Status)
@@ -248,4 +260,15 @@ func assertLeaseHistory(t *testing.T, history *historypb.History) {
 	for _, in := range creates {
 		require.Equal(t, contract.SandboxProviderOpensandbox, in.Provider)
 	}
+}
+
+func receivedPauseSignals(history *historypb.History) []string {
+	out := []string{}
+	for _, event := range history.Events {
+		if signal := event.GetWorkflowExecutionSignaledEventAttributes(); signal != nil &&
+			(signal.SignalName == w.Pause || signal.SignalName == w.Resume) {
+			out = append(out, signal.SignalName)
+		}
+	}
+	return out
 }

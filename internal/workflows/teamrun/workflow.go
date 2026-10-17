@@ -21,7 +21,6 @@ type boardView struct {
 type run struct {
 	in           w.TeamRunInput
 	st           *w.TeamCarry
-	now          time.Time
 	waitCtx      workflow.Context
 	results      []w.TurnResult
 	pending      []workflow.Future
@@ -38,7 +37,7 @@ func Run(ctx workflow.Context, in w.TeamRunInput) error {
 	}
 	waitCtx, cancelWait := workflow.NewDisconnectedContext(ctx)
 	defer cancelWait()
-	r := &run{in: in, st: in.Carry, now: workflow.Now(ctx), waitCtx: waitCtx, limit: limit}
+	r := &run{in: in, st: in.Carry, waitCtx: waitCtx, limit: limit}
 	if r.st == nil {
 		r.st = &w.TeamCarry{Status: "running", Board: contract.TeamBoard{Roster: slices.Clone(in.Team.Roster)},
 			Mail: map[string][]contract.MailboxMessage{}, Cursors: map[string]w.MemberCursor{}, Active: map[string]w.ActiveTurn{},
@@ -47,10 +46,15 @@ func Run(ctx workflow.Context, in w.TeamRunInput) error {
 	if err := r.register(ctx); err != nil {
 		return err
 	}
+	r.registerPauseSignals(ctx)
+	deadlineCtx, cancelDeadline := workflow.WithCancel(ctx)
+	defer cancelDeadline()
+	deadline := workflow.NewTimer(deadlineCtx,
+		max(r.st.StartedAt.Add(time.Duration(in.Limits.MaxActiveSeconds)*time.Second).Sub(workflow.Now(ctx)), 0))
 	if in.Carry == nil {
 		if err := r.exec(ctx, "PrepareTeamRun", w.PrepareTeamInput{RunOp: r.op(ctx), Budget: in.BudgetMillicredits,
 			Team: in.Team, Board: r.st.Board}, nil); err != nil {
-			return err
+			return r.shutdown(ctx, "failed", "PREPARE_FAILED")
 		}
 		if err := r.exec(ctx, "AcquireSandbox", w.AcquireSandboxInput{RunOp: r.op(ctx), Spec: in.Sandbox,
 			LockID: in.Lock.Id, Holder: in.RunID}, &r.st.Lease); err != nil {
@@ -76,13 +80,14 @@ func Run(ctx workflow.Context, in w.TeamRunInput) error {
 			if r.st.Paused {
 				status = "paused"
 			}
-			if err := r.exec(ctx, "SetRunStatus", w.StatusInput{RunOp: r.op(ctx), Status: status}, nil); err != nil {
-				return err
-			}
+			// Clear before yielding: a signal received during the Activity must request another write.
 			r.pauseChanged = false
+			if err := r.exec(ctx, "SetRunStatus", w.StatusInput{RunOp: r.op(ctx), Status: status}, nil); err != nil {
+				return r.shutdown(ctx, "failed", "STATUS_FAILED")
+			}
 		}
 		if err := r.flush(ctx); err != nil {
-			return err
+			return r.shutdown(ctx, "failed", "RECORD_BOARD_FAILED")
 		}
 		if status, code := r.terminal(ctx); status != "" {
 			return r.shutdown(ctx, status, code)
@@ -110,7 +115,8 @@ func Run(ctx workflow.Context, in w.TeamRunInput) error {
 		r.collectPending(ctx)
 		r.drain(ctx)
 		if len(r.results) == 0 && !r.st.Dirty && len(r.st.Outbox) == 0 && len(r.pending) == 0 &&
-			workflow.AllHandlersFinished(ctx) && (r.st.Steps >= r.limit || workflow.GetInfo(ctx).GetContinueAsNewSuggested()) {
+			!r.pauseChanged && !r.pausePending(ctx) && workflow.AllHandlersFinished(ctx) &&
+			(r.st.Steps >= r.limit || workflow.GetInfo(ctx).GetContinueAsNewSuggested()) {
 			r.st.Steps = 0
 			in.Carry = r.st
 			return workflow.NewContinueAsNewError(ctx, w.TeamRunWorkflow, in)
@@ -118,9 +124,8 @@ func Run(ctx workflow.Context, in w.TeamRunInput) error {
 		if r.st.Dirty || len(r.results) > 0 {
 			continue
 		}
-		remaining := r.st.StartedAt.Add(time.Duration(in.Limits.MaxActiveSeconds) * time.Second).Sub(workflow.Now(ctx))
-		_, err := workflow.AwaitWithTimeout(ctx, max(remaining, 0), func() bool {
-			return len(r.results) > 0 || r.st.Dirty || r.signals(ctx) || ctx.Err() != nil || r.readyPending()
+		err := workflow.Await(ctx, func() bool {
+			return deadline.IsReady() || r.pauseChanged || len(r.results) > 0 || r.st.Dirty || r.signals(ctx) || ctx.Err() != nil || r.readyPending()
 		})
 		if err != nil && ctx.Err() == nil {
 			return err
@@ -213,6 +218,10 @@ func (r *run) start(ctx workflow.Context, action team.Action, input contract.Seg
 		task := r.task(action.TaskID)
 		brief = &contract.TeamTaskBrief{TaskId: task.TaskId, Title: task.Title, Description: task.Description, NarrowedTools: task.NarrowedTools}
 		if action.Kind == "task" {
+			if !team.CanTransition(task.Status, "in_progress") {
+				r.failure = "INVALID_SPEC"
+				return
+			}
 			task.Status = "in_progress"
 			task.Attempts++
 			r.updated(task, false)
@@ -242,14 +251,6 @@ func (r *run) start(ctx workflow.Context, action team.Action, input contract.Seg
 		return
 	}
 	active := w.ActiveTurn{Member: action.Member, Turn: cursor.Turn, Kind: action.Kind, TaskID: action.TaskID}
-	for _, item := range mail {
-		active.SentMail = append(active.SentMail, item.MessageId)
-	}
-	for _, item := range steer {
-		if item.ContentRef != nil {
-			active.SentSteer = append(active.SentSteer, *item.ContentRef)
-		}
-	}
 	r.st.Active[action.Member] = active
 	r.wait(active)
 	r.emit("team.member.status",
@@ -287,7 +288,11 @@ func (r *run) result(ctx workflow.Context, result w.TurnResult) {
 		}
 	}
 	r.st.Steps++
-	if active.Kind == "lead" {
+	invariant := result.Status != "ended" && team.Classify(result.Code) == team.Invariant
+	if invariant {
+		r.failure = result.Code
+	}
+	if active.Kind == "lead" && !invariant {
 		if result.Final != nil {
 			final := *result.Final
 			final.TextPreview = team.TruncateEncoded(final.TextPreview, team.SummaryBytes)
@@ -309,19 +314,18 @@ func (r *run) result(ctx workflow.Context, result w.TurnResult) {
 		default:
 			r.failure = "LEADER_FAILED"
 		}
-	} else {
+	} else if active.Kind != "lead" && !invariant {
 		task := r.task(active.TaskID)
-		if team.Classify(result.Code) == team.Invariant {
-			r.failure = result.Code
-		}
 		if active.Kind == "review" {
-			if result.Status != "ended" && task.Status == "in_review" && task.Review != nil &&
+			if result.Status != "ended" && result.Status != "cancelled" &&
+				result.Status != "budget_exhausted" && task.Status == "in_review" &&
+				task.Review != nil &&
 				!slices.ContainsFunc(task.Review.Votes, func(v contract.ReviewVote) bool { return string(v.Reviewer) == result.Member }) {
 				task.Review.Votes = append(task.Review.Votes, contract.ReviewVote{Reviewer: contract.MemberName(result.Member),
 					Verdict: "reject", Comment: "reviewer did not submit a verdict"})
 				r.settle(ctx, task)
 			}
-		} else {
+		} else if task.Status == "in_progress" {
 			switch result.Status {
 			case "ended", "cancelled":
 			case "completed":
@@ -467,19 +471,19 @@ func (r *run) shutdown(ctx workflow.Context, status, code string) error {
 	}
 	for i := range r.st.Board.Tasks {
 		task := &r.st.Board.Tasks[i]
-		if !team.Terminal(task.Status) {
+		if !team.Terminal(task.Status) && team.CanTransition(task.Status, "cancelled") {
 			task.Status = "cancelled"
 			r.updated(task, false)
 		}
 	}
 	if err := r.flush(ctx); err != nil {
-		return err
+		workflow.GetLogger(ctx).Error("final board flush failed", "error", err)
 	}
 	return r.exec(ctx, "FinalizeTeamRun",
 		w.FinalizeTeamInput{RunOp: r.op(ctx), Status: status, Code: code, Summary: r.st.Summary, Board: r.st.Board}, nil)
 }
 func (r *run) signals(ctx workflow.Context) bool {
-	for _, name := range []string{w.Cancel, w.Pause, w.Resume, w.AssetSuspended} {
+	for _, name := range []string{w.Cancel, pauseSignal, w.AssetSuspended} {
 		if workflow.GetSignalChannel(ctx, name).Len() > 0 {
 			return true
 		}
@@ -490,7 +494,7 @@ func (r *run) drain(ctx workflow.Context) {
 	if ctx.Err() != nil && r.st.Cancel == nil {
 		r.st.Cancel = &w.CancelInput{Reason: "parent_cancelled"}
 	}
-	for _, name := range []string{w.Cancel, w.Pause, w.Resume, w.AssetSuspended} {
+	for _, name := range []string{w.Cancel, w.AssetSuspended} {
 		ch := workflow.GetSignalChannel(ctx, name)
 		for ch.Len() > 0 {
 			var input any
@@ -502,12 +506,6 @@ func (r *run) drain(ctx workflow.Context) {
 				if r.st.Cancel == nil {
 					r.st.Cancel = &in
 				}
-			case w.Pause, w.Resume:
-				var in w.ActorInput
-				ch.ReceiveAsync(&in)
-				input = in
-				r.st.Paused = name == w.Pause
-				r.pauseChanged = true
 			case w.AssetSuspended:
 				var in w.AssetSuspendedInput
 				ch.ReceiveAsync(&in)

@@ -33,10 +33,9 @@ type MemberCursor struct {
 	ActiveSeconds          int64
 }
 type ActiveTurn struct {
-	Member              string
-	Turn                int
-	Kind, TaskID        string
-	SentMail, SentSteer []string
+	Member       string
+	Turn         int
+	Kind, TaskID string
 }
 type AppliedUpdate struct {
 	Member string
@@ -70,7 +69,6 @@ type TeamCarry struct {
 	Outbox                   []TeamEvent
 	Dirty                    bool
 	Lease                    contract.SandboxLease
-	Acquisitions             int
 }
 type MemberTaskInput struct {
 	V                                                    int

@@ -15,8 +15,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/converter"
+	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
+	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 
 	"github.com/mindreon/orbit-control/internal/contract"
@@ -84,6 +86,7 @@ type harness struct {
 	signalDelay   time.Duration
 	seq           int
 	onMemberStart func(w.MemberTaskInput)
+	failActivity  string
 }
 
 func roster() []contract.RosterEntry {
@@ -144,6 +147,7 @@ func (h *harness) remaining(member string, turn int, after time.Duration) time.D
 func (h *harness) newEnv() {
 	var suite testsuite.WorkflowTestSuite
 	h.env = suite.NewTestWorkflowEnvironment()
+	h.env.SetWorkerOptions(worker.Options{Interceptors: []interceptor.WorkerInterceptor{&SignalInterceptor{}}})
 	// Every execution continues the same virtual clock, so StartedAt arithmetic survives Continue-As-New.
 	h.env.SetStartTime(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Add(h.epoch))
 	h.base = h.env.Now()
@@ -180,27 +184,28 @@ func (h *harness) newEnv() {
 		}
 		return w.TurnResult{}, workflow.Sleep(ctx, 24*time.Hour)
 	}, workflow.RegisterOptions{Name: w.MemberTaskWorkflow})
-	h.record("PrepareTeamRun", func(context.Context, w.PrepareTeamInput) error { return nil })
+	h.record("PrepareTeamRun", func(context.Context, w.PrepareTeamInput) error { return h.activityError("PrepareTeamRun") })
 	h.record("SetRunStatus", func(_ context.Context, in w.StatusInput) error {
 		h.mu.Lock()
 		h.statuses = append(h.statuses, in)
 		h.mu.Unlock()
-		return nil
+		return h.activityError("SetRunStatus")
 	})
-	h.record("AcquireSandbox", func(context.Context, w.AcquireSandboxInput) (contract.SandboxLease, error) {
+	h.record("AcquireSandbox", func(_ context.Context, in w.AcquireSandboxInput) (contract.SandboxLease, error) {
+		require.Equal(h.t, w.MemberTeam, in.Member, "the initial sandbox belongs to the team, not the zero member")
 		return contract.SandboxLease{Provider: "local", SandboxId: "sandbox"}, nil
 	})
 	h.record("RecordBoard", func(_ context.Context, in w.RecordBoardInput) error {
 		h.mu.Lock()
 		h.boards = append(h.boards, in)
 		h.mu.Unlock()
-		return nil
+		return h.activityError("RecordBoard")
 	})
 	h.record("FinalizeTeamRun", func(_ context.Context, in w.FinalizeTeamInput) error {
 		h.mu.Lock()
 		h.final = &in
 		h.mu.Unlock()
-		return nil
+		return h.activityError("FinalizeTeamRun")
 	})
 	h.env.RegisterActivityWithOptions(func(context.Context, w.TurnOp) (w.TurnResult, error) { return w.TurnResult{}, nil },
 		activity.RegisterOptions{Name: "WaitForTurn"})
@@ -435,4 +440,11 @@ func needTurns(t *testing.T, n int) {
 	if team.MaxTurnsTotal < n {
 		t.Skipf("needs %d turns; this build allows %d", n, team.MaxTurnsTotal)
 	}
+}
+
+func (h *harness) activityError(name string) error {
+	if h.failActivity == name {
+		return errors.New("persistent projection failure")
+	}
+	return nil
 }

@@ -20,6 +20,7 @@ import (
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
@@ -450,7 +451,9 @@ func save(t *testing.T, c client.Client, id, runID, name string) {
 		history.Events = append(history.Events, ev)
 	}
 	require.NotEmpty(t, history.Events)
-	replayer := worker.NewWorkflowReplayer()
+	replayer, err := worker.NewWorkflowReplayerWithOptions(
+		worker.WorkflowReplayerOptions{Interceptors: []interceptor.WorkerInterceptor{&teamrun.SignalInterceptor{}}})
+	require.NoError(t, err)
 	replayer.RegisterWorkflowWithOptions(agentrun.Run, workflow.RegisterOptions{Name: w.AgentRunWorkflow})
 	replayer.RegisterWorkflowWithOptions(session.Run, workflow.RegisterOptions{Name: w.SessionWorkflow})
 	replayer.RegisterWorkflowWithOptions(sandboxlease.Run, workflow.RegisterOptions{Name: w.SandboxLeaseWorkflow})

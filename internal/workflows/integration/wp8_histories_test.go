@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 
@@ -140,14 +141,14 @@ func TestRecordWP8Histories(t *testing.T) {
 	c := devClient(t)
 	f := &fixtures{calls: map[string]int{}}
 	queue := "wp8-record-" + time.Now().Format("150405.000000")
-	ctl := worker.New(c, contract.TaskQueueCtl, worker.Options{})
+	ctl := worker.New(c, contract.TaskQueueCtl, worker.Options{Interceptors: []interceptor.WorkerInterceptor{&teamrun.SignalInterceptor{}}})
 	registerFixtures(ctl, f)
 	registerWP8(ctl, c)
 	wait := worker.New(c, w.TaskQueueCtlWait, worker.Options{})
 	registerWP8(wait, c)
 	agent := worker.New(c, contract.TaskQueueAgentStandard, worker.Options{})
 	agent.RegisterActivityWithOptions(wp8Segment(c), activity.RegisterOptions{Name: contract.ActivityRunAgentSegment})
-	root := worker.New(c, queue, worker.Options{})
+	root := worker.New(c, queue, worker.Options{Interceptors: []interceptor.WorkerInterceptor{&teamrun.SignalInterceptor{}}})
 	registerFixtures(root, f)
 	registerWP8(root, c)
 	for _, reg := range []worker.Worker{ctl, wait, agent, root} {
@@ -162,6 +163,9 @@ func TestRecordWP8Histories(t *testing.T) {
 			require.NoError(t, err)
 			first := run.GetRunID()
 			if name == "teamrun-cancel" {
+				for _, signal := range []string{w.Resume, w.Pause, w.Resume, w.Pause, w.Resume} {
+					require.NoError(t, c.SignalWorkflow(t.Context(), run.GetID(), "", signal, w.ActorInput{}))
+				}
 				time.AfterFunc(300*time.Millisecond, func() {
 					_ = c.SignalWorkflow(context.Background(), run.GetID(), "", w.Cancel, w.CancelInput{Reason: "recorded"})
 				})

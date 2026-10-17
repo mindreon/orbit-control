@@ -228,18 +228,23 @@ func (s *sessionWorkflow) startNext(ctx workflow.Context) {
 	msg := s.queue[0]
 	s.queue = s.queue[1:]
 	s.active = msg.RunID
-	s.activeKind = msg.EntryKind
+	s.activeKind = "agent"
+	teamChild := msg.EntryKind == "team" && workflow.GetVersion(ctx, "session-team-child", workflow.DefaultVersion,
+		1) != workflow.DefaultVersion
+	if teamChild {
+		s.activeKind = "team"
+	}
 	s.external = false
 	cc := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
-		WorkflowID: w.RunWorkflowID(msg.EntryKind, s.in.TenantID, msg.RunID), TaskQueue: contract.TaskQueueCtl,
+		WorkflowID: w.RunWorkflowID(s.activeKind, s.in.TenantID, msg.RunID), TaskQueue: contract.TaskQueueCtl,
 		ParentClosePolicy: enums.PARENT_CLOSE_POLICY_REQUEST_CANCEL, WaitForCancellation: true,
 		WorkflowIDReusePolicy: enums.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
 		TypedSearchAttributes: temporal.NewSearchAttributes(
 			temporal.NewSearchAttributeKeyKeyword("TenantId").ValueSet(s.in.TenantID),
 			temporal.NewSearchAttributeKeyKeyword("WorkspaceId").ValueSet(s.in.WorkspaceID),
-			temporal.NewSearchAttributeKeyKeyword("RunKind").ValueSet(runKind(msg.EntryKind))),
+			temporal.NewSearchAttributeKeyKeyword("RunKind").ValueSet(runKind(s.activeKind))),
 	})
-	if msg.EntryKind == "team" && workflow.GetVersion(ctx, "session-team-child", workflow.DefaultVersion, 1) != workflow.DefaultVersion {
+	if teamChild {
 		s.child = workflow.ExecuteChildWorkflow(cc, w.TeamRunWorkflow,
 			w.NewTeamRunInput(s.in, msg, w.EventSubject(s.in.TenantID, s.in.SessionID, msg.RunID)))
 	} else {

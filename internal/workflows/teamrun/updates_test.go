@@ -96,11 +96,13 @@ func TestMailboxAndToolLimits(t *testing.T) {
 func TestMaximalCarryStaysUnderOneMiB(t *testing.T) {
 	// T-R27 (I5, F44, F77): fill every bounded field of the carry to its limit with the worst escaping characters
 	// and the Temporal payload (encoding/json) must stay below 1 MiB.
-	roster := []contract.RosterEntry{{Name: "leader", Role: "leader", Status: "idle", Description: "lead"},
-		{Name: "alice", Role: "teammate", Status: "idle", Description: "work"}}
+	roster := []contract.RosterEntry{{Name: contract.MemberName("leader" + strings.Repeat("x", 58)), Role: "leader", Status: "idle",
+		Description: "lead"},
+		{Name: contract.MemberName("alice" + strings.Repeat("x", 59)), Role: "teammate", Status: "idle", Description: "work"}}
 	for i := range team.MaxRoster - 2 {
-		roster = append(roster, contract.RosterEntry{Name: contract.MemberName(fmt.Sprintf("rv%02d", i)), Role: "reviewer",
-			Status: "idle", Description: strings.Repeat("<", 200)})
+		roster = append(roster,
+			contract.RosterEntry{Name: contract.MemberName(fmt.Sprintf("rv%02d%s", i, strings.Repeat("x", 60))), Role: "reviewer",
+				Status: "idle", Description: strings.Repeat("<", 200)})
 	}
 	r := updateRun()
 	r.in.Team.Roster = roster
@@ -111,11 +113,12 @@ func TestMaximalCarryStaysUnderOneMiB(t *testing.T) {
 		r.st.Cursors[string(entry.Name)] = w.MemberCursor{Seq: 1 << 20, CheckpointVersion: 1 << 20, EventN: 1 << 40, Turn: 500,
 			ActiveSeconds: 1 << 30}
 	}
-	leader := new(contract.MemberName("leader"))
+	r.in.Team.Leader = string(roster[0].Name)
+	leader := new(roster[0].Name)
 	for i := range team.MaxTasks {
 		in := contract.CreateTasksInput{Caller: leader, RequestId: fmt.Sprintf("create-%d", i), Tasks: []contract.NewTask{{
-			Title: strings.Repeat("<", team.TitleBytes), Description: strings.Repeat("<", 2200),
-			Assignee: new(contract.MemberName("alice")), NarrowedTools: slices.Repeat([]string{strings.Repeat("<", team.ToolNameBytes)},
+			Title: strings.Repeat("<", team.TitleBytes), Description: strings.Repeat("<", 1400),
+			Assignee: new(roster[1].Name), NarrowedTools: slices.Repeat([]string{strings.Repeat("<", team.ToolNameBytes)},
 				1)}}}
 		if err := r.validateCreate(in); err != nil {
 			requireCode(t, err, "TEAM_TEXT_TOO_LONG")
@@ -125,6 +128,21 @@ func TestMaximalCarryStaysUnderOneMiB(t *testing.T) {
 		require.NoError(t, err)
 	}
 	require.Len(t, r.st.Board.Tasks, team.MaxTasks, "exercise every task slot with all fourteen reviewer votes")
+	// Fill the aggregate board allowance, rather than relying on a short fixed description.
+	for i := range r.st.Board.Tasks {
+		task := &r.st.Board.Tasks[i]
+		for len(task.Description) < team.DescriptionBytes {
+			next := *task
+			next.Description += "<"
+			if team.EncodedLen(r.st.Board)-team.EncodedLen(*task)+team.EncodedLen(next) > team.BoardBytesMax {
+				break
+			}
+			*task = next
+		}
+	}
+	require.InDelta(t, team.BoardBytesMax, team.EncodedLen(r.st.Board), 6)
+	require.Len(t, roster, 16)
+
 	require.LessOrEqual(t, team.EncodedLen(r.st.Board), team.BoardBytesMax, "validators cap the board")
 	for i := range r.st.Board.Tasks {
 		task := &r.st.Board.Tasks[i]
@@ -140,6 +158,8 @@ func TestMaximalCarryStaysUnderOneMiB(t *testing.T) {
 		to := roster[1+i%(len(roster)-1)].Name
 		in := contract.SendMessageInput{Caller: leader, RequestId: fmt.Sprintf("send-%d", i), To: to,
 			Text: strings.Repeat("<", team.MessageBytes)}
+		// Each mailbox write belongs to a separate turn: this fixture later fills Applied to its bound independently.
+		clear(r.st.Applied)
 		if err := r.validateSend(in); err != nil {
 			requireCode(t, err, "TEAM_MAILBOX_FULL")
 			break
@@ -155,9 +175,14 @@ func TestMaximalCarryStaysUnderOneMiB(t *testing.T) {
 		r.st.UserSteer = append(r.st.UserSteer, contract.SteerItem{ContentRef: new("t/" + strings.Repeat("x", 120) + fmt.Sprint(i))})
 	}
 	for _, entry := range roster {
-		for i := range 20 {
-			result, _ := team.Marshal(contract.CreateTasksOutput{TaskIds: slices.Repeat([]string{"t32"}, team.MaxTasks)})
-			r.st.Applied[fmt.Sprintf("%s-%s-%d", strings.Repeat("r", 40), entry.Name, i)] = w.AppliedUpdate{Member: string(entry.Name), Turn: 500,
+		for i := range team.AppliedPerTurnMax {
+			result, _ := team.Marshal(struct{}{})
+			if entry.Role == "leader" && i == 0 {
+				result, _ = team.Marshal(contract.CreateTasksOutput{TaskIds: slices.Repeat([]string{"t32"}, team.MaxTasks)})
+			}
+			key := fmt.Sprintf("%s-%s-%02d", strings.Repeat("r", 188), entry.Name, i)
+			require.Len(t, key, 256)
+			r.st.Applied[key] = w.AppliedUpdate{Member: string(entry.Name), Turn: 500,
 				Result: result}
 		}
 	}
@@ -165,5 +190,40 @@ func TestMaximalCarryStaysUnderOneMiB(t *testing.T) {
 		r.st.Escalations = append(r.st.Escalations, fmt.Sprintf("t%d", i))
 	}
 	r.st.Outbox, r.st.Dirty = nil, false // Continue-As-New only happens after the Outbox is flushed
-	require.Less(t, team.EncodedLen(r.st), 1<<20)
+	measured := team.EncodedLen(r.st)
+	t.Logf("maximal carry: %d bytes; headroom %d bytes", measured, (1<<20)-measured)
+	require.LessOrEqual(t, measured, (1<<20)-(16<<10))
+}
+
+func TestAppliedWriteCapPerActiveTurn(t *testing.T) {
+	r := updateRun()
+	caller := new(contract.MemberName("leader"))
+	for i := range team.AppliedPerTurnMax {
+		r.remember(fmt.Sprintf("r%d", i), caller, struct{}{})
+	}
+	in := contract.CreateTasksInput{Caller: caller, RequestId: "overflow", Tasks: []contract.NewTask{{Title: "t", Description: "d"}}}
+	err := r.validateCreate(in)
+	require.ErrorContains(t, err, "TEAM_TEXT_TOO_LONG")
+	require.ErrorContains(t, err, "Too many team writes")
+	in.RequestId = "r0"
+	require.NoError(t, r.validateCreate(in), "replay at the cap still returns the saved result")
+	r.st.Active["leader"] = w.ActiveTurn{Member: "leader", Turn: 2, Kind: "lead"}
+	in.RequestId = "next-turn"
+	require.NoError(t, r.validateCreate(in), "the cap belongs to the turn, not the member")
+}
+
+func TestCreateCapacityMeasuresExpandedStoredTask(t *testing.T) {
+	r := updateRun()
+	for i := range 13 {
+		r.st.Board.Roster = append(r.st.Board.Roster, contract.RosterEntry{
+			Name: contract.MemberName(fmt.Sprintf("r%02d%s", i, strings.Repeat("x", 61))), Role: "reviewer"})
+	}
+	in := contract.CreateTasksInput{Caller: new(contract.MemberName("leader")), RequestId: "create",
+		Tasks: []contract.NewTask{{Title: "t", Description: "d"}}}
+	// Leave enough room for the request, but not for the expanded reviewers and review metadata.
+	base := team.EncodedLen(r.st.Board)
+	filler := team.BoardBytesMax - base - team.EncodedLen(in.Tasks) - 400
+	r.st.Board.Tasks = []contract.TeamTask{{TaskId: "existing", Title: "old", Status: "completed", Description: strings.Repeat("x", filler)}}
+	require.Less(t, team.EncodedLen(r.st.Board)+team.EncodedLen(in.Tasks), team.BoardBytesMax)
+	require.ErrorContains(t, r.validateCreate(in), "TEAM_TEXT_TOO_LONG")
 }

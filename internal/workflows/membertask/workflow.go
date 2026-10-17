@@ -24,8 +24,9 @@ func Run(ctx workflow.Context, in w.MemberTaskInput) (w.TurnResult, error) {
 		BudgetMillicredits: in.BudgetMillicredits, Limits: in.Limits, Sandbox: in.Sandbox, Tier: in.Tier,
 		Unattended: in.Unattended, Carry: carry}
 	result := w.TurnResult{Member: in.Member, Turn: in.Turn}
-	hooks := &segloop.Hooks{
-		Prepare: func(workflow.Context, w.RunInput, *segloop.State) error { return nil },
+	hooks := segloop.Hooks{
+		TrackDeliveries: true,
+		Prepare:         func(workflow.Context, w.RunInput, *segloop.State) error { return nil },
 		ContinueAsNew: func(ctx workflow.Context, st *segloop.State) error {
 			in.Carry = st
 			return workflow.NewContinueAsNewError(ctx, w.MemberTaskWorkflow, in)
@@ -48,27 +49,6 @@ func Run(ctx workflow.Context, in w.MemberTaskInput) (w.TurnResult, error) {
 		},
 		Holder: w.LeaseHolder(in.RunID, in.Member), Turn: in.Turn, Drain: drain,
 	}
-	// Signals can be received while an Activity future yields. Drain again in the
-	// main loop before deciding whether to continue or Continue-As-New.
-	workflow.Go(ctx, func(ctx workflow.Context) {
-		ch := workflow.GetSignalChannel(ctx, w.Deliver)
-		for {
-			var delivery w.DeliverInput
-			if !ch.Receive(ctx, &delivery) {
-				return
-			}
-			deliver(carry, delivery)
-		}
-	})
-	workflow.Go(ctx, func(ctx workflow.Context) {
-		ch := workflow.GetSignalChannel(ctx, w.EndTurn)
-		for {
-			if !ch.Receive(ctx, nil) {
-				return
-			}
-			carry.EndTurn = true
-		}
-	})
 	err := segloop.Run(ctx, run, hooks)
 	return result, err
 }

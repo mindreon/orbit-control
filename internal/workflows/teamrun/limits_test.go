@@ -178,3 +178,20 @@ func TestTurnLimitFailsTheRun(t *testing.T) {
 	require.Equal(t, "TEAM_TURN_LIMIT", h.final.Code)
 	require.Len(t, h.starts, team.MaxTurnsTotal)
 }
+
+func TestPauseChangeIsWrittenBeforeContinueAsNew(t *testing.T) {
+	h := newHarness(t)
+	h.at(5*sec, func() { h.create("leader", "create", newTask("t1", "alice")) })
+	h.onMemberStart = func(in w.MemberTaskInput) {
+		if in.Member == "alice" {
+			h.env.SignalWorkflow(w.Pause, w.ActorInput{})
+		}
+	}
+	h.turn("leader", 1, 100*sec, w.TurnResult{Status: "ended"})
+	h.turn("alice", 1, 100*sec, w.TurnResult{Status: "ended"})
+	h.cancelAt(20 * sec)
+	require.NoError(t, h.run())
+	require.NotEmpty(t, h.carries)
+	require.NotEmpty(t, h.statuses, "the pending pause change must not be lost on Continue-As-New")
+	require.Equal(t, "paused", h.statuses[0].Status)
+}

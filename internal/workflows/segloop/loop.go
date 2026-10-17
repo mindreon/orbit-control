@@ -18,18 +18,21 @@ type State = w.RunCarry
 
 // Hooks isolates run ownership from the shared member segment protocol.
 type Hooks struct {
-	Prepare       func(workflow.Context, w.RunInput, *State) error
-	ContinueAsNew func(workflow.Context, *State) error
-	Input         func(*contract.SegmentInput)
-	ShouldEnd     func(*State) bool
-	Finish        func(workflow.Context, *State, string, string) error
-	Holder        string
-	Turn          int
-	Drain         func(workflow.Context, *State)
+	Prepare         func(workflow.Context, w.RunInput, *State) error
+	ContinueAsNew   func(workflow.Context, *State) error
+	Input           func(*contract.SegmentInput)
+	ShouldEnd       func(*State) bool
+	Finish          func(workflow.Context, *State, string, string) error
+	Holder          string
+	Turn            int
+	Drain           func(workflow.Context, *State)
+	TrackDeliveries bool
 }
 
 type loop struct {
-	hooks         *Hooks
+	hooks         Hooks
+	holderID      string
+	turnID        int
 	in            w.RunInput
 	st            *State
 	cancelSegment workflow.CancelFunc
@@ -45,16 +48,44 @@ func Restore(in w.RunInput) *State {
 		PendingTurn: contract.SegmentTurn{Kind: "user_message", ContentRef: new(in.InputRef)},
 	}
 }
-func Run(ctx workflow.Context, in w.RunInput, hooks *Hooks) error {
+func Run(ctx workflow.Context, in w.RunInput, hooks Hooks) error {
 	limit, err := w.ContinueThreshold(ctx, w.RunContinueAfter)
 	if err != nil {
 		return err
 	}
-	l := &loop{in: in, st: Restore(in), continueAfter: limit, hooks: hooks}
+	l := &loop{in: in, st: Restore(in), continueAfter: limit, holderID: hooks.Holder, turnID: hooks.Turn}
+	if l.holderID == "" {
+		l.holderID = in.RunID
+	}
+	// Resolve ownership defaults once; the shared protocol never branches on a nil lifecycle.
+	if hooks.Prepare == nil {
+		hooks.Prepare = func(ctx workflow.Context, _ w.RunInput, _ *State) error { return l.prepareAgent(ctx) }
+	}
+	if hooks.ContinueAsNew == nil {
+		hooks.ContinueAsNew = func(ctx workflow.Context, st *State) error {
+			in.Carry = st
+			return workflow.NewContinueAsNewError(ctx, w.AgentRunWorkflow, in)
+		}
+	}
+	if hooks.Input == nil {
+		hooks.Input = func(*contract.SegmentInput) {}
+	}
+	if hooks.ShouldEnd == nil {
+		hooks.ShouldEnd = func(*State) bool { return false }
+	}
+	if hooks.Finish == nil {
+		hooks.Finish = func(ctx workflow.Context, _ *State, status, code string) error {
+			return l.finishAgent(ctx, status, code)
+		}
+	}
+	if hooks.Drain == nil {
+		hooks.Drain = func(workflow.Context, *State) {}
+	}
+	l.hooks = hooks
 	if err := l.register(ctx); err != nil {
 		return err
 	}
-	if err := l.prepare(ctx); err != nil {
+	if err := l.hooks.Prepare(ctx, in, l.st); err != nil {
 		return err
 	}
 	if w.Terminal(l.st.Status) {
@@ -63,9 +94,7 @@ func Run(ctx workflow.Context, in w.RunInput, hooks *Hooks) error {
 
 	for {
 		st := l.st
-		if hooks != nil && hooks.Drain != nil {
-			hooks.Drain(ctx, st)
-		}
+		hooks.Drain(ctx, st)
 		if st.Cancel != nil {
 			return l.cancelled(ctx)
 		}
@@ -91,11 +120,7 @@ func Run(ctx workflow.Context, in w.RunInput, hooks *Hooks) error {
 			((st.CommittedSeq > st.ContinuedAt && st.CommittedSeq%l.continueAfter == 0) ||
 				workflow.GetInfo(ctx).GetContinueAsNewSuggested()) {
 			st.ContinuedAt = st.CommittedSeq
-			in.Carry = st
-			if hooks != nil {
-				return hooks.ContinueAsNew(ctx, st)
-			}
-			return workflow.NewContinueAsNewError(ctx, w.AgentRunWorkflow, in)
+			return hooks.ContinueAsNew(ctx, st)
 		}
 		done, err := l.step(ctx)
 		if done || err != nil {
@@ -103,11 +128,8 @@ func Run(ctx workflow.Context, in w.RunInput, hooks *Hooks) error {
 		}
 	}
 }
-func (l *loop) prepare(ctx workflow.Context) error {
+func (l *loop) prepareAgent(ctx workflow.Context) error {
 	in := l.in
-	if l.hooks != nil {
-		return l.hooks.Prepare(ctx, in, l.st)
-	}
 	if in.Carry == nil {
 		var prep w.PrepareOutput
 		if err := l.exec(ctx,
@@ -257,7 +279,7 @@ func (l *loop) commit(
 	st.CheckpointVersion = res.CheckpointVersion
 	st.UsedMillicredits = rec.RunUsedMillicredits
 	for _, item := range seg.Steer {
-		if item.ContentRef != nil {
+		if l.hooks.TrackDeliveries && item.ContentRef != nil {
 			st.DeliveredSteer = append(st.DeliveredSteer, *item.ContentRef)
 		}
 	}
@@ -266,8 +288,12 @@ func (l *loop) commit(
 		st.DeliveredMail = append(st.DeliveredMail, item.MessageId)
 	}
 	st.Mailbox = st.Mailbox[len(seg.Mailbox):]
-	st.LastFinal = res.Final
+	if l.hooks.TrackDeliveries {
+		st.LastFinal = res.Final
+	}
 	st.SandboxRetries = 0
+	// A delivery may arrive while RecordSegment yields. Consume it before deciding to finish.
+	l.hooks.Drain(ctx, st)
 	if st.Cancel != nil {
 		return true, l.cancelled(ctx)
 	}
@@ -366,13 +392,13 @@ func (l *loop) touch(ctx workflow.Context, use bool) {
 }
 func (l *loop) finish(ctx workflow.Context, status, code string) error {
 	l.st.Status = status
+	ctx, _ = workflow.NewDisconnectedContext(ctx)
+	return l.hooks.Finish(ctx, l.st, status, code)
+}
+func (l *loop) finishAgent(ctx workflow.Context, status, code string) error {
 	reason := ""
 	if l.st.Cancel != nil {
 		reason = l.st.Cancel.Reason
-	}
-	ctx, _ = workflow.NewDisconnectedContext(ctx)
-	if l.hooks != nil {
-		return l.hooks.Finish(ctx, l.st, status, code)
 	}
 	return workflow.ExecuteActivity(
 		w.Ctl(ctx, "FinalizeRun"),
@@ -556,9 +582,7 @@ func (l *loop) segmentInput(ctx workflow.Context, turn contract.SegmentTurn, seq
 		},
 		EventSubject: in.EventSubject,
 	}
-	if l.hooks != nil {
-		l.hooks.Input(&out)
-	}
+	l.hooks.Input(&out)
 	return out
 }
 
@@ -659,19 +683,9 @@ func (l *loop) waitDecision(ctx workflow.Context, now time.Time, req *contract.I
 	return nil
 }
 
-func (l *loop) shouldEnd() bool { return l.hooks != nil && l.hooks.ShouldEnd(l.st) }
-func (l *loop) holder() string {
-	if l.hooks != nil {
-		return l.hooks.Holder
-	}
-	return l.in.RunID
-}
-func (l *loop) turn() int {
-	if l.hooks != nil {
-		return l.hooks.Turn
-	}
-	return 0
-}
+func (l *loop) shouldEnd() bool { return l.hooks.ShouldEnd(l.st) }
+func (l *loop) holder() string  { return l.holderID }
+func (l *loop) turn() int       { return l.turnID }
 func (l *loop) unattended(ctx workflow.Context, req *contract.InteractionRequest) error {
 	if req == nil {
 		return fmt.Errorf("missing interaction")
