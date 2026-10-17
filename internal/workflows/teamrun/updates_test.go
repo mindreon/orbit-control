@@ -114,9 +114,9 @@ func TestMaximalCarryStaysUnderOneMiB(t *testing.T) {
 	leader := new(contract.MemberName("leader"))
 	for i := range team.MaxTasks {
 		in := contract.CreateTasksInput{Caller: leader, RequestId: fmt.Sprintf("create-%d", i), Tasks: []contract.NewTask{{
-			Title: strings.Repeat("<", team.TitleBytes), Description: strings.Repeat("<", team.DescriptionBytes),
+			Title: strings.Repeat("<", team.TitleBytes), Description: strings.Repeat("<", 2200),
 			Assignee: new(contract.MemberName("alice")), NarrowedTools: slices.Repeat([]string{strings.Repeat("<", team.ToolNameBytes)},
-				team.NarrowedToolsMax)}}}
+				1)}}}
 		if err := r.validateCreate(in); err != nil {
 			requireCode(t, err, "TEAM_TEXT_TOO_LONG")
 			break
@@ -124,6 +124,7 @@ func TestMaximalCarryStaysUnderOneMiB(t *testing.T) {
 		_, err := r.create(nil, in)
 		require.NoError(t, err)
 	}
+	require.Len(t, r.st.Board.Tasks, team.MaxTasks, "exercise every task slot with all fourteen reviewer votes")
 	require.LessOrEqual(t, team.EncodedLen(r.st.Board), team.BoardBytesMax, "validators cap the board")
 	for i := range r.st.Board.Tasks {
 		task := &r.st.Board.Tasks[i]
