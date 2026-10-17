@@ -22,6 +22,7 @@ import (
 	"github.com/mindreon/orbit-control/internal/contract"
 	"github.com/mindreon/orbit-control/internal/httpapi"
 	"github.com/mindreon/orbit-control/internal/kernelapi"
+	"github.com/mindreon/orbit-control/internal/locks"
 	"github.com/mindreon/orbit-control/internal/platform/config"
 	"github.com/mindreon/orbit-control/internal/platform/db"
 	orbitlog "github.com/mindreon/orbit-control/internal/platform/log"
@@ -29,7 +30,9 @@ import (
 	"github.com/mindreon/orbit-control/internal/platform/objstore"
 	"github.com/mindreon/orbit-control/internal/platform/temporalx"
 	"github.com/mindreon/orbit-control/internal/runworker"
+	"github.com/mindreon/orbit-control/internal/schedules"
 	"github.com/mindreon/orbit-control/internal/secrets"
+	"github.com/mindreon/orbit-control/internal/sessions"
 	"github.com/mindreon/orbit-control/internal/sink"
 )
 
@@ -132,6 +135,7 @@ func serveAPI(
 	}
 	defer a.Close()
 	h := &httpapi.Handler{
+		Schedules:  &schedules.Service{DB: d, Locks: locks.NewResolver(assetService), Temporal: tc.ScheduleClient(), DefaultLimit: c.SchedulesDefaultLimit, SweepInterval: c.ScheduleSweepInterval},
 		EventFloor: floor,
 		DB:         d,
 		Auth:       a,
@@ -152,6 +156,7 @@ func serveAPI(
 	internal := &http.Server{
 		Addr: c.InternalAddr,
 		Handler: (&kernelapi.Handler{DB: d,
+			Temporal: temporalx.Service{Client: tc}, Schedules: h.Schedules,
 			Signer:  a.Capability,
 			Secrets: secrets.Keys{Current: c.SecretsKeyVersion, KEKs: c.SecretsKEKs},
 			Obj:     store, ServiceTokenSHA256: c.WorkerServiceTokenSHA256}).Router(),
@@ -207,20 +212,27 @@ func startWorkers(
 			return nil, err
 		}
 	}
-	worker := runworker.New(
-		tc,
-		&ctl.Activities{
-			DB: d, Obj: store, NATS: bus, Temporal: tc, Environment: c.Environment, Logger: l,
-			SandboxProvider: contract.SandboxProvider(c.SandboxProvider),
-		},
-	)
+	scheduleService := &schedules.Service{DB: d, Locks: locks.NewResolver(assetService), Temporal: tc.ScheduleClient(), DefaultLimit: c.SchedulesDefaultLimit, SweepInterval: c.ScheduleSweepInterval}
+	activities := &ctl.Activities{DB: d, Obj: store, NATS: bus, Temporal: tc, Environment: c.Environment, Logger: l,
+		SandboxProvider: contract.SandboxProvider(c.SandboxProvider), Schedules: scheduleService,
+		Sessions: sessions.Service{Objects: store, Locks: locks.NewResolver(assetService), DefaultRunBudget: c.DefaultRunBudget}}
+	worker := runworker.New(tc, activities)
+	waitWorker := runworker.NewWait(tc, activities, c.CtlWaitConcurrency)
+	if err := waitWorker.Start(); err != nil {
+		return nil, err
+	}
+
 	releaseactivities.Register(worker, &releaseactivities.Activities{DB: d, Assets: assetService})
 	if err := worker.Start(); err != nil {
+		waitWorker.Stop()
 		return nil, err
 	}
 	dispatchCtx, cancelDispatch := context.WithCancel(ctx)
 	dispatchDone := make(chan struct{})
 	var projections sync.WaitGroup
+	projections.Go(func() {
+		scheduleService.Sweep(dispatchCtx, func(err error) { l.Warn("schedule synchronization failed", "error_type", fmt.Sprintf("%T", err)) })
+	})
 	if c.SinkEnabled {
 		projection := sink.New(d, consumer, l, metrics)
 		projections.Go(func() {
@@ -237,6 +249,7 @@ func startWorkers(
 		<-dispatchDone
 		projections.Wait()
 		worker.Stop()
+		waitWorker.Stop()
 	}
 	go func() {
 		defer close(dispatchDone)

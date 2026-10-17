@@ -1208,7 +1208,7 @@ paths:
   /v1/sessions:
     post:
       operationId: createSession
-      summary: Create an agent session
+      summary: Create an agent or team session
       parameters:
         - $ref: '#/components/parameters/Tenant'
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -1231,6 +1231,9 @@ paths:
                 workspace_id:
                   type: string
                   format: uuid
+                entry_kind:
+                  type: string
+                  enum: [agent, team]
                 entry_ref:
                   type: string
                 title:
@@ -2145,6 +2148,149 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /v1/runs/{r}/team:
+    get:
+      operationId: getTeamRun
+      summary: getTeamRun
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - name: r
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamView'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /v1/schedules:
+    get:
+      operationId: listSchedules
+      summary: listSchedules
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: workspace_id
+          in: query
+          schema: {type: string, format: uuid}
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SchedulePage'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      operationId: createSchedule
+      summary: createSchedule
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - $ref: '#/components/parameters/RequiredIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScheduleCreate'
+      responses:
+        "201":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Schedule'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /v1/schedules/{id}:
+    get:
+      operationId: getSchedule
+      summary: getSchedule
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - name: id
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScheduleDetail'
+        default:
+          $ref: '#/components/responses/Error'
+    patch:
+      operationId: patchSchedule
+      summary: patchSchedule
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - name: id
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SchedulePatch'
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Schedule'
+        default:
+          $ref: '#/components/responses/Error'
+    delete:
+      operationId: deleteSchedule
+      summary: deleteSchedule
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - name: id
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        "200":
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Schedule'
+        default:
+          $ref: '#/components/responses/Error'
+
+  /v1/schedules/{id}/trigger:
+    post:
+      operationId: triggerSchedule
+      summary: triggerSchedule
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - name: id
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        "202":
+          description: Successful response
+        default:
+          $ref: '#/components/responses/Error'
+
 components:
   securitySchemes:
     bearerAuth:
@@ -2152,6 +2298,11 @@ components:
       scheme: bearer
       description: OIDC/dev JWT or orbit_ API key; selected tenant requires active membership.
   parameters:
+    RequiredIdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: {type: string, maxLength: 256}
     EventTypes:
       name: types
       in: query
@@ -3530,3 +3681,99 @@ components:
         - digest
         - status
         - updated_at
+
+    TeamView:
+      type: object
+      required: [board, members, finished, summary]
+      properties:
+        board:
+          $ref: '../contract/v2/schema/team_updates.json#/$defs/TeamBoard'
+        members:
+          type: array
+          items: {$ref: '#/components/schemas/TeamMemberView'}
+        finished: {type: boolean}
+        summary: {type: string}
+    TeamMemberView:
+      type: object
+      required: [name, role, status, turn]
+      properties:
+        name: {type: string}
+        role: {enum: [leader, teammate, reviewer]}
+        status: {enum: [idle, working, waiting_input, waiting_approval, finished]}
+        task_id: {type: [string, 'null']}
+        turn: {type: integer}
+    ScheduleCreate:
+      type: object
+      required: [workspace_id, name, cron, timezone, entry_ref, prompt, budget_millicredits]
+      properties:
+        workspace_id: {type: string, format: uuid}
+        name: {type: string, minLength: 1, maxLength: 128}
+        description: {type: string, maxLength: 1024}
+        cron: {type: string}
+        timezone: {type: string}
+        entry_kind: {enum: [agent, team]}
+        entry_ref: {type: string}
+        prompt: {type: string, minLength: 1, maxLength: 32768}
+        budget_millicredits: {type: integer, minimum: 1000}
+        overlap_policy: {enum: [skip, buffer_one], default: skip}
+        catchup_window_seconds: {type: integer, minimum: 60, maximum: 86400, default: 3600}
+    SchedulePatch:
+      type: object
+      properties:
+        name: {type: string, minLength: 1, maxLength: 128}
+        description: {type: string, maxLength: 1024}
+        cron: {type: string}
+        timezone: {type: string}
+        prompt: {type: string, minLength: 1, maxLength: 32768}
+        budget_millicredits: {type: integer, minimum: 1000}
+        overlap_policy: {enum: [skip, buffer_one]}
+        catchup_window_seconds: {type: integer, minimum: 60, maximum: 86400}
+        status: {enum: [active, paused]}
+    Schedule:
+      allOf:
+        - $ref: '#/components/schemas/ScheduleCreate'
+        - type: object
+          required: [id, tenant_id, owner_id, status, version, synced_version, sync_pending, created_at, updated_at]
+          properties:
+            id: {type: string, format: uuid}
+            tenant_id: {type: string, format: uuid}
+            owner_id: {type: string, format: uuid}
+            status: {enum: [active, paused, deleted]}
+            paused_reason: {type: string}
+            version: {type: integer}
+            synced_version: {type: integer}
+            sync_pending: {type: boolean}
+            created_at: {type: string, format: date-time}
+            updated_at: {type: string, format: date-time}
+            deleted_at: {type: string, format: date-time}
+    ScheduleRun:
+      type: object
+      required: [schedule_id, fire_at, status, started_at]
+      properties:
+        schedule_id: {type: string, format: uuid}
+        fire_at: {type: string, format: date-time}
+        run_id: {type: [string, 'null'], format: uuid}
+        session_id: {type: [string, 'null'], format: uuid}
+        status: {enum: [running, succeeded, failed, cancelled, budget_exhausted, timed_out, skipped]}
+        error_code: {type: [string, 'null']}
+        started_at: {type: string, format: date-time}
+        ended_at: {type: [string, 'null'], format: date-time}
+    SchedulePage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/Schedule'}}
+        next_cursor: {type: string}
+    ScheduleDetail:
+      type: object
+      required: [schedule, runs, describe]
+      properties:
+        schedule: {$ref: '#/components/schemas/Schedule'}
+        runs: {type: array, items: {$ref: '#/components/schemas/ScheduleRun'}}
+        describe:
+          type: [object, 'null']
+          properties:
+            next_fire_at: {type: [string, 'null'], format: date-time}
+            num_actions: {type: integer}
+            skipped_overlap: {type: integer}
+            missed_catchup: {type: integer}

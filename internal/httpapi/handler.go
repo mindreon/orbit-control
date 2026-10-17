@@ -27,6 +27,7 @@ import (
 	"github.com/mindreon/orbit-control/internal/platform/objstore"
 	"github.com/mindreon/orbit-control/internal/platform/temporalx"
 	"github.com/mindreon/orbit-control/internal/policy"
+	"github.com/mindreon/orbit-control/internal/schedules"
 	"github.com/mindreon/orbit-control/internal/tenancy"
 )
 
@@ -36,6 +37,7 @@ type EventFloor interface {
 }
 
 type Handler struct {
+	Schedules       *schedules.Service
 	EventFloor      EventFloor
 	Temporal        temporalx.Client
 	Objects         objstore.ObjectStore
@@ -61,6 +63,13 @@ type route struct {
 }
 
 var routes = []route{
+	{Pattern: "GET /v1/runs/{r}/team", Handle: func(h *Handler) endpoint { return h.teamView }, TwoPhase: false},
+	{Pattern: "GET /v1/schedules", Handle: func(h *Handler) endpoint { return h.listSchedules }, TwoPhase: false},
+	{Pattern: "POST /v1/schedules", Handle: func(h *Handler) endpoint { return h.writeSchedule }, TwoPhase: true},
+	{Pattern: "GET /v1/schedules/{id}", Handle: func(h *Handler) endpoint { return h.getSchedule }, TwoPhase: true},
+	{Pattern: "PATCH /v1/schedules/{id}", Handle: func(h *Handler) endpoint { return h.writeSchedule }, TwoPhase: true},
+	{Pattern: "DELETE /v1/schedules/{id}", Handle: func(h *Handler) endpoint { return h.writeSchedule }, TwoPhase: true},
+	{Pattern: "POST /v1/schedules/{id}/trigger", Handle: func(h *Handler) endpoint { return h.triggerSchedule }, TwoPhase: true},
 	{
 		Pattern: "POST /v1/sessions",
 		Handle:  func(h *Handler) endpoint { return h.createSession },

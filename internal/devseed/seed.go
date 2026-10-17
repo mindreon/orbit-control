@@ -112,6 +112,9 @@ func Seed(ctx context.Context, d *db.DB, svc *assets.Service, keys secrets.Keys,
 		if err := seedAgents(ctx, tx, svc, &out); err != nil {
 			return err
 		}
+		if err := seedTeam(ctx, tx, svc, &out); err != nil {
+			return err
+		}
 		return audit.Append(
 			ctx,
 			tx,
@@ -120,7 +123,7 @@ func Seed(ctx context.Context, d *db.DB, svc *assets.Service, keys secrets.Keys,
 			"dev.seed",
 			"workspace",
 			out.WorkspaceID,
-			map[string]any{"models": []string{"default"}, "assets": []string{"echo-agent", "notify-agent"}},
+			map[string]any{"models": []string{"default"}, "assets": []string{"echo-agent", "notify-agent", "review-team"}},
 		)
 	})
 	return out, err

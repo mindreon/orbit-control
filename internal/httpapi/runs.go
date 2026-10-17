@@ -123,6 +123,13 @@ func (h *Handler) controlRun(out http.ResponseWriter, r *http.Request) error {
 				return temporalError(errors.New("no client"), "")
 			}
 			if action == "cancel" {
+				if run.Trigger == "schedule" {
+					if err := h.Temporal.Signal(ctx, run.TemporalWorkflowID, w.Cancel, w.CancelInput{ActorID: actor, Reason: in.Reason}); err != nil {
+						return temporalError(err, "RUN_FINISHED")
+					}
+					httpx.JSON(rec, 202, w.CancelRunOutput{Disposition: "cancelling"})
+					return nil
+				}
 				var result w.CancelRunOutput
 				if err := h.Temporal.Update(
 					ctx,
@@ -141,7 +148,7 @@ func (h *Handler) controlRun(out http.ResponseWriter, r *http.Request) error {
 			if action == "resume" {
 				signal = w.Resume
 			}
-			if err := h.Temporal.Signal(ctx, w.AgentRunWorkflowID(tenant, run.ID), signal, w.ActorInput{ActorID: actor}); err != nil {
+			if err := h.Temporal.Signal(ctx, run.TemporalWorkflowID, signal, w.ActorInput{ActorID: actor}); err != nil {
 				return temporalError(err, "RUN_NOT_ACTIVE")
 			}
 			rec.WriteHeader(202)
@@ -184,7 +191,7 @@ func (h *Handler) prepareSteer(
 		var result w.SteerOutput
 		if err := h.Temporal.Update(
 			ctx,
-			w.AgentRunWorkflowID(tenant, runID),
+			run.TemporalWorkflowID,
 			w.Steer,
 			messageID,
 			w.SteerInput{MessageID: messageID, ContentRef: ref, ActorID: actor},
@@ -275,7 +282,6 @@ func (h *Handler) resolveInteraction(out http.ResponseWriter, r *http.Request) e
 		if decision.Kind != i.Kind {
 			return nil, httpx.E(422, "INVALID_INPUT", "Decision kind does not match interaction")
 		}
-		tenant := auth.Tenant(ctx)
 		return func(ctx context.Context, rec *httpx.Recorder) error {
 			if h.Temporal == nil {
 				return temporalError(errors.New("no client"), "")
@@ -283,7 +289,7 @@ func (h *Handler) resolveInteraction(out http.ResponseWriter, r *http.Request) e
 			var result w.ResolveInteractionOutput
 			if err := h.Temporal.Update(
 				ctx,
-				w.AgentRunWorkflowID(tenant, i.RunID),
+				i.WorkflowID,
 				w.ResolveInteraction,
 				"resolve:"+i.ID,
 				w.ResolveInteractionInput{InteractionID: i.ID, ActorID: actor, Decision: decision},

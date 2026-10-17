@@ -16,7 +16,6 @@ import (
 	"go.temporal.io/sdk/temporal"
 
 	"github.com/mindreon/orbit-control/internal/auth"
-	"github.com/mindreon/orbit-control/internal/contract"
 	"github.com/mindreon/orbit-control/internal/locks"
 	"github.com/mindreon/orbit-control/internal/platform/db"
 	"github.com/mindreon/orbit-control/internal/platform/httpx"
@@ -183,11 +182,18 @@ func (h *Handler) prepareSubmission(ctx context.Context, r *http.Request, body [
 			return deliver, err
 		}
 	}
-	lock, storedBudget, err := h.sessionService().PrepareSubmission(ctx, s, runID, messageID, input.Text, input.Budget)
+	var scheduled bool
+	if err := db.Tx(ctx).QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM schedule_runs WHERE tenant_id=$1 AND session_id=$2 AND status='running')`, tenant, s.ID).Scan(&scheduled); err != nil {
+		return nil, err
+	}
+	if scheduled {
+		return nil, httpx.E(409, "SCHEDULED_RUN_ACTIVE", "Scheduled run has not finished archiving")
+	}
+	msg, err := h.sessionService().BuildStart(ctx, db.Tx(ctx), s, auth.From(ctx), runID, messageID, input.Text, input.Budget)
 	if err != nil {
 		return nil, err
 	}
-	return h.submitDelivery(s, tenant, principal, runID, messageID, lock, storedBudget), nil
+	return h.submitDelivery(s, tenant, msg), nil
 }
 
 type delivery func(context.Context, *httpx.Recorder) error
@@ -231,31 +237,8 @@ func (h *Handler) policySteer(
 	return nil, nil
 }
 
-func (h *Handler) submitDelivery(
-	s sessions.Session,
-	tenant, principal, runID, messageID string,
-	lock contract.RunLock,
-	storedBudget int64,
-) delivery {
-	inputRef := "t/" + tenant + "/runs/" + runID + "/input/" + messageID + ".json"
-	permissions := lock.Members[0].EffectivePermissions
-	msg := w.SubmitMessageInput{
-		V:                  1,
-		RunID:              runID,
-		MessageID:          messageID,
-		PrincipalID:        principal,
-		Trigger:            "user_message",
-		Lock:               contract.SegmentLockRef{Id: lock.LockId, Digest: lock.Digest},
-		InputRef:           inputRef,
-		BudgetMillicredits: storedBudget,
-		Limits:             w.DefaultLimits(storedBudget),
-		Sandbox: w.SandboxSpec{
-			IsolationKey: w.IsolationKey(tenant, s.ID),
-			Profile:      permissions.SandboxProfile,
-			Egress:       permissions.Network.Egress,
-			TTLSeconds:   1800,
-		},
-	}
+func (h *Handler) submitDelivery(s sessions.Session, tenant string, msg w.SubmitMessageInput) delivery {
+	runID, messageID := msg.RunID, msg.MessageID
 	return func(ctx context.Context, rec *httpx.Recorder) error {
 		if h.Temporal == nil {
 			return temporalError(errors.New("no client"), "")

@@ -24,11 +24,15 @@ import (
 	"github.com/mindreon/orbit-control/internal/platform/db"
 	"github.com/mindreon/orbit-control/internal/platform/httpx"
 	"github.com/mindreon/orbit-control/internal/platform/objstore"
+	"github.com/mindreon/orbit-control/internal/platform/temporalx"
+	"github.com/mindreon/orbit-control/internal/schedules"
 	"github.com/mindreon/orbit-control/internal/secrets"
 	"github.com/mindreon/orbit-control/internal/usage"
 )
 
 type Handler struct {
+	Temporal           temporalx.Client
+	Schedules          *schedules.Service
 	DB                 *db.DB
 	Signer             *auth.CapabilitySigner
 	Secrets            secrets.Keys
@@ -111,6 +115,7 @@ func (h *Handler) Router() http.Handler {
 			rec.FlushTo(w)
 		})
 	}
+	h.teamRoutes(mux)
 	return mux
 }
 func check(ctx context.Context, c auth.CapabilityClaims) error {
