@@ -100,16 +100,10 @@ func Run(ctx workflow.Context, in w.TeamRunInput) error {
 			}
 			r.st.Board = board
 			for _, action := range actions {
-				if r.st.Paused {
-					break
-				}
 				task := r.task(action.TaskID)
 				r.start(ctx, action, contract.SegmentTurn{Kind: "follow_up", Text: new(team.TaskNotice(*task, r.st.Board))})
 			}
 			for _, action := range team.ReviewScan(r.st.Board, r.active(), in.Team.MaxParallel, r.st.Reserve) {
-				if r.st.Paused {
-					break
-				}
 				r.start(ctx, action, contract.SegmentTurn{Kind: "follow_up", Text: new(team.ReviewNotice(*r.task(action.TaskID)))})
 			}
 			r.wake(ctx)
