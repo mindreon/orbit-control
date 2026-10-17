@@ -121,6 +121,11 @@
           "type": "string",
           "description": "Principal initiating the run, used for user grants.",
           "format": "uuid"
+        },
+        "unattended": {
+          "type": "boolean",
+          "default": false,
+          "description": "True for scheduled runs; interactive approval and questions are denied. Defaults to false."
         }
       },
       "x-extra": "ignore",
@@ -435,11 +440,6 @@
           "type": "string",
           "description": "What to do and what done looks like."
         },
-        "spec_ref": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Object store reference of a longer specification."
-        },
         "narrowed_tools": {
           "type": "array",
           "items": {
@@ -456,16 +456,9 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "team_workflow_id",
         "role"
       ],
       "properties": {
-        "team_workflow_id": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Workflow ID of the TeamRunWorkflow; team tools call its Updates.",
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$"
-        },
         "role": {
           "$ref": "team_updates.json#/$defs/TeamRole"
         },

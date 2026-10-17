@@ -191,7 +191,7 @@ func TestGoWireFixtures(t *testing.T) {
 		valid := ValidateStrict(kind, raw) == nil
 		definition := registry.docs[registry.where[kind]]["$defs"].(map[string]any)[kind].(map[string]any)
 		required, _ := definition["required"].([]any)
-		if !valid && (name != "zero" || len(required) == 0) {
+		if !valid && (name != "zero" || len(required) == 0 && definition["enum"] == nil) {
 			t.Fatalf("%s %s: %v", kind, name, ValidateStrict(kind, raw))
 		}
 		fixtures = append(fixtures, wireFixture{Kind: kind, Case: name, Valid: valid, Payload: raw})

@@ -36,9 +36,15 @@
             "verdict": "reject",
             "comment": "Q3 is missing."
           }
-        ]
+        ],
+        "round": 1,
+        "rework_note": "Check all citations."
       },
-      "description": "Task acceptance criteria."
+      "description": "Task acceptance criteria.",
+      "failures": 0,
+      "files": [
+        "report/summary.md"
+      ]
     },
     {
       "task_id": "task-2",

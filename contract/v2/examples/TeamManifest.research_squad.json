@@ -24,7 +24,8 @@
   "dispatch": "scheduled",
   "maxParallelMembers": 3,
   "review": {
-    "mode": "veto"
+    "mode": "veto",
+    "maxRounds": 4
   },
   "sharedSkills": [
     {

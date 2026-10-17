@@ -1,0 +1,12 @@
+{
+  "name": "Daily research",
+  "description": "Summarize new filings.",
+  "cron": "*/5 * * * *",
+  "timezone": "Asia/Shanghai",
+  "entry_ref": "dev/echo",
+  "prompt": "Summarize new filings.",
+  "budget_millicredits": 1000,
+  "overlap_policy": "buffer_all",
+  "catchup_window_seconds": 3600,
+  "request_id": "effect-1"
+}

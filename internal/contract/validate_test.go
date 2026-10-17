@@ -15,7 +15,10 @@ func TestConsumerAndStrictValidation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		payload := decodeAny(t, raw).(map[string]any)
+		payload, ok := decodeAny(t, raw).(map[string]any)
+		if !ok {
+			continue // Scalar exports have no future object fields.
+		}
 		payload["future_optional"] = "new"
 		raw, err = json.Marshal(payload)
 		if err != nil {

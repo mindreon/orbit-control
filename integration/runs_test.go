@@ -18,6 +18,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
+	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/testsuite"
+	"go.temporal.io/sdk/workflow"
 
 	"github.com/mindreon/orbit-control/internal/activities/ctl"
 	"github.com/mindreon/orbit-control/internal/auth"
@@ -37,6 +40,38 @@ type runFixture struct {
 	router                                       http.Handler
 	signer                                       *auth.CapabilitySigner
 	keys                                         secrets.Keys
+}
+
+// Interactions persist the calling workflow's ID, so exercise them in an actual
+// Temporal test activity context rather than calling the activity directly.
+func (f *runFixture) createInteraction(t *testing.T, in w.InteractionInput) (w.InteractionOutput, error) {
+	t.Helper()
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	workflowID := "member:" + f.tenant + ":" + f.run + ":alice:1"
+	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: workflowID})
+	env.RegisterActivity(f.activities.CreateInteraction)
+	env.ExecuteWorkflow(func(ctx workflow.Context, input w.InteractionInput) (w.InteractionOutput, error) {
+		ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{StartToCloseTimeout: time.Minute})
+		var out w.InteractionOutput
+		err := workflow.ExecuteActivity(ctx, f.activities.CreateInteraction, input).Get(ctx, &out)
+		return out, err
+	}, in)
+	if err := env.GetWorkflowError(); err != nil {
+		return w.InteractionOutput{}, err
+	}
+	var out w.InteractionOutput
+	err := env.GetWorkflowResult(&out)
+	f.tx(t, func(ctx context.Context, tx pgx.Tx) error {
+		var actual string
+		if err := tx.QueryRow(ctx, "SELECT workflow_id FROM interactions WHERE tenant_id=$1 AND id=$2",
+			f.tenant, in.Request.InteractionId).Scan(&actual); err != nil {
+			return err
+		}
+		require.Equal(t, workflowID, actual)
+		return nil
+	})
+	return out, err
 }
 
 func newRunFixture(t *testing.T, d *db.DB, admin *pgx.Conn) *runFixture {
@@ -277,7 +312,7 @@ func testRunGrants(t *testing.T, d *db.DB, admin *pgx.Conn) {
 			create := w.InteractionInput{RunOp: op, Request: req, RemindAt: op.EventAt.Add(time.Hour),
 				EscalateAt: op.EventAt.Add(24 * time.Hour), ExpiresAt: op.EventAt.Add(72 * time.Hour)}
 			for range 2 {
-				_, err = f.activities.CreateInteraction(t.Context(), create)
+				_, err = f.createInteraction(t, create)
 				require.NoError(t, err)
 			}
 			notify := w.NotifyInput{RunOp: f.op(), InteractionID: req.InteractionId, Kind: "escalate"}
@@ -327,7 +362,7 @@ func testRunGrants(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		Question:      &contract.Question{Text: "Ready?"},
 	}
 	op := f.op()
-	_, err := f.activities.CreateInteraction(t.Context(), w.InteractionInput{RunOp: op, Request: cancelReq,
+	_, err := f.createInteraction(t, w.InteractionInput{RunOp: op, Request: cancelReq,
 		RemindAt: op.EventAt, EscalateAt: op.EventAt, ExpiresAt: op.EventAt.Add(time.Hour)})
 	require.NoError(t, err)
 	cancel := w.NotifyInput{RunOp: f.op(), InteractionID: cancelReq.InteractionId}

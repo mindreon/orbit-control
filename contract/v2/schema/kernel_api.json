@@ -14,7 +14,12 @@
     "CheckpointKeyResponse",
     "UsageItem",
     "UsageReport",
-    "UsageReportResponse"
+    "UsageReportResponse",
+    "TeamErrorCode",
+    "ScheduleCreateRequest",
+    "ScheduleView",
+    "ScheduleListResponse",
+    "ScheduleErrorCode"
   ],
   "$defs": {
     "LockFileContent": {
@@ -589,6 +594,243 @@
         "run_used_millicredits"
       ],
       "x-extra": "ignore"
+    },
+    "TeamErrorCode": {
+      "description": "HTTP error codes returned by team kernel API operations; not Temporal ApplicationError types.",
+      "enum": [
+        "TEAM_NOT_LEADER",
+        "TEAM_NOT_ASSIGNEE",
+        "TEAM_NOT_REVIEWER",
+        "TEAM_NOT_IN_TURN",
+        "TEAM_UNKNOWN_TASK",
+        "TEAM_UNKNOWN_MEMBER",
+        "TEAM_BAD_TRANSITION",
+        "TEAM_MAILBOX_FULL",
+        "TEAM_TOO_MANY_TASKS",
+        "TEAM_TEXT_TOO_LONG",
+        "TEAM_FINISHED",
+        "TEAM_UPDATE_TIMEOUT"
+      ]
+    },
+    "ScheduleCreateRequest": {
+      "description": "Create a schedule as the run principal in the session workspace.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "cron",
+        "timezone",
+        "entry_ref",
+        "prompt",
+        "budget_millicredits",
+        "request_id"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Schedule display name, 1\u2013128 characters.",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "description": {
+          "type": "string",
+          "description": "What the schedule is for; at most 1024 characters.",
+          "maxLength": 1024
+        },
+        "cron": {
+          "type": "string",
+          "description": "Standard five-field cron; minimum interval 5 minutes, validated by control.",
+          "minLength": 1
+        },
+        "timezone": {
+          "type": "string",
+          "description": "IANA timezone name; empty and Local are rejected by control.",
+          "minLength": 1
+        },
+        "entry_ref": {
+          "type": "string",
+          "description": "Agent or team asset reference; control resolves its kind and permissions.",
+          "minLength": 1
+        },
+        "prompt": {
+          "type": "string",
+          "description": "Run prompt; nonempty and at most 32768 UTF-8 bytes, authoritatively validated by control.",
+          "minLength": 1,
+          "maxLength": 32768
+        },
+        "budget_millicredits": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 9007199254740991,
+          "description": "Budget per firing in integer millicredits; at least 1000."
+        },
+        "overlap_policy": {
+          "$ref": "#/$defs/ScheduleOverlapPolicy",
+          "description": "Overlap handling; defaults to skip.",
+          "default": "skip"
+        },
+        "catchup_window_seconds": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 86400,
+          "default": 3600,
+          "description": "Catchup window in seconds; defaults to 3600."
+        },
+        "request_id": {
+          "type": "string",
+          "description": "Effect key for idempotent creation within the run.",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$"
+        }
+      },
+      "x-extra": "ignore"
+    },
+    "ScheduleView": {
+      "description": "Public schedule configuration and lifecycle state.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "cron",
+        "timezone",
+        "entry_ref",
+        "prompt",
+        "budget_millicredits",
+        "overlap_policy",
+        "catchup_window_seconds",
+        "id",
+        "workspace_id",
+        "owner_id",
+        "entry_kind",
+        "status",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Schedule display name, 1\u2013128 characters.",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "description": {
+          "type": "string",
+          "description": "What the schedule is for; at most 1024 characters.",
+          "maxLength": 1024
+        },
+        "cron": {
+          "type": "string",
+          "description": "Standard five-field cron; minimum interval 5 minutes, validated by control.",
+          "minLength": 1
+        },
+        "timezone": {
+          "type": "string",
+          "description": "IANA timezone name; empty and Local are rejected by control.",
+          "minLength": 1
+        },
+        "entry_ref": {
+          "type": "string",
+          "description": "Agent or team asset reference; control resolves its kind and permissions.",
+          "minLength": 1
+        },
+        "prompt": {
+          "type": "string",
+          "description": "Run prompt; nonempty and at most 32768 UTF-8 bytes, authoritatively validated by control.",
+          "minLength": 1,
+          "maxLength": 32768
+        },
+        "budget_millicredits": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 9007199254740991,
+          "description": "Budget per firing in integer millicredits; at least 1000."
+        },
+        "overlap_policy": {
+          "$ref": "#/$defs/ScheduleOverlapPolicy",
+          "description": "Overlap handling."
+        },
+        "catchup_window_seconds": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 86400,
+          "description": "Catchup window in seconds."
+        },
+        "id": {
+          "type": "string",
+          "description": "Schedule identifier.",
+          "format": "uuid"
+        },
+        "workspace_id": {
+          "type": "string",
+          "description": "Workspace containing the schedule.",
+          "format": "uuid"
+        },
+        "owner_id": {
+          "type": "string",
+          "description": "Principal whose identity and permissions apply at each firing.",
+          "format": "uuid"
+        },
+        "entry_kind": {
+          "$ref": "lock.json#/$defs/EntryKind",
+          "description": "Resolved entry asset kind."
+        },
+        "status": {
+          "enum": [
+            "active",
+            "paused",
+            "deleted"
+          ],
+          "description": "Schedule lifecycle status."
+        },
+        "paused_reason": {
+          "type": "string",
+          "description": "Reason the schedule was automatically paused."
+        },
+        "created_at": {
+          "type": "string",
+          "description": "Creation timestamp.",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "description": "Last modification timestamp.",
+          "format": "date-time"
+        }
+      },
+      "x-extra": "ignore"
+    },
+    "ScheduleListResponse": {
+      "description": "Schedules visible to the run principal in the session workspace.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "items": {
+          "type": "array",
+          "description": "Visible schedules.",
+          "items": {
+            "$ref": "#/$defs/ScheduleView"
+          },
+          "default": []
+        }
+      },
+      "x-extra": "ignore"
+    },
+    "ScheduleOverlapPolicy": {
+      "description": "How a schedule handles overlapping firings.",
+      "enum": [
+        "skip",
+        "buffer_one"
+      ]
+    },
+    "ScheduleErrorCode": {
+      "description": "HTTP error codes returned by schedule kernel API operations; not Temporal ApplicationError types.",
+      "enum": [
+        "SCHEDULE_INVALID_CRON",
+        "SCHEDULE_INTERVAL_TOO_SHORT",
+        "SCHEDULE_INVALID_TIMEZONE",
+        "SCHEDULE_QUOTA_EXCEEDED",
+        "SCHEDULE_NOT_FOUND"
+      ]
     }
   }
 }

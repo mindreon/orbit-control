@@ -170,6 +170,18 @@ func testRLS(t *testing.T, admin *pgx.Conn, app *db.DB) {
 	for _, n := range base {
 		idmap[n] = ids.New()
 	}
+	crudTables := []string{"team_runs", "team_tasks", "team_members", "team_turns", "schedules", "schedule_runs"}
+	for _, table := range crudTables {
+		if !slices.Contains(base, table) {
+			t.Fatalf("missing WP8 tenant table %s", table)
+		}
+		for _, privilege := range []string{"SELECT", "INSERT", "UPDATE", "DELETE"} {
+			var allowed bool
+			if err := admin.QueryRow(ctx, "SELECT has_table_privilege('orbit_app',$1,$2)", table, privilege).Scan(&allowed); err != nil || !allowed {
+				t.Fatalf("orbit_app %s on %s: allowed=%v err=%v", privilege, table, allowed, err)
+			}
+		}
+	}
 	// Build a minimally valid fixture for every new table from live column and CHECK
 	// metadata, so adding a tenant table expands coverage automatically.
 	for _, n := range base {
@@ -216,6 +228,34 @@ func testRLS(t *testing.T, admin *pgx.Conn, app *db.DB) {
 			})
 			if e != nil {
 				t.Fatal(e)
+			}
+			if slices.Contains(crudTables, table) {
+				// Exercise actual app UPDATE and DELETE rights without removing the
+				// fixture or its referenced parents from the rest of the suite.
+				e = app.WithTenant(ctx, a, func(tx pgx.Tx) error {
+					if _, err := tx.Exec(ctx, "SAVEPOINT tenant_crud"); err != nil {
+						return err
+					}
+					if table == "schedules" {
+						if _, err := tx.Exec(ctx, "DELETE FROM schedule_runs"); err != nil {
+							return err
+						}
+					}
+					for _, statement := range []string{"UPDATE " + q + " SET tenant_id=tenant_id", "DELETE FROM " + q} {
+						result, err := tx.Exec(ctx, statement)
+						if err != nil {
+							return err
+						}
+						if result.RowsAffected() == 0 {
+							return fmt.Errorf("app write did not affect its tenant fixture")
+						}
+					}
+					_, err := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT tenant_crud")
+					return err
+				})
+				if e != nil {
+					t.Fatal(e)
+				}
 			}
 			e = app.WithTenant(ctx, b, func(tx pgx.Tx) error {
 				var n int
@@ -357,6 +397,8 @@ func insertFixture(t *testing.T, admin *pgx.Conn, app *db.DB, table, base, tenan
 				v = idmap["workspaces"]
 			case "session_id":
 				v = idmap["sessions"]
+			case "schedule_id":
+				v = idmap["schedules"]
 			case "run_id":
 				v = idmap["runs"]
 			case "asset_id":

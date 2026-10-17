@@ -30,6 +30,7 @@
         ]
       },
       "description": "Task acceptance criteria."
-    }
+    },
+    "auto_completed": true
   }
 }

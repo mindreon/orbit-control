@@ -22,9 +22,10 @@
       ]
     },
     "MemberName": {
-      "description": "Roster name of a team member.",
+      "description": "Member name, at most 64 ASCII bytes. main is the single-agent member and team the team-level emitter; team rosters may use neither.",
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"
     },
     "NewTask": {
       "description": "A task the leader adds to the board.",
@@ -38,12 +39,14 @@
         "title": {
           "type": "string",
           "minLength": 1,
-          "description": "Short title."
+          "description": "Short title; at most 200 UTF-8 bytes, authoritatively validated by control.",
+          "maxLength": 200
         },
         "description": {
           "type": "string",
           "minLength": 1,
-          "description": "What to do and what done looks like."
+          "description": "Task requirements and acceptance criteria; at most 4096 UTF-8 bytes, authoritatively validated by control.",
+          "maxLength": 4096
         },
         "deps": {
           "type": "array",
@@ -58,17 +61,20 @@
         "assignee": {
           "$ref": "#/$defs/MemberName"
         },
-        "spec_ref": {
-          "type": "string",
-          "description": "Object reference of a longer task specification.",
-          "minLength": 1
-        },
         "narrowed_tools": {
           "type": "array",
           "description": "Tools allowed for this task; only narrows member permissions.",
           "items": {
             "type": "string",
             "description": "Tool name."
+          },
+          "default": []
+        },
+        "reviewers": {
+          "type": "array",
+          "description": "Reviewer member names, a subset of the roster's reviewers; empty means every reviewer.",
+          "items": {
+            "$ref": "#/$defs/MemberName"
           },
           "default": []
         }
@@ -80,13 +86,13 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "caller",
         "tasks",
         "request_id"
       ],
       "properties": {
         "caller": {
-          "$ref": "#/$defs/MemberName"
+          "$ref": "#/$defs/MemberName",
+          "description": "Optional caller hint; control overrides it with the member identity from the run capability token."
         },
         "tasks": {
           "type": "array",
@@ -128,14 +134,14 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "caller",
         "task_id",
         "member",
         "request_id"
       ],
       "properties": {
         "caller": {
-          "$ref": "#/$defs/MemberName"
+          "$ref": "#/$defs/MemberName",
+          "description": "Optional caller hint; control overrides it with the member identity from the run capability token."
         },
         "task_id": {
           "type": "string",
@@ -167,14 +173,14 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "caller",
         "to",
         "text",
         "request_id"
       ],
       "properties": {
         "caller": {
-          "$ref": "#/$defs/MemberName"
+          "$ref": "#/$defs/MemberName",
+          "description": "Optional caller hint; control overrides it with the member identity from the run capability token."
         },
         "to": {
           "$ref": "#/$defs/MemberName"
@@ -182,7 +188,8 @@
         "text": {
           "type": "string",
           "minLength": 1,
-          "description": "Message text."
+          "description": "Message text; at most 2048 UTF-8 bytes, authoritatively validated by control.",
+          "maxLength": 2048
         },
         "request_id": {
           "type": "string",
@@ -197,14 +204,14 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "caller",
         "task_id",
         "result_text",
         "request_id"
       ],
       "properties": {
         "caller": {
-          "$ref": "#/$defs/MemberName"
+          "$ref": "#/$defs/MemberName",
+          "description": "Optional caller hint; control overrides it with the member identity from the run capability token."
         },
         "task_id": {
           "type": "string",
@@ -215,20 +222,25 @@
         "result_text": {
           "type": "string",
           "minLength": 1,
-          "description": "The result of the task."
-        },
-        "artifacts": {
-          "type": "array",
-          "items": {
-            "$ref": "common.json#/$defs/Artifact"
-          },
-          "description": "Files that are part of the result.",
-          "default": []
+          "description": "Task result; at most 4096 UTF-8 bytes, authoritatively validated by control.",
+          "maxLength": 4096
         },
         "request_id": {
           "type": "string",
           "description": "Effect key; Temporal Update ID MUST equal request_id for retries to deduplicate.",
           "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$"
+        },
+        "files": {
+          "type": "array",
+          "description": "Result file paths, at most 20; each path is at most 256 UTF-8 bytes, authoritatively validated by control.",
+          "items": {
+            "type": "string",
+            "description": "Workspace-relative file path; at most 256 UTF-8 bytes, authoritatively validated by control.",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "maxItems": 20,
+          "default": []
         }
       },
       "x-extra": "ignore"
@@ -245,7 +257,6 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "caller",
         "task_id",
         "verdict",
         "comment",
@@ -253,7 +264,8 @@
       ],
       "properties": {
         "caller": {
-          "$ref": "#/$defs/MemberName"
+          "$ref": "#/$defs/MemberName",
+          "description": "Optional caller hint; control overrides it with the member identity from the run capability token."
         },
         "task_id": {
           "type": "string",
@@ -266,7 +278,8 @@
         },
         "comment": {
           "type": "string",
-          "description": "Why; shown to the assignee when the verdict is reject."
+          "description": "Review explanation shown to the assignee on rejection; at most 1024 UTF-8 bytes, authoritatively validated by control.",
+          "maxLength": 1024
         },
         "request_id": {
           "type": "string",
@@ -281,18 +294,19 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "caller",
         "summary",
         "request_id"
       ],
       "properties": {
         "caller": {
-          "$ref": "#/$defs/MemberName"
+          "$ref": "#/$defs/MemberName",
+          "description": "Optional caller hint; control overrides it with the member identity from the run capability token."
         },
         "summary": {
           "type": "string",
           "minLength": 1,
-          "description": "What the team accomplished."
+          "description": "What the team accomplished; at most 8192 UTF-8 bytes, authoritatively validated by control.",
+          "maxLength": 8192
         },
         "request_id": {
           "type": "string",
@@ -340,14 +354,15 @@
       "x-extra": "ignore"
     },
     "TaskStatus": {
-      "description": "pending: ready to be assigned or started. blocked: waits for dependencies. in_progress: a member works on it. in_review: the result waits for reviewers. completed: approved. cancelled: dropped.",
+      "description": "pending: ready to be assigned or started. blocked: waits for dependencies. in_progress: a member works on it. in_review: the result waits for reviewers. completed: approved. cancelled: dropped. failed: the task exhausted its failure or review-round limit.",
       "enum": [
         "pending",
         "blocked",
         "in_progress",
         "in_review",
         "completed",
-        "cancelled"
+        "cancelled",
+        "failed"
       ]
     },
     "TaskReview": {
@@ -370,6 +385,16 @@
             "$ref": "#/$defs/ReviewVote"
           },
           "default": []
+        },
+        "round": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Review round; starts at 0 before the first review."
+        },
+        "rework_note": {
+          "type": "string",
+          "description": "Rework instructions after a rejected review; at most 1024 UTF-8 bytes, authoritatively validated by control.",
+          "maxLength": 1024
         }
       },
       "required": [],
@@ -396,7 +421,8 @@
         "title": {
           "type": "string",
           "minLength": 1,
-          "description": "Short title."
+          "description": "Short title; at most 200 UTF-8 bytes, authoritatively validated by control.",
+          "maxLength": 200
         },
         "deps": {
           "type": "array",
@@ -422,11 +448,6 @@
         "review": {
           "$ref": "#/$defs/TaskReview"
         },
-        "spec_ref": {
-          "type": "string",
-          "description": "Object reference of a longer task specification.",
-          "minLength": 1
-        },
         "narrowed_tools": {
           "type": "array",
           "description": "Tools allowed for this task; only narrows member permissions.",
@@ -438,19 +459,30 @@
         },
         "description": {
           "type": "string",
-          "description": "Task requirements and acceptance criteria."
+          "description": "Task requirements and acceptance criteria; at most 4096 UTF-8 bytes, authoritatively validated by control.",
+          "maxLength": 4096
         },
         "result_text": {
           "type": "string",
-          "description": "Member result for leader synthesis."
+          "description": "Member result for leader synthesis; at most 4096 UTF-8 bytes, authoritatively validated by control.",
+          "maxLength": 4096
         },
-        "artifacts": {
+        "files": {
           "type": "array",
-          "description": "Files produced by the member.",
+          "description": "Result file paths, at most 20; each path is at most 256 UTF-8 bytes, authoritatively validated by control.",
           "items": {
-            "$ref": "common.json#/$defs/Artifact"
+            "type": "string",
+            "description": "Workspace-relative file path; at most 256 UTF-8 bytes, authoritatively validated by control.",
+            "minLength": 1,
+            "maxLength": 256
           },
+          "maxItems": 20,
           "default": []
+        },
+        "failures": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of failed task turns, excluding review rejections."
         }
       },
       "x-extra": "ignore"
@@ -493,7 +525,8 @@
         },
         "comment": {
           "type": "string",
-          "description": "Explanation of the vote."
+          "description": "Review explanation; at most 1024 UTF-8 bytes, authoritatively validated by control.",
+          "maxLength": 1024
         }
       },
       "required": [

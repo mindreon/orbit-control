@@ -62,7 +62,7 @@
         "maxParallelMembers": {
           "type": "integer",
           "minimum": 1,
-          "description": "How many members may run a task at the same time."
+          "description": "How many non-leader members may run at the same time; defaults to 2."
         },
         "review": {
           "$ref": "#/$defs/ReviewPolicy"
@@ -91,7 +91,13 @@
         "name": {
           "type": "string",
           "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
-          "description": "Roster name, unique within the team. With count above 1 it is the prefix of the instance names."
+          "description": "Roster name, unique within the team; main and team are reserved. With count above 1 it is the prefix of the instance names.",
+          "not": {
+            "enum": [
+              "main",
+              "team"
+            ]
+          }
         },
         "role": {
           "$ref": "team_updates.json#/$defs/TeamRole"
@@ -131,6 +137,13 @@
       "properties": {
         "mode": {
           "$ref": "#/$defs/ReviewMode"
+        },
+        "maxRounds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10,
+          "default": 3,
+          "description": "Maximum review rounds per task; defaults to 3."
         }
       },
       "x-extra": "forbid"

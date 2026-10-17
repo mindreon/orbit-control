@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	"github.com/jackc/pgx/v5"
+	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 
 	"github.com/mindreon/orbit-control/internal/audit"
@@ -37,10 +38,10 @@ func (a *Activities) CreateInteraction(ctx context.Context, in w.InteractionInpu
 		}
 		n, err := tx.Exec(ctx,
 			`INSERT INTO interactions(id,tenant_id,run_id,session_id,member,seq,kind,request,approvers,status,remind_at,due_at,
- expires_at,created_at)
- VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10,$11,$12,$13)
+ expires_at,created_at,workflow_id)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10,$11,$12,$13,$14)
  ON CONFLICT DO NOTHING`, in.Request.InteractionId, in.TenantID, in.RunID, in.SessionID, in.Member, in.Seq,
-			in.Request.Kind, req, approvers, in.RemindAt, in.EscalateAt, in.ExpiresAt, in.EventAt)
+			in.Request.Kind, req, approvers, in.RemindAt, in.EscalateAt, in.ExpiresAt, in.EventAt, activity.GetInfo(ctx).WorkflowExecution.ID)
 		if err != nil {
 			return nil, err
 		}

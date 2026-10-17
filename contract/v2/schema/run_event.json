@@ -62,7 +62,7 @@
         "member": {
           "type": "string",
           "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
-          "description": "Emitter member; main for a single-agent run. Control events use attempt=0; worker attempts start at 1."
+          "description": "Emitter member; main is reserved for single-agent runs and team for team-level control events. Control events use attempt=0; worker attempts start at 1."
         },
         "segment": {
           "type": "integer",
@@ -1002,6 +1002,11 @@
       "properties": {
         "task": {
           "$ref": "team_updates.json#/$defs/TeamTask"
+        },
+        "auto_completed": {
+          "type": "boolean",
+          "default": false,
+          "description": "True when control completes a task after an assignee turn ends without CompleteTask. Defaults to false."
         }
       },
       "x-extra": "ignore"

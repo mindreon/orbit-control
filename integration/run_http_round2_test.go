@@ -198,7 +198,7 @@ func testRunHTTPHandler(t *testing.T, d *db.DB, admin *pgx.Conn, tc handlerCase)
 		return err
 	})
 	op := f.op()
-	_, err := f.activities.CreateInteraction(t.Context(), w.InteractionInput{RunOp: op,
+	_, err := f.createInteraction(t, w.InteractionInput{RunOp: op,
 		Request:   contract.InteractionRequest{InteractionId: interaction, Kind: "ask_user", Question: &contract.Question{Text: "Ready?"}},
 		ExpiresAt: time.Now().Add(time.Hour)})
 	require.NoError(t, err)

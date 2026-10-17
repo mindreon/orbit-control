@@ -604,8 +604,9 @@ func (j *AssetKind) UnmarshalJSON(value []byte) error {
 // Update AssignTask, leader only: give a task to a member, optionally narrowing
 // its tools.
 type AssignTaskInput struct {
-	// Caller corresponds to the JSON schema field "caller".
-	Caller MemberName `json:"caller" yaml:"caller" mapstructure:"caller"`
+	// Optional caller hint; control overrides it with the member identity from the
+	// run capability token.
+	Caller *MemberName `json:"caller,omitempty,omitzero" yaml:"caller,omitempty" mapstructure:"caller,omitempty"`
 
 	// Member corresponds to the JSON schema field "member".
 	Member MemberName `json:"member" yaml:"member" mapstructure:"member"`
@@ -627,9 +628,6 @@ func (j *AssignTaskInput) UnmarshalJSON(value []byte) error {
 	var raw map[string]interface{}
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
-	}
-	if _, ok := raw["caller"]; raw != nil && !ok {
-		return fmt.Errorf("field caller in AssignTaskInput: required")
 	}
 	if _, ok := raw["member"]; raw != nil && !ok {
 		return fmt.Errorf("field member in AssignTaskInput: required")
@@ -757,17 +755,19 @@ func (j *Compat) UnmarshalJSON(value []byte) error {
 // Update CompleteTask, the assignee only: hand in the result; the task moves to
 // in_review.
 type CompleteTaskInput struct {
-	// Files that are part of the result.
-	Artifacts []Artifact `json:"artifacts,omitempty,omitzero" yaml:"artifacts,omitempty" mapstructure:"artifacts,omitempty"`
+	// Optional caller hint; control overrides it with the member identity from the
+	// run capability token.
+	Caller *MemberName `json:"caller,omitempty,omitzero" yaml:"caller,omitempty" mapstructure:"caller,omitempty"`
 
-	// Caller corresponds to the JSON schema field "caller".
-	Caller MemberName `json:"caller" yaml:"caller" mapstructure:"caller"`
+	// Result file paths, at most 20; each path is at most 256 UTF-8 bytes,
+	// authoritatively validated by control.
+	Files []string `json:"files,omitempty,omitzero" yaml:"files,omitempty" mapstructure:"files,omitempty"`
 
 	// Effect key; Temporal Update ID MUST equal request_id for retries to
 	// deduplicate.
 	RequestId string `json:"request_id" yaml:"request_id" mapstructure:"request_id"`
 
-	// The result of the task.
+	// Task result; at most 4096 UTF-8 bytes, authoritatively validated by control.
 	ResultText string `json:"result_text" yaml:"result_text" mapstructure:"result_text"`
 
 	// Task being completed.
@@ -779,9 +779,6 @@ func (j *CompleteTaskInput) UnmarshalJSON(value []byte) error {
 	var raw map[string]interface{}
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
-	}
-	if _, ok := raw["caller"]; raw != nil && !ok {
-		return fmt.Errorf("field caller in CompleteTaskInput: required")
 	}
 	if _, ok := raw["request_id"]; raw != nil && !ok {
 		return fmt.Errorf("field request_id in CompleteTaskInput: required")
@@ -797,14 +794,20 @@ func (j *CompleteTaskInput) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
-	if v, ok := raw["artifacts"]; !ok || v == nil {
-		plain.Artifacts = []Artifact{}
+	if v, ok := raw["files"]; !ok || v == nil {
+		plain.Files = []string{}
+	}
+	if len(plain.Files) > 20 {
+		return fmt.Errorf("field %s length: must be <= %d", "files", 20)
 	}
 	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.RequestId)); !matched {
 		return fmt.Errorf("field %s pattern match: must match %s", "RequestId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
 	}
 	if utf8.RuneCountInString(string(plain.ResultText)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "result_text", 1)
+	}
+	if utf8.RuneCountInString(string(plain.ResultText)) > 4096 {
+		return fmt.Errorf("field %s length: must be <= %d", "result_text", 4096)
 	}
 	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.TaskId)); !matched {
 		return fmt.Errorf("field %s pattern match: must match %s", "TaskId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
@@ -818,8 +821,9 @@ func (j *CompleteTaskInput) UnmarshalJSON(value []byte) error {
 
 // Update CreateTasks, leader only: add tasks to the board.
 type CreateTasksInput struct {
-	// Caller corresponds to the JSON schema field "caller".
-	Caller MemberName `json:"caller" yaml:"caller" mapstructure:"caller"`
+	// Optional caller hint; control overrides it with the member identity from the
+	// run capability token.
+	Caller *MemberName `json:"caller,omitempty,omitzero" yaml:"caller,omitempty" mapstructure:"caller,omitempty"`
 
 	// Effect key; Temporal Update ID MUST equal request_id for retries to
 	// deduplicate.
@@ -834,9 +838,6 @@ func (j *CreateTasksInput) UnmarshalJSON(value []byte) error {
 	var raw map[string]interface{}
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
-	}
-	if _, ok := raw["caller"]; raw != nil && !ok {
-		return fmt.Errorf("field caller in CreateTasksInput: required")
 	}
 	if _, ok := raw["request_id"]; raw != nil && !ok {
 		return fmt.Errorf("field request_id in CreateTasksInput: required")
@@ -1353,14 +1354,16 @@ func (j *FinalMessage) UnmarshalJSON(value []byte) error {
 // Update FinishTeam, leader only: declare the work done; the workflow runs the
 // leader's final summary segment.
 type FinishTeamInput struct {
-	// Caller corresponds to the JSON schema field "caller".
-	Caller MemberName `json:"caller" yaml:"caller" mapstructure:"caller"`
+	// Optional caller hint; control overrides it with the member identity from the
+	// run capability token.
+	Caller *MemberName `json:"caller,omitempty,omitzero" yaml:"caller,omitempty" mapstructure:"caller,omitempty"`
 
 	// Effect key; Temporal Update ID MUST equal request_id for retries to
 	// deduplicate.
 	RequestId string `json:"request_id" yaml:"request_id" mapstructure:"request_id"`
 
-	// What the team accomplished.
+	// What the team accomplished; at most 8192 UTF-8 bytes, authoritatively validated
+	// by control.
 	Summary string `json:"summary" yaml:"summary" mapstructure:"summary"`
 }
 
@@ -1369,9 +1372,6 @@ func (j *FinishTeamInput) UnmarshalJSON(value []byte) error {
 	var raw map[string]interface{}
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
-	}
-	if _, ok := raw["caller"]; raw != nil && !ok {
-		return fmt.Errorf("field caller in FinishTeamInput: required")
 	}
 	if _, ok := raw["request_id"]; raw != nil && !ok {
 		return fmt.Errorf("field request_id in FinishTeamInput: required")
@@ -1389,6 +1389,9 @@ func (j *FinishTeamInput) UnmarshalJSON(value []byte) error {
 	}
 	if utf8.RuneCountInString(string(plain.Summary)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "summary", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Summary)) > 8192 {
+		return fmt.Errorf("field %s length: must be <= %d", "summary", 8192)
 	}
 	*j = FinishTeamInput(plain)
 	return nil
@@ -2121,7 +2124,8 @@ func (j *McpTransport) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// Roster name of a team member.
+// Member name, at most 64 ASCII bytes. main is the single-agent member and team
+// the team-level emitter; team rosters may use neither.
 type MemberName string
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -2130,6 +2134,9 @@ func (j *MemberName) UnmarshalJSON(value []byte) error {
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`, string(plain)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "", `^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
 	}
 	if utf8.RuneCountInString(string(plain)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "", 1)
@@ -2606,16 +2613,18 @@ type NewTask struct {
 	// A DAG is built by creating tasks in dependency order.
 	Deps []string `json:"deps,omitempty,omitzero" yaml:"deps,omitempty" mapstructure:"deps,omitempty"`
 
-	// What to do and what done looks like.
+	// Task requirements and acceptance criteria; at most 4096 UTF-8 bytes,
+	// authoritatively validated by control.
 	Description string `json:"description" yaml:"description" mapstructure:"description"`
 
 	// Tools allowed for this task; only narrows member permissions.
 	NarrowedTools []string `json:"narrowed_tools,omitempty,omitzero" yaml:"narrowed_tools,omitempty" mapstructure:"narrowed_tools,omitempty"`
 
-	// Object reference of a longer task specification.
-	SpecRef *string `json:"spec_ref,omitempty,omitzero" yaml:"spec_ref,omitempty" mapstructure:"spec_ref,omitempty"`
+	// Reviewer member names, a subset of the roster's reviewers; empty means every
+	// reviewer.
+	Reviewers []MemberName `json:"reviewers,omitempty,omitzero" yaml:"reviewers,omitempty" mapstructure:"reviewers,omitempty"`
 
-	// Short title.
+	// Short title; at most 200 UTF-8 bytes, authoritatively validated by control.
 	Title string `json:"title" yaml:"title" mapstructure:"title"`
 }
 
@@ -2642,14 +2651,20 @@ func (j *NewTask) UnmarshalJSON(value []byte) error {
 	if utf8.RuneCountInString(string(plain.Description)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "description", 1)
 	}
+	if utf8.RuneCountInString(string(plain.Description)) > 4096 {
+		return fmt.Errorf("field %s length: must be <= %d", "description", 4096)
+	}
 	if v, ok := raw["narrowed_tools"]; !ok || v == nil {
 		plain.NarrowedTools = []string{}
 	}
-	if plain.SpecRef != nil && utf8.RuneCountInString(string(*plain.SpecRef)) < 1 {
-		return fmt.Errorf("field %s length: must be >= %d", "spec_ref", 1)
+	if v, ok := raw["reviewers"]; !ok || v == nil {
+		plain.Reviewers = []MemberName{}
 	}
 	if utf8.RuneCountInString(string(plain.Title)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "title", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Title)) > 200 {
+		return fmt.Errorf("field %s length: must be <= %d", "title", 200)
 	}
 	*j = NewTask(plain)
 	return nil
@@ -2877,6 +2892,9 @@ func (j *ReviewMode) UnmarshalJSON(value []byte) error {
 
 // How task results are reviewed.
 type ReviewPolicy struct {
+	// Maximum review rounds per task; defaults to 3.
+	MaxRounds int `json:"maxRounds,omitempty,omitzero" yaml:"maxRounds,omitempty" mapstructure:"maxRounds,omitempty"`
+
 	// Mode corresponds to the JSON schema field "mode".
 	Mode ReviewMode `json:"mode" yaml:"mode" mapstructure:"mode"`
 }
@@ -2895,13 +2913,23 @@ func (j *ReviewPolicy) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
+	if v, ok := raw["maxRounds"]; !ok || v == nil {
+		plain.MaxRounds = 3
+	}
+	if 10 < plain.MaxRounds {
+		return fmt.Errorf("field %s: must be <= %v", "maxRounds", 10)
+	}
+	if 1 > plain.MaxRounds {
+		return fmt.Errorf("field %s: must be >= %v", "maxRounds", 1)
+	}
 	*j = ReviewPolicy(plain)
 	return nil
 }
 
 // One reviewer vote.
 type ReviewVote struct {
-	// Explanation of the vote.
+	// Review explanation; at most 1024 UTF-8 bytes, authoritatively validated by
+	// control.
 	Comment string `json:"comment" yaml:"comment" mapstructure:"comment"`
 
 	// Reviewer corresponds to the JSON schema field "reviewer".
@@ -2930,6 +2958,9 @@ func (j *ReviewVote) UnmarshalJSON(value []byte) error {
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if utf8.RuneCountInString(string(plain.Comment)) > 1024 {
+		return fmt.Errorf("field %s length: must be <= %d", "comment", 1024)
 	}
 	*j = ReviewVote(plain)
 	return nil
@@ -3063,8 +3094,8 @@ type RunEvent struct {
 	// within each emitter tuple; control uses attempt=0.
 	Id string `json:"id" yaml:"id" mapstructure:"id"`
 
-	// Emitter member; main for a single-agent run. Control events use attempt=0;
-	// worker attempts start at 1.
+	// Emitter member; main is reserved for single-agent runs and team for team-level
+	// control events. Control events use attempt=0; worker attempts start at 1.
 	Member string `json:"member" yaml:"member" mapstructure:"member"`
 
 	// Run the event belongs to.
@@ -4090,6 +4121,394 @@ func (j *SandboxSnapshotResult) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// Create a schedule as the run principal in the session workspace.
+type ScheduleCreateRequest struct {
+	// Budget per firing in integer millicredits; at least 1000.
+	BudgetMillicredits int64 `json:"budget_millicredits" yaml:"budget_millicredits" mapstructure:"budget_millicredits"`
+
+	// Catchup window in seconds; defaults to 3600.
+	CatchupWindowSeconds int `json:"catchup_window_seconds,omitempty,omitzero" yaml:"catchup_window_seconds,omitempty" mapstructure:"catchup_window_seconds,omitempty"`
+
+	// Standard five-field cron; minimum interval 5 minutes, validated by control.
+	Cron string `json:"cron" yaml:"cron" mapstructure:"cron"`
+
+	// What the schedule is for; at most 1024 characters.
+	Description *string `json:"description,omitempty,omitzero" yaml:"description,omitempty" mapstructure:"description,omitempty"`
+
+	// Agent or team asset reference; control resolves its kind and permissions.
+	EntryRef string `json:"entry_ref" yaml:"entry_ref" mapstructure:"entry_ref"`
+
+	// Schedule display name, 1–128 characters.
+	Name string `json:"name" yaml:"name" mapstructure:"name"`
+
+	// Overlap handling; defaults to skip.
+	OverlapPolicy ScheduleOverlapPolicy `json:"overlap_policy,omitempty,omitzero" yaml:"overlap_policy,omitempty" mapstructure:"overlap_policy,omitempty"`
+
+	// Run prompt; nonempty and at most 32768 UTF-8 bytes, authoritatively validated
+	// by control.
+	Prompt string `json:"prompt" yaml:"prompt" mapstructure:"prompt"`
+
+	// Effect key for idempotent creation within the run.
+	RequestId string `json:"request_id" yaml:"request_id" mapstructure:"request_id"`
+
+	// IANA timezone name; empty and Local are rejected by control.
+	Timezone string `json:"timezone" yaml:"timezone" mapstructure:"timezone"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ScheduleCreateRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["budget_millicredits"]; raw != nil && !ok {
+		return fmt.Errorf("field budget_millicredits in ScheduleCreateRequest: required")
+	}
+	if _, ok := raw["cron"]; raw != nil && !ok {
+		return fmt.Errorf("field cron in ScheduleCreateRequest: required")
+	}
+	if _, ok := raw["entry_ref"]; raw != nil && !ok {
+		return fmt.Errorf("field entry_ref in ScheduleCreateRequest: required")
+	}
+	if _, ok := raw["name"]; raw != nil && !ok {
+		return fmt.Errorf("field name in ScheduleCreateRequest: required")
+	}
+	if _, ok := raw["prompt"]; raw != nil && !ok {
+		return fmt.Errorf("field prompt in ScheduleCreateRequest: required")
+	}
+	if _, ok := raw["request_id"]; raw != nil && !ok {
+		return fmt.Errorf("field request_id in ScheduleCreateRequest: required")
+	}
+	if _, ok := raw["timezone"]; raw != nil && !ok {
+		return fmt.Errorf("field timezone in ScheduleCreateRequest: required")
+	}
+	type Plain ScheduleCreateRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if 9007199254740991 < plain.BudgetMillicredits {
+		return fmt.Errorf("field %s: must be <= %v", "budget_millicredits", 9007199254740991)
+	}
+	if 1000 > plain.BudgetMillicredits {
+		return fmt.Errorf("field %s: must be >= %v", "budget_millicredits", 1000)
+	}
+	if v, ok := raw["catchup_window_seconds"]; !ok || v == nil {
+		plain.CatchupWindowSeconds = 3600
+	}
+	if 86400 < plain.CatchupWindowSeconds {
+		return fmt.Errorf("field %s: must be <= %v", "catchup_window_seconds", 86400)
+	}
+	if 60 > plain.CatchupWindowSeconds {
+		return fmt.Errorf("field %s: must be >= %v", "catchup_window_seconds", 60)
+	}
+	if utf8.RuneCountInString(string(plain.Cron)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "cron", 1)
+	}
+	if plain.Description != nil && utf8.RuneCountInString(string(*plain.Description)) > 1024 {
+		return fmt.Errorf("field %s length: must be <= %d", "description", 1024)
+	}
+	if utf8.RuneCountInString(string(plain.EntryRef)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "entry_ref", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Name)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "name", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Name)) > 128 {
+		return fmt.Errorf("field %s length: must be <= %d", "name", 128)
+	}
+	if v, ok := raw["overlap_policy"]; !ok || v == nil {
+		plain.OverlapPolicy = "skip"
+	}
+	if utf8.RuneCountInString(string(plain.Prompt)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "prompt", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Prompt)) > 32768 {
+		return fmt.Errorf("field %s length: must be <= %d", "prompt", 32768)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.RequestId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "RequestId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
+	}
+	if utf8.RuneCountInString(string(plain.Timezone)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "timezone", 1)
+	}
+	*j = ScheduleCreateRequest(plain)
+	return nil
+}
+
+type ScheduleErrorCode string
+
+const ScheduleErrorCodeSCHEDULEINTERVALTOOSHORT ScheduleErrorCode = "SCHEDULE_INTERVAL_TOO_SHORT"
+const ScheduleErrorCodeSCHEDULEINVALIDCRON ScheduleErrorCode = "SCHEDULE_INVALID_CRON"
+const ScheduleErrorCodeSCHEDULEINVALIDTIMEZONE ScheduleErrorCode = "SCHEDULE_INVALID_TIMEZONE"
+const ScheduleErrorCodeSCHEDULENOTFOUND ScheduleErrorCode = "SCHEDULE_NOT_FOUND"
+const ScheduleErrorCodeSCHEDULEQUOTAEXCEEDED ScheduleErrorCode = "SCHEDULE_QUOTA_EXCEEDED"
+
+var enumValues_ScheduleErrorCode = []interface{}{
+	"SCHEDULE_INVALID_CRON",
+	"SCHEDULE_INTERVAL_TOO_SHORT",
+	"SCHEDULE_INVALID_TIMEZONE",
+	"SCHEDULE_QUOTA_EXCEEDED",
+	"SCHEDULE_NOT_FOUND",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ScheduleErrorCode) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ScheduleErrorCode {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ScheduleErrorCode, v)
+	}
+	*j = ScheduleErrorCode(v)
+	return nil
+}
+
+// Schedules visible to the run principal in the session workspace.
+type ScheduleListResponse struct {
+	// Visible schedules.
+	Items []ScheduleView `json:"items,omitempty,omitzero" yaml:"items,omitempty" mapstructure:"items,omitempty"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ScheduleListResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	type Plain ScheduleListResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if v, ok := raw["items"]; !ok || v == nil {
+		plain.Items = []ScheduleView{}
+	}
+	*j = ScheduleListResponse(plain)
+	return nil
+}
+
+type ScheduleOverlapPolicy string
+
+const ScheduleOverlapPolicyBufferOne ScheduleOverlapPolicy = "buffer_one"
+const ScheduleOverlapPolicySkip ScheduleOverlapPolicy = "skip"
+
+var enumValues_ScheduleOverlapPolicy = []interface{}{
+	"skip",
+	"buffer_one",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ScheduleOverlapPolicy) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ScheduleOverlapPolicy {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ScheduleOverlapPolicy, v)
+	}
+	*j = ScheduleOverlapPolicy(v)
+	return nil
+}
+
+// Public schedule configuration and lifecycle state.
+type ScheduleView struct {
+	// Budget per firing in integer millicredits; at least 1000.
+	BudgetMillicredits int64 `json:"budget_millicredits" yaml:"budget_millicredits" mapstructure:"budget_millicredits"`
+
+	// Catchup window in seconds.
+	CatchupWindowSeconds int `json:"catchup_window_seconds" yaml:"catchup_window_seconds" mapstructure:"catchup_window_seconds"`
+
+	// Creation timestamp.
+	CreatedAt time.Time `json:"created_at" yaml:"created_at" mapstructure:"created_at"`
+
+	// Standard five-field cron; minimum interval 5 minutes, validated by control.
+	Cron string `json:"cron" yaml:"cron" mapstructure:"cron"`
+
+	// What the schedule is for; at most 1024 characters.
+	Description *string `json:"description,omitempty,omitzero" yaml:"description,omitempty" mapstructure:"description,omitempty"`
+
+	// Resolved entry asset kind.
+	EntryKind EntryKind `json:"entry_kind" yaml:"entry_kind" mapstructure:"entry_kind"`
+
+	// Agent or team asset reference; control resolves its kind and permissions.
+	EntryRef string `json:"entry_ref" yaml:"entry_ref" mapstructure:"entry_ref"`
+
+	// Schedule identifier.
+	Id string `json:"id" yaml:"id" mapstructure:"id"`
+
+	// Schedule display name, 1–128 characters.
+	Name string `json:"name" yaml:"name" mapstructure:"name"`
+
+	// Overlap handling.
+	OverlapPolicy ScheduleOverlapPolicy `json:"overlap_policy" yaml:"overlap_policy" mapstructure:"overlap_policy"`
+
+	// Principal whose identity and permissions apply at each firing.
+	OwnerId string `json:"owner_id" yaml:"owner_id" mapstructure:"owner_id"`
+
+	// Reason the schedule was automatically paused.
+	PausedReason *string `json:"paused_reason,omitempty,omitzero" yaml:"paused_reason,omitempty" mapstructure:"paused_reason,omitempty"`
+
+	// Run prompt; nonempty and at most 32768 UTF-8 bytes, authoritatively validated
+	// by control.
+	Prompt string `json:"prompt" yaml:"prompt" mapstructure:"prompt"`
+
+	// Schedule lifecycle status.
+	Status ScheduleViewStatus `json:"status" yaml:"status" mapstructure:"status"`
+
+	// IANA timezone name; empty and Local are rejected by control.
+	Timezone string `json:"timezone" yaml:"timezone" mapstructure:"timezone"`
+
+	// Last modification timestamp.
+	UpdatedAt time.Time `json:"updated_at" yaml:"updated_at" mapstructure:"updated_at"`
+
+	// Workspace containing the schedule.
+	WorkspaceId string `json:"workspace_id" yaml:"workspace_id" mapstructure:"workspace_id"`
+}
+
+type ScheduleViewStatus string
+
+const ScheduleViewStatusActive ScheduleViewStatus = "active"
+const ScheduleViewStatusDeleted ScheduleViewStatus = "deleted"
+const ScheduleViewStatusPaused ScheduleViewStatus = "paused"
+
+var enumValues_ScheduleViewStatus = []interface{}{
+	"active",
+	"paused",
+	"deleted",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ScheduleViewStatus) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ScheduleViewStatus {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ScheduleViewStatus, v)
+	}
+	*j = ScheduleViewStatus(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ScheduleView) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["budget_millicredits"]; raw != nil && !ok {
+		return fmt.Errorf("field budget_millicredits in ScheduleView: required")
+	}
+	if _, ok := raw["catchup_window_seconds"]; raw != nil && !ok {
+		return fmt.Errorf("field catchup_window_seconds in ScheduleView: required")
+	}
+	if _, ok := raw["created_at"]; raw != nil && !ok {
+		return fmt.Errorf("field created_at in ScheduleView: required")
+	}
+	if _, ok := raw["cron"]; raw != nil && !ok {
+		return fmt.Errorf("field cron in ScheduleView: required")
+	}
+	if _, ok := raw["entry_kind"]; raw != nil && !ok {
+		return fmt.Errorf("field entry_kind in ScheduleView: required")
+	}
+	if _, ok := raw["entry_ref"]; raw != nil && !ok {
+		return fmt.Errorf("field entry_ref in ScheduleView: required")
+	}
+	if _, ok := raw["id"]; raw != nil && !ok {
+		return fmt.Errorf("field id in ScheduleView: required")
+	}
+	if _, ok := raw["name"]; raw != nil && !ok {
+		return fmt.Errorf("field name in ScheduleView: required")
+	}
+	if _, ok := raw["overlap_policy"]; raw != nil && !ok {
+		return fmt.Errorf("field overlap_policy in ScheduleView: required")
+	}
+	if _, ok := raw["owner_id"]; raw != nil && !ok {
+		return fmt.Errorf("field owner_id in ScheduleView: required")
+	}
+	if _, ok := raw["prompt"]; raw != nil && !ok {
+		return fmt.Errorf("field prompt in ScheduleView: required")
+	}
+	if _, ok := raw["status"]; raw != nil && !ok {
+		return fmt.Errorf("field status in ScheduleView: required")
+	}
+	if _, ok := raw["timezone"]; raw != nil && !ok {
+		return fmt.Errorf("field timezone in ScheduleView: required")
+	}
+	if _, ok := raw["updated_at"]; raw != nil && !ok {
+		return fmt.Errorf("field updated_at in ScheduleView: required")
+	}
+	if _, ok := raw["workspace_id"]; raw != nil && !ok {
+		return fmt.Errorf("field workspace_id in ScheduleView: required")
+	}
+	type Plain ScheduleView
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if 9007199254740991 < plain.BudgetMillicredits {
+		return fmt.Errorf("field %s: must be <= %v", "budget_millicredits", 9007199254740991)
+	}
+	if 1000 > plain.BudgetMillicredits {
+		return fmt.Errorf("field %s: must be >= %v", "budget_millicredits", 1000)
+	}
+	if 86400 < plain.CatchupWindowSeconds {
+		return fmt.Errorf("field %s: must be <= %v", "catchup_window_seconds", 86400)
+	}
+	if 60 > plain.CatchupWindowSeconds {
+		return fmt.Errorf("field %s: must be >= %v", "catchup_window_seconds", 60)
+	}
+	if utf8.RuneCountInString(string(plain.Cron)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "cron", 1)
+	}
+	if plain.Description != nil && utf8.RuneCountInString(string(*plain.Description)) > 1024 {
+		return fmt.Errorf("field %s length: must be <= %d", "description", 1024)
+	}
+	if utf8.RuneCountInString(string(plain.EntryRef)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "entry_ref", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Name)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "name", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Name)) > 128 {
+		return fmt.Errorf("field %s length: must be <= %d", "name", 128)
+	}
+	if utf8.RuneCountInString(string(plain.Prompt)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "prompt", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Prompt)) > 32768 {
+		return fmt.Errorf("field %s length: must be <= %d", "prompt", 32768)
+	}
+	if utf8.RuneCountInString(string(plain.Timezone)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "timezone", 1)
+	}
+	*j = ScheduleView(plain)
+	return nil
+}
+
 // A secret the agent needs. Only the name is declared; the value is bound by the
 // installer.
 type SecretDeclaration struct {
@@ -4447,6 +4866,10 @@ type SegmentInput struct {
 	// Trace corresponds to the JSON schema field "trace".
 	Trace *SegmentTrace `json:"trace,omitempty,omitzero" yaml:"trace,omitempty" mapstructure:"trace,omitempty"`
 
+	// True for scheduled runs; interactive approval and questions are denied.
+	// Defaults to false.
+	Unattended bool `json:"unattended,omitempty,omitzero" yaml:"unattended,omitempty" mapstructure:"unattended,omitempty"`
+
 	// Wire protocol version; currently 1.
 	V int `json:"v" yaml:"v" mapstructure:"v"`
 
@@ -4533,6 +4956,9 @@ func (j *SegmentInput) UnmarshalJSON(value []byte) error {
 	}
 	if v, ok := raw["steer"]; !ok || v == nil {
 		plain.Steer = []SteerItem{}
+	}
+	if v, ok := raw["unattended"]; !ok || v == nil {
+		plain.Unattended = false
 	}
 	if plain.V != 1 {
 		return fmt.Errorf("field %s: must be equal to %v", "v", 1)
@@ -5061,14 +5487,15 @@ func (j *SegmentTurn) UnmarshalJSON(value []byte) error {
 
 // Update SendMessage, any member: put a message in another member's mailbox.
 type SendMessageInput struct {
-	// Caller corresponds to the JSON schema field "caller".
-	Caller MemberName `json:"caller" yaml:"caller" mapstructure:"caller"`
+	// Optional caller hint; control overrides it with the member identity from the
+	// run capability token.
+	Caller *MemberName `json:"caller,omitempty,omitzero" yaml:"caller,omitempty" mapstructure:"caller,omitempty"`
 
 	// Effect key; Temporal Update ID MUST equal request_id for retries to
 	// deduplicate.
 	RequestId string `json:"request_id" yaml:"request_id" mapstructure:"request_id"`
 
-	// Message text.
+	// Message text; at most 2048 UTF-8 bytes, authoritatively validated by control.
 	Text string `json:"text" yaml:"text" mapstructure:"text"`
 
 	// To corresponds to the JSON schema field "to".
@@ -5080,9 +5507,6 @@ func (j *SendMessageInput) UnmarshalJSON(value []byte) error {
 	var raw map[string]interface{}
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
-	}
-	if _, ok := raw["caller"]; raw != nil && !ok {
-		return fmt.Errorf("field caller in SendMessageInput: required")
 	}
 	if _, ok := raw["request_id"]; raw != nil && !ok {
 		return fmt.Errorf("field request_id in SendMessageInput: required")
@@ -5103,6 +5527,9 @@ func (j *SendMessageInput) UnmarshalJSON(value []byte) error {
 	}
 	if utf8.RuneCountInString(string(plain.Text)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "text", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Text)) > 2048 {
+		return fmt.Errorf("field %s length: must be <= %d", "text", 2048)
 	}
 	*j = SendMessageInput(plain)
 	return nil
@@ -5307,10 +5734,12 @@ func (j *SteerItem) UnmarshalJSON(value []byte) error {
 
 // Update SubmitVerdict, reviewer only.
 type SubmitVerdictInput struct {
-	// Caller corresponds to the JSON schema field "caller".
-	Caller MemberName `json:"caller" yaml:"caller" mapstructure:"caller"`
+	// Optional caller hint; control overrides it with the member identity from the
+	// run capability token.
+	Caller *MemberName `json:"caller,omitempty,omitzero" yaml:"caller,omitempty" mapstructure:"caller,omitempty"`
 
-	// Why; shown to the assignee when the verdict is reject.
+	// Review explanation shown to the assignee on rejection; at most 1024 UTF-8
+	// bytes, authoritatively validated by control.
 	Comment string `json:"comment" yaml:"comment" mapstructure:"comment"`
 
 	// Effect key; Temporal Update ID MUST equal request_id for retries to
@@ -5330,9 +5759,6 @@ func (j *SubmitVerdictInput) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
-	if _, ok := raw["caller"]; raw != nil && !ok {
-		return fmt.Errorf("field caller in SubmitVerdictInput: required")
-	}
 	if _, ok := raw["comment"]; raw != nil && !ok {
 		return fmt.Errorf("field comment in SubmitVerdictInput: required")
 	}
@@ -5349,6 +5775,9 @@ func (j *SubmitVerdictInput) UnmarshalJSON(value []byte) error {
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if utf8.RuneCountInString(string(plain.Comment)) > 1024 {
+		return fmt.Errorf("field %s length: must be <= %d", "comment", 1024)
 	}
 	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.RequestId)); !matched {
 		return fmt.Errorf("field %s pattern match: must match %s", "RequestId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
@@ -5368,6 +5797,13 @@ type TaskReview struct {
 	// Assigned reviewers.
 	Reviewers []MemberName `json:"reviewers,omitempty,omitzero" yaml:"reviewers,omitempty" mapstructure:"reviewers,omitempty"`
 
+	// Rework instructions after a rejected review; at most 1024 UTF-8 bytes,
+	// authoritatively validated by control.
+	ReworkNote *string `json:"rework_note,omitempty,omitzero" yaml:"rework_note,omitempty" mapstructure:"rework_note,omitempty"`
+
+	// Review round; starts at 0 before the first review.
+	Round *int `json:"round,omitempty,omitzero" yaml:"round,omitempty" mapstructure:"round,omitempty"`
+
 	// Submitted votes; any reject vetoes.
 	Votes []ReviewVote `json:"votes,omitempty,omitzero" yaml:"votes,omitempty" mapstructure:"votes,omitempty"`
 }
@@ -5386,6 +5822,12 @@ func (j *TaskReview) UnmarshalJSON(value []byte) error {
 	if v, ok := raw["reviewers"]; !ok || v == nil {
 		plain.Reviewers = []MemberName{}
 	}
+	if plain.ReworkNote != nil && utf8.RuneCountInString(string(*plain.ReworkNote)) > 1024 {
+		return fmt.Errorf("field %s length: must be <= %d", "rework_note", 1024)
+	}
+	if plain.Round != nil && 0 > *plain.Round {
+		return fmt.Errorf("field %s: must be >= %v", "round", 0)
+	}
 	if v, ok := raw["votes"]; !ok || v == nil {
 		plain.Votes = []ReviewVote{}
 	}
@@ -5398,6 +5840,7 @@ type TaskStatus string
 const TaskStatusBlocked TaskStatus = "blocked"
 const TaskStatusCancelled TaskStatus = "cancelled"
 const TaskStatusCompleted TaskStatus = "completed"
+const TaskStatusFailed TaskStatus = "failed"
 const TaskStatusInProgress TaskStatus = "in_progress"
 const TaskStatusInReview TaskStatus = "in_review"
 const TaskStatusPending TaskStatus = "pending"
@@ -5409,6 +5852,7 @@ var enumValues_TaskStatus = []interface{}{
 	"in_review",
 	"completed",
 	"cancelled",
+	"failed",
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -5469,9 +5913,6 @@ type TeamContext struct {
 
 	// Task corresponds to the JSON schema field "task".
 	Task *TeamTaskBrief `json:"task,omitempty,omitzero" yaml:"task,omitempty" mapstructure:"task,omitempty"`
-
-	// Workflow ID of the TeamRunWorkflow; team tools call its Updates.
-	TeamWorkflowId string `json:"team_workflow_id" yaml:"team_workflow_id" mapstructure:"team_workflow_id"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -5483,21 +5924,62 @@ func (j *TeamContext) UnmarshalJSON(value []byte) error {
 	if _, ok := raw["role"]; raw != nil && !ok {
 		return fmt.Errorf("field role in TeamContext: required")
 	}
-	if _, ok := raw["team_workflow_id"]; raw != nil && !ok {
-		return fmt.Errorf("field team_workflow_id in TeamContext: required")
-	}
 	type Plain TeamContext
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
-	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.TeamWorkflowId)); !matched {
-		return fmt.Errorf("field %s pattern match: must match %s", "TeamWorkflowId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
-	}
-	if utf8.RuneCountInString(string(plain.TeamWorkflowId)) < 1 {
-		return fmt.Errorf("field %s length: must be >= %d", "team_workflow_id", 1)
-	}
 	*j = TeamContext(plain)
+	return nil
+}
+
+type TeamErrorCode string
+
+const TeamErrorCodeTEAMBADTRANSITION TeamErrorCode = "TEAM_BAD_TRANSITION"
+const TeamErrorCodeTEAMFINISHED TeamErrorCode = "TEAM_FINISHED"
+const TeamErrorCodeTEAMMAILBOXFULL TeamErrorCode = "TEAM_MAILBOX_FULL"
+const TeamErrorCodeTEAMNOTASSIGNEE TeamErrorCode = "TEAM_NOT_ASSIGNEE"
+const TeamErrorCodeTEAMNOTINTURN TeamErrorCode = "TEAM_NOT_IN_TURN"
+const TeamErrorCodeTEAMNOTLEADER TeamErrorCode = "TEAM_NOT_LEADER"
+const TeamErrorCodeTEAMNOTREVIEWER TeamErrorCode = "TEAM_NOT_REVIEWER"
+const TeamErrorCodeTEAMTEXTTOOLONG TeamErrorCode = "TEAM_TEXT_TOO_LONG"
+const TeamErrorCodeTEAMTOOMANYTASKS TeamErrorCode = "TEAM_TOO_MANY_TASKS"
+const TeamErrorCodeTEAMUNKNOWNMEMBER TeamErrorCode = "TEAM_UNKNOWN_MEMBER"
+const TeamErrorCodeTEAMUNKNOWNTASK TeamErrorCode = "TEAM_UNKNOWN_TASK"
+const TeamErrorCodeTEAMUPDATETIMEOUT TeamErrorCode = "TEAM_UPDATE_TIMEOUT"
+
+var enumValues_TeamErrorCode = []interface{}{
+	"TEAM_NOT_LEADER",
+	"TEAM_NOT_ASSIGNEE",
+	"TEAM_NOT_REVIEWER",
+	"TEAM_NOT_IN_TURN",
+	"TEAM_UNKNOWN_TASK",
+	"TEAM_UNKNOWN_MEMBER",
+	"TEAM_BAD_TRANSITION",
+	"TEAM_MAILBOX_FULL",
+	"TEAM_TOO_MANY_TASKS",
+	"TEAM_TEXT_TOO_LONG",
+	"TEAM_FINISHED",
+	"TEAM_UPDATE_TIMEOUT",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *TeamErrorCode) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_TeamErrorCode {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_TeamErrorCode, v)
+	}
+	*j = TeamErrorCode(v)
 	return nil
 }
 
@@ -5510,7 +5992,7 @@ type TeamManifest struct {
 	// Dispatch corresponds to the JSON schema field "dispatch".
 	Dispatch DispatchMode `json:"dispatch" yaml:"dispatch" mapstructure:"dispatch"`
 
-	// How many members may run a task at the same time.
+	// How many non-leader members may run at the same time; defaults to 2.
 	MaxParallelMembers *int `json:"maxParallelMembers,omitempty,omitzero" yaml:"maxParallelMembers,omitempty" mapstructure:"maxParallelMembers,omitempty"`
 
 	// Name of the team.
@@ -5685,8 +6167,8 @@ type TeamRoleSpec struct {
 	// How many instances of this member the team has. Defaults to 1.
 	Count *int `json:"count,omitempty,omitzero" yaml:"count,omitempty" mapstructure:"count,omitempty"`
 
-	// Roster name, unique within the team. With count above 1 it is the prefix of the
-	// instance names.
+	// Roster name, unique within the team; main and team are reserved. With count
+	// above 1 it is the prefix of the instance names.
 	Name string `json:"name" yaml:"name" mapstructure:"name"`
 
 	// Role corresponds to the JSON schema field "role".
@@ -5756,9 +6238,6 @@ func (j *TeamRole) UnmarshalJSON(value []byte) error {
 
 // A task on the board.
 type TeamTask struct {
-	// Files produced by the member.
-	Artifacts []Artifact `json:"artifacts,omitempty,omitzero" yaml:"artifacts,omitempty" mapstructure:"artifacts,omitempty"`
-
 	// Assignee corresponds to the JSON schema field "assignee".
 	Assignee *MemberName `json:"assignee,omitempty,omitzero" yaml:"assignee,omitempty" mapstructure:"assignee,omitempty"`
 
@@ -5768,20 +6247,26 @@ type TeamTask struct {
 	// Task IDs this task waits for.
 	Deps []string `json:"deps,omitempty,omitzero" yaml:"deps,omitempty" mapstructure:"deps,omitempty"`
 
-	// Task requirements and acceptance criteria.
+	// Task requirements and acceptance criteria; at most 4096 UTF-8 bytes,
+	// authoritatively validated by control.
 	Description string `json:"description" yaml:"description" mapstructure:"description"`
+
+	// Number of failed task turns, excluding review rejections.
+	Failures *int `json:"failures,omitempty,omitzero" yaml:"failures,omitempty" mapstructure:"failures,omitempty"`
+
+	// Result file paths, at most 20; each path is at most 256 UTF-8 bytes,
+	// authoritatively validated by control.
+	Files []string `json:"files,omitempty,omitzero" yaml:"files,omitempty" mapstructure:"files,omitempty"`
 
 	// Tools allowed for this task; only narrows member permissions.
 	NarrowedTools []string `json:"narrowed_tools,omitempty,omitzero" yaml:"narrowed_tools,omitempty" mapstructure:"narrowed_tools,omitempty"`
 
-	// Member result for leader synthesis.
+	// Member result for leader synthesis; at most 4096 UTF-8 bytes, authoritatively
+	// validated by control.
 	ResultText *string `json:"result_text,omitempty,omitzero" yaml:"result_text,omitempty" mapstructure:"result_text,omitempty"`
 
 	// Review corresponds to the JSON schema field "review".
 	Review *TaskReview `json:"review,omitempty,omitzero" yaml:"review,omitempty" mapstructure:"review,omitempty"`
-
-	// Object reference of a longer task specification.
-	SpecRef *string `json:"spec_ref,omitempty,omitzero" yaml:"spec_ref,omitempty" mapstructure:"spec_ref,omitempty"`
 
 	// Status corresponds to the JSON schema field "status".
 	Status TaskStatus `json:"status" yaml:"status" mapstructure:"status"`
@@ -5789,7 +6274,7 @@ type TeamTask struct {
 	// Task identifier, unique within the team run.
 	TaskId string `json:"task_id" yaml:"task_id" mapstructure:"task_id"`
 
-	// Short title.
+	// Short title; at most 200 UTF-8 bytes, authoritatively validated by control.
 	Title string `json:"title" yaml:"title" mapstructure:"title"`
 }
 
@@ -5801,9 +6286,6 @@ type TeamTaskBrief struct {
 	// Tools the leader restricted the task to; empty means the member's full tool
 	// set. It can only narrow, never widen.
 	NarrowedTools []string `json:"narrowed_tools,omitempty,omitzero" yaml:"narrowed_tools,omitempty" mapstructure:"narrowed_tools,omitempty"`
-
-	// Object store reference of a longer specification.
-	SpecRef *string `json:"spec_ref,omitempty,omitzero" yaml:"spec_ref,omitempty" mapstructure:"spec_ref,omitempty"`
 
 	// Task identifier on the team board.
 	TaskId string `json:"task_id" yaml:"task_id" mapstructure:"task_id"`
@@ -5834,9 +6316,6 @@ func (j *TeamTaskBrief) UnmarshalJSON(value []byte) error {
 	}
 	if v, ok := raw["narrowed_tools"]; !ok || v == nil {
 		plain.NarrowedTools = []string{}
-	}
-	if plain.SpecRef != nil && utf8.RuneCountInString(string(*plain.SpecRef)) < 1 {
-		return fmt.Errorf("field %s length: must be >= %d", "spec_ref", 1)
 	}
 	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.TaskId)); !matched {
 		return fmt.Errorf("field %s pattern match: must match %s", "TaskId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
@@ -5877,6 +6356,10 @@ func (j *TeamTaskCreated) UnmarshalJSON(value []byte) error {
 
 // A task on the board changed.
 type TeamTaskUpdated struct {
+	// True when control completes a task after an assignee turn ends without
+	// CompleteTask. Defaults to false.
+	AutoCompleted bool `json:"auto_completed,omitempty,omitzero" yaml:"auto_completed,omitempty" mapstructure:"auto_completed,omitempty"`
+
 	// Task corresponds to the JSON schema field "task".
 	Task TeamTask `json:"task" yaml:"task" mapstructure:"task"`
 }
@@ -5894,6 +6377,9 @@ func (j *TeamTaskUpdated) UnmarshalJSON(value []byte) error {
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if v, ok := raw["auto_completed"]; !ok || v == nil {
+		plain.AutoCompleted = false
 	}
 	*j = TeamTaskUpdated(plain)
 	return nil
@@ -5925,20 +6411,29 @@ func (j *TeamTask) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
-	if v, ok := raw["artifacts"]; !ok || v == nil {
-		plain.Artifacts = []Artifact{}
-	}
 	if 0 > plain.Attempts {
 		return fmt.Errorf("field %s: must be >= %v", "attempts", 0)
 	}
 	if v, ok := raw["deps"]; !ok || v == nil {
 		plain.Deps = []string{}
 	}
+	if utf8.RuneCountInString(string(plain.Description)) > 4096 {
+		return fmt.Errorf("field %s length: must be <= %d", "description", 4096)
+	}
+	if plain.Failures != nil && 0 > *plain.Failures {
+		return fmt.Errorf("field %s: must be >= %v", "failures", 0)
+	}
+	if v, ok := raw["files"]; !ok || v == nil {
+		plain.Files = []string{}
+	}
+	if len(plain.Files) > 20 {
+		return fmt.Errorf("field %s length: must be <= %d", "files", 20)
+	}
 	if v, ok := raw["narrowed_tools"]; !ok || v == nil {
 		plain.NarrowedTools = []string{}
 	}
-	if plain.SpecRef != nil && utf8.RuneCountInString(string(*plain.SpecRef)) < 1 {
-		return fmt.Errorf("field %s length: must be >= %d", "spec_ref", 1)
+	if plain.ResultText != nil && utf8.RuneCountInString(string(*plain.ResultText)) > 4096 {
+		return fmt.Errorf("field %s length: must be <= %d", "result_text", 4096)
 	}
 	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`, string(plain.TaskId)); !matched {
 		return fmt.Errorf("field %s pattern match: must match %s", "TaskId", `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`)
@@ -5948,6 +6443,9 @@ func (j *TeamTask) UnmarshalJSON(value []byte) error {
 	}
 	if utf8.RuneCountInString(string(plain.Title)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "title", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Title)) > 200 {
+		return fmt.Errorf("field %s length: must be <= %d", "title", 200)
 	}
 	*j = TeamTask(plain)
 	return nil
@@ -6701,7 +7199,6 @@ const YieldReasonCompacted YieldReason = "compacted"
 const YieldReasonEffectBoundary YieldReason = "effect_boundary"
 const YieldReasonGoalContinue YieldReason = "goal_continue"
 const YieldReasonIterationCap YieldReason = "iteration_cap"
-const YieldReasonMailbox YieldReason = "mailbox"
 const YieldReasonWallCap YieldReason = "wall_cap"
 
 var enumValues_YieldReason = []interface{}{
@@ -6711,7 +7208,6 @@ var enumValues_YieldReason = []interface{}{
 	"budget_soft",
 	"cancel",
 	"goal_continue",
-	"mailbox",
 	"compacted",
 }
 

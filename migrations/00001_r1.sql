@@ -64,7 +64,7 @@ CREATE TABLE model_profiles (
   id uuid PRIMARY KEY, tenant_id uuid NOT NULL REFERENCES tenants(id), name text NOT NULL, provider text NOT NULL, base_url text NOT NULL, model text NOT NULL, secret_id uuid, params jsonb NOT NULL DEFAULT '{}', pricing jsonb NOT NULL DEFAULT '{}', context_window int, is_default boolean NOT NULL DEFAULT false, created_at timestamptz NOT NULL DEFAULT now(), FOREIGN KEY(tenant_id,secret_id) REFERENCES secrets(tenant_id,id), UNIQUE(tenant_id,name)
 );
 CREATE TABLE sessions (
-  id uuid PRIMARY KEY, tenant_id uuid NOT NULL, workspace_id uuid NOT NULL, project_id uuid, owner_id uuid NOT NULL, title text NOT NULL, entry_kind text NOT NULL CHECK(entry_kind IN ('agent','team')), entry_ref text NOT NULL, message_policy text NOT NULL CHECK(message_policy IN ('queue','steer','interrupt')), pinned boolean NOT NULL DEFAULT false, pinned_lock_id uuid, sandbox_id text, status text NOT NULL CHECK(status IN ('active','idle','archived')), created_at timestamptz NOT NULL DEFAULT now(), last_activity_at timestamptz NOT NULL DEFAULT now(), UNIQUE(tenant_id,id), FOREIGN KEY(tenant_id,workspace_id) REFERENCES workspaces(tenant_id,id), FOREIGN KEY(tenant_id,project_id) REFERENCES projects(tenant_id,id), FOREIGN KEY(tenant_id,owner_id) REFERENCES memberships(tenant_id,principal_id)
+  id uuid PRIMARY KEY, tenant_id uuid NOT NULL, workspace_id uuid NOT NULL, project_id uuid, owner_id uuid NOT NULL, title text NOT NULL, entry_kind text NOT NULL CHECK(entry_kind IN ('agent','team')), entry_ref text NOT NULL, message_policy text NOT NULL CHECK(message_policy IN ('queue','steer','interrupt')), pinned boolean NOT NULL DEFAULT false, pinned_lock_id uuid, schedule_id uuid, sandbox_id text, status text NOT NULL CHECK(status IN ('active','idle','archived')), created_at timestamptz NOT NULL DEFAULT now(), last_activity_at timestamptz NOT NULL DEFAULT now(), UNIQUE(tenant_id,id), FOREIGN KEY(tenant_id,workspace_id) REFERENCES workspaces(tenant_id,id), FOREIGN KEY(tenant_id,project_id) REFERENCES projects(tenant_id,id), FOREIGN KEY(tenant_id,owner_id) REFERENCES memberships(tenant_id,principal_id)
 );
 CREATE TABLE runs (
   id uuid PRIMARY KEY, tenant_id uuid NOT NULL, session_id uuid NOT NULL, trigger text NOT NULL CHECK(trigger IN ('user_message','schedule','api','channel','resume')), status text NOT NULL CHECK(status IN ('queued','running','waiting_input','waiting_approval','paused','succeeded','failed','cancelled','budget_exhausted','timed_out')), lock_id uuid, created_by uuid REFERENCES principals(id), message_id uuid, budget_millicredits bigint NOT NULL DEFAULT 0, used_millicredits bigint NOT NULL DEFAULT 0, temporal_workflow_id text, started_at timestamptz, ended_at timestamptz, error_code text, summary text, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(tenant_id,id), FOREIGN KEY(tenant_id,session_id) REFERENCES sessions(tenant_id,id)
@@ -89,13 +89,22 @@ CREATE TABLE run_events (
 ) PARTITION BY RANGE (ts);
 CREATE TABLE run_events_default PARTITION OF run_events DEFAULT;
 CREATE TABLE interactions (
-  id uuid PRIMARY KEY, tenant_id uuid NOT NULL, run_id uuid NOT NULL, member text NOT NULL, kind text NOT NULL CHECK(kind IN ('tool_approval','ask_user','effect_uncertain','question','plan','human_task')), request jsonb NOT NULL, approvers jsonb NOT NULL, status text NOT NULL CHECK(status IN ('pending','resolved','expired','cancelled','escalated')), decision jsonb, decided_by uuid REFERENCES principals(id), seq int, session_id uuid, remind_at timestamptz, expires_at timestamptz, resolved_at timestamptz, due_at timestamptz, escalated_at timestamptz, created_at timestamptz NOT NULL DEFAULT now(), FOREIGN KEY(tenant_id,run_id) REFERENCES runs(tenant_id,id)
+  id uuid PRIMARY KEY, tenant_id uuid NOT NULL, run_id uuid NOT NULL, member text NOT NULL, workflow_id text NOT NULL, kind text NOT NULL CHECK(kind IN ('tool_approval','ask_user','effect_uncertain','question','plan','human_task')), request jsonb NOT NULL, approvers jsonb NOT NULL, status text NOT NULL CHECK(status IN ('pending','resolved','expired','cancelled','escalated')), decision jsonb, decided_by uuid REFERENCES principals(id), seq int, session_id uuid, remind_at timestamptz, expires_at timestamptz, resolved_at timestamptz, due_at timestamptz, escalated_at timestamptz, created_at timestamptz NOT NULL DEFAULT now(), FOREIGN KEY(tenant_id,run_id) REFERENCES runs(tenant_id,id)
 );
 CREATE TABLE artifacts (
   id uuid PRIMARY KEY, tenant_id uuid NOT NULL, session_id uuid NOT NULL, run_id uuid NOT NULL, path text NOT NULL, mime text NOT NULL, size bigint NOT NULL, digest text NOT NULL, object_ref text NOT NULL, status text NOT NULL CHECK(status IN ('draft','final')), created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), FOREIGN KEY(tenant_id,session_id) REFERENCES sessions(tenant_id,id), FOREIGN KEY(tenant_id,run_id) REFERENCES runs(tenant_id,id)
 );
 CREATE TABLE team_runs (
-  run_id uuid NOT NULL, tenant_id uuid NOT NULL, roster jsonb NOT NULL, board_snapshot_ref text, dispatch_mode text NOT NULL CHECK(dispatch_mode IN ('scheduled')), PRIMARY KEY(tenant_id,run_id), FOREIGN KEY(tenant_id,run_id) REFERENCES runs(tenant_id,id)
+  run_id uuid NOT NULL, tenant_id uuid NOT NULL, roster jsonb NOT NULL, board jsonb NOT NULL DEFAULT '{}', board_version bigint NOT NULL DEFAULT 0, max_parallel int NOT NULL, review_max_rounds int NOT NULL, finished boolean NOT NULL DEFAULT false, paused boolean NOT NULL DEFAULT false, summary text, dispatch_mode text NOT NULL CHECK(dispatch_mode IN ('scheduled')), PRIMARY KEY(tenant_id,run_id), FOREIGN KEY(tenant_id,run_id) REFERENCES runs(tenant_id,id)
+);
+CREATE TABLE team_tasks (
+  tenant_id uuid NOT NULL, run_id uuid NOT NULL, task_id text NOT NULL, title text NOT NULL, description text NOT NULL, deps jsonb NOT NULL, assignee text, status text NOT NULL CHECK(status IN ('pending','blocked','in_progress','in_review','completed','cancelled','failed')), attempts int NOT NULL, failures int NOT NULL, review jsonb NOT NULL, narrowed_tools jsonb NOT NULL, result_text text, files jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(tenant_id,run_id,task_id), FOREIGN KEY(tenant_id,run_id) REFERENCES runs(tenant_id,id)
+);
+CREATE TABLE team_members (
+  tenant_id uuid NOT NULL, run_id uuid NOT NULL, name text NOT NULL, role text NOT NULL CHECK(role IN ('leader','teammate','reviewer')), status text NOT NULL CHECK(status IN ('idle','working','finished')), task_id text, turn int NOT NULL DEFAULT 0, PRIMARY KEY(tenant_id,run_id,name), FOREIGN KEY(tenant_id,run_id) REFERENCES runs(tenant_id,id)
+);
+CREATE TABLE team_turns (
+  tenant_id uuid NOT NULL, run_id uuid NOT NULL, member text NOT NULL, turn int NOT NULL, kind text NOT NULL CHECK(kind IN ('lead','task','review')), task_id text, status text NOT NULL CHECK(status IN ('running','ended','completed','failed','cancelled','timed_out','budget_exhausted')), code text, started_at timestamptz, ended_at timestamptz, PRIMARY KEY(tenant_id,run_id,member,turn), FOREIGN KEY(tenant_id,run_id) REFERENCES runs(tenant_id,id)
 );
 CREATE TABLE agent_checkpoints (
   tenant_id      uuid        NOT NULL,
@@ -131,6 +140,7 @@ CREATE TABLE tool_effects (
   effect_class       text        NOT NULL CHECK (effect_class IN ('external_write','privileged')),
   checkpoint_version bigint      NOT NULL,
   status             text        NOT NULL CHECK (status IN ('started','completed','failed','unknown')),
+  request            jsonb CHECK (request IS NULL OR octet_length(request::text) <= 65536),
   result_preview     jsonb,
   result_ref         text,
   external_ref       text,
@@ -142,7 +152,10 @@ CREATE TABLE sandboxes (
   tenant_id uuid NOT NULL REFERENCES tenants(id), isolation_key text NOT NULL, provider text NOT NULL CHECK(provider IN ('opensandbox','local')), sandbox_id text, state text NOT NULL CHECK(state IN ('creating','ready','paused','snapshotted','destroyed','failed')), profile jsonb NOT NULL, session_id uuid, snapshot_id text, expires_at timestamptz, lease_gen int NOT NULL DEFAULT 0, updated_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(tenant_id,isolation_key)
 );
 CREATE TABLE schedules (
-  id uuid PRIMARY KEY, tenant_id uuid NOT NULL, workspace_id uuid NOT NULL, owner_id uuid NOT NULL, cron text NOT NULL, timezone text NOT NULL, entry_ref text NOT NULL, input jsonb NOT NULL, overlap_policy text NOT NULL CHECK(overlap_policy IN ('skip','buffer_one','buffer_all','cancel_other','terminate_other','allow_all')), catchup_window interval NOT NULL, temporal_schedule_id text NOT NULL, status text NOT NULL CHECK(status IN ('active','paused','deleted')), created_at timestamptz NOT NULL DEFAULT now(), FOREIGN KEY(tenant_id,workspace_id) REFERENCES workspaces(tenant_id,id), FOREIGN KEY(tenant_id,owner_id) REFERENCES memberships(tenant_id,principal_id)
+  id uuid PRIMARY KEY, tenant_id uuid NOT NULL, workspace_id uuid NOT NULL, owner_id uuid NOT NULL, cron text NOT NULL, timezone text NOT NULL, name text NOT NULL, description text, entry_kind text NOT NULL CHECK(entry_kind IN ('agent','team')), entry_ref text NOT NULL, prompt text NOT NULL, budget_millicredits bigint NOT NULL, overlap_policy text NOT NULL CHECK(overlap_policy IN ('skip','buffer_one')), catchup_window interval NOT NULL, temporal_schedule_id text NOT NULL, status text NOT NULL CHECK(status IN ('active','paused','deleted')), created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), deleted_at timestamptz, paused_reason text, version bigint NOT NULL DEFAULT 1, synced_version bigint NOT NULL DEFAULT 0, UNIQUE(tenant_id,id), FOREIGN KEY(tenant_id,workspace_id) REFERENCES workspaces(tenant_id,id), FOREIGN KEY(tenant_id,owner_id) REFERENCES memberships(tenant_id,principal_id)
+);
+CREATE TABLE schedule_runs (
+  tenant_id uuid NOT NULL, schedule_id uuid NOT NULL, fire_at timestamptz NOT NULL, run_id uuid, session_id uuid, status text NOT NULL CHECK(status IN ('running','succeeded','failed','cancelled','budget_exhausted','timed_out','skipped')), error_code text, started_at timestamptz NOT NULL DEFAULT now(), ended_at timestamptz, PRIMARY KEY(tenant_id,schedule_id,fire_at), FOREIGN KEY(tenant_id,schedule_id) REFERENCES schedules(tenant_id,id), FOREIGN KEY(tenant_id,run_id) REFERENCES runs(tenant_id,id)
 );
 CREATE TABLE permission_grants (
   id uuid PRIMARY KEY, tenant_id uuid NOT NULL REFERENCES tenants(id), scope_type text NOT NULL CHECK(scope_type IN ('session','user','workspace')), scope_id uuid NOT NULL, interaction_id uuid NOT NULL, tool text NOT NULL, arg_pattern text, decision text NOT NULL CHECK(decision IN ('allow','deny')), granted_by uuid NOT NULL REFERENCES principals(id), expires_at timestamptz, created_at timestamptz NOT NULL DEFAULT now()
@@ -271,6 +284,7 @@ GRANT SELECT, INSERT ON run_event_rejects TO orbit_app;
 CREATE INDEX ON run_event_rejects(tenant_id,created_at DESC);
 ALTER TABLE runs ADD FOREIGN KEY(tenant_id,lock_id) REFERENCES run_locks(tenant_id,id);
 ALTER TABLE sessions ADD FOREIGN KEY(tenant_id,pinned_lock_id) REFERENCES run_locks(tenant_id,id);
+ALTER TABLE sessions ADD FOREIGN KEY(tenant_id,schedule_id) REFERENCES schedules(tenant_id,id);
 CREATE INDEX ON memberships(principal_id);
 CREATE INDEX ON memberships(tenant_id,joined_at DESC);
 CREATE INDEX ON groups(tenant_id,created_at DESC);
@@ -317,7 +331,8 @@ CREATE INDEX ON segment_results(tenant_id,created_at DESC);
 CREATE INDEX ON tool_effects(tenant_id,created_at DESC);
 CREATE INDEX ON sandboxes(tenant_id,updated_at DESC);
 CREATE INDEX ON schedules(tenant_id,owner_id);
-CREATE INDEX ON schedules(tenant_id,workspace_id);
+CREATE INDEX ON schedules(tenant_id,workspace_id,status);
+CREATE INDEX ON schedules(tenant_id) WHERE synced_version < version;
 CREATE INDEX ON schedules(tenant_id,created_at DESC);
 CREATE INDEX ON permission_grants(tenant_id,scope_id);
 CREATE INDEX ON permission_grants(tenant_id,created_at DESC);
@@ -441,6 +456,18 @@ ALTER TABLE team_runs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE team_runs FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON team_runs USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON team_runs TO orbit_app;
+ALTER TABLE team_tasks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE team_tasks FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON team_tasks USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+GRANT SELECT, INSERT, UPDATE, DELETE ON team_tasks TO orbit_app;
+ALTER TABLE team_members ENABLE ROW LEVEL SECURITY;
+ALTER TABLE team_members FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON team_members USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+GRANT SELECT, INSERT, UPDATE, DELETE ON team_members TO orbit_app;
+ALTER TABLE team_turns ENABLE ROW LEVEL SECURITY;
+ALTER TABLE team_turns FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON team_turns USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+GRANT SELECT, INSERT, UPDATE, DELETE ON team_turns TO orbit_app;
 ALTER TABLE agent_checkpoints ENABLE ROW LEVEL SECURITY;
 ALTER TABLE agent_checkpoints FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON agent_checkpoints USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
@@ -464,6 +491,10 @@ ALTER TABLE schedules ENABLE ROW LEVEL SECURITY;
 ALTER TABLE schedules FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON schedules USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON schedules TO orbit_app;
+ALTER TABLE schedule_runs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE schedule_runs FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON schedule_runs USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+GRANT SELECT, INSERT, UPDATE, DELETE ON schedule_runs TO orbit_app;
 ALTER TABLE permission_grants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE permission_grants FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON permission_grants USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
@@ -624,12 +655,16 @@ DROP TABLE asset_versions CASCADE;
 DROP FUNCTION protect_asset_content();
 DROP TABLE assets CASCADE;
 DROP TABLE permission_grants CASCADE;
+DROP TABLE schedule_runs CASCADE;
 DROP TABLE schedules CASCADE;
 DROP TABLE sandboxes CASCADE;
 DROP TABLE tool_effects CASCADE;
 DROP FUNCTION protect_worker_effect();
 DROP TABLE segment_results CASCADE;
 DROP TABLE agent_checkpoints CASCADE;
+DROP TABLE team_turns CASCADE;
+DROP TABLE team_members CASCADE;
+DROP TABLE team_tasks CASCADE;
 DROP TABLE team_runs CASCADE;
 DROP TABLE artifacts CASCADE;
 DROP TABLE interactions CASCADE;

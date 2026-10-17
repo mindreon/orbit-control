@@ -195,8 +195,8 @@ func testRunHTTP(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	f.start(t)
 	req := contract.InteractionRequest{Kind: "ask_user", InteractionId: ids.New(), Question: &contract.Question{Text: "Ready?"}}
 	op := f.op()
-	_, err = f.activities.CreateInteraction(
-		t.Context(),
+	_, err = f.createInteraction(
+		t,
 		w.InteractionInput{RunOp: op, Request: req, ExpiresAt: op.EventAt.Add(time.Hour)},
 	)
 	require.NoError(t, err)

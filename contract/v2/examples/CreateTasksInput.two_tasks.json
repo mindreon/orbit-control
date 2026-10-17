@@ -1,10 +1,12 @@
 {
-  "caller": "leader",
   "tasks": [
     {
       "title": "Collect 2025 filings",
       "description": "Download and list every 2025 filing.",
-      "assignee": "researcher-1"
+      "assignee": "researcher-1",
+      "reviewers": [
+        "reviewer"
+      ]
     },
     {
       "title": "Cross-check figures",

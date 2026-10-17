@@ -140,7 +140,6 @@
     "case": "example:AssignTaskInput.narrowed",
     "valid": true,
     "payload": {
-      "caller": "leader",
       "member": "researcher-2",
       "narrowed_tools": [
         "read_file"
@@ -160,19 +159,44 @@
   },
   {
     "kind": "CompleteTaskInput",
-    "case": "example:CompleteTaskInput.with_artifact",
+    "case": "example:CompleteTaskInput.limits",
     "valid": true,
     "payload": {
-      "artifacts": [
-        {
-          "digest": "sha256:761b7ad8ad439b2855fcbb611331c646ef0870b0631247bba3f3025cb6df5a53",
-          "mime": "text/markdown",
-          "object_ref": "t/3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f/artifacts/9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d/report/summary.md",
-          "path": "report/summary.md",
-          "size_bytes": 2048
-        }
+      "files": [
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
       ],
-      "caller": "researcher-1",
+      "request_id": "effect-1",
+      "result_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "task_id": "task-1"
+    }
+  },
+  {
+    "kind": "CompleteTaskInput",
+    "case": "example:CompleteTaskInput.with_files",
+    "valid": true,
+    "payload": {
+      "files": [
+        "report/summary.md"
+      ],
       "request_id": "effect-1",
       "result_text": "Found 4 filings; list attached.",
       "task_id": "task-1"
@@ -183,12 +207,14 @@
     "case": "example:CreateTasksInput.two_tasks",
     "valid": true,
     "payload": {
-      "caller": "leader",
       "request_id": "effect-1",
       "tasks": [
         {
           "assignee": "researcher-1",
           "description": "Download and list every 2025 filing.",
+          "reviewers": [
+            "reviewer"
+          ],
           "title": "Collect 2025 filings"
         },
         {
@@ -262,7 +288,6 @@
     "case": "example:FinishTeamInput.summary",
     "valid": true,
     "payload": {
-      "caller": "leader",
       "request_id": "effect-1",
       "summary": "All tasks completed; the report is in report/summary.md."
     }
@@ -1114,6 +1139,7 @@
     "payload": {
       "attempt": 1,
       "data": {
+        "auto_completed": true,
         "task": {
           "assignee": "researcher-1",
           "attempts": 2,
@@ -1660,9 +1686,9 @@
         }
       ],
       "profile": "office-standard",
+      "provider": "local",
       "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
-      "ttl_seconds": 1800,
-      "provider": "local"
+      "ttl_seconds": 1800
     }
   },
   {
@@ -1696,9 +1722,9 @@
         }
       ],
       "profile": "office-standard",
+      "provider": "local",
       "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
-      "ttl_seconds": 1800,
-      "provider": "local"
+      "ttl_seconds": 1800
     }
   },
   {
@@ -1803,6 +1829,79 @@
     "valid": true,
     "payload": {
       "snapshot_id": "snap-3391"
+    }
+  },
+  {
+    "kind": "ScheduleCreateRequest",
+    "case": "example:ScheduleCreateRequest.minimal",
+    "valid": true,
+    "payload": {
+      "budget_millicredits": 1000,
+      "catchup_window_seconds": 7200,
+      "cron": "*/5 * * * *",
+      "description": "Summarize new filings.",
+      "entry_ref": "dev/echo",
+      "name": "Daily research",
+      "overlap_policy": "buffer_one",
+      "prompt": "Summarize new filings.",
+      "request_id": "effect-1",
+      "timezone": "Asia/Shanghai"
+    }
+  },
+  {
+    "kind": "ScheduleErrorCode",
+    "case": "example:ScheduleErrorCode.invalid_cron",
+    "valid": true,
+    "payload": "SCHEDULE_INVALID_CRON"
+  },
+  {
+    "kind": "ScheduleListResponse",
+    "case": "example:ScheduleListResponse.one_schedule",
+    "valid": true,
+    "payload": {
+      "items": [
+        {
+          "budget_millicredits": 1000,
+          "catchup_window_seconds": 3600,
+          "created_at": "2026-10-17T00:00:00Z",
+          "cron": "*/5 * * * *",
+          "description": "Summarize new filings.",
+          "entry_kind": "agent",
+          "entry_ref": "dev/echo",
+          "id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+          "name": "Daily research",
+          "overlap_policy": "skip",
+          "owner_id": "7b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+          "prompt": "Summarize new filings.",
+          "status": "active",
+          "timezone": "Asia/Shanghai",
+          "updated_at": "2026-10-17T00:00:00Z",
+          "workspace_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+        }
+      ]
+    }
+  },
+  {
+    "kind": "ScheduleView",
+    "case": "example:ScheduleView.active",
+    "valid": true,
+    "payload": {
+      "budget_millicredits": 1000,
+      "catchup_window_seconds": 3600,
+      "created_at": "2026-10-17T00:00:00Z",
+      "cron": "*/5 * * * *",
+      "description": "Summarize new filings.",
+      "entry_kind": "agent",
+      "entry_ref": "dev/echo",
+      "id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "name": "Daily research",
+      "overlap_policy": "skip",
+      "owner_id": "7b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "prompt": "Summarize new filings.",
+      "status": "active",
+      "timezone": "Asia/Shanghai",
+      "updated_at": "2026-10-17T00:00:00Z",
+      "workspace_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
     }
   },
   {
@@ -2022,11 +2121,9 @@
             "web_fetch",
             "write_file"
           ],
-          "spec_ref": "t/3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f/uploads/spec-3",
           "task_id": "task-3",
           "title": "Collect 2025 filings"
-        },
-        "team_workflow_id": "team:3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f:9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+        }
       },
       "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
       "trace": {
@@ -2267,7 +2364,6 @@
     "case": "example:SendMessageInput.to_member",
     "valid": true,
     "payload": {
-      "caller": "researcher-1",
       "request_id": "effect-1",
       "text": "The 2025 Q3 filing is not public yet.",
       "to": "leader"
@@ -2303,7 +2399,6 @@
     "case": "example:SubmitVerdictInput.reject",
     "valid": true,
     "payload": {
-      "caller": "reviewer",
       "comment": "Q3 is missing.",
       "request_id": "effect-1",
       "task_id": "task-1",
@@ -2340,10 +2435,16 @@
           "assignee": "researcher-1",
           "attempts": 2,
           "description": "Task acceptance criteria.",
+          "failures": 0,
+          "files": [
+            "report/summary.md"
+          ],
           "review": {
             "reviewers": [
               "reviewer"
             ],
+            "rework_note": "Check all citations.",
+            "round": 1,
             "votes": [
               {
                 "comment": "Q3 is missing.",
@@ -2370,6 +2471,12 @@
     }
   },
   {
+    "kind": "TeamErrorCode",
+    "case": "example:TeamErrorCode.not_leader",
+    "valid": true,
+    "payload": "TEAM_NOT_LEADER"
+  },
+  {
     "kind": "TeamManifest",
     "case": "example:TeamManifest.research_squad",
     "valid": true,
@@ -2379,6 +2486,7 @@
       "maxParallelMembers": 3,
       "name": "research-squad",
       "review": {
+        "maxRounds": 4,
         "mode": "veto"
       },
       "roles": [
@@ -2600,7 +2708,6 @@
     "case": "zero",
     "valid": false,
     "payload": {
-      "caller": "",
       "member": "",
       "request_id": "",
       "task_id": ""
@@ -2611,7 +2718,6 @@
     "case": "minimal",
     "valid": true,
     "payload": {
-      "caller": "leader",
       "member": "researcher-2",
       "request_id": "effect-1",
       "task_id": "task-2"
@@ -2640,7 +2746,6 @@
     "case": "zero",
     "valid": false,
     "payload": {
-      "caller": "",
       "request_id": "",
       "result_text": "",
       "task_id": ""
@@ -2651,9 +2756,8 @@
     "case": "minimal",
     "valid": true,
     "payload": {
-      "caller": "researcher-1",
       "request_id": "effect-1",
-      "result_text": "Found 4 filings; list attached.",
+      "result_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
       "task_id": "task-1"
     }
   },
@@ -2662,7 +2766,6 @@
     "case": "zero",
     "valid": false,
     "payload": {
-      "caller": "",
       "request_id": "",
       "tasks": null
     }
@@ -2672,7 +2775,6 @@
     "case": "minimal",
     "valid": true,
     "payload": {
-      "caller": "leader",
       "request_id": "effect-1",
       "tasks": [
         {
@@ -2728,7 +2830,6 @@
     "case": "zero",
     "valid": false,
     "payload": {
-      "caller": "",
       "request_id": "",
       "summary": ""
     }
@@ -2738,7 +2839,6 @@
     "case": "minimal",
     "valid": true,
     "payload": {
-      "caller": "leader",
       "request_id": "effect-1",
       "summary": "All tasks completed; the report is in report/summary.md."
     }
@@ -3007,6 +3107,7 @@
         "workspace_id": ""
       },
       "profile": "",
+      "provider": "",
       "tenant_id": "",
       "ttl_seconds": 0
     }
@@ -3024,9 +3125,9 @@
         "workspace_id": "01900000-0000-7000-8000-000000000001"
       },
       "profile": "office-standard",
+      "provider": "local",
       "tenant_id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
-      "ttl_seconds": 1800,
-      "provider": "local"
+      "ttl_seconds": 1800
     }
   },
   {
@@ -3177,6 +3278,104 @@
     "valid": true,
     "payload": {
       "snapshot_id": "snap-3391"
+    }
+  },
+  {
+    "kind": "ScheduleCreateRequest",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "budget_millicredits": 0,
+      "cron": "",
+      "entry_ref": "",
+      "name": "",
+      "prompt": "",
+      "request_id": "",
+      "timezone": ""
+    }
+  },
+  {
+    "kind": "ScheduleCreateRequest",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "budget_millicredits": 1000,
+      "catchup_window_seconds": 3600,
+      "cron": "*/5 * * * *",
+      "entry_ref": "dev/echo",
+      "name": "Daily research",
+      "overlap_policy": "skip",
+      "prompt": "Summarize new filings.",
+      "request_id": "effect-1",
+      "timezone": "Asia/Shanghai"
+    }
+  },
+  {
+    "kind": "ScheduleErrorCode",
+    "case": "zero",
+    "valid": false,
+    "payload": ""
+  },
+  {
+    "kind": "ScheduleErrorCode",
+    "case": "minimal",
+    "valid": true,
+    "payload": "SCHEDULE_INVALID_CRON"
+  },
+  {
+    "kind": "ScheduleListResponse",
+    "case": "zero",
+    "valid": true,
+    "payload": {}
+  },
+  {
+    "kind": "ScheduleListResponse",
+    "case": "minimal",
+    "valid": true,
+    "payload": {}
+  },
+  {
+    "kind": "ScheduleView",
+    "case": "zero",
+    "valid": false,
+    "payload": {
+      "budget_millicredits": 0,
+      "catchup_window_seconds": 0,
+      "created_at": "0001-01-01T00:00:00Z",
+      "cron": "",
+      "entry_kind": "",
+      "entry_ref": "",
+      "id": "",
+      "name": "",
+      "overlap_policy": "",
+      "owner_id": "",
+      "prompt": "",
+      "status": "",
+      "timezone": "",
+      "updated_at": "0001-01-01T00:00:00Z",
+      "workspace_id": ""
+    }
+  },
+  {
+    "kind": "ScheduleView",
+    "case": "minimal",
+    "valid": true,
+    "payload": {
+      "budget_millicredits": 1000,
+      "catchup_window_seconds": 3600,
+      "created_at": "2026-10-17T00:00:00Z",
+      "cron": "*/5 * * * *",
+      "entry_kind": "agent",
+      "entry_ref": "dev/echo",
+      "id": "3f2a8c1e-5b7d-4e9a-9c11-0a1b2c3d4e5f",
+      "name": "Daily research",
+      "overlap_policy": "skip",
+      "owner_id": "7b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "prompt": "Summarize new filings.",
+      "status": "active",
+      "timezone": "Asia/Shanghai",
+      "updated_at": "2026-10-17T00:00:00Z",
+      "workspace_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
     }
   },
   {
@@ -3336,7 +3535,6 @@
     "case": "zero",
     "valid": false,
     "payload": {
-      "caller": "",
       "request_id": "",
       "text": "",
       "to": ""
@@ -3347,7 +3545,6 @@
     "case": "minimal",
     "valid": true,
     "payload": {
-      "caller": "researcher-1",
       "request_id": "effect-1",
       "text": "The 2025 Q3 filing is not public yet.",
       "to": "leader"
@@ -3370,7 +3567,6 @@
     "case": "zero",
     "valid": false,
     "payload": {
-      "caller": "",
       "comment": "",
       "request_id": "",
       "task_id": "",
@@ -3382,7 +3578,6 @@
     "case": "minimal",
     "valid": true,
     "payload": {
-      "caller": "reviewer",
       "comment": "Q3 is missing.",
       "request_id": "effect-1",
       "task_id": "task-1",
@@ -3400,6 +3595,18 @@
     "case": "minimal",
     "valid": true,
     "payload": {}
+  },
+  {
+    "kind": "TeamErrorCode",
+    "case": "zero",
+    "valid": false,
+    "payload": ""
+  },
+  {
+    "kind": "TeamErrorCode",
+    "case": "minimal",
+    "valid": true,
+    "payload": "TEAM_NOT_LEADER"
   },
   {
     "kind": "TeamManifest",
