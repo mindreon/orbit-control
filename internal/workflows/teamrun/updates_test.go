@@ -242,26 +242,36 @@ func TestAssignStatusRules(t *testing.T) {
 	for _, status := range []contract.TaskStatus{"pending", "blocked", "failed"} {
 		r := updateRun()
 		r.st.Board.Tasks = []contract.TeamTask{{TaskId: "t1", Status: status}}
-		require.NoError(t, r.validateAssign(contract.AssignTaskInput{Caller: new(contract.MemberName("leader")), RequestId: string(status), TaskId: "t1", Member: "alice"}))
+		assign := contract.AssignTaskInput{Caller: new(contract.MemberName("leader")), RequestId: string(status),
+			TaskId: "t1", Member: "alice"}
+		require.NoError(t, r.validateAssign(assign))
 	}
 	for _, status := range []contract.TaskStatus{"in_progress", "in_review", "completed"} {
 		r := updateRun()
 		r.st.Board.Tasks = []contract.TeamTask{{TaskId: "t1", Status: status}}
-		requireCode(t, r.validateAssign(contract.AssignTaskInput{Caller: new(contract.MemberName("leader")), RequestId: string(status), TaskId: "t1", Member: "alice"}), "TEAM_BAD_TRANSITION")
+		assign := contract.AssignTaskInput{Caller: new(contract.MemberName("leader")), RequestId: string(status),
+			TaskId: "t1", Member: "alice"}
+		requireCode(t, r.validateAssign(assign), "TEAM_BAD_TRANSITION")
 	}
 }
 func TestCompleteAndVerdictStatusRules(t *testing.T) {
 	for _, status := range []contract.TaskStatus{"pending", "in_review", "completed"} {
 		r := updateRun()
-		r.st.Board.Tasks = []contract.TeamTask{{TaskId: "t1", Status: status, Assignee: new(contract.MemberName("alice")), Review: &contract.TaskReview{Reviewers: []contract.MemberName{"reviewer"}}}}
+		r.st.Board.Tasks = []contract.TeamTask{{TaskId: "t1", Status: status,
+			Assignee: new(contract.MemberName("alice")), Review: &contract.TaskReview{Reviewers: []contract.MemberName{"reviewer"}}}}
 		r.st.Active["alice"] = w.ActiveTurn{Member: "alice", Turn: 1, Kind: "task", TaskID: "t1"}
 		if status == "in_review" {
 			r.st.Active["alice"] = w.ActiveTurn{Member: "alice", Turn: 1, Kind: "task", TaskID: "t1"}
 		}
-		requireCode(t, r.validateComplete(contract.CompleteTaskInput{Caller: new(contract.MemberName("alice")), RequestId: "c" + string(status), TaskId: "t1", ResultText: "x"}), "TEAM_BAD_TRANSITION")
+		complete := contract.CompleteTaskInput{Caller: new(contract.MemberName("alice")), RequestId: "c" + string(status),
+			TaskId: "t1", ResultText: "x"}
+		requireCode(t, r.validateComplete(complete), "TEAM_BAD_TRANSITION")
 	}
 	r := updateRun()
-	r.st.Board.Tasks = []contract.TeamTask{{TaskId: "t1", Status: "in_review", Review: &contract.TaskReview{Reviewers: []contract.MemberName{"reviewer"}}}}
+	r.st.Board.Tasks = []contract.TeamTask{{TaskId: "t1", Status: "in_review",
+		Review: &contract.TaskReview{Reviewers: []contract.MemberName{"reviewer"}}}}
 	r.st.Active["reviewer"] = w.ActiveTurn{Member: "reviewer", Turn: 1, Kind: "review", TaskID: "t1"}
-	require.NoError(t, r.validateVerdict(contract.SubmitVerdictInput{Caller: new(contract.MemberName("reviewer")), RequestId: "v", TaskId: "t1", Verdict: "approve"}))
+	verdict := contract.SubmitVerdictInput{Caller: new(contract.MemberName("reviewer")), RequestId: "v",
+		TaskId: "t1", Verdict: "approve"}
+	require.NoError(t, r.validateVerdict(verdict))
 }
