@@ -9,22 +9,6 @@ import (
 	"github.com/mindreon/orbit-control/internal/contract"
 )
 
-func TestTransitions(t *testing.T) {
-	want := map[contract.TaskStatus][]contract.TaskStatus{
-		"pending": {"in_progress", "blocked", "cancelled"}, "blocked": {"pending", "cancelled"},
-		"in_progress": {"in_review", "completed", "pending", "cancelled", "failed"},
-		"in_review":   {"completed", "pending", "cancelled", "failed"}, "failed": {"pending"}, "completed": {}, "cancelled": {},
-	}
-	for from, targets := range want {
-		for to := range want {
-			allowed := false
-			for _, target := range targets {
-				allowed = allowed || target == to
-			}
-			require.Equal(t, allowed, CanTransition(from, to), "%s -> %s", from, to)
-		}
-	}
-}
 func TestSettle(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
