@@ -104,6 +104,9 @@ func Run(ctx workflow.Context, in w.TeamRunInput) error {
 			}
 			r.wake(ctx)
 		}
+		if r.failure != "" {
+			continue
+		}
 		r.collectPending(ctx)
 		r.drain(ctx)
 		if len(r.results) == 0 && !r.st.Dirty && len(r.st.Outbox) == 0 && len(r.pending) == 0 &&
