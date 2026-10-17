@@ -230,3 +230,11 @@ func TestCreateCapacityMeasuresExpandedStoredTask(t *testing.T) {
 	require.Less(t, team.EncodedLen(r.st.Board)+team.EncodedLen(in.Tasks), team.BoardBytesMax)
 	require.ErrorContains(t, r.validateCreate(in), "TEAM_TEXT_TOO_LONG")
 }
+
+func TestCompleteRejectsInvalidSourceTransition(t *testing.T) {
+	r := updateRun()
+	r.st.Board.Tasks = []contract.TeamTask{{TaskId: "t1", Status: "pending", Assignee: new(contract.MemberName("alice"))}}
+	r.st.Active["alice"] = w.ActiveTurn{Member: "alice", Turn: 1, Kind: "task", TaskID: "t1"}
+	err := r.validateComplete(contract.CompleteTaskInput{Caller: new(contract.MemberName("alice")), RequestId: "bad-source", TaskId: "t1", ResultText: "result"})
+	requireCode(t, err, "TEAM_BAD_TRANSITION")
+}
