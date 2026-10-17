@@ -626,6 +626,46 @@ func TestPauseResumeArrivalOrder(t *testing.T) {
 	}
 }
 
+func TestPauseSignalsBatchIdleAndMidScan(t *testing.T) {
+	t.Run("idle-batch", func(t *testing.T) {
+		h := newHarness(t)
+		h.at(sec, func() {
+			h.env.SignalWorkflowSkippingWorkflowTask(w.Resume, w.ActorInput{})
+			h.env.SignalWorkflow(w.Pause, w.ActorInput{})
+		})
+		h.cancelAt(5 * sec)
+		require.NoError(t, h.run())
+		require.NotEmpty(t, h.statuses)
+		require.Equal(t, "paused", h.statuses[len(h.statuses)-1].Status)
+	})
+	t.Run("mid-scan", func(t *testing.T) {
+		h := newHarness(t)
+		h.at(sec, func() {
+			h.create("leader", "create", newTask("t1", "alice"))
+			h.create("leader", "create2", newTask("t2", "bob"))
+		})
+		h.onMemberStart = func(in w.MemberTaskInput) {
+			if in.Member == "alice" {
+				h.env.SignalWorkflowSkippingWorkflowTask(w.Resume, w.ActorInput{})
+				h.env.SignalWorkflow(w.Pause, w.ActorInput{})
+			}
+		}
+		h.turn("leader", 1, 20*sec, w.TurnResult{Status: "ended"})
+		h.turn("alice", 1, 20*sec, w.TurnResult{Status: "ended"})
+		h.turn("bob", 1, 20*sec, w.TurnResult{Status: "ended"})
+		h.cancelAt(10 * sec)
+		require.NoError(t, h.run())
+		require.NotEmpty(t, h.statuses)
+		require.Equal(t, "paused", h.statuses[len(h.statuses)-1].Status)
+		found := map[string]bool{}
+		for _, sig := range h.signalsNamed(w.Pause) {
+			found[sig.Workflow] = true
+		}
+		require.True(t, found[w.MemberTaskWorkflowID("tenant", "run", "alice", 1)])
+		require.True(t, found[w.MemberTaskWorkflowID("tenant", "run", "bob", 1)])
+	})
+}
+
 func TestPublicSteerUsesAgentErrorCodes(t *testing.T) {
 	h := newHarness(t)
 	var invalid, overflow *outcome
