@@ -153,7 +153,7 @@ func (a *Activities) CreateScheduledSession(ctx context.Context, in w.ScheduledS
 }
 func recordFire(ctx context.Context, tx pgx.Tx, in w.ScheduledSessionInput, status, code string, run, session *string) error {
 	_, err := tx.Exec(ctx, `INSERT INTO schedule_runs(tenant_id,schedule_id,fire_at,run_id,session_id,status,error_code,ended_at)
- VALUES($1,$2,$3,$4,$5,$6,NULLIF($7,''),CASE WHEN $6='running' THEN NULL ELSE $8 END) ON CONFLICT DO NOTHING`,
+ VALUES($1,$2,$3,$4,$5,$6,NULLIF($7,''),CASE WHEN $6='running' THEN NULL ELSE $8::timestamptz END) ON CONFLICT DO NOTHING`,
 		in.TenantID, in.ScheduleID, in.FireAt, run, session, status, code, in.Now)
 	return err
 }
