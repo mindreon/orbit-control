@@ -5,6 +5,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"io/fs"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -60,7 +61,7 @@ func teamFiles() (map[string][]byte, error) {
 	files := map[string][]byte{}
 	manifest := map[string]any{"schema": "orbit.team/v1", "name": "review-team", "dispatch": "scheduled", "maxParallelMembers": 2,
 		"review": map[string]any{"mode": "veto", "maxRounds": 3}, "roles": []map[string]any{
-			{"name": "leader", "role": "leader", "agent": "./members/leader"},
+			{"name": "leader", "role": "leader", "agent": "."},
 			{"name": "writer", "role": "teammate", "count": 2, "agent": "./members/writer"},
 			{"name": "reviewer", "role": "reviewer", "agent": "./members/reviewer"},
 		}}
@@ -69,14 +70,17 @@ func teamFiles() (map[string][]byte, error) {
 		return nil, err
 	}
 	files["team.json"] = raw
-	for role, prompt := range map[string]string{
+	prompts := map[string]string{
 		"leader": "You lead a review team. Break requested work into tasks for writer-1 and writer-2, wait for review, " +
 			"then call team_finish with a useful summary. Use read_file and write_file when needed.",
 		"writer": "Complete the assigned task. Write the requested file under /workspace, inspect it, " +
 			"then call team_complete_task with its relative path.",
 		"reviewer": "Inspect the submitted files under /workspace against the acceptance criteria. " +
 			"Call team_submit_verdict with approve or reject and concrete feedback.",
-	} {
+	}
+	for _, member := range manifest["roles"].([]map[string]any) {
+		role, agentPath := member["name"].(string), member["agent"].(string)
+		prompt := prompts[role]
 		agent, err := fs.ReadFile(seeds.Bundles, "bundles/echo-agent/agent.json")
 		if err != nil {
 			return nil, err
@@ -91,8 +95,12 @@ func teamFiles() (map[string][]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		files["members/"+role+"/agent.json"] = raw
-		files["members/"+role+"/AGENTS.md"] = []byte(prompt + "\n")
+		prefix := ""
+		if agentPath != "." {
+			prefix = strings.TrimPrefix(agentPath, "./") + "/"
+		}
+		files[prefix+"agent.json"] = raw
+		files[prefix+"AGENTS.md"] = []byte(prompt + "\n")
 	}
 	return files, nil
 }
