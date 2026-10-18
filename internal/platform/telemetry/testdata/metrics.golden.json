@@ -1,0 +1,413 @@
+[
+  {
+    "meter": "orbit-control",
+    "name": "sink_messages_total",
+    "kind": "counter",
+    "unit": "",
+    "labels": [
+      "result"
+    ],
+    "tenant_allowed": false
+  },
+  {
+    "meter": "orbit-control",
+    "name": "sink_rejected_total",
+    "kind": "counter",
+    "unit": "",
+    "labels": [
+      "reason"
+    ],
+    "tenant_allowed": false
+  },
+  {
+    "meter": "orbit-control",
+    "name": "sink_skipped_total",
+    "kind": "counter",
+    "unit": "",
+    "labels": [
+      "type"
+    ],
+    "tenant_allowed": false
+  },
+  {
+    "meter": "orbit-control",
+    "name": "sink_lag_seconds",
+    "kind": "histogram",
+    "unit": "s",
+    "labels": [],
+    "tenant_allowed": false
+  },
+  {
+    "meter": "orbit-control",
+    "name": "sink_batch_duration_seconds",
+    "kind": "histogram",
+    "unit": "s",
+    "labels": [],
+    "tenant_allowed": false
+  },
+  {
+    "meter": "orbit-control",
+    "name": "sink_pending",
+    "kind": "gauge",
+    "unit": "",
+    "labels": [],
+    "tenant_allowed": false
+  },
+  {
+    "meter": "orbit-control",
+    "name": "outbox_quarantined_total",
+    "kind": "counter",
+    "unit": "",
+    "labels": [
+      "reason"
+    ],
+    "tenant_allowed": false
+  },
+  {
+    "meter": "orbit-control",
+    "name": "control_outbox_failures_total",
+    "kind": "counter",
+    "unit": "",
+    "labels": [
+      "stage"
+    ],
+    "tenant_allowed": false
+  },
+  {
+    "meter": "stream-gateway",
+    "name": "streamgw_connections",
+    "kind": "updowncounter",
+    "unit": "",
+    "labels": [
+      "scope"
+    ],
+    "tenant_allowed": false
+  },
+  {
+    "meter": "stream-gateway",
+    "name": "streamgw_frames_sent_total",
+    "kind": "counter",
+    "unit": "",
+    "labels": [
+      "type"
+    ],
+    "tenant_allowed": false
+  },
+  {
+    "meter": "stream-gateway",
+    "name": "streamgw_resumes_total",
+    "kind": "counter",
+    "unit": "",
+    "labels": [],
+    "tenant_allowed": false
+  },
+  {
+    "meter": "stream-gateway",
+    "name": "streamgw_cursor_expired_total",
+    "kind": "counter",
+    "unit": "",
+    "labels": [],
+    "tenant_allowed": false
+  },
+  {
+    "meter": "stream-gateway",
+    "name": "streamgw_slow_client_closed_total",
+    "kind": "counter",
+    "unit": "",
+    "labels": [],
+    "tenant_allowed": false
+  },
+  {
+    "meter": "stream-gateway",
+    "name": "streamgw_auth_failures_total",
+    "kind": "counter",
+    "unit": "",
+    "labels": [
+      "reason"
+    ],
+    "tenant_allowed": false
+  },
+  {
+    "meter": "stream-gateway",
+    "name": "streamgw_invalid_frames_total",
+    "kind": "counter",
+    "unit": "",
+    "labels": [],
+    "tenant_allowed": false
+  },
+  {
+    "meter": "stream-gateway",
+    "name": "streamgw_order_violation_total",
+    "kind": "counter",
+    "unit": "",
+    "labels": [],
+    "tenant_allowed": false
+  },
+  {
+    "meter": "stream-gateway",
+    "name": "streamgw_rejected_total",
+    "kind": "counter",
+    "unit": "",
+    "labels": [
+      "reason"
+    ],
+    "tenant_allowed": false
+  },
+  {
+    "meter": "orbit-control",
+    "name": "orbit.http.server.request.duration",
+    "kind": "histogram",
+    "unit": "s",
+    "labels": [
+      "http.request.method",
+      "http.route",
+      "http.response.status_code",
+      "orbit.listener"
+    ],
+    "tenant_allowed": false,
+    "buckets": [
+      0.005,
+      0.01,
+      0.025,
+      0.05,
+      0.1,
+      0.25,
+      0.5,
+      1,
+      2.5,
+      5,
+      10
+    ]
+  },
+  {
+    "meter": "stream-gateway",
+    "name": "orbit.http.server.request.duration",
+    "kind": "histogram",
+    "unit": "s",
+    "labels": [
+      "http.request.method",
+      "http.route",
+      "http.response.status_code",
+      "orbit.listener"
+    ],
+    "tenant_allowed": false,
+    "buckets": [
+      0.005,
+      0.01,
+      0.025,
+      0.05,
+      0.1,
+      0.25,
+      0.5,
+      1,
+      2.5,
+      5,
+      10
+    ]
+  },
+  {
+    "meter": "orbit-control",
+    "name": "orbit.temporal.task_queue.backlog",
+    "kind": "gauge",
+    "unit": "{task}",
+    "labels": [
+      "orbit.task_queue"
+    ],
+    "tenant_allowed": false
+  },
+  {
+    "meter": "orbit-control",
+    "name": "orbit.runs.active",
+    "kind": "gauge",
+    "unit": "{run}",
+    "labels": [
+      "orbit.tenant_id",
+      "orbit.run.status"
+    ],
+    "tenant_allowed": true
+  },
+  {
+    "meter": "orbit-control",
+    "name": "orbit.interactions.pending",
+    "kind": "gauge",
+    "unit": "{interaction}",
+    "labels": [
+      "orbit.interaction.kind"
+    ],
+    "tenant_allowed": false
+  },
+  {
+    "meter": "orbit-control",
+    "name": "orbit.interactions.oldest_pending.age",
+    "kind": "gauge",
+    "unit": "s",
+    "labels": [
+      "orbit.interaction.kind"
+    ],
+    "tenant_allowed": false
+  },
+  {
+    "meter": "orbit-control",
+    "name": "orbit.interaction.wait.duration",
+    "kind": "histogram",
+    "unit": "s",
+    "labels": [
+      "orbit.interaction.kind",
+      "orbit.interaction.outcome"
+    ],
+    "tenant_allowed": false,
+    "buckets": [
+      1,
+      10,
+      30,
+      60,
+      300,
+      900,
+      3600,
+      14400,
+      86400,
+      259200
+    ]
+  },
+  {
+    "meter": "orbit-control",
+    "name": "orbit.quota.rejections",
+    "kind": "counter",
+    "unit": "{request}",
+    "labels": [
+      "orbit.quota.metric",
+      "orbit.quota.scope"
+    ],
+    "tenant_allowed": false
+  },
+  {
+    "meter": "orbit-control",
+    "name": "orbit.runs.started",
+    "kind": "counter",
+    "unit": "{run}",
+    "labels": [
+      "orbit.run.trigger",
+      "orbit.entry_kind"
+    ],
+    "tenant_allowed": false
+  },
+  {
+    "meter": "orbit-control",
+    "name": "orbit.runs.finished",
+    "kind": "counter",
+    "unit": "{run}",
+    "labels": [
+      "orbit.run.status",
+      "orbit.entry_kind"
+    ],
+    "tenant_allowed": false
+  },
+  {
+    "meter": "orbit-control",
+    "name": "orbit.run.duration",
+    "kind": "histogram",
+    "unit": "s",
+    "labels": [
+      "orbit.run.status",
+      "orbit.entry_kind"
+    ],
+    "tenant_allowed": false,
+    "buckets": [
+      1,
+      5,
+      15,
+      30,
+      60,
+      120,
+      300,
+      600,
+      1800,
+      3600,
+      14400
+    ]
+  },
+  {
+    "meter": "orbit-control",
+    "name": "orbit.run.start.latency",
+    "kind": "histogram",
+    "unit": "s",
+    "labels": [
+      "orbit.run.trigger"
+    ],
+    "tenant_allowed": false,
+    "buckets": [
+      0.1,
+      0.25,
+      0.5,
+      1,
+      2,
+      3,
+      5,
+      10,
+      30
+    ]
+  },
+  {
+    "meter": "orbit-control",
+    "name": "orbit.usage.tokens",
+    "kind": "counter",
+    "unit": "{token}",
+    "labels": [
+      "orbit.tenant_id",
+      "gen_ai.request.model",
+      "orbit.token.type"
+    ],
+    "tenant_allowed": true
+  },
+  {
+    "meter": "orbit-control",
+    "name": "orbit.quota.policies_over_threshold",
+    "kind": "gauge",
+    "unit": "{policy}",
+    "labels": [
+      "orbit.quota.metric",
+      "orbit.threshold"
+    ],
+    "tenant_allowed": false
+  },
+  {
+    "meter": "orbit-control",
+    "name": "orbit.telemetry.label_overflow",
+    "kind": "counter",
+    "unit": "{measurement}",
+    "labels": [
+      "orbit.label"
+    ],
+    "tenant_allowed": false
+  },
+  {
+    "meter": "orbit-control",
+    "name": "orbit.telemetry.label_violations",
+    "kind": "counter",
+    "unit": "{measurement}",
+    "labels": [
+      "orbit.metric"
+    ],
+    "tenant_allowed": false
+  },
+  {
+    "meter": "orbit-control",
+    "name": "orbit.telemetry.label_registered",
+    "kind": "gauge",
+    "unit": "{label}",
+    "labels": [
+      "orbit.label"
+    ],
+    "tenant_allowed": false
+  },
+  {
+    "meter": "orbit-control",
+    "name": "orbit.telemetry.spans_redacted",
+    "kind": "counter",
+    "unit": "{span}",
+    "labels": [
+      "orbit.reason"
+    ],
+    "tenant_allowed": false
+  }
+]

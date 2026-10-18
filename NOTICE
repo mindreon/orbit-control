@@ -23,3 +23,9 @@ Adaptations live in internal/team.
 This product uses github.com/robfig/cron/v3 v3.0.1.
 Copyright (C) 2012 Rob Figueiredo. All Rights Reserved.
 Licensed under the MIT License (verified in the module's LICENSE).
+
+This product uses go.temporal.io/sdk/contrib/opentelemetry v0.6.0.
+Copyright (c) 2020 Temporal Technologies Inc. and Uber Technologies, Inc.
+Licensed under the MIT License (verified in the module's LICENSE).
+OpenTelemetry Go SDK and OTLP exporters v1.44.0 are licensed under Apache-2.0
+(verified in the modules' LICENSE files).

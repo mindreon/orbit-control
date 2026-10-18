@@ -11,10 +11,12 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	"github.com/mindreon/orbit-control/internal/contract"
+	"github.com/mindreon/orbit-control/internal/platform/telemetry/wfctx"
 	w "github.com/mindreon/orbit-control/internal/workflows"
 )
 
 type sessionWorkflow struct {
+	parents    map[string]any
 	in         w.SessionInput
 	queue      []w.SubmitMessageInput
 	policy     string
@@ -32,7 +34,7 @@ func Run(ctx workflow.Context, in w.SessionInput) error {
 	if err != nil {
 		return err
 	}
-	s := &sessionWorkflow{in: in, policy: in.Policy, limit: limit}
+	s := &sessionWorkflow{in: in, policy: in.Policy, limit: limit, parents: map[string]any{}}
 	if in.Carry != nil {
 		s.queue = in.Carry.Queue
 		s.policy = in.Carry.Policy
@@ -134,9 +136,15 @@ func (s *sessionWorkflow) submit(ctx workflow.Context, msg w.SubmitMessageInput)
 		if err := s.signalActive(ctx, w.CancelInput{Reason: "interrupted_by_new_message"}); err != nil {
 			return w.SubmitMessageOutput{}, err
 		}
+	}
+	if p := wfctx.WorkflowSpan(ctx); p != nil {
+		s.parents[msg.RunID] = p
+	}
+	if s.policy == "interrupt" && s.active != "" {
 		s.queue = append([]w.SubmitMessageInput{msg}, s.queue...)
 		return w.SubmitMessageOutput{RunID: msg.RunID, Disposition: "queued"}, nil
 	}
+
 	pos, disposition := len(s.queue), "started"
 	if s.active != "" {
 		pos++
@@ -170,6 +178,7 @@ func (s *sessionWorkflow) cancel(ctx workflow.Context, in w.CancelRunInput) (w.C
 				s.queue = append([]w.SubmitMessageInput{q}, s.queue...)
 				return w.CancelRunOutput{}, err
 			}
+			delete(s.parents, q.RunID)
 			return w.CancelRunOutput{Disposition: "dequeued"}, nil
 		}
 	}
@@ -198,7 +207,12 @@ func (s *sessionWorkflow) drain(ctx workflow.Context) error {
 		}
 	}
 	for _, q := range s.queue {
-		if err := s.finalize(ctx, q, "session_archived"); err != nil {
+		parent := ctx
+		if p, ok := s.parents[q.RunID]; ok {
+			parent = workflow.WithValue(ctx, wfctx.SpanContextKey, p)
+			delete(s.parents, q.RunID)
+		}
+		if err := s.finalize(parent, q, "session_archived"); err != nil {
 			return err
 		}
 	}
@@ -226,6 +240,10 @@ func (s *sessionWorkflow) runInput(ctx workflow.Context, msg w.SubmitMessageInpu
 }
 func (s *sessionWorkflow) startNext(ctx workflow.Context) {
 	msg := s.queue[0]
+	if p, ok := s.parents[msg.RunID]; ok {
+		ctx = workflow.WithValue(ctx, wfctx.SpanContextKey, p)
+		delete(s.parents, msg.RunID)
+	}
 	s.queue = s.queue[1:]
 	s.active = msg.RunID
 	s.activeKind = "agent"

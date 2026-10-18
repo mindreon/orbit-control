@@ -8,6 +8,10 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	commonpb "go.temporal.io/api/common/v1"
 	"go.temporal.io/api/enums/v1"
 	historypb "go.temporal.io/api/history/v1"
 	"go.temporal.io/sdk/converter"
@@ -16,6 +20,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 
 	"github.com/mindreon/orbit-control/internal/contract"
+	"github.com/mindreon/orbit-control/internal/platform/temporalx"
 	w "github.com/mindreon/orbit-control/internal/workflows"
 	"github.com/mindreon/orbit-control/internal/workflows/agentrun"
 	"github.com/mindreon/orbit-control/internal/workflows/membertask"
@@ -28,7 +33,7 @@ import (
 func TestReplay(t *testing.T) {
 	paths, err := filepath.Glob("testdata/histories/*.json")
 	require.NoError(t, err)
-	require.Len(t, paths, 22, "WP6 branches and the WP7 subject change need real server histories")
+	require.Len(t, paths, 24, "WP6 branches and the WP7 subject change need real server histories")
 	for _, path := range paths {
 		t.Run(filepath.Base(path), func(t *testing.T) {
 			raw, err := os.ReadFile(path)
@@ -36,8 +41,35 @@ func TestReplay(t *testing.T) {
 			history := &historypb.History{}
 			require.NoError(t, protojson.Unmarshal(raw, history))
 			assertHistoryScenario(t, strings.TrimSuffix(filepath.Base(path), ".json"), history)
+			var exporter *tracetest.InMemoryExporter
+			allowedTraces := map[string]bool{}
+			if strings.HasPrefix(filepath.Base(path), "trace-") {
+				exporter = tracetest.NewInMemoryExporter()
+				provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+				old := otel.GetTracerProvider()
+				otel.SetTracerProvider(provider)
+				defer func() {
+					otel.SetTracerProvider(old)
+					_ = provider.Shutdown(t.Context())
+				}()
+				for _, event := range history.Events {
+					var header *commonpb.Header
+					if started := event.GetWorkflowExecutionStartedEventAttributes(); started != nil {
+						header = started.Header
+					}
+					if update := event.GetWorkflowExecutionUpdateAcceptedEventAttributes(); update != nil {
+						header = update.AcceptedRequest.GetInput().GetHeader()
+					}
+					if header != nil && header.Fields["_tracer-data"] != nil {
+						var carrier map[string]string
+						require.NoError(t, converter.GetDefaultDataConverter().FromPayload(header.Fields["_tracer-data"], &carrier))
+						require.Len(t, carrier["traceparent"], 55)
+						allowedTraces[carrier["traceparent"][3:35]] = true
+					}
+				}
+			}
 			replayer, err := worker.NewWorkflowReplayerWithOptions(
-				worker.WorkflowReplayerOptions{Interceptors: teamrun.WorkerOptions().Interceptors})
+				worker.WorkflowReplayerOptions{Interceptors: append(teamrun.WorkerOptions().Interceptors, temporalx.TemporalTracing())})
 			require.NoError(t, err)
 			replayer.RegisterWorkflowWithOptions(agentrun.Run, workflow.RegisterOptions{Name: w.AgentRunWorkflow})
 			replayer.RegisterWorkflowWithOptions(session.Run, workflow.RegisterOptions{Name: w.SessionWorkflow})
@@ -48,6 +80,12 @@ func TestReplay(t *testing.T) {
 			require.NoError(t, replayer.ReplayWorkflowHistoryWithOptions(nil, history,
 				worker.ReplayWorkflowHistoryOptions{OriginalExecution: workflow.Execution{
 					ID: history.Events[0].GetWorkflowExecutionStartedEventAttributes().GetWorkflowId()}}))
+			if exporter != nil {
+				require.NotEmpty(t, exporter.GetSpans())
+				for _, span := range exporter.GetSpans() {
+					require.True(t, allowedTraces[span.SpanContext.TraceID().String()])
+				}
+			}
 		})
 	}
 }
@@ -75,6 +113,22 @@ func assertHistoryScenario(t *testing.T, name string, history *historypb.History
 	segments := historyInputs[contract.SegmentInput](t, history, contract.ActivityRunAgentSegment)
 	final := historyInputs[w.FinalizeInput](t, history, "FinalizeRun")
 	switch name {
+	case "trace-session":
+		require.Len(t, childWorkflows(history), 2)
+		var traces []string
+		for _, event := range history.Events {
+			if child := event.GetStartChildWorkflowExecutionInitiatedEventAttributes(); child != nil {
+				var carrier map[string]string
+				require.NoError(t, converter.GetDefaultDataConverter().FromPayload(child.Header.Fields["_tracer-data"], &carrier))
+				require.Len(t, carrier["traceparent"], 55)
+				traces = append(traces, carrier["traceparent"][3:35])
+			}
+		}
+		require.NotEqual(t, traces[0], traces[1])
+	case "trace-team":
+		require.Len(t, historyInputs[w.PrepareTeamInput](t, history, "PrepareTeamRun"), 1)
+		require.Len(t, historyInputs[w.FinalizeTeamInput](t, history, "FinalizeTeamRun"), 1)
+
 	case "lease-maintenance-can", "lease-archive-can":
 		require.Contains(t, types, enums.EVENT_TYPE_WORKFLOW_EXECUTION_CONTINUED_AS_NEW)
 		event := history.Events[len(history.Events)-1].GetWorkflowExecutionContinuedAsNewEventAttributes()

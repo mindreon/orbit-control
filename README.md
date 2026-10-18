@@ -66,6 +66,11 @@ URLs are not logged. Configuration uses environment variables only.
 
 | Variable | Meaning / default |
 | --- | --- |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP gRPC HTTP(S) endpoint; empty disables SDK/export (no metrics listener) |
+| `OTEL_TRACES_SAMPLER_ARG` | Parent-based root sample ratio in `[0,1]`, default `1.0` |
+| `OTEL_METRIC_EXPORT_INTERVAL` | Positive milliseconds, default `15000` |
+| `ORBIT_METRICS_TENANT_LIMIT` | First distinct tenant label values retained per process, default `500`; later values use `_other` |
+| `ORBIT_METRICS_MODEL_LIMIT` | First distinct model label values retained per process, default `50` |
 | `ORBIT_DATABASE_URL` | Required app PostgreSQL URL for `api` |
 | `ORBIT_ADMIN_DATABASE_URL` | Required owner PostgreSQL URL for admin commands |
 | `ORBIT_HTTP_ADDR` | `127.0.0.1:8080` |
@@ -679,3 +684,18 @@ The suite includes 100 random reconnection seeds over 10,000 source events, real
 socket backpressure, graceful drain, shared-consumer replicas, a test-owned PG
 network proxy for a 20-second outage, and an isolated authenticated NATS container
 using the specification appendix B permissions. Permission tests require Docker.
+
+### Telemetry boundaries
+
+Control and stream-gateway send traces/metrics only through OTLP; orbit-admin does
+not initialize telemetry. Export spans are allowlisted, without events or status
+descriptions. Public HTTP ignores inbound trace context; the internal listener and
+Temporal propagate only `traceparent`, never baggage or `tracestate`. No request
+bodies, prompts, outputs, tool arguments/results or files are telemetry content.
+`runs.trace_id` is set once in the first PrepareRun/PrepareTeamRun activity and is
+not added to tenant-visible Run objects or RunEvents. Session queued parents are
+in-memory only and intentionally do not survive Continue-As-New.
+
+Temporal's OpenTelemetry contrib is pinned to v0.6.0 (MIT). v0.7.0/v0.8.0 require
+newer Nexus SDK/API modules incompatible with the pinned Temporal SDK v1.37.0;
+v0.6.0 supports the required tracing options without changing those pins.

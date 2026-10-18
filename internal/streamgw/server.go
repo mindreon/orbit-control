@@ -266,7 +266,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	}()
 	started := time.Now()
 	hash := sha256.Sum256([]byte(subject(claims)))
-	s.logger.Info("stream.open", "scope", claims.Scope, "tenant", claims.TenantID,
+	s.logger.InfoContext(ctx, "stream.open", "scope", claims.Scope, "tenant", claims.TenantID,
 		"subject_hash", fmt.Sprintf("%x", hash[:8]), "resume_from", cursor)
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -285,7 +285,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	reason, frames := s.writeEvents(ctx, w, queue)
-	s.logger.Info("stream.close", "reason", reason, "frames", frames, "duration", time.Since(started))
+	s.logger.InfoContext(ctx, "stream.close", "reason", reason, "frames", frames, "duration", time.Since(started))
 }
 
 func matches(c auth.StreamClaims, e contract.RunEvent, subj string) bool {

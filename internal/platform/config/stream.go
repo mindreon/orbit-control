@@ -12,6 +12,7 @@ import (
 // StreamGateway contains only public verification keys and NATS/HTTP settings.
 // It deliberately does not load control's database, KEK or signing configuration.
 type StreamGateway struct {
+	MetricsTenantLimit, MetricsModelLimit          int
 	Addr, NATSURL, LogFormat                       string
 	PublicKeys                                     map[string][]byte
 	MaxConnections, PerTenant, PerSubject          int
@@ -75,5 +76,10 @@ func LoadStreamGateway() (StreamGateway, error) {
 			}
 		}
 	}
+	c.MetricsTenantLimit, c.MetricsModelLimit, err = metricLimits()
+	if err != nil {
+		return c, err
+	}
+
 	return c, nil
 }

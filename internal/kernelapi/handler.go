@@ -24,6 +24,7 @@ import (
 	"github.com/mindreon/orbit-control/internal/platform/db"
 	"github.com/mindreon/orbit-control/internal/platform/httpx"
 	"github.com/mindreon/orbit-control/internal/platform/objstore"
+	"github.com/mindreon/orbit-control/internal/platform/telemetry"
 	"github.com/mindreon/orbit-control/internal/platform/temporalx"
 	"github.com/mindreon/orbit-control/internal/schedules"
 	"github.com/mindreon/orbit-control/internal/secrets"
@@ -39,7 +40,14 @@ type Handler struct {
 	Obj                objstore.ObjectStore
 	ServiceTokenSHA256 string
 }
-type endpoint func(http.ResponseWriter, *http.Request, auth.CapabilityClaims) error
+type afterCommit struct{ tokens []usage.TokenMeasurement }
+type endpoint func(http.ResponseWriter, *http.Request, auth.CapabilityClaims) (afterCommit, error)
+
+func transactional(fn func(http.ResponseWriter, *http.Request, auth.CapabilityClaims) error) endpoint {
+	return func(w http.ResponseWriter, r *http.Request, c auth.CapabilityClaims) (afterCommit, error) {
+		return afterCommit{}, fn(w, r, c)
+	}
+}
 
 func (h *Handler) Router() http.Handler {
 	mux := http.NewServeMux()
@@ -56,31 +64,31 @@ func (h *Handler) Router() http.Handler {
 		purposes string
 		fn       endpoint
 	}{
-		{pattern: "GET /internal/v1/runs/{run}/lock", purposes: "segment sandbox", fn: h.lock},
+		{pattern: "GET /internal/v1/runs/{run}/lock", purposes: "segment sandbox", fn: transactional(h.lock)},
 		{
 			pattern:  "GET /internal/v1/runs/{run}/policy",
 			purposes: "segment",
-			fn:       h.policy,
+			fn:       transactional(h.policy),
 		},
 		{
 			pattern:  "GET /internal/v1/runs/{run}/model",
 			purposes: "segment",
-			fn:       h.model,
+			fn:       transactional(h.model),
 		},
 		{
 			pattern:  "POST /internal/v1/runs/{run}/secret-grants",
 			purposes: "segment",
-			fn:       h.secretGrants,
+			fn:       transactional(h.secretGrants),
 		},
 		{
 			pattern:  "GET /internal/v1/runs/{run}/checkpoint-key",
 			purposes: "segment",
-			fn:       h.checkpointKey,
+			fn:       transactional(h.checkpointKey),
 		},
 		{
 			pattern:  "GET /internal/v1/runs/{run}/content",
 			purposes: "segment sandbox",
-			fn:       h.content,
+			fn:       transactional(h.content),
 		},
 		{
 			pattern:  "POST /internal/v1/runs/{run}/usage",
@@ -90,6 +98,7 @@ func (h *Handler) Router() http.Handler {
 	} {
 		mux.HandleFunc(route.pattern, func(w http.ResponseWriter, r *http.Request) {
 			rec := httpx.NewRecorder()
+			var committed afterCommit
 			token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 			claims, err := h.Signer.VerifyCapability(token)
 			if err != nil {
@@ -101,22 +110,27 @@ func (h *Handler) Router() http.Handler {
 				httpx.WriteError(w, httpx.E(403, "TOKEN_SUPERSEDED", "Capability does not authorize request"))
 				return
 			}
+			telemetry.SetTenant(r.Context(), claims.Tenant)
+			telemetry.SetRun(r.Context(), claims.Run, claims.Member, claims.Seq, claims.Attempt)
 			err = h.DB.WithTenant(r.Context(), claims.Tenant, func(tx pgx.Tx) error {
 				ctx := db.Context(r.Context(), tx)
 				if err := check(ctx, claims); err != nil {
 					return err
 				}
-				return route.fn(rec, r.WithContext(ctx), claims)
+				var err error
+				committed, err = route.fn(rec, r.WithContext(ctx), claims)
+				return err
 			})
 			if err != nil {
 				httpx.WriteError(w, err)
 				return
 			}
+			usage.RecordTokens(r.Context(), committed.tokens)
 			rec.FlushTo(w)
 		})
 	}
 	h.teamRoutes(mux)
-	return mux
+	return telemetry.HTTPMiddleware("internal", mux)
 }
 func check(ctx context.Context, c auth.CapabilityClaims) error {
 	var valid bool
@@ -435,15 +449,15 @@ func (h *Handler) policy(w http.ResponseWriter, r *http.Request, c auth.Capabili
 	httpx.JSON(w, 200, out)
 	return nil
 }
-func (h *Handler) reportUsage(w http.ResponseWriter, r *http.Request, c auth.CapabilityClaims) error {
+func (h *Handler) reportUsage(w http.ResponseWriter, r *http.Request, c auth.CapabilityClaims) (afterCommit, error) {
 	var req contract.UsageReport
 	if err := decode(r, "UsageReport", &req); err != nil {
-		return err
+		return afterCommit{}, err
 	}
-	out, err := usage.ReportModelUsage(r.Context(), c, req)
+	out, points, err := usage.ReportModelUsage(r.Context(), c, req)
 	if err != nil {
-		return err
+		return afterCommit{}, err
 	}
 	httpx.JSON(w, 200, out)
-	return nil
+	return afterCommit{tokens: points}, nil
 }

@@ -6,6 +6,9 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/mindreon/orbit-control/internal/auth"
 )
 
@@ -36,6 +39,7 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) (auth.StreamC
 		writeError(w, 403, "STREAM_FORBIDDEN", "Stream token does not authorize this path")
 		return claims, false
 	}
+	trace.SpanFromContext(r.Context()).SetAttributes(attribute.String("orbit.tenant_id", claims.TenantID))
 	return claims, true
 }
 

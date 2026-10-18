@@ -20,6 +20,7 @@ import (
 	"github.com/mindreon/orbit-control/internal/platform/db"
 	"github.com/mindreon/orbit-control/internal/platform/httpx"
 	"github.com/mindreon/orbit-control/internal/platform/ids"
+	"github.com/mindreon/orbit-control/internal/platform/telemetry"
 	"github.com/mindreon/orbit-control/internal/schedules"
 	w "github.com/mindreon/orbit-control/internal/workflows"
 )
@@ -56,6 +57,8 @@ func (h *Handler) teamRequest(route teamRoute) http.HandlerFunc {
 			httpx.WriteError(out, httpx.E(403, "TOKEN_SUPERSEDED", "Capability does not authorize request"))
 			return
 		}
+		telemetry.SetTenant(r.Context(), claims.Tenant)
+		telemetry.SetRun(r.Context(), claims.Run, claims.Member, claims.Seq, claims.Attempt)
 		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 		defer cancel()
 		var response teamResponse

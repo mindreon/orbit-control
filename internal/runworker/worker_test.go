@@ -10,6 +10,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	"github.com/mindreon/orbit-control/internal/activities/ctl"
+	"github.com/mindreon/orbit-control/internal/workflows/teamrun"
 )
 
 // registry records registrations; any other Registry method panics through the nil embedded interface.
@@ -33,4 +34,10 @@ func TestWaitWorkerRegistersOnlyTheWaitActivities(t *testing.T) {
 	sort.Strings(r.activities)
 	require.Equal(t, []string{"WaitForRun", "WaitForTurn"}, r.activities)
 	require.Empty(t, r.workflows)
+}
+
+func TestWorkerInterceptorsNotDuplicated(t *testing.T) {
+	options := workerOptions()
+	require.Len(t, options.Interceptors, 1)
+	require.IsType(t, &teamrun.SignalInterceptor{}, options.Interceptors[0])
 }

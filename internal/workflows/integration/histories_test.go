@@ -20,6 +20,7 @@ import (
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/interceptor"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
@@ -27,6 +28,7 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	"github.com/mindreon/orbit-control/internal/contract"
+	"github.com/mindreon/orbit-control/internal/platform/temporalx"
 	w "github.com/mindreon/orbit-control/internal/workflows"
 	"github.com/mindreon/orbit-control/internal/workflows/agentrun"
 	"github.com/mindreon/orbit-control/internal/workflows/membertask"
@@ -214,7 +216,8 @@ func devClient(t *testing.T) client.Client {
 	if ns == "" {
 		ns = "orbit-v2-wp6b-histories"
 	}
-	c, err := client.Dial(client.Options{HostPort: address, Namespace: ns})
+	c, err := client.Dial(client.Options{HostPort: address, Namespace: ns,
+		Interceptors: []interceptor.ClientInterceptor{temporalx.TemporalTracing()}})
 	require.NoError(t, err)
 	t.Cleanup(c.Close)
 	_, err = c.WorkflowService().RegisterNamespace(t.Context(), &workflowservice.RegisterNamespaceRequest{
@@ -256,6 +259,7 @@ func runInput(name string) w.RunInput {
 	}
 }
 func TestRecordHistories(t *testing.T) {
+	recordingProvider(t)
 	c := devClient(t)
 	queue := "orbit-v2-wp6b-" + time.Now().Format("150405.000000")
 	f := &fixtures{calls: map[string]int{}}
@@ -286,6 +290,7 @@ func TestRecordHistories(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) { recordRun(t, c, queue, name, f) })
 	}
+	t.Run("trace-session", func(t *testing.T) { recordTracedSession(t, c, queue) })
 	t.Run("session", func(t *testing.T) { recordSession(t, c, queue, "session") })
 	t.Run("session-subject", func(t *testing.T) { recordSession(t, c, queue, "session-subject") })
 	t.Run("lease", func(t *testing.T) { recordLease(t, c, queue) })
@@ -451,7 +456,7 @@ func save(t *testing.T, c client.Client, id, runID, name string) {
 	}
 	require.NotEmpty(t, history.Events)
 	replayer, err := worker.NewWorkflowReplayerWithOptions(
-		worker.WorkflowReplayerOptions{Interceptors: teamrun.WorkerOptions().Interceptors})
+		worker.WorkflowReplayerOptions{Interceptors: append(teamrun.WorkerOptions().Interceptors, temporalx.TemporalTracing())})
 	require.NoError(t, err)
 	replayer.RegisterWorkflowWithOptions(agentrun.Run, workflow.RegisterOptions{Name: w.AgentRunWorkflow})
 	replayer.RegisterWorkflowWithOptions(session.Run, workflow.RegisterOptions{Name: w.SessionWorkflow})

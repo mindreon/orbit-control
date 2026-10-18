@@ -72,13 +72,16 @@ func (a *Activities) CreateInteraction(ctx context.Context, in w.InteractionInpu
 	return out, err
 }
 func (a *Activities) CancelInteraction(ctx context.Context, in w.NotifyInput) error {
-	return a.change(ctx, in.RunOp, func(ctx context.Context, tx pgx.Tx) ([]event, error) {
-		_, err := tx.Exec(ctx, `UPDATE interactions
+	return a.measuredChange(ctx, in.RunOp, func(ctx context.Context, tx pgx.Tx) ([]event, error) {
+		rows, err := tx.Query(ctx, `UPDATE interactions
  SET status='cancelled',resolved_at=now()
  WHERE tenant_id=$1
  AND id=$2
- AND status IN ('pending','escalated')`, in.TenantID, in.InteractionID)
+ AND status IN ('pending','escalated') RETURNING kind,created_at,resolved_at`, in.TenantID, in.InteractionID)
 		if err != nil {
+			return nil, err
+		}
+		if err = stageInteractionRows(ctx, rows, "cancelled"); err != nil {
 			return nil, err
 		}
 		if w.TeamMember(in.Member) {
@@ -132,7 +135,7 @@ func (a *Activities) ApplyDecision(ctx context.Context, in w.DecisionInput) erro
 	if err := validate("Decision", in.Decision); err != nil {
 		return err
 	}
-	return a.change(ctx, in.RunOp, func(ctx context.Context, tx pgx.Tx) ([]event, error) {
+	return a.measuredChange(ctx, in.RunOp, func(ctx context.Context, tx pgx.Tx) ([]event, error) {
 		i, err := interactions.Get(ctx, in.TenantID, in.InteractionID)
 		if err != nil {
 			return nil, err
@@ -169,10 +172,15 @@ func (a *Activities) ApplyDecision(ctx context.Context, in w.DecisionInput) erro
 		if err != nil {
 			return nil, err
 		}
-		if _, err = tx.Exec(ctx, `UPDATE interactions
+		rows, err := tx.Query(ctx, `UPDATE interactions
  SET status=$3,decision=$4,decided_by=$5,resolved_at=now()
  WHERE tenant_id=$1
- AND id=$2`, in.TenantID, i.ID, status, raw, actor); err != nil {
+ AND id=$2 AND status IN ('pending','escalated') RETURNING kind,created_at,resolved_at`,
+			in.TenantID, i.ID, status, raw, actor)
+		if err != nil {
+			return nil, err
+		}
+		if err = stageInteractionRows(ctx, rows, status); err != nil {
 			return nil, err
 		}
 		if err = auditDecision(ctx, tx, in, i.ID, scope); err != nil {

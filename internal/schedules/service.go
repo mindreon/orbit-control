@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
+	"go.opentelemetry.io/otel/attribute"
 	"go.temporal.io/sdk/client"
 
 	"github.com/mindreon/orbit-control/internal/audit"
@@ -16,6 +17,7 @@ import (
 	"github.com/mindreon/orbit-control/internal/platform/db"
 	"github.com/mindreon/orbit-control/internal/platform/httpx"
 	"github.com/mindreon/orbit-control/internal/platform/ids"
+	"github.com/mindreon/orbit-control/internal/platform/telemetry"
 	"github.com/mindreon/orbit-control/internal/policy"
 	"github.com/mindreon/orbit-control/internal/sessions"
 	w "github.com/mindreon/orbit-control/internal/workflows"
@@ -216,6 +218,8 @@ func (s Service) quota(ctx context.Context, workspace, owner string, userOnly bo
 			return err
 		}
 		if count >= q.limit {
+			telemetry.Counter("orbit.quota.rejections").Add(ctx, 1,
+				attribute.String("orbit.quota.metric", "schedules"), attribute.String("orbit.quota.scope", q.kind))
 			return httpx.E(429, "SCHEDULE_QUOTA_EXCEEDED", "Schedule quota exceeded")
 		}
 	}

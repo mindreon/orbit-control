@@ -138,7 +138,7 @@ func Middleware(logger *slog.Logger, publicOrigin string, origins []string, next
 				rec = NewRecorder()
 				rec.H = headers
 				WriteError(rec, E(500, "INTERNAL", "Request failed"))
-				logger.Error(
+				logger.ErrorContext(r.Context(),
 					"request panic",
 					"request_id",
 					id,
@@ -154,7 +154,7 @@ func Middleware(logger *slog.Logger, publicOrigin string, origins []string, next
 				rec.Status = 200
 			}
 			rec.FlushTo(w)
-			logger.Info(
+			logger.InfoContext(r.Context(),
 				"http access",
 				"request_id",
 				id,

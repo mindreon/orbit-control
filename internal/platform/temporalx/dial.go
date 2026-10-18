@@ -7,12 +7,14 @@ import (
 	"os"
 
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/interceptor"
 
 	"github.com/mindreon/orbit-control/internal/platform/config"
 )
 
 func Dial(c config.Config) (client.Client, error) {
-	options := client.Options{HostPort: c.TemporalAddress, Namespace: c.TemporalNamespace}
+	options := client.Options{HostPort: c.TemporalAddress, Namespace: c.TemporalNamespace,
+		Interceptors: []interceptor.ClientInterceptor{TemporalTracing()}, MetricsHandler: TemporalMetrics()}
 	if c.TemporalTLS {
 		tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: c.TemporalServerName}
 		if c.TemporalCAFile != "" {

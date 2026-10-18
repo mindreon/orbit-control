@@ -89,6 +89,7 @@ func TestPostgresSuite(t *testing.T) {
 		privileged.Close()
 		t.Fatal("API accepted owner credentials")
 	}
+	t.Run("Telemetry", func(t *testing.T) { testTelemetry(t, app, admin) })
 	t.Run("ContractColumns", func(t *testing.T) { testContractColumns(t, admin) })
 	t.Run("PartitionTimeZone", func(t *testing.T) { testPartitionTimeZone(t, admin) })
 	t.Run("AllTenantTablesRLS", func(t *testing.T) { testRLS(t, admin, app) })

@@ -7,10 +7,12 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/mindreon/orbit-control/internal/platform/db"
 	"github.com/mindreon/orbit-control/internal/platform/httpx"
 	"github.com/mindreon/orbit-control/internal/platform/ids"
+	"github.com/mindreon/orbit-control/internal/platform/telemetry"
 )
 
 type Entry struct {
@@ -146,6 +148,8 @@ func Admit(ctx context.Context, tenant, workspace, principal string, budget int6
  AND ($2='tenant' OR ($2='workspace' AND s.workspace_id=$3::uuid) OR ($2='user' AND r.created_by=$3::uuid))`, tenant, q.scope, q.id).
 				Scan(&used)
 			if err == nil && used >= q.limit {
+				telemetry.Counter("orbit.quota.rejections").Add(ctx, 1,
+					attribute.String("orbit.quota.metric", q.metric), attribute.String("orbit.quota.scope", q.scope))
 				return httpx.E(429, "QUOTA_EXCEEDED", "Concurrent run quota exceeded")
 			}
 		} else {
@@ -156,6 +160,8 @@ func Admit(ctx context.Context, tenant, workspace, principal string, budget int6
  AND ($4='total' OR occurred_at>=date_trunc(CASE $4 WHEN 'hour' THEN 'hour' WHEN 'day' THEN 'day' ELSE 'month' END,now() AT TIME
    ZONE 'UTC') AT TIME ZONE 'UTC')`, tenant, q.scope, q.id, q.period).Scan(&used)
 			if err == nil && (budget > q.limit || used > q.limit-budget) {
+				telemetry.Counter("orbit.quota.rejections").Add(ctx, 1,
+					attribute.String("orbit.quota.metric", q.metric), attribute.String("orbit.quota.scope", q.scope))
 				return httpx.E(429, "QUOTA_EXCEEDED", "Credit quota exceeded")
 			}
 		}

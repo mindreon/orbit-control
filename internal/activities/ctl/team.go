@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 
@@ -16,7 +18,7 @@ import (
 )
 
 func (a *Activities) PrepareTeamRun(ctx context.Context, in w.PrepareTeamInput) error {
-	return a.change(ctx, in.RunOp, func(ctx context.Context, tx pgx.Tx) ([]event, error) {
+	return a.measuredChange(ctx, in.RunOp, func(ctx context.Context, tx pgx.Tx) ([]event, error) {
 		if err := prepareRun(ctx, tx, in.RunOp, in.Budget); err != nil {
 			return nil, err
 		}
@@ -47,11 +49,26 @@ func (a *Activities) PrepareTeamRun(ctx context.Context, in w.PrepareTeamInput) 
 	})
 }
 func prepareRun(ctx context.Context, tx pgx.Tx, in w.RunOp, budget int64) error {
-	if _, err := tx.Exec(ctx, `UPDATE runs SET status='running',started_at=COALESCE(started_at,now())
- WHERE tenant_id=$1 AND id=$2 AND status IN ('queued','running')`, in.TenantID, in.RunID); err != nil {
+	traceID := ""
+	if sc := trace.SpanContextFromContext(ctx); sc.IsValid() {
+		traceID = sc.TraceID().String()
+	}
+	var first bool
+	var trigger, kind string
+	err := tx.QueryRow(ctx, `UPDATE runs SET status='running',started_at=COALESCE(started_at,now()),
+ trace_id=COALESCE(trace_id,NULLIF($3,''))
+ WHERE tenant_id=$1 AND id=$2 AND status IN ('queued','running')
+ RETURNING (started_at IS NOT DISTINCT FROM now()),trigger,
+ (SELECT entry_kind FROM sessions WHERE sessions.tenant_id=runs.tenant_id AND sessions.id=runs.session_id)`,
+		in.TenantID, in.RunID, traceID).Scan(&first, &trigger, &kind)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
-	_, err := tx.Exec(ctx, `INSERT INTO budget_reservations(id,tenant_id,run_id,millicredits,status,expires_at)
+	if first {
+		stageMeasurement(ctx, "orbit.runs.started", 1, true,
+			attribute.String("orbit.run.trigger", trigger), attribute.String("orbit.entry_kind", kind))
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO budget_reservations(id,tenant_id,run_id,millicredits,status,expires_at)
  VALUES($1,$2,$3,$4,'held',now()+interval '7 days') ON CONFLICT DO NOTHING`, ids.Derive(in.RunID, "reservation"), in.TenantID, in.RunID,
 		budget)
 	return err
@@ -168,7 +185,7 @@ func (a *Activities) WaitForTurn(ctx context.Context, in w.TurnOp) (w.TurnResult
 	}
 }
 func (a *Activities) FinalizeTeamRun(ctx context.Context, in w.FinalizeTeamInput) error {
-	return a.change(ctx, in.RunOp, func(ctx context.Context, tx pgx.Tx) ([]event, error) {
+	return a.measuredChange(ctx, in.RunOp, func(ctx context.Context, tx pgx.Tx) ([]event, error) {
 		changed, err := finalizeRun(ctx, tx, w.FinalizeInput{RunOp: in.RunOp, Status: in.Status, ErrorCode: in.Code, Reason: in.Summary})
 		if err != nil || !changed {
 			return nil, err

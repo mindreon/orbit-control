@@ -7,15 +7,21 @@ import (
 	"strconv"
 	"strings"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/mindreon/orbit-control/internal/auth"
 	"github.com/mindreon/orbit-control/internal/contract"
 	"github.com/mindreon/orbit-control/internal/models"
 	"github.com/mindreon/orbit-control/internal/platform/db"
 	"github.com/mindreon/orbit-control/internal/platform/httpx"
+	"github.com/mindreon/orbit-control/internal/platform/telemetry"
 )
 
-func ReportModelUsage(ctx context.Context, c auth.CapabilityClaims, req contract.UsageReport) (contract.UsageReportResponse, error) {
+func ReportModelUsage(
+	ctx context.Context, c auth.CapabilityClaims, req contract.UsageReport,
+) (contract.UsageReportResponse, []TokenMeasurement, error) {
 	var out contract.UsageReportResponse
+	var points []TokenMeasurement
 
 	tx := db.Tx(ctx)
 	prefix := fmt.Sprintf("model:%s:%s:%d:%d:", c.Run, c.Member, c.Seq, c.Attempt)
@@ -25,13 +31,13 @@ func ReportModelUsage(ctx context.Context, c auth.CapabilityClaims, req contract
  JOIN sessions s ON s.id=r.session_id
  WHERE r.tenant_id=$1
  AND r.id=$2`, c.Tenant, c.Run).Scan(&workspace, &principal); err != nil {
-		return out, err
+		return out, nil, err
 	}
 	for _, item := range req.Items {
 		suffix, ok := strings.CutPrefix(item.IdempotencyKey, prefix)
 		n, e := strconv.Atoi(suffix)
 		if !ok || e != nil || n < 1 {
-			return out, httpx.E(422, "INVALID_USAGE_KEY", "Usage key must identify this attempt")
+			return out, nil, httpx.E(422, "INVALID_USAGE_KEY", "Usage key must identify this attempt")
 		}
 		var raw []byte
 		if err := tx.QueryRow(ctx, `SELECT model_profiles->$5->'pricing'
@@ -42,24 +48,26 @@ func ReportModelUsage(ctx context.Context, c auth.CapabilityClaims, req contract
  AND seq=$4
  AND model_profiles ? $5`, c.Tenant, c.Run, c.Member, c.Seq, models.BindingKey(c.Attempt, item.Model)).Scan(&raw); err !=
 			nil {
-			return out, err
+			return out, nil, err
 		}
 		var pricing contract.ModelPricing
 		if err := json.Unmarshal(raw, &pricing); err != nil {
-			return out, err
+			return out, nil, err
 		}
-		if err := chargeModelTokens(ctx, c, workspace, principal, item, pricing); err != nil {
-			return out, err
+		added, err := chargeModelTokens(ctx, c, workspace, principal, item, pricing)
+		if err != nil {
+			return out, nil, err
 		}
+		points = append(points, added...)
 
 	}
 	if err := tx.QueryRow(ctx, `SELECT COALESCE(sum(millicredits),0)::bigint
  FROM usage_ledger
  WHERE tenant_id=$1
  AND run_id=$2`, c.Tenant, c.Run).Scan(&out.RunUsedMillicredits); err != nil {
-		return out, err
+		return out, nil, err
 	}
-	return out, nil
+	return out, points, nil
 }
 
 func chargeModelTokens(
@@ -68,34 +76,35 @@ func chargeModelTokens(
 	workspace, principal string,
 	item contract.UsageItem,
 	pricing contract.ModelPricing,
-) error {
+) ([]TokenMeasurement, error) {
+	var points []TokenMeasurement
 	for _, token := range []struct {
-		suffix string
-		count  int
-		price  int64
+		suffix, kind string
+		count        int
+		price        int64
 	}{
-		{suffix: "in", count: item.InputTokens, price: pricing.InputPerMtokMillicredits},
+		{suffix: "in", kind: "input", count: item.InputTokens, price: pricing.InputPerMtokMillicredits},
 		{
-			suffix: "out",
-			count:  item.OutputTokens,
-			price:  pricing.OutputPerMtokMillicredits,
+			suffix: "out", kind: "output",
+			count: item.OutputTokens,
+			price: pricing.OutputPerMtokMillicredits,
 		},
 		{
-			suffix: "cr",
-			count:  item.CacheReadTokens,
-			price:  pricing.CacheReadPerMtokMillicredits,
+			suffix: "cr", kind: "cache_read",
+			count: item.CacheReadTokens,
+			price: pricing.CacheReadPerMtokMillicredits,
 		},
 		{
-			suffix: "cw",
-			count:  item.CacheWriteTokens,
-			price:  pricing.CacheWritePerMtokMillicredits,
+			suffix: "cw", kind: "cache_write",
+			count: item.CacheWriteTokens,
+			price: pricing.CacheWritePerMtokMillicredits,
 		},
 	} {
 		cost, e := models.Price(token.count, token.price)
 		if e != nil {
-			return httpx.E(422, "INVALID_USAGE", "Usage cost overflows")
+			return nil, httpx.E(422, "INVALID_USAGE", "Usage cost overflows")
 		}
-		if _, e = RecordUsage(
+		added, e := RecordUsage(
 			ctx,
 			db.Tx(ctx),
 			Entry{
@@ -112,9 +121,26 @@ func chargeModelTokens(
 				IdempotencyKey: item.IdempotencyKey + ":" + token.suffix,
 				OccurredAt:     item.OccurredAt,
 			},
-		); e != nil {
-			return e
+		)
+		if e != nil {
+			return nil, e
+		}
+		if added {
+			points = append(points, TokenMeasurement{Tenant: c.Tenant, Model: item.Model, Type: token.kind, Count: int64(token.count)})
 		}
 	}
-	return nil
+	return points, nil
+}
+
+// TokenMeasurement contains only metric dimensions, never usage payload content.
+type TokenMeasurement struct {
+	Tenant, Model, Type string
+	Count               int64
+}
+
+func RecordTokens(ctx context.Context, points []TokenMeasurement) {
+	for _, point := range points {
+		telemetry.Counter("orbit.usage.tokens").Add(ctx, point.Count, attribute.String("orbit.tenant_id", point.Tenant),
+			attribute.String("gen_ai.request.model", point.Model), attribute.String("orbit.token.type", point.Type))
+	}
 }

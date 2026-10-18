@@ -13,6 +13,7 @@ import (
 )
 
 type Config struct {
+	MetricsTenantLimit, MetricsModelLimit                                                                     int
 	SchedulesDefaultLimit, CtlWaitConcurrency                                                                 int
 	ScheduleSweepInterval                                                                                     time.Duration
 	SinkEnabled                                                                                               bool
@@ -80,6 +81,12 @@ func Load() (Config, error) {
 	if err := c.validateOrigins(); err != nil {
 		return c, err
 	}
+	var err error
+	c.MetricsTenantLimit, c.MetricsModelLimit, err = metricLimits()
+	if err != nil {
+		return c, err
+	}
+
 	return c, nil
 }
 func (c Config) ValidateAPI() error {

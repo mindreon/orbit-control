@@ -28,6 +28,7 @@ import (
 	orbitlog "github.com/mindreon/orbit-control/internal/platform/log"
 	"github.com/mindreon/orbit-control/internal/platform/natsx"
 	"github.com/mindreon/orbit-control/internal/platform/objstore"
+	"github.com/mindreon/orbit-control/internal/platform/telemetry"
 	"github.com/mindreon/orbit-control/internal/platform/temporalx"
 	"github.com/mindreon/orbit-control/internal/runworker"
 	"github.com/mindreon/orbit-control/internal/schedules"
@@ -67,6 +68,20 @@ func run() error {
 		return e
 	}
 	l := orbitlog.New(os.Stdout, c.LogFormat)
+	telemetryConfig, e := telemetry.FromEnv("orbit-control", c.Environment)
+	if e != nil {
+		return e
+	}
+	telemetryConfig.TenantLimit, telemetryConfig.ModelLimit = c.MetricsTenantLimit, c.MetricsModelLimit
+	shutdownTelemetry, e := telemetry.Setup(context.Background(), telemetryConfig, l)
+	if e != nil {
+		return e
+	}
+	defer func() {
+		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownTelemetry(shutdown)
+	}()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	startup, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -134,8 +149,13 @@ func serveAPI(
 		return e
 	}
 	defer a.Close()
+	scheduleClient, e := temporalx.ScheduleClient(startup, tc, client.Options{Namespace: c.TemporalNamespace})
+	if e != nil {
+		return e
+	}
+	defer scheduleClient.Close()
 	h := &httpapi.Handler{
-		Schedules: &schedules.Service{DB: d, Locks: locks.NewResolver(assetService), Temporal: tc.ScheduleClient(),
+		Schedules: &schedules.Service{DB: d, Locks: locks.NewResolver(assetService), Temporal: scheduleClient,
 			DefaultLimit: c.SchedulesDefaultLimit, SweepInterval: c.ScheduleSweepInterval},
 		EventFloor: floor,
 		DB:         d,
@@ -213,7 +233,11 @@ func startWorkers(
 			return nil, err
 		}
 	}
-	scheduleService := &schedules.Service{DB: d, Locks: locks.NewResolver(assetService), Temporal: tc.ScheduleClient(),
+	scheduleClient, err := temporalx.ScheduleClient(ctx, tc, client.Options{Namespace: c.TemporalNamespace})
+	if err != nil {
+		return nil, err
+	}
+	scheduleService := &schedules.Service{DB: d, Locks: locks.NewResolver(assetService), Temporal: scheduleClient,
 		DefaultLimit: c.SchedulesDefaultLimit, SweepInterval: c.ScheduleSweepInterval}
 	activities := &ctl.Activities{DB: d, Obj: store, NATS: bus, Temporal: tc, Environment: c.Environment, Logger: l,
 		SandboxProvider: contract.SandboxProvider(c.SandboxProvider), Schedules: scheduleService,
@@ -221,17 +245,28 @@ func startWorkers(
 	worker := runworker.New(tc, activities)
 	waitWorker := runworker.NewWait(tc, activities, c.CtlWaitConcurrency)
 	if err := waitWorker.Start(); err != nil {
+		scheduleClient.Close()
 		return nil, err
 	}
 
 	releaseactivities.Register(worker, &releaseactivities.Activities{DB: d, Assets: assetService})
 	if err := worker.Start(); err != nil {
+		scheduleClient.Close()
 		waitWorker.Stop()
 		return nil, err
 	}
 	dispatchCtx, cancelDispatch := context.WithCancel(ctx)
 	dispatchDone := make(chan struct{})
+	unregisterTelemetry, err := runworker.Observe(d)
+	if err != nil {
+		cancelDispatch()
+		worker.Stop()
+		waitWorker.Stop()
+		scheduleClient.Close()
+		return nil, err
+	}
 	var projections sync.WaitGroup
+	projections.Go(func() { runworker.Sample(dispatchCtx, d, tc, l) })
 	projections.Go(func() {
 		scheduleService.Sweep(dispatchCtx, func(err error) { l.Warn("schedule synchronization failed", "error_type", fmt.Sprintf("%T", err)) })
 	})
@@ -247,6 +282,8 @@ func startWorkers(
 		projections.Go(func() { outbox.Run(dispatchCtx) })
 	}
 	cleanup := func() {
+		defer scheduleClient.Close()
+		unregisterTelemetry()
 		cancelDispatch()
 		<-dispatchDone
 		projections.Wait()

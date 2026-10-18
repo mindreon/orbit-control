@@ -26,11 +26,14 @@ func Register(reg worker.Registry, a *ctl.Activities) {
 	reg.RegisterWorkflowWithOptions(scheduledrun.Run, workflow.RegisterOptions{Name: w.ScheduledRunWorkflow})
 	reg.RegisterActivity(a)
 }
-func New(c client.Client, a *ctl.Activities) worker.Worker {
+func workerOptions() worker.Options {
 	options := teamrun.WorkerOptions()
 	options.MaxConcurrentActivityExecutionSize = 64
 	options.MaxConcurrentWorkflowTaskExecutionSize = 32
-	worker := worker.New(c, contract.TaskQueueCtl, options)
+	return options
+}
+func New(c client.Client, a *ctl.Activities) worker.Worker {
+	worker := worker.New(c, contract.TaskQueueCtl, workerOptions())
 	Register(worker, a)
 	return worker
 }

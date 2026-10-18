@@ -25,6 +25,7 @@ import (
 	"github.com/mindreon/orbit-control/internal/platform/httpx"
 	"github.com/mindreon/orbit-control/internal/platform/ids"
 	"github.com/mindreon/orbit-control/internal/platform/objstore"
+	"github.com/mindreon/orbit-control/internal/platform/telemetry"
 	"github.com/mindreon/orbit-control/internal/platform/temporalx"
 	"github.com/mindreon/orbit-control/internal/policy"
 	"github.com/mindreon/orbit-control/internal/schedules"
@@ -454,6 +455,7 @@ func (h *Handler) Router() http.Handler {
 				httpx.WriteError(w, httpx.E(404, "NOT_FOUND", "Route not found"))
 				return
 			}
+			telemetry.SetRoute(r.Context(), selected.Pattern)
 			ip, _, _ := net.SplitHostPort(r.RemoteAddr)
 			r = r.WithContext(audit.Context(r.Context(), ip, r.UserAgent()))
 			rec := httpx.NewRecorder()
@@ -471,7 +473,7 @@ func (h *Handler) Router() http.Handler {
 					if errors.As(e, &pgerr) {
 						code = pgerr.Code
 					}
-					h.Logger.Error("request failed", "error_type", fmt.Sprintf("%T", e), "sqlstate", code)
+					h.Logger.ErrorContext(r.Context(), "request failed", "error_type", fmt.Sprintf("%T", e), "sqlstate", code)
 				}
 				httpx.WriteError(w, e)
 				return
@@ -482,7 +484,7 @@ func (h *Handler) Router() http.Handler {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, httpx.E(404, "NOT_FOUND", "Route not found"))
 	})
-	return httpx.Middleware(h.Logger, h.Config.PublicOrigin, h.Config.CORS, mux)
+	return telemetry.HTTPMiddleware("public", httpx.Middleware(h.Logger, h.Config.PublicOrigin, h.Config.CORS, mux))
 }
 func (h *Handler) protected(w http.ResponseWriter, r *http.Request, fn endpoint, selected route) error {
 	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -500,6 +502,7 @@ func (h *Handler) protected(w http.ResponseWriter, r *http.Request, fn endpoint,
 		}
 		return e
 	}
+	telemetry.SetTenant(r.Context(), tenant)
 	ctx := auth.Context(r.Context(), p, tenant)
 	r = r.WithContext(ctx)
 	if selected.SelfManagedTenant {

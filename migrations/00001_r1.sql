@@ -67,7 +67,7 @@ CREATE TABLE sessions (
   id uuid PRIMARY KEY, tenant_id uuid NOT NULL, workspace_id uuid NOT NULL, project_id uuid, owner_id uuid NOT NULL, title text NOT NULL, entry_kind text NOT NULL CHECK(entry_kind IN ('agent','team')), entry_ref text NOT NULL, message_policy text NOT NULL CHECK(message_policy IN ('queue','steer','interrupt')), pinned boolean NOT NULL DEFAULT false, pinned_lock_id uuid, schedule_id uuid, sandbox_id text, status text NOT NULL CHECK(status IN ('active','idle','archived')), created_at timestamptz NOT NULL DEFAULT now(), last_activity_at timestamptz NOT NULL DEFAULT now(), UNIQUE(tenant_id,id), FOREIGN KEY(tenant_id,workspace_id) REFERENCES workspaces(tenant_id,id), FOREIGN KEY(tenant_id,project_id) REFERENCES projects(tenant_id,id), FOREIGN KEY(tenant_id,owner_id) REFERENCES memberships(tenant_id,principal_id)
 );
 CREATE TABLE runs (
-  id uuid PRIMARY KEY, tenant_id uuid NOT NULL, session_id uuid NOT NULL, trigger text NOT NULL CHECK(trigger IN ('user_message','schedule','api','channel','resume')), status text NOT NULL CHECK(status IN ('queued','running','waiting_input','waiting_approval','paused','succeeded','failed','cancelled','budget_exhausted','timed_out')), lock_id uuid, created_by uuid REFERENCES principals(id), message_id uuid, budget_millicredits bigint NOT NULL DEFAULT 0, used_millicredits bigint NOT NULL DEFAULT 0, temporal_workflow_id text, started_at timestamptz, ended_at timestamptz, error_code text, summary text, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(tenant_id,id), FOREIGN KEY(tenant_id,session_id) REFERENCES sessions(tenant_id,id)
+  id uuid PRIMARY KEY, tenant_id uuid NOT NULL, session_id uuid NOT NULL, trigger text NOT NULL CHECK(trigger IN ('user_message','schedule','api','channel','resume')), status text NOT NULL CHECK(status IN ('queued','running','waiting_input','waiting_approval','paused','succeeded','failed','cancelled','budget_exhausted','timed_out')), lock_id uuid, created_by uuid REFERENCES principals(id), message_id uuid, budget_millicredits bigint NOT NULL DEFAULT 0, used_millicredits bigint NOT NULL DEFAULT 0, trace_id text CHECK (trace_id ~ '^[0-9a-f]{32}$'), temporal_workflow_id text, started_at timestamptz, ended_at timestamptz, error_code text, summary text, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(tenant_id,id), FOREIGN KEY(tenant_id,session_id) REFERENCES sessions(tenant_id,id)
 );
 CREATE TABLE run_locks (
   id uuid PRIMARY KEY, tenant_id uuid NOT NULL, run_id uuid NOT NULL, digest text NOT NULL, entries jsonb NOT NULL, effective_permissions jsonb NOT NULL, lock jsonb, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(tenant_id,id), FOREIGN KEY(tenant_id,run_id) REFERENCES runs(tenant_id,id)
@@ -631,7 +631,34 @@ END $$;
 -- +goose StatementEnd
 CREATE TRIGGER worker_effect_update BEFORE UPDATE ON tool_effects FOR EACH ROW EXECUTE FUNCTION protect_worker_effect();
 REVOKE ALL ON FUNCTION protect_worker_effect() FROM PUBLIC;
+-- Cross-tenant aggregate telemetry exposes only identifiers, counts and ratios.
+-- +goose StatementBegin
+CREATE FUNCTION ops_run_counts() RETURNS TABLE(tenant_id uuid, status text, n bigint)
+LANGUAGE sql SECURITY DEFINER STABLE SET search_path=public,pg_temp AS $$
+ SELECT tenant_id,status,count(*) FROM runs
+ WHERE status NOT IN ('succeeded','failed','cancelled','budget_exhausted','timed_out') GROUP BY tenant_id,status
+$$;
+CREATE FUNCTION ops_interaction_counts() RETURNS TABLE(kind text, n bigint, oldest timestamptz)
+LANGUAGE sql SECURITY DEFINER STABLE SET search_path=public,pg_temp AS $$
+ SELECT kind,count(*),min(created_at) FROM interactions WHERE status IN ('pending','escalated') GROUP BY kind
+$$;
+CREATE FUNCTION ops_quota_utilization() RETURNS TABLE(tenant_id uuid, policy_id uuid, metric text, ratio numeric)
+LANGUAGE sql SECURITY DEFINER STABLE SET search_path=public,pg_temp AS $$
+ SELECT q.tenant_id,q.id,q.metric,
+ COALESCE((SELECT sum(CASE q.metric WHEN 'tokens' THEN l.quantity ELSE l.millicredits::numeric END)
+ FROM usage_ledger l WHERE l.tenant_id=q.tenant_id
+ AND (q.metric<>'tokens' OR l.meter LIKE 'tokens.%')
+ AND (q.scope_type='tenant' OR (q.scope_type='workspace' AND l.workspace_id=q.scope_id)
+ OR (q.scope_type='user' AND l.principal_id=q.scope_id))
+ AND (q.period='total' OR l.occurred_at>=date_trunc(CASE q.period WHEN 'hour' THEN 'hour' WHEN 'day' THEN 'day'
+ ELSE 'month' END,now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')),0)/NULLIF(q."limit",0)
+ FROM quota_policies q WHERE q.metric IN ('millicredits','tokens') AND q.scope_type IN ('tenant','workspace','user')
+$$;
+-- +goose StatementEnd
+REVOKE ALL ON FUNCTION ops_run_counts(),ops_interaction_counts(),ops_quota_utilization() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION ops_run_counts(),ops_interaction_counts(),ops_quota_utilization() TO orbit_app;
 -- +goose Down
+DROP FUNCTION ops_run_counts(),ops_interaction_counts(),ops_quota_utilization();
 SET LOCAL ROLE orbit_owner;
 DROP FUNCTION invitation_tenant(bytea);
 DROP TABLE invitations;

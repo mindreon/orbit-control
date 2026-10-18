@@ -179,7 +179,7 @@ func auditRun(ctx context.Context, tx pgx.Tx, in w.RunOp, action, target string,
 }
 func (a *Activities) PrepareRun(ctx context.Context, in w.PrepareInput) (w.PrepareOutput, error) {
 	var out w.PrepareOutput
-	err := a.change(ctx, in.RunOp, func(ctx context.Context, tx pgx.Tx) ([]event, error) {
+	err := a.measuredChange(ctx, in.RunOp, func(ctx context.Context, tx pgx.Tx) ([]event, error) {
 		var lock string
 		var kind string
 		if err := tx.QueryRow(ctx, `SELECT r.lock_id::text,s.entry_kind
@@ -209,14 +209,28 @@ func (a *Activities) PrepareRun(ctx context.Context, in w.PrepareInput) (w.Prepa
 	return out, err
 }
 func (a *Activities) StartSegment(ctx context.Context, in w.StartSegmentInput) error {
-	return a.change(ctx, in.RunOp, func(ctx context.Context, tx pgx.Tx) ([]event, error) {
-		_, err := tx.Exec(ctx, `INSERT INTO run_segments(tenant_id,run_id,member,seq,status,checkpoint_version)
+	return a.measuredChange(ctx, in.RunOp, func(ctx context.Context, tx pgx.Tx) ([]event, error) {
+		var inserted bool
+		err := tx.QueryRow(ctx, `INSERT INTO run_segments(tenant_id,run_id,member,seq,status,checkpoint_version)
  VALUES($1,$2,$3,$4,'running',$5)
  ON CONFLICT(tenant_id,run_id,member,seq)
  DO UPDATE SET started_at=now()
- WHERE run_segments.status='running'`, in.TenantID, in.RunID, in.Member, in.Seq, in.ExpectedVersion)
+ WHERE run_segments.status='running' RETURNING (xmax=0)`, in.TenantID, in.RunID, in.Member, in.Seq,
+			in.ExpectedVersion).Scan(&inserted)
+		if errors.Is(err, pgx.ErrNoRows) {
+			err = nil
+		}
 		if err != nil {
 			return nil, err
+		}
+		if inserted && in.Seq == 1 && in.Member == "main" {
+			var latency float64
+			var trigger string
+			if err = tx.QueryRow(ctx, `SELECT extract(epoch FROM now()-created_at)::float8,trigger
+ FROM runs WHERE tenant_id=$1 AND id=$2`, in.TenantID, in.RunID).Scan(&latency, &trigger); err != nil {
+				return nil, err
+			}
+			stageMeasurement(ctx, "orbit.run.start.latency", latency, false, attribute.String("orbit.run.trigger", trigger))
 		}
 		if w.TeamMember(in.Member) {
 			return nil, nil
@@ -314,7 +328,7 @@ func (a *Activities) ReconcileCheckpoint(ctx context.Context, in w.ReconcileInpu
 	return out, err
 }
 func (a *Activities) FinalizeRun(ctx context.Context, in w.FinalizeInput) error {
-	return a.change(ctx, in.RunOp, func(ctx context.Context, tx pgx.Tx) ([]event, error) {
+	return a.measuredChange(ctx, in.RunOp, func(ctx context.Context, tx pgx.Tx) ([]event, error) {
 		changed, err := finalizeRun(ctx, tx, in)
 		if err != nil || !changed {
 			return nil, err
@@ -462,15 +476,19 @@ func settleRun(ctx context.Context, tx pgx.Tx, in w.FinalizeInput, used int64) e
  WHERE tenant_id=$1
  AND run_id=$2
  AND status='running'`,
-		`UPDATE interactions
- SET status='cancelled',resolved_at=now()
- WHERE tenant_id=$1
- AND run_id=$2
- AND status IN ('pending','escalated')`,
 	} {
 		if _, err = tx.Exec(ctx, sql, in.TenantID, in.RunID); err != nil {
 			return err
 		}
+	}
+	rows, err := tx.Query(ctx, `UPDATE interactions SET status='cancelled',resolved_at=now()
+ WHERE tenant_id=$1 AND run_id=$2 AND status IN ('pending','escalated') RETURNING kind,created_at,resolved_at`,
+		in.TenantID, in.RunID)
+	if err != nil {
+		return err
+	}
+	if err = stageInteractionRows(ctx, rows, "cancelled"); err != nil {
+		return err
 	}
 	reservation := "settled"
 	if in.NeverStarted {
@@ -499,12 +517,22 @@ func finalizeRun(ctx context.Context, tx pgx.Tx, in w.FinalizeInput) (bool, erro
  WHERE tenant_id=$1 AND run_id=$2`, in.TenantID, in.RunID).Scan(&used); err != nil {
 		return false, err
 	}
-	n, err := tx.Exec(ctx, `UPDATE runs SET status=$3,error_code=NULLIF($4,''),summary=NULLIF($5,''),
- ended_at=now(),used_millicredits=$6 WHERE tenant_id=$1 AND id=$2 AND ended_at IS NULL`,
-		in.TenantID, in.RunID, in.Status, in.ErrorCode, in.Reason, used)
-	if err != nil || n.RowsAffected() == 0 {
+	var duration float64
+	var kind string
+	err := tx.QueryRow(ctx, `UPDATE runs SET status=$3,error_code=NULLIF($4,''),summary=NULLIF($5,''),
+ ended_at=now(),used_millicredits=$6 WHERE tenant_id=$1 AND id=$2 AND ended_at IS NULL
+ RETURNING extract(epoch FROM ended_at-created_at)::float8,
+ (SELECT entry_kind FROM sessions WHERE sessions.tenant_id=runs.tenant_id AND sessions.id=runs.session_id)`,
+		in.TenantID, in.RunID, in.Status, in.ErrorCode, in.Reason, used).Scan(&duration, &kind)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
 		return false, err
 	}
+	labels := []attribute.KeyValue{attribute.String("orbit.run.status", in.Status), attribute.String("orbit.entry_kind", kind)}
+	stageMeasurement(ctx, "orbit.runs.finished", 1, true, labels...)
+	stageMeasurement(ctx, "orbit.run.duration", duration, false, labels...)
 	if err = settleRun(ctx, tx, in, used); err != nil {
 		return false, err
 	}

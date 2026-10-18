@@ -1,10 +1,13 @@
 package log
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"strings"
+
+	"go.opentelemetry.io/otel/trace"
 )
 
 func sensitive(k string) bool {
@@ -63,9 +66,9 @@ func New(w io.Writer, format string) *slog.Logger {
 		return a
 	}}
 	if format == "text" {
-		return slog.New(slog.NewTextHandler(w, opts))
+		return slog.New(traceHandler{next: slog.NewTextHandler(w, opts)})
 	}
-	return slog.New(slog.NewJSONHandler(w, opts))
+	return slog.New(traceHandler{next: slog.NewJSONHandler(w, opts)})
 }
 
 // PanicValue keeps structured diagnostics while redacting sensitive fields.
@@ -82,4 +85,24 @@ func PanicValue(v any) any {
 	default:
 		return "[REDACTED]"
 	}
+}
+
+// traceHandler adds only opaque identifiers; existing redaction remains in next.
+type traceHandler struct{ next slog.Handler }
+
+func (h traceHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	return h.next.Enabled(ctx, level)
+}
+func (h traceHandler) Handle(ctx context.Context, record slog.Record) error {
+	sc := trace.SpanContextFromContext(ctx)
+	if sc.IsValid() {
+		record.AddAttrs(slog.String("trace_id", sc.TraceID().String()), slog.String("span_id", sc.SpanID().String()))
+	}
+	return h.next.Handle(ctx, record)
+}
+func (h traceHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return traceHandler{next: h.next.WithAttrs(attrs)}
+}
+func (h traceHandler) WithGroup(group string) slog.Handler {
+	return traceHandler{next: h.next.WithGroup(group)}
 }

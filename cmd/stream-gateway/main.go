@@ -14,6 +14,7 @@ import (
 	"github.com/mindreon/orbit-control/internal/platform/config"
 	orbitlog "github.com/mindreon/orbit-control/internal/platform/log"
 	"github.com/mindreon/orbit-control/internal/platform/natsx"
+	"github.com/mindreon/orbit-control/internal/platform/telemetry"
 	"github.com/mindreon/orbit-control/internal/streamgw"
 )
 
@@ -33,12 +34,26 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	logger := orbitlog.New(os.Stdout, c.LogFormat)
+	telemetryConfig, err := telemetry.FromEnv("stream-gateway", os.Getenv("ORBIT_ENV"))
+	if err != nil {
+		return err
+	}
+	telemetryConfig.TenantLimit, telemetryConfig.ModelLimit = c.MetricsTenantLimit, c.MetricsModelLimit
+	shutdownTelemetry, err := telemetry.Setup(context.Background(), telemetryConfig, logger)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownTelemetry(shutdown)
+	}()
 	bus, err := natsx.Connect(c.NATSURL, "stream-gateway")
 	if err != nil {
 		return fmt.Errorf("gateway NATS connection failed")
 	}
 	defer bus.Close()
-	logger := orbitlog.New(os.Stdout, c.LogFormat)
 	gateway, err := streamgw.New(bus, verifier, streamgw.Config{
 		MaxConnections: c.MaxConnections, PerTenant: c.PerTenant, PerSubject: c.PerSubject,
 		BufferFrames: c.BufferFrames, BufferBytes: c.BufferBytes, Heartbeat: c.Heartbeat, WriteTimeout: c.WriteTimeout,
@@ -47,7 +62,8 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	server := &http.Server{Addr: c.Addr, Handler: gateway.Router(), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: time.Minute}
+	server := &http.Server{Addr: c.Addr, Handler: telemetry.HTTPMiddleware("stream", gateway.Router()),
+		ReadHeaderTimeout: 5 * time.Second, IdleTimeout: time.Minute}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	done := make(chan error, 1)

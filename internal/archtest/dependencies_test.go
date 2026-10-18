@@ -20,6 +20,7 @@ func TestPackageBoundaries(t *testing.T) {
 		"./internal/httpapi",
 		"./internal/kernelapi",
 		"./internal/streamgw",
+		"./internal/platform/telemetry",
 	)
 	cmd.Dir = "../.."
 	raw, err := cmd.Output()
@@ -57,11 +58,26 @@ func TestPackageBoundaries(t *testing.T) {
 	for _, pkg := range packages {
 		if strings.HasPrefix(pkg.ImportPath, module+"workflows") {
 			for _, dep := range pkg.Imports {
-				allowed := standard[dep] || dep == module+"contract" || dep == module+"team" || dep == module+"workflows" ||
+				allowed := standard[dep] || dep == module+"platform/telemetry/wfctx" || dep == module+"contract" || dep == module+"team" ||
+					dep == module+"workflows" ||
 					strings.HasPrefix(dep, module+"workflows/") || strings.HasPrefix(dep, "go.temporal.io/sdk/") ||
 					strings.HasPrefix(dep, "go.temporal.io/api/")
 				if !allowed {
 					t.Errorf("%s imports forbidden %s", pkg.ImportPath, dep)
+				}
+			}
+		}
+		if pkg.ImportPath == module+"platform/telemetry" {
+			for _, dep := range pkg.Imports {
+				if strings.HasPrefix(dep, "go.temporal.io/") || strings.HasPrefix(dep, "github.com/jackc/") || dep == module+"platform/db" {
+					t.Errorf("telemetry imports forbidden orchestration dependency %s", dep)
+				}
+			}
+		}
+		if pkg.ImportPath == module+"platform/telemetry/wfctx" {
+			for _, dep := range pkg.Imports {
+				if dep != "go.temporal.io/sdk/workflow" {
+					t.Errorf("wfctx imports forbidden %s", dep)
 				}
 			}
 		}
