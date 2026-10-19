@@ -36,6 +36,7 @@ import (
 	"github.com/mindreon/orbit-control/internal/workflows/scheduledrun"
 	"github.com/mindreon/orbit-control/internal/workflows/session"
 	"github.com/mindreon/orbit-control/internal/workflows/teamrun"
+	"github.com/mindreon/orbit-control/internal/workflows/usagerollup"
 )
 
 var update = flag.Bool("update", false, "write real dev-stack histories")
@@ -116,6 +117,7 @@ func registerFixtures(reg worker.Worker, f *fixtures) {
 	reg.RegisterWorkflowWithOptions(agentrun.Run, workflow.RegisterOptions{Name: w.AgentRunWorkflow})
 	reg.RegisterWorkflowWithOptions(session.Run, workflow.RegisterOptions{Name: w.SessionWorkflow})
 	reg.RegisterWorkflowWithOptions(sandboxlease.Run, workflow.RegisterOptions{Name: w.SandboxLeaseWorkflow})
+	registerUsageFixtures(reg)
 	reg.RegisterActivityWithOptions(f.segment, activity.RegisterOptions{Name: contract.ActivityRunAgentSegment})
 	reg.RegisterActivityWithOptions(func(context.Context, w.PrepareInput) (w.PrepareOutput, error) {
 		return w.PrepareOutput{}, nil
@@ -290,6 +292,7 @@ func TestRecordHistories(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) { recordRun(t, c, queue, name, f) })
 	}
+	t.Run("usage-rollup", func(t *testing.T) { recordUsageRollup(t, c, queue) })
 	t.Run("trace-session", func(t *testing.T) { recordTracedSession(t, c, queue) })
 	t.Run("session", func(t *testing.T) { recordSession(t, c, queue, "session") })
 	t.Run("session-subject", func(t *testing.T) { recordSession(t, c, queue, "session-subject") })
@@ -464,6 +467,7 @@ func save(t *testing.T, c client.Client, id, runID, name string) {
 	replayer.RegisterWorkflowWithOptions(teamrun.Run, workflow.RegisterOptions{Name: w.TeamRunWorkflow})
 	replayer.RegisterWorkflowWithOptions(membertask.Run, workflow.RegisterOptions{Name: w.MemberTaskWorkflow})
 	replayer.RegisterWorkflowWithOptions(scheduledrun.Run, workflow.RegisterOptions{Name: w.ScheduledRunWorkflow})
+	replayer.RegisterWorkflowWithOptions(usagerollup.Run, workflow.RegisterOptions{Name: w.UsageRollupWorkflow})
 	require.NoError(t, replayer.ReplayWorkflowHistoryWithOptions(nil, history,
 		worker.ReplayWorkflowHistoryOptions{OriginalExecution: workflow.Execution{ID: id, RunID: runID}}))
 	if *update {

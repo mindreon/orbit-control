@@ -28,12 +28,13 @@ import (
 	"github.com/mindreon/orbit-control/internal/workflows/scheduledrun"
 	"github.com/mindreon/orbit-control/internal/workflows/session"
 	"github.com/mindreon/orbit-control/internal/workflows/teamrun"
+	"github.com/mindreon/orbit-control/internal/workflows/usagerollup"
 )
 
 func TestReplay(t *testing.T) {
 	paths, err := filepath.Glob("testdata/histories/*.json")
 	require.NoError(t, err)
-	require.Len(t, paths, 24, "WP6 branches and the WP7 subject change need real server histories")
+	require.Len(t, paths, 25, "WP6 branches and the WP7 subject change need real server histories")
 	for _, path := range paths {
 		t.Run(filepath.Base(path), func(t *testing.T) {
 			raw, err := os.ReadFile(path)
@@ -77,6 +78,7 @@ func TestReplay(t *testing.T) {
 			replayer.RegisterWorkflowWithOptions(teamrun.Run, workflow.RegisterOptions{Name: w.TeamRunWorkflow})
 			replayer.RegisterWorkflowWithOptions(membertask.Run, workflow.RegisterOptions{Name: w.MemberTaskWorkflow})
 			replayer.RegisterWorkflowWithOptions(scheduledrun.Run, workflow.RegisterOptions{Name: w.ScheduledRunWorkflow})
+			replayer.RegisterWorkflowWithOptions(usagerollup.Run, workflow.RegisterOptions{Name: w.UsageRollupWorkflow})
 			require.NoError(t, replayer.ReplayWorkflowHistoryWithOptions(nil, history,
 				worker.ReplayWorkflowHistoryOptions{OriginalExecution: workflow.Execution{
 					ID: history.Events[0].GetWorkflowExecutionStartedEventAttributes().GetWorkflowId()}}))
@@ -113,6 +115,14 @@ func assertHistoryScenario(t *testing.T, name string, history *historypb.History
 	segments := historyInputs[contract.SegmentInput](t, history, contract.ActivityRunAgentSegment)
 	final := historyInputs[w.FinalizeInput](t, history, "FinalizeRun")
 	switch name {
+	case "usage-rollup":
+		pages := historyInputs[w.DirtyPage](t, history, "ListDirtyHours")
+		hours := historyInputs[w.DirtyHour](t, history, "RollupHour")
+		require.Len(t, pages, 2)
+		require.Len(t, hours, 1)
+		require.Equal(t, hours[0].Hour, pages[1].AfterStart)
+		require.Equal(t, hours[0].TenantID, pages[1].AfterTenant)
+		require.Equal(t, pages[0].Before, pages[1].Before)
 	case "trace-session":
 		require.Len(t, childWorkflows(history), 2)
 		var traces []string

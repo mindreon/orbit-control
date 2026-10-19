@@ -39,6 +39,10 @@ type Segment struct {
 	CheckpointVersion *int             `json:"checkpoint_version,omitempty"`
 	Iterations        int              `json:"iterations"`
 	Usage             []contract.Usage `json:"usage"`
+	EndReason         *string          `json:"end_reason"`
+	ErrorCode         *string          `json:"error_code"`
+	DurationMS        *int64           `json:"duration_ms"`
+	CostMillicredits  int64            `json:"cost_millicredits"`
 	StartedAt         time.Time        `json:"started_at"`
 	EndedAt           *time.Time       `json:"ended_at,omitempty"`
 }
@@ -126,7 +130,11 @@ func Artifacts(ctx context.Context, session string, page httpx.Page) (Page[Artif
 		page, auth.Tenant(ctx), session, page.Cursor, page.Limit+1)
 }
 func Segments(ctx context.Context, run string) (Page[Segment], error) {
-	return readPage[Segment](ctx, `SELECT to_jsonb(s)
+	return readPage[Segment](ctx, `SELECT jsonb_build_object('member',member,'seq',seq,'status',status,
+ 'checkpoint_version',checkpoint_version,'iterations',iterations,'usage',usage,'started_at',started_at,
+ 'ended_at',ended_at,'end_reason',end_reason,'error_code',error_code,
+ 'duration_ms',(extract(epoch FROM ended_at-started_at)*1000)::bigint,
+ 'cost_millicredits',COALESCE((SELECT sum((u->>'cost_millicredits')::bigint) FROM jsonb_array_elements(usage) u),0))
  FROM run_segments s
  WHERE tenant_id=$1
  AND run_id=$2

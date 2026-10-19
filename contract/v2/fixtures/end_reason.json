@@ -1,0 +1,335 @@
+[
+  {
+    "result": {
+      "status": "completed",
+      "checkpoint_version": 1,
+      "progress": {
+        "iterations": 1,
+        "tool_calls": 0,
+        "new_output": true
+      },
+      "v": 1,
+      "artifacts_omitted": 0
+    },
+    "end_reason": "completed"
+  },
+  {
+    "result": {
+      "status": "yielded",
+      "checkpoint_version": 1,
+      "progress": {
+        "iterations": 1,
+        "tool_calls": 0,
+        "new_output": true
+      },
+      "v": 1,
+      "artifacts_omitted": 0,
+      "yield_reason": "iteration_cap"
+    },
+    "end_reason": "iteration_cap"
+  },
+  {
+    "result": {
+      "status": "yielded",
+      "checkpoint_version": 1,
+      "progress": {
+        "iterations": 1,
+        "tool_calls": 0,
+        "new_output": true
+      },
+      "v": 1,
+      "artifacts_omitted": 0,
+      "yield_reason": "wall_cap"
+    },
+    "end_reason": "wall_cap"
+  },
+  {
+    "result": {
+      "status": "yielded",
+      "checkpoint_version": 1,
+      "progress": {
+        "iterations": 1,
+        "tool_calls": 0,
+        "new_output": true
+      },
+      "v": 1,
+      "artifacts_omitted": 0,
+      "yield_reason": "effect_boundary"
+    },
+    "end_reason": "effect_boundary"
+  },
+  {
+    "result": {
+      "status": "yielded",
+      "checkpoint_version": 1,
+      "progress": {
+        "iterations": 1,
+        "tool_calls": 0,
+        "new_output": true
+      },
+      "v": 1,
+      "artifacts_omitted": 0,
+      "yield_reason": "budget_soft"
+    },
+    "end_reason": "budget_soft"
+  },
+  {
+    "result": {
+      "status": "yielded",
+      "checkpoint_version": 1,
+      "progress": {
+        "iterations": 1,
+        "tool_calls": 0,
+        "new_output": true
+      },
+      "v": 1,
+      "artifacts_omitted": 0,
+      "yield_reason": "cancel"
+    },
+    "end_reason": "cancel"
+  },
+  {
+    "result": {
+      "status": "yielded",
+      "checkpoint_version": 1,
+      "progress": {
+        "iterations": 1,
+        "tool_calls": 0,
+        "new_output": true
+      },
+      "v": 1,
+      "artifacts_omitted": 0,
+      "yield_reason": "goal_continue"
+    },
+    "end_reason": "goal_continue"
+  },
+  {
+    "result": {
+      "status": "yielded",
+      "checkpoint_version": 1,
+      "progress": {
+        "iterations": 1,
+        "tool_calls": 0,
+        "new_output": true
+      },
+      "v": 1,
+      "artifacts_omitted": 0,
+      "yield_reason": "compacted"
+    },
+    "end_reason": "compacted"
+  },
+  {
+    "result": {
+      "status": "interrupted",
+      "checkpoint_version": 1,
+      "progress": {
+        "iterations": 1,
+        "tool_calls": 0,
+        "new_output": true
+      },
+      "v": 1,
+      "artifacts_omitted": 0,
+      "interaction": {
+        "interaction_id": "ia-0001",
+        "kind": "tool_approval",
+        "calls": [
+          {
+            "name": "mail.send",
+            "args_preview": "{\"to\": \"legal@example.com\", \"subject\": \"Contract review\"}",
+            "effect_class": "external_write",
+            "risk_reasons": [
+              "external_write requires approval"
+            ],
+            "call_id": "call-1"
+          }
+        ]
+      }
+    },
+    "end_reason": "tool_approval"
+  },
+  {
+    "result": {
+      "status": "interrupted",
+      "checkpoint_version": 1,
+      "progress": {
+        "iterations": 1,
+        "tool_calls": 0,
+        "new_output": true
+      },
+      "v": 1,
+      "artifacts_omitted": 0,
+      "interaction": {
+        "interaction_id": "ia-0002",
+        "kind": "ask_user",
+        "question": {
+          "text": "Which of the two contracts should be the baseline?",
+          "options": [
+            "contract-a.docx",
+            "contract-b.docx"
+          ]
+        }
+      }
+    },
+    "end_reason": "ask_user"
+  },
+  {
+    "result": {
+      "status": "interrupted",
+      "checkpoint_version": 1,
+      "progress": {
+        "iterations": 1,
+        "tool_calls": 0,
+        "new_output": true
+      },
+      "v": 1,
+      "artifacts_omitted": 0,
+      "interaction": {
+        "interaction_id": "ia-0003",
+        "kind": "effect_uncertain",
+        "effect": {
+          "effect_key": "dcb576426a17b7df13907007cb02a1f1dfc12fc6c69f603717abca59d03b888e",
+          "tool": "mail.send",
+          "args_preview": "{\"to\": \"legal@example.com\"}"
+        }
+      }
+    },
+    "end_reason": "effect_uncertain"
+  },
+  {
+    "result": {
+      "status": "failed",
+      "checkpoint_version": 1,
+      "progress": {
+        "iterations": 1,
+        "tool_calls": 0,
+        "new_output": true
+      },
+      "v": 1,
+      "artifacts_omitted": 0,
+      "error": {
+        "code": "agent_error",
+        "message": "fixture",
+        "retryable": false
+      }
+    },
+    "end_reason": "agent_error"
+  },
+  {
+    "result": {
+      "status": "failed",
+      "checkpoint_version": 1,
+      "progress": {
+        "iterations": 1,
+        "tool_calls": 0,
+        "new_output": true
+      },
+      "v": 1,
+      "artifacts_omitted": 0,
+      "error": {
+        "code": "model_error",
+        "message": "fixture",
+        "retryable": false
+      }
+    },
+    "end_reason": "model_error"
+  },
+  {
+    "result": {
+      "status": "failed",
+      "checkpoint_version": 1,
+      "progress": {
+        "iterations": 1,
+        "tool_calls": 0,
+        "new_output": true
+      },
+      "v": 1,
+      "artifacts_omitted": 0,
+      "error": {
+        "code": "loop_detected",
+        "message": "fixture",
+        "retryable": false
+      }
+    },
+    "end_reason": "loop_detected"
+  },
+  {
+    "result": {
+      "status": "failed",
+      "checkpoint_version": 1,
+      "progress": {
+        "iterations": 1,
+        "tool_calls": 0,
+        "new_output": true
+      },
+      "v": 1,
+      "artifacts_omitted": 0,
+      "error": {
+        "code": "sandbox_error",
+        "message": "fixture",
+        "retryable": false
+      }
+    },
+    "end_reason": "sandbox_error"
+  },
+  {
+    "result": {
+      "status": "failed",
+      "checkpoint_version": 1,
+      "progress": {
+        "iterations": 1,
+        "tool_calls": 0,
+        "new_output": true
+      },
+      "v": 1,
+      "artifacts_omitted": 0,
+      "error": {
+        "code": "tool_policy_error",
+        "message": "fixture",
+        "retryable": false
+      }
+    },
+    "end_reason": "tool_policy_error"
+  },
+  {
+    "result": {
+      "status": "yielded",
+      "checkpoint_version": 1,
+      "progress": {
+        "iterations": 1,
+        "tool_calls": 0,
+        "new_output": true
+      },
+      "v": 1,
+      "artifacts_omitted": 0
+    },
+    "end_reason": null
+  },
+  {
+    "result": {
+      "status": "interrupted",
+      "checkpoint_version": 1,
+      "progress": {
+        "iterations": 1,
+        "tool_calls": 0,
+        "new_output": true
+      },
+      "v": 1,
+      "artifacts_omitted": 0
+    },
+    "end_reason": null
+  },
+  {
+    "result": {
+      "status": "failed",
+      "checkpoint_version": 1,
+      "progress": {
+        "iterations": 1,
+        "tool_calls": 0,
+        "new_output": true
+      },
+      "v": 1,
+      "artifacts_omitted": 0
+    },
+    "end_reason": null
+  }
+]

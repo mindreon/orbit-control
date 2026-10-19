@@ -252,14 +252,18 @@ func (a *Activities) RecordSegment(ctx context.Context, in w.RecordSegmentInput)
 		if err != nil {
 			return nil, err
 		}
+		var errorCode *contract.SegmentErrorCode
+		if in.Result.Status == "failed" && in.Result.Error != nil {
+			errorCode = &in.Result.Error.Code
+		}
 		n, err := tx.Exec(ctx, `UPDATE run_segments
- SET status=$5,checkpoint_version=$6,iterations=$7,usage=$8,ended_at=now()
+ SET status=$5,checkpoint_version=$6,iterations=$7,usage=$8,ended_at=now(),end_reason=$9,error_code=$10
  WHERE tenant_id=$1
  AND run_id=$2
  AND member=$3
  AND seq=$4
  AND status='running'`, in.TenantID, in.RunID, in.Member, in.Seq, in.Result.Status,
-			in.Result.CheckpointVersion, in.Result.Progress.Iterations, usage)
+			in.Result.CheckpointVersion, in.Result.Progress.Iterations, usage, sessions.EndReason(in.Result), errorCode)
 		if err != nil {
 			return nil, err
 		}
@@ -472,7 +476,7 @@ func settleRun(ctx context.Context, tx pgx.Tx, in w.FinalizeInput, used int64) e
 	var err error
 	for _, sql := range []string{
 		`UPDATE run_segments
- SET status='failed',ended_at=now()
+ SET status='failed',ended_at=now(),end_reason='run_terminated'
  WHERE tenant_id=$1
  AND run_id=$2
  AND status='running'`,

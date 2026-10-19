@@ -69,6 +69,9 @@ func run(args []string) error {
 	if len(args) >= 2 && args[0] == "maintenance" && args[1] == "requeue-control-events" {
 		return requeueControlEvents(ctx, d, args[2:])
 	}
+	if args[0] == "usage" {
+		return usageCommand(ctx, d, args[1:])
+	}
 	if args[0] == "market" {
 		return importMarket(ctx, d, c, args[1:])
 	}

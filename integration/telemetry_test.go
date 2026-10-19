@@ -107,6 +107,10 @@ func testTelemetry(t *testing.T, d *db.DB, admin *pgx.Conn) {
 				require.NoError(t, f.activities.FinalizeRun(ctx, final))
 			}
 		}
+		var terminated int
+		require.NoError(t, admin.QueryRow(t.Context(), `SELECT count(*) FROM run_segments
+ WHERE tenant_id=$1 AND run_id=$2 AND end_reason='run_terminated'`, f.tenant, f.run).Scan(&terminated))
+		require.Equal(t, 1, terminated, "both single-agent and team finalization settle still-running segments")
 		require.Equal(t, finished+1, metricTotal(t, reader, "orbit.runs.finished"))
 		require.Equal(t, duration+1, metricTotal(t, reader, "orbit.run.duration"))
 		require.Equal(t, waits+2, metricTotal(t, reader, "orbit.interaction.wait.duration"))

@@ -122,6 +122,10 @@ var routes = []route{
 		Pattern: "GET /v1/runs/{r}/segments",
 		Handle:  func(h *Handler) endpoint { return h.runSegments },
 	},
+	{Pattern: "GET /v1/runs/{r}/effects", Handle: func(h *Handler) endpoint { return h.runEffects }},
+	{Pattern: "GET /v1/runs/{r}/interactions", Handle: func(h *Handler) endpoint { return h.runInteractions }},
+	{Pattern: "GET /v1/runs/{r}/cost", Handle: func(h *Handler) endpoint { return h.runCost }},
+	{Pattern: "GET /v1/usage", Handle: func(h *Handler) endpoint { return h.usage }},
 	{
 		Pattern: "GET /v1/sessions/{s}/stream-token",
 		Handle:  func(h *Handler) endpoint { return h.sessionStreamToken },
@@ -502,6 +506,7 @@ func (h *Handler) protected(w http.ResponseWriter, r *http.Request, fn endpoint,
 		}
 		return e
 	}
+	p.PlatformOperator = h.Config.PlatformOperators[p.ID]
 	telemetry.SetTenant(r.Context(), tenant)
 	ctx := auth.Context(r.Context(), p, tenant)
 	r = r.WithContext(ctx)
@@ -669,7 +674,8 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) error {
 		slices.Sort(roles)
 		roles = slices.Compact(roles)
 	}
-	httpx.JSON(w, 200, map[string]any{"principal": p, "tenants": ts, "current_tenant": tenant, "roles": roles})
+	httpx.JSON(w, 200, map[string]any{"principal": p, "tenants": ts, "current_tenant": tenant, "roles": roles,
+		"platform_operator": p.PlatformOperator})
 	return nil
 }
 func (h *Handler) tenants(w http.ResponseWriter, r *http.Request) error {

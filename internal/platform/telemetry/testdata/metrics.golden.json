@@ -1,6 +1,30 @@
 [
   {
     "meter": "orbit-control",
+    "name": "orbit.usage.rollup_backlog",
+    "kind": "gauge",
+    "unit": "{hour}",
+    "labels": [],
+    "tenant_allowed": false
+  },
+  {
+    "meter": "orbit-control",
+    "name": "orbit.usage.rollup_oldest_dirty_age",
+    "kind": "gauge",
+    "unit": "s",
+    "labels": [],
+    "tenant_allowed": false
+  },
+  {
+    "meter": "orbit-control",
+    "name": "orbit.usage.rollup_conflicts",
+    "kind": "counter",
+    "unit": "",
+    "labels": [],
+    "tenant_allowed": false
+  },
+  {
+    "meter": "orbit-control",
     "name": "sink_messages_total",
     "kind": "counter",
     "unit": "",

@@ -127,6 +127,7 @@ func Sample(ctx context.Context, d *db.DB, temporal client.Client, logger *slog.
 			}
 		case <-quota.C:
 			sampleQuota(ctx, d)
+			sampleUsageBacklog(ctx, d)
 		}
 	}
 }

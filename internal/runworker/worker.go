@@ -15,6 +15,7 @@ import (
 	"github.com/mindreon/orbit-control/internal/workflows/scheduledrun"
 	"github.com/mindreon/orbit-control/internal/workflows/session"
 	"github.com/mindreon/orbit-control/internal/workflows/teamrun"
+	"github.com/mindreon/orbit-control/internal/workflows/usagerollup"
 )
 
 func Register(reg worker.Registry, a *ctl.Activities) {
@@ -24,6 +25,7 @@ func Register(reg worker.Registry, a *ctl.Activities) {
 	reg.RegisterWorkflowWithOptions(teamrun.Run, workflow.RegisterOptions{Name: w.TeamRunWorkflow})
 	reg.RegisterWorkflowWithOptions(membertask.Run, workflow.RegisterOptions{Name: w.MemberTaskWorkflow})
 	reg.RegisterWorkflowWithOptions(scheduledrun.Run, workflow.RegisterOptions{Name: w.ScheduledRunWorkflow})
+	reg.RegisterWorkflowWithOptions(usagerollup.Run, workflow.RegisterOptions{Name: w.UsageRollupWorkflow})
 	reg.RegisterActivity(a)
 }
 func workerOptions() worker.Options {

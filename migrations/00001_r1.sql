@@ -76,7 +76,7 @@ CREATE TABLE messages (
   id uuid PRIMARY KEY, tenant_id uuid NOT NULL, session_id uuid NOT NULL, run_id uuid, role text NOT NULL CHECK(role IN ('user','assistant','system','tool_summary')), author_id uuid REFERENCES principals(id), content jsonb, content_ref text, created_at timestamptz NOT NULL DEFAULT now(), FOREIGN KEY(tenant_id,session_id) REFERENCES sessions(tenant_id,id), FOREIGN KEY(tenant_id,run_id) REFERENCES runs(tenant_id,id)
 );
 CREATE TABLE run_segments (
-  tenant_id uuid NOT NULL, run_id uuid NOT NULL, member text NOT NULL, seq int NOT NULL CHECK(seq>=1), status text NOT NULL CHECK(status IN ('running','completed','interrupted','yielded','failed')), checkpoint_version bigint, iterations int NOT NULL DEFAULT 0, usage jsonb NOT NULL DEFAULT '[]', model_profiles jsonb NOT NULL DEFAULT '{}', result_ref text, started_at timestamptz NOT NULL DEFAULT now(), ended_at timestamptz, PRIMARY KEY(tenant_id,run_id,member,seq), FOREIGN KEY(tenant_id,run_id) REFERENCES runs(tenant_id,id)
+  tenant_id uuid NOT NULL, run_id uuid NOT NULL, member text NOT NULL, seq int NOT NULL CHECK(seq>=1), status text NOT NULL CHECK(status IN ('running','completed','interrupted','yielded','failed')), checkpoint_version bigint, iterations int NOT NULL DEFAULT 0, usage jsonb NOT NULL DEFAULT '[]', model_profiles jsonb NOT NULL DEFAULT '{}', result_ref text, end_reason text, error_code text, started_at timestamptz NOT NULL DEFAULT now(), ended_at timestamptz, PRIMARY KEY(tenant_id,run_id,member,seq), FOREIGN KEY(tenant_id,run_id) REFERENCES runs(tenant_id,id)
 );
 -- Event IDs are <run>:<member>:<seq>:<attempt>:<n>; ts is the immutable RunEvent timestamp.
 -- Historical reads and SSE cursors order by the JetStream stream sequence.
@@ -208,12 +208,30 @@ CREATE TABLE budget_reservations (
   id uuid PRIMARY KEY, tenant_id uuid NOT NULL, run_id uuid NOT NULL, millicredits bigint NOT NULL, status text NOT NULL CHECK(status IN ('held','settled','released')), expires_at timestamptz NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), FOREIGN KEY(tenant_id,run_id) REFERENCES runs(tenant_id,id)
 );
 CREATE TABLE usage_ledger (
-  id uuid NOT NULL, tenant_id uuid NOT NULL, workspace_id uuid, principal_id uuid REFERENCES principals(id), run_id uuid, segment_seq int, source text NOT NULL CHECK(source IN ('model','sandbox','tool','storage')), meter text NOT NULL, quantity numeric NOT NULL, unit_price numeric NOT NULL, millicredits bigint NOT NULL, idempotency_key text NOT NULL, occurred_at timestamptz NOT NULL, PRIMARY KEY(tenant_id,id,occurred_at), UNIQUE(tenant_id,idempotency_key,occurred_at), FOREIGN KEY(tenant_id,workspace_id) REFERENCES workspaces(tenant_id,id), FOREIGN KEY(tenant_id,run_id) REFERENCES runs(tenant_id,id)
+  id uuid NOT NULL, tenant_id uuid NOT NULL, workspace_id uuid, principal_id uuid REFERENCES principals(id), run_id uuid, segment_seq int, member text, model_profile_id uuid, asset_ref text, source text NOT NULL CHECK(source IN ('model','sandbox','tool','storage')), meter text NOT NULL CONSTRAINT usage_ledger_meter CHECK(meter IN ('tokens.input','tokens.output','tokens.cache_read','tokens.cache_write')) CONSTRAINT usage_ledger_model_meter CHECK(source <> 'model' OR meter LIKE 'tokens.%'), quantity numeric NOT NULL, unit_price numeric NOT NULL, millicredits bigint NOT NULL, idempotency_key text NOT NULL, occurred_at timestamptz NOT NULL, PRIMARY KEY(tenant_id,id,occurred_at), UNIQUE(tenant_id,idempotency_key,occurred_at), FOREIGN KEY(tenant_id,workspace_id) REFERENCES workspaces(tenant_id,id), FOREIGN KEY(tenant_id,run_id) REFERENCES runs(tenant_id,id)
 ) PARTITION BY RANGE (occurred_at);
 CREATE TABLE usage_ledger_default PARTITION OF usage_ledger DEFAULT;
 CREATE TABLE usage_rollups (
-  tenant_id uuid NOT NULL REFERENCES tenants(id), scope_type text NOT NULL CHECK(scope_type IN ('tenant','workspace','user','run')), scope_id uuid NOT NULL, meter text NOT NULL, period_start timestamptz NOT NULL, quantity numeric NOT NULL, millicredits bigint NOT NULL, PRIMARY KEY(tenant_id,scope_type,scope_id,meter,period_start)
+  tenant_id uuid NOT NULL REFERENCES tenants(id),
+  period_start timestamptz NOT NULL CHECK(period_start=date_trunc('hour',period_start,'UTC')),
+  workspace_id uuid NOT NULL, principal_id uuid NOT NULL, asset_ref text NOT NULL,
+  model_profile_id uuid NOT NULL, member text NOT NULL,
+  source text NOT NULL CHECK(source IN ('model','sandbox','tool','storage')),
+  meter text NOT NULL CONSTRAINT usage_rollups_meter CHECK(meter IN ('tokens.input','tokens.output','tokens.cache_read','tokens.cache_write'))
+    CONSTRAINT usage_rollups_model_meter CHECK(source <> 'model' OR meter LIKE 'tokens.%'),
+  quantity numeric NOT NULL, millicredits bigint NOT NULL, entries bigint NOT NULL,
+  computed_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY(tenant_id,period_start,workspace_id,principal_id,asset_ref,model_profile_id,member,source,meter)
 );
+CREATE INDEX ON usage_rollups(tenant_id,workspace_id,period_start);
+CREATE INDEX ON usage_rollups(tenant_id,principal_id,period_start);
+CREATE TABLE usage_rollup_dirty (
+  tenant_id uuid NOT NULL REFERENCES tenants(id),
+  period_start timestamptz NOT NULL CHECK(period_start=date_trunc('hour',period_start,'UTC')),
+  generation bigint NOT NULL DEFAULT 1, first_marked_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY(tenant_id,period_start)
+);
+CREATE INDEX ON usage_rollup_dirty(period_start,tenant_id);
 CREATE INDEX runs_session_created ON runs (tenant_id, session_id, created_at);
 CREATE INDEX runs_active ON runs (tenant_id, status) WHERE status NOT IN ('succeeded','failed','cancelled','budget_exhausted','timed_out');
 CREATE INDEX usage_ledger_run ON usage_ledger (tenant_id, run_id);
@@ -364,7 +382,7 @@ CREATE INDEX ON usage_ledger(tenant_id,workspace_id);
 CREATE INDEX ON usage_ledger(tenant_id,principal_id);
 CREATE INDEX ON usage_ledger(tenant_id,run_id);
 CREATE INDEX ON usage_ledger(tenant_id,occurred_at DESC);
-CREATE INDEX ON usage_rollups(tenant_id,scope_id);
+
 CREATE INDEX ON usage_rollups(tenant_id,period_start DESC);
 CREATE INDEX ON audit_log(tenant_id,actor_id);
 CREATE INDEX ON audit_log(tenant_id,occurred_at DESC);
@@ -555,6 +573,10 @@ ALTER TABLE usage_rollups ENABLE ROW LEVEL SECURITY;
 ALTER TABLE usage_rollups FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON usage_rollups USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
 GRANT SELECT, INSERT, UPDATE, DELETE ON usage_rollups TO orbit_app;
+ALTER TABLE usage_rollup_dirty ENABLE ROW LEVEL SECURITY;
+ALTER TABLE usage_rollup_dirty FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON usage_rollup_dirty USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+GRANT SELECT, INSERT, UPDATE, DELETE ON usage_rollup_dirty TO orbit_app;
 ALTER TABLE audit_log ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_log FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON audit_log USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid) WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
@@ -654,10 +676,26 @@ LANGUAGE sql SECURITY DEFINER STABLE SET search_path=public,pg_temp AS $$
  ELSE 'month' END,now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')),0)/NULLIF(q."limit",0)
  FROM quota_policies q WHERE q.metric IN ('millicredits','tokens') AND q.scope_type IN ('tenant','workspace','user')
 $$;
+CREATE FUNCTION usage_rollup_dirty_page(after_start timestamptz, after_tenant uuid, before_start timestamptz, lim int)
+RETURNS TABLE(tenant_id uuid, period_start timestamptz)
+LANGUAGE sql SECURITY DEFINER STABLE SET search_path=public,pg_temp AS $$
+ SELECT d.tenant_id,d.period_start FROM usage_rollup_dirty d
+ WHERE d.period_start<before_start
+ AND (after_start IS NULL OR (d.period_start,d.tenant_id)>(after_start,after_tenant))
+ ORDER BY d.period_start,d.tenant_id LIMIT least(greatest(lim,1),1000)
+$$;
+CREATE FUNCTION ops_usage_rollup_backlog() RETURNS TABLE(dirty_hours bigint, oldest_marked timestamptz)
+LANGUAGE sql SECURITY DEFINER STABLE SET search_path=public,pg_temp AS $$
+ SELECT count(*),min(first_marked_at) FROM usage_rollup_dirty
+$$;
 -- +goose StatementEnd
+REVOKE ALL ON FUNCTION usage_rollup_dirty_page(timestamptz,uuid,timestamptz,int),ops_usage_rollup_backlog() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION usage_rollup_dirty_page(timestamptz,uuid,timestamptz,int),ops_usage_rollup_backlog() TO orbit_app;
 REVOKE ALL ON FUNCTION ops_run_counts(),ops_interaction_counts(),ops_quota_utilization() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION ops_run_counts(),ops_interaction_counts(),ops_quota_utilization() TO orbit_app;
 -- +goose Down
+DROP FUNCTION usage_rollup_dirty_page(timestamptz,uuid,timestamptz,int),ops_usage_rollup_backlog();
+DROP TABLE usage_rollup_dirty;
 DROP FUNCTION ops_run_counts(),ops_interaction_counts(),ops_quota_utilization();
 SET LOCAL ROLE orbit_owner;
 DROP FUNCTION invitation_tenant(bytea);

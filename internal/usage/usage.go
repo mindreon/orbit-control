@@ -4,6 +4,8 @@ package usage
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -15,19 +17,56 @@ import (
 	"github.com/mindreon/orbit-control/internal/platform/telemetry"
 )
 
+// Service owns the ingestion clock. A zero value uses the production wall clock.
+type Service struct {
+	Now func() time.Time
+}
+
+func (s Service) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
+}
+
+// ClampOccurredAt bounds worker timestamps without losing usage or changing keys.
+func ClampOccurredAt(t, now time.Time) (time.Time, bool) {
+	if t.Before(now.Add(-time.Hour)) || t.After(now.Add(5*time.Minute)) {
+		return now, true
+	}
+	return t, false
+}
+
 type Entry struct {
-	TenantID                                           string
-	WorkspaceID, PrincipalID, RunID                    *string
-	SegmentSeq                                         *int
-	Source, Meter, Quantity, UnitPrice, IdempotencyKey string
-	Millicredits                                       int64
-	OccurredAt                                         time.Time
+	TenantID                                    string
+	WorkspaceID, PrincipalID, RunID             *string
+	SegmentSeq                                  *int
+	Member, ModelProfileID, AssetRef            *string
+	Meter                                       Meter
+	Source, Quantity, UnitPrice, IdempotencyKey string
+	Millicredits                                int64
+	OccurredAt                                  time.Time
 }
 
 // RecordUsage claims the key and appends the ledger entry in the caller's tenant
 // transaction. A duplicate is a successful no-op, including across months.
 // Returning an error requires the caller to roll back the transaction.
 func RecordUsage(ctx context.Context, tx pgx.Tx, e Entry) (bool, error) {
+	return (Service{}).RecordUsage(ctx, tx, e)
+}
+
+func (s Service) RecordUsage(ctx context.Context, tx pgx.Tx, e Entry) (bool, error) {
+	now := s.now()
+	occurred, clamped := ClampOccurredAt(e.OccurredAt, now)
+	if clamped {
+		runID := ""
+		if e.RunID != nil {
+			runID = *e.RunID
+		}
+		slog.WarnContext(ctx, "usage.occurred_at_clamped", "run_id", runID,
+			"skew_seconds", e.OccurredAt.Sub(now).Seconds())
+	}
+	e.OccurredAt = occurred
 	var key string
 	err := tx.QueryRow(ctx, `INSERT INTO usage_keys(tenant_id,idempotency_key,created_at)
  VALUES($1,$2,$3)
@@ -42,10 +81,16 @@ func RecordUsage(ctx context.Context, tx pgx.Tx, e Entry) (bool, error) {
 	}
 	_, err = tx.Exec(ctx,
 		`INSERT INTO usage_ledger(id,tenant_id,workspace_id,principal_id,run_id,segment_seq,source,meter,quantity,
- unit_price,millicredits,idempotency_key,occurred_at)
- VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, ids.New(), e.TenantID, e.WorkspaceID, e.PrincipalID,
+ unit_price,millicredits,idempotency_key,occurred_at,member,model_profile_id,asset_ref)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`, ids.New(), e.TenantID, e.WorkspaceID, e.PrincipalID,
 		e.RunID, e.SegmentSeq, e.Source, e.Meter, e.Quantity, e.UnitPrice, e.Millicredits, e.IdempotencyKey,
-		e.OccurredAt)
+		e.OccurredAt, e.Member, e.ModelProfileID, e.AssetRef)
+	if err != nil {
+		return false, err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO usage_rollup_dirty(tenant_id,period_start) VALUES($1,$2)
+ ON CONFLICT(tenant_id,period_start) DO UPDATE SET generation=usage_rollup_dirty.generation+1`,
+		e.TenantID, e.OccurredAt.UTC().Truncate(time.Hour))
 	return err == nil, err
 }
 
@@ -54,6 +99,9 @@ func RecordUsage(ctx context.Context, tx pgx.Tx, e Entry) (bool, error) {
 func Prune(ctx context.Context, d *db.DB, cutoff *time.Time) error {
 	var tenants []string
 	err := d.Global(ctx, func(tx pgx.Tx) error {
+		if err := validatePruneCutoff(ctx, tx, cutoff); err != nil {
+			return err
+		}
 		rows, err := tx.Query(ctx, "SELECT id::text FROM tenants ORDER BY id")
 		if err != nil {
 			return err
@@ -73,6 +121,9 @@ func Prune(ctx context.Context, d *db.DB, cutoff *time.Time) error {
 	}
 	for _, tenant := range tenants {
 		if err = d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
+			if err := validatePruneCutoff(ctx, tx, cutoff); err != nil {
+				return err
+			}
 			if _, err := tx.Exec(ctx, "DELETE FROM idempotency_keys WHERE tenant_id=$1 AND expires_at<=now()", tenant); err != nil {
 				return err
 			}
@@ -82,6 +133,14 @@ func Prune(ctx context.Context, d *db.DB, cutoff *time.Time) error {
 			// Lock out concurrent recorders while retaining the key/ledger invariant.
 			if _, err := tx.Exec(ctx, "LOCK TABLE usage_keys,usage_ledger IN SHARE ROW EXCLUSIVE MODE"); err != nil {
 				return err
+			}
+			var dirty bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM usage_rollup_dirty
+ WHERE tenant_id=$1 AND period_start<$2)`, tenant, *cutoff).Scan(&dirty); err != nil {
+				return err
+			}
+			if dirty {
+				return fmt.Errorf("usage: rollup not caught up before prune cutoff")
 			}
 			if _, err := tx.Exec(ctx, "DELETE FROM usage_ledger WHERE tenant_id=$1 AND occurred_at<$2", tenant, *cutoff); err != nil {
 				return err
@@ -112,7 +171,7 @@ func Admit(ctx context.Context, tenant, workspace, principal string, budget int6
  FROM quota_policies
  WHERE tenant_id=$1
  AND action='block'
- AND metric IN ('runs_concurrent','millicredits')
+ AND metric IN ('runs_concurrent','millicredits','tokens')
  AND ((scope_type='tenant' AND scope_id=$1) OR (scope_type='workspace' AND scope_id=$2) OR (scope_type='user' AND scope_id=$3))
  ORDER BY id`, tenant, workspace, principal)
 	if err != nil {
@@ -152,6 +211,18 @@ func Admit(ctx context.Context, tenant, workspace, principal string, budget int6
 					attribute.String("orbit.quota.metric", q.metric), attribute.String("orbit.quota.scope", q.scope))
 				return httpx.E(429, "QUOTA_EXCEEDED", "Concurrent run quota exceeded")
 			}
+		} else if q.metric == "tokens" {
+			err = tx.QueryRow(ctx, `SELECT COALESCE(sum(quantity),0)::bigint
+ FROM usage_ledger
+ WHERE tenant_id=$1 AND meter LIKE 'tokens.%'
+ AND ($2='tenant' OR ($2='workspace' AND workspace_id=$3::uuid) OR ($2='user' AND principal_id=$3::uuid))
+ AND ($4='total' OR occurred_at>=date_trunc(CASE $4 WHEN 'hour' THEN 'hour' WHEN 'day' THEN 'day' ELSE 'month' END,
+ now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')`, tenant, q.scope, q.id, q.period).Scan(&used)
+			if err == nil && used >= q.limit {
+				telemetry.Counter("orbit.quota.rejections").Add(ctx, 1,
+					attribute.String("orbit.quota.metric", q.metric), attribute.String("orbit.quota.scope", q.scope))
+				return httpx.E(429, "QUOTA_EXCEEDED", "Token quota exceeded")
+			}
 		} else {
 			err = tx.QueryRow(ctx, `SELECT COALESCE(sum(millicredits),0)::bigint
  FROM usage_ledger
@@ -168,6 +239,21 @@ func Admit(ctx context.Context, tenant, workspace, principal string, budget int6
 		if err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// Validate against this transaction's database clock, never the admin host.
+func validatePruneCutoff(ctx context.Context, tx pgx.Tx, cutoff *time.Time) error {
+	if cutoff == nil {
+		return nil
+	}
+	var now time.Time
+	if err := tx.QueryRow(ctx, "SELECT now()").Scan(&now); err != nil {
+		return err
+	}
+	if !cutoff.Equal(cutoff.UTC().Truncate(time.Hour)) || cutoff.After(now.Add(-2*time.Hour).UTC().Truncate(time.Hour)) {
+		return fmt.Errorf("usage: cutoff must be a UTC hour at or before the database hour two hours ago")
 	}
 	return nil
 }

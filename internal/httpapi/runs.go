@@ -26,6 +26,9 @@ func (h *Handler) getRun(out http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	if auth.From(r.Context()).PlatformOperator {
+		run.Ops = run.OperatorView(h.Config.TemporalNamespace, h.Config.OpsTemporalURLTemplate, h.Config.OpsTraceURLTemplate)
+	}
 	httpx.JSON(out, 200, run)
 	return nil
 }

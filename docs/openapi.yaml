@@ -1564,6 +1564,144 @@ paths:
                 $ref: '#/components/schemas/Run'
         default:
           $ref: '#/components/responses/Error'
+  /v1/runs/{r}/effects:
+    get:
+      operationId: listRunEffects
+      summary: Read run effects
+      parameters:
+      - $ref: '#/components/parameters/Tenant'
+      - name: r
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/Cursor'
+      - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RunEffect'
+                  next_cursor:
+                    type: string
+                required:
+                - items
+                - next_cursor
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/runs/{r}/interactions:
+    get:
+      operationId: listRunInteractions
+      summary: Read run interactions
+      parameters:
+      - $ref: '#/components/parameters/Tenant'
+      - name: r
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/Cursor'
+      - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Interaction'
+                  next_cursor:
+                    type: string
+                required:
+                - items
+                - next_cursor
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/runs/{r}/cost:
+    get:
+      operationId: getRunCost
+      summary: Read run cost
+      parameters:
+      - $ref: '#/components/parameters/Tenant'
+      - name: r
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunCost'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/usage:
+    get:
+      operationId: getUsage
+      summary: Read materialized hourly usage
+      parameters:
+      - $ref: '#/components/parameters/Tenant'
+      - name: scope
+        in: query
+        schema:
+          enum:
+          - tenant
+          - workspace
+          - user
+          default: tenant
+      - name: id
+        in: query
+        schema:
+          type: string
+          format: uuid
+      - name: from
+        in: query
+        schema:
+          type: string
+          format: date-time
+      - name: to
+        in: query
+        schema:
+          type: string
+          format: date-time
+      - name: granularity
+        in: query
+        schema:
+          enum:
+          - hour
+          - day
+          - month
+          default: day
+      - name: group_by
+        in: query
+        schema:
+          type: string
+          description: Comma-separated workspace, principal, asset, model_profile, member, source, meter
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageReport'
+        default:
+          $ref: '#/components/responses/Error'
   /v1/runs/{r}/segments:
     get:
       operationId: listRunSegments
@@ -3144,6 +3282,8 @@ components:
     Me:
       additionalProperties: false
       properties:
+        platform_operator:
+          type: boolean
         current_tenant:
           format: uuid
           type:
@@ -3160,6 +3300,7 @@ components:
             $ref: '#/components/schemas/Tenant'
           type: array
       required:
+        - platform_operator
         - principal
         - tenants
         - current_tenant
@@ -3508,6 +3649,27 @@ components:
     Run:
       type: object
       properties:
+        ops:
+          type: object
+          required:
+          - trace_id
+          - temporal_workflow_id
+          - temporal_url
+          - trace_url
+          properties:
+            trace_id:
+              type: &id001
+              - string
+              - 'null'
+              pattern: ^[0-9a-f]{32}$
+            temporal_workflow_id:
+              type: string
+            temporal_url:
+              type: *id001
+              format: uri
+            trace_url:
+              type: *id001
+              format: uri
         id:
           type: string
           format: uuid
@@ -3559,6 +3721,165 @@ components:
         - budget_millicredits
         - used_millicredits
         - segments_count
+    RunEffect:
+      type: object
+      required:
+      - id
+      - member
+      - tool
+      - effect_class
+      - status
+      - checkpoint_version
+      - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        member:
+          type: string
+        tool:
+          type: string
+        effect_class:
+          enum:
+          - external_write
+          - privileged
+        status:
+          enum:
+          - started
+          - completed
+          - failed
+          - unknown
+        checkpoint_version: &id001
+          type: integer
+          format: int64
+        external_ref: &id002
+          type: &id004
+          - string
+          - 'null'
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+    RunCost:
+      type: object
+      required:
+      - run_id
+      - total_millicredits
+      - items
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        total_millicredits: *id001
+        items:
+          type: array
+          items:
+            type: object
+            required:
+            - member
+            - source
+            - meter
+            - quantity
+            - millicredits
+            properties:
+              member: *id002
+              segment:
+                type:
+                - integer
+                - 'null'
+              source:
+                enum:
+                - model
+                - sandbox
+                - tool
+                - storage
+              meter:
+                enum:
+                - tokens.input
+                - tokens.output
+                - tokens.cache_read
+                - tokens.cache_write
+              model_profile_id: &id003
+                type:
+                - string
+                - 'null'
+                format: uuid
+              model_profile_name: *id002
+              model: *id002
+              quantity:
+                type: string
+              millicredits: *id001
+    UsageReport:
+      type: object
+      required:
+      - scope
+      - from
+      - to
+      - granularity
+      - computed_through
+      - dirty_hours
+      - items
+      properties:
+        scope:
+          enum:
+          - tenant
+          - workspace
+          - user
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        granularity:
+          enum:
+          - hour
+          - day
+          - month
+        computed_through:
+          type: string
+          format: date-time
+        dirty_hours: *id001
+        items:
+          type: array
+          items:
+            type: object
+            required:
+            - period_start
+            - quantity
+            - millicredits
+            properties:
+              period_start:
+                type: string
+                format: date-time
+              workspace_id: *id003
+              principal_id: *id003
+              asset_ref: *id002
+              model_profile_id: *id003
+              model_profile_name: *id002
+              member: *id002
+              source:
+                type: *id004
+                enum:
+                - model
+                - sandbox
+                - tool
+                - storage
+                - null
+              meter:
+                type: *id004
+                enum:
+                - tokens.input
+                - tokens.output
+                - tokens.cache_read
+                - tokens.cache_write
+                - null
+              quantity: *id002
+              millicredits: *id001
     Segment:
       type: object
       properties:
@@ -3569,6 +3890,12 @@ components:
           format: int64
         status:
           type: string
+          enum:
+          - running
+          - completed
+          - interrupted
+          - yielded
+          - failed
         checkpoint_version:
           type: integer
           format: int64
@@ -3585,13 +3912,50 @@ components:
         ended_at:
           type: string
           format: date-time
+        end_reason:
+          type: &id001
+          - string
+          - 'null'
+          enum:
+          - completed
+          - iteration_cap
+          - wall_cap
+          - effect_boundary
+          - budget_soft
+          - cancel
+          - goal_continue
+          - compacted
+          - tool_approval
+          - ask_user
+          - effect_uncertain
+          - agent_error
+          - model_error
+          - loop_detected
+          - sandbox_error
+          - tool_policy_error
+          - run_terminated
+          - null
+        error_code:
+          type: *id001
+        duration_ms:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        cost_millicredits:
+          type: integer
+          format: int64
       required:
-        - member
-        - seq
-        - status
-        - iterations
-        - usage
-        - started_at
+      - member
+      - seq
+      - status
+      - iterations
+      - usage
+      - started_at
+      - end_reason
+      - error_code
+      - duration_ms
+      - cost_millicredits
     Interaction:
       type: object
       properties:

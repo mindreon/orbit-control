@@ -1,9 +1,11 @@
 package usage
 
 import (
+	"cmp"
 	"context"
 	"encoding/json/v2"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -26,27 +28,45 @@ func ReportModelUsage(
 	tx := db.Tx(ctx)
 	prefix := fmt.Sprintf("model:%s:%s:%d:%d:", c.Run, c.Member, c.Seq, c.Attempt)
 	var workspace, principal string
-	if err := tx.QueryRow(ctx, `SELECT s.workspace_id::text,r.created_by::text
+	var lockRaw []byte
+	if err := tx.QueryRow(ctx, `SELECT s.workspace_id::text,r.created_by::text,l.lock
  FROM runs r
  JOIN sessions s ON s.id=r.session_id
+ LEFT JOIN run_locks l ON l.tenant_id=r.tenant_id AND l.id=r.lock_id
  WHERE r.tenant_id=$1
- AND r.id=$2`, c.Tenant, c.Run).Scan(&workspace, &principal); err != nil {
+ AND r.id=$2`, c.Tenant, c.Run).Scan(&workspace, &principal, &lockRaw); err != nil {
 		return out, nil, err
 	}
-	for _, item := range req.Items {
+	var asset *string
+	if len(lockRaw) > 0 {
+		var lock contract.RunLock
+		if err := json.Unmarshal(lockRaw, &lock); err != nil {
+			return out, nil, err
+		}
+		asset = AssetRef(lock, c.Member)
+	}
+	items := slices.Clone(req.Items)
+	slices.SortFunc(items, func(a, b contract.UsageItem) int {
+		if order := a.OccurredAt.Compare(b.OccurredAt); order != 0 {
+			return order
+		}
+		return cmp.Compare(a.IdempotencyKey, b.IdempotencyKey)
+	})
+	for _, item := range items {
 		suffix, ok := strings.CutPrefix(item.IdempotencyKey, prefix)
 		n, e := strconv.Atoi(suffix)
 		if !ok || e != nil || n < 1 {
 			return out, nil, httpx.E(422, "INVALID_USAGE_KEY", "Usage key must identify this attempt")
 		}
 		var raw []byte
-		if err := tx.QueryRow(ctx, `SELECT model_profiles->$5->'pricing'
+		var profileID *string
+		if err := tx.QueryRow(ctx, `SELECT model_profiles->$5->'pricing',model_profiles->$5->>'id'
  FROM run_segments
  WHERE tenant_id=$1
  AND run_id=$2
  AND member=$3
  AND seq=$4
- AND model_profiles ? $5`, c.Tenant, c.Run, c.Member, c.Seq, models.BindingKey(c.Attempt, item.Model)).Scan(&raw); err !=
+ AND model_profiles ? $5`, c.Tenant, c.Run, c.Member, c.Seq, models.BindingKey(c.Attempt, item.Model)).Scan(&raw, &profileID); err !=
 			nil {
 			return out, nil, err
 		}
@@ -54,7 +74,7 @@ func ReportModelUsage(
 		if err := json.Unmarshal(raw, &pricing); err != nil {
 			return out, nil, err
 		}
-		added, err := chargeModelTokens(ctx, c, workspace, principal, item, pricing)
+		added, err := chargeModelTokens(ctx, c, workspace, principal, asset, profileID, item, pricing)
 		if err != nil {
 			return out, nil, err
 		}
@@ -74,6 +94,7 @@ func chargeModelTokens(
 	ctx context.Context,
 	c auth.CapabilityClaims,
 	workspace, principal string,
+	asset, profileID *string,
 	item contract.UsageItem,
 	pricing contract.ModelPricing,
 ) ([]TokenMeasurement, error) {
@@ -114,7 +135,10 @@ func chargeModelTokens(
 				RunID:          &c.Run,
 				SegmentSeq:     &c.Seq,
 				Source:         "model",
-				Meter:          "tokens",
+				Meter:          Meter("tokens." + token.kind),
+				Member:         &c.Member,
+				AssetRef:       asset,
+				ModelProfileID: profileID,
 				Quantity:       strconv.Itoa(token.count),
 				UnitPrice:      strconv.FormatInt(token.price, 10),
 				Millicredits:   cost,

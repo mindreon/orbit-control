@@ -73,7 +73,7 @@ func testUsageAndEvents(t *testing.T, d *db.DB, admin *pgx.Conn) {
 		TenantID:       tenant,
 		RunID:          &run,
 		Source:         "model",
-		Meter:          "tokens",
+		Meter:          usage.TokensInput,
 		Quantity:       "7",
 		UnitPrice:      "100",
 		Millicredits:   700,
@@ -169,7 +169,8 @@ func testUsageAndEvents(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	old := entry
 	old.IdempotencyKey = oldKey
 	old.OccurredAt = at.AddDate(-2, 0, 0)
-	if err := d.WithTenant(ctx, tenant, func(tx pgx.Tx) error { _, err := usage.RecordUsage(ctx, tx, old); return err }); err != nil {
+	clock := usage.Service{Now: func() time.Time { return old.OccurredAt }}
+	if err := d.WithTenant(ctx, tenant, func(tx pgx.Tx) error { _, err := clock.RecordUsage(ctx, tx, old); return err }); err != nil {
 		t.Fatal(err)
 	}
 	owner, err := db.Open(ctx, roleURL(t, os.Getenv("ORBIT_TEST_DATABASE_URL"), "orbit_owner"))
@@ -196,7 +197,10 @@ func testUsageAndEvents(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	cutoff := at.AddDate(-1, 0, 0)
+	cutoff := at.AddDate(-1, 0, 0).Truncate(time.Hour)
+	if err = usage.RollupHour(ctx, d, usage.DirtyHour{TenantID: tenant, Hour: old.OccurredAt.Truncate(time.Hour)}, nil); err != nil {
+		t.Fatal(err)
+	}
 	if err = usage.Prune(ctx, owner, &cutoff); err != nil {
 		t.Fatal(err)
 	}

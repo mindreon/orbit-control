@@ -255,6 +255,12 @@ func startWorkers(
 		waitWorker.Stop()
 		return nil, err
 	}
+	if err := runworker.EnsureUsageSchedule(ctx, scheduleClient); err != nil {
+		worker.Stop()
+		waitWorker.Stop()
+		scheduleClient.Close()
+		return nil, err
+	}
 	dispatchCtx, cancelDispatch := context.WithCancel(ctx)
 	dispatchDone := make(chan struct{})
 	unregisterTelemetry, err := runworker.Observe(d)

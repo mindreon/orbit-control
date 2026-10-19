@@ -29,7 +29,9 @@ type Session struct {
 	LastActivityAt time.Time `json:"last_activity_at"`
 }
 type Run struct {
-	TemporalWorkflowID   string     `json:"temporal_workflow_id"`
+	TemporalWorkflowID   string     `json:"-"`
+	TraceID              *string    `json:"-"`
+	Ops                  *RunOps    `json:"ops,omitempty"`
 	ID                   string     `json:"id"`
 	SessionID            string     `json:"session_id"`
 	Status               string     `json:"status"`
@@ -86,10 +88,10 @@ func GetRun(ctx context.Context, id, action string) (Run, Session, error) {
      LIMIT 1),'segments_count',(SELECT count(*)
      FROM run_segments g
      WHERE g.tenant_id=r.tenant_id
-     AND g.run_id=r.id))
+     AND g.run_id=r.id)),COALESCE(r.temporal_workflow_id,''),r.trace_id
  FROM runs r
  WHERE tenant_id=$1
- AND id=$2`, auth.Tenant(ctx), id).Scan(&raw)
+ AND id=$2`, auth.Tenant(ctx), id).Scan(&raw, &r.TemporalWorkflowID, &r.TraceID)
 	if err != nil {
 		return r, s, err
 	}

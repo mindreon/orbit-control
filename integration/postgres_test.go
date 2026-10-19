@@ -450,6 +450,9 @@ func insertFixture(t *testing.T, admin *pgx.Conn, app *db.DB, table, base, tenan
 			v = 1
 		case "timestamp with time zone":
 			v = at
+			if col == "period_start" {
+				v = at.UTC().Truncate(time.Hour)
+			}
 		case "interval":
 			v = "1 hour"
 		case "ARRAY":

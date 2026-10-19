@@ -699,3 +699,52 @@ in-memory only and intentionally do not survive Continue-As-New.
 Temporal's OpenTelemetry contrib is pinned to v0.6.0 (MIT). v0.7.0/v0.8.0 require
 newer Nexus SDK/API modules incompatible with the pinned Temporal SDK v1.37.0;
 v0.6.0 supports the required tracing options without changing those pins.
+
+### Replay, operators and hourly usage
+
+`GET /v1/runs/{r}/segments`, `/effects`, `/interactions` and `/cost` require
+`session.read`; inaccessible runs return 404. Segment responses expose derived
+end reasons, duration and credits, not internal model bindings/result references.
+Effects omit arguments, result previews, object references and idempotency keys.
+Run cost reads the ledger directly; quantities remain separated by token meter.
+
+`ORBIT_PLATFORM_OPERATORS` is a comma-separated principal UUID allowlist, empty
+by default. Invalid UUIDs fail startup. `/v1/me.platform_operator` reports this
+identity flag; only an operator who already has access to a run receives its
+`ops` object, including `trace_id` and `temporal_workflow_id`. This is not a
+cross-tenant bypass. Optional `ORBIT_OPS_TEMPORAL_URL_TEMPLATE` and
+`ORBIT_OPS_TRACE_URL_TEMPLATE` accept only `{namespace}`, `{workflow_id}` and
+`{trace_id}`; replacements are path-escaped. Empty templates produce null links.
+Known limitation: the deployment allowlist is temporary and must be replaced by
+external IAM when that integration becomes available.
+
+Control workers ensure the untraced system Schedule `sys:usage-rollup` in the
+configured Temporal namespace on the `ctl` queue (UTC `5 * * * *`, overlap SKIP,
+one-hour catch-up window, 30-minute run timeout). It processes completed dirty
+hours, eight at a time, and continues as new after 20 pages or a server hint.
+Every new ledger row atomically marks its hour dirty; retries do not add marks.
+Worker timestamps outside the past-hour/future-five-minute window are charged
+at the current time. No ledger content is passed through Workflow histories.
+Worker-only backlog gauges report dirty-hour count/oldest mark age every minute.
+
+`GET /v1/usage` reads hourly materializations. It supports tenant/workspace/user
+scopes, UTC hour-aligned `from`/`to` ranges of at most 93 days, hour/day/month
+buckets and dimension groups. `computed_through` and `dirty_hours` describe lag.
+Without `group_by=meter`, quantity is null; only credits may sum across meters.
+The tokens admission quota is the explicit exception: all four token meters
+count toward a blocking token limit, for interactive and scheduled runs alike.
+A rejected scheduled firing fails with `QUOTA_EXCEEDED` without pausing its Schedule.
+
+Before pruning usage, wait for rollups to catch up. `maintenance prune
+--usage-before` requires a UTC hour at or before the database hour two hours ago
+and refuses if any older dirty hour remains. Rollups are retained after ledger/key pruning.
+To mark retained ledger hours for repair or an existing-data import, use an
+owner connection (the command only adds dirty markers):
+
+```bash
+orbit-admin usage rollup-mark --from 2026-10-01T00:00:00Z --to 2026-10-02T00:00:00Z [--tenant UUID]
+temporal schedule trigger --schedule-id sys:usage-rollup
+```
+
+The repair command marks only hours still represented in the ledger; it never
+empties retained rollups for already-pruned hours.

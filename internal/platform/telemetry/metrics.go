@@ -25,6 +25,9 @@ type Spec struct {
 }
 
 var Metrics = []Spec{
+	{Meter: "orbit-control", Name: "orbit.usage.rollup_backlog", Kind: "gauge", Unit: "{hour}", Labels: []string{}},
+	{Meter: "orbit-control", Name: "orbit.usage.rollup_oldest_dirty_age", Kind: "gauge", Unit: "s", Labels: []string{}},
+	{Meter: "orbit-control", Name: "orbit.usage.rollup_conflicts", Kind: "counter", Labels: []string{}},
 	{Meter: "orbit-control", Name: "sink_messages_total", Kind: "counter", Labels: []string{"result"}},
 	{Meter: "orbit-control", Name: "sink_rejected_total", Kind: "counter", Labels: []string{"reason"}},
 	{Meter: "orbit-control", Name: "sink_skipped_total", Kind: "counter", Labels: []string{"type"}},

@@ -13,6 +13,8 @@ import (
 )
 
 type Config struct {
+	PlatformOperators                                                                                         map[string]bool
+	OpsTemporalURLTemplate, OpsTraceURLTemplate                                                               string
 	MetricsTenantLimit, MetricsModelLimit                                                                     int
 	SchedulesDefaultLimit, CtlWaitConcurrency                                                                 int
 	ScheduleSweepInterval                                                                                     time.Duration
@@ -54,6 +56,9 @@ func Load() (Config, error) {
 		KeyFile:          env("ORBIT_SIGNING_KEY_FILE", ".orbit-data/signing.key"),
 		LogFormat:        env("ORBIT_LOG_FORMAT", "json"),
 		AllowDevNetwork:  os.Getenv("ORBIT_ALLOW_DEV_AUTH_ON_NETWORK") == "1",
+	}
+	if err := c.loadOperators(); err != nil {
+		return c, err
 	}
 	if err := c.loadRunEnvironment(); err != nil {
 		return c, err
