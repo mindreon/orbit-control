@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -16,85 +17,144 @@ import (
 	"github.com/mindreon/orbit-control/internal/platform/telemetry"
 )
 
-// Observe registers DB gauges only in worker processes. Each callback uses a
-// bounded global transaction and calls only the aggregate SECURITY DEFINER API.
-func Observe(d *db.DB) (func(), error) {
+const metricsSampleInterval = time.Minute
+
+type runKey struct{ tenant, status string }
+type interactionCount struct {
+	kind   string
+	n      int64
+	oldest time.Time
+}
+type metricsSnapshot struct {
+	sampledAt    time.Time
+	runs         map[runKey]int64
+	interactions []interactionCount
+}
+
+// Metrics publishes immutable snapshots; its mutex never covers IO or OTel work.
+type Metrics struct {
+	d        *db.DB
+	now      func() time.Time
+	mu       sync.Mutex
+	snapshot metricsSnapshot
+}
+
+// Observe registers snapshot-only gauges in worker processes.
+func Observe(d *db.DB) (*Metrics, func(), error) {
+	return observe(d, time.Now)
+}
+
+func observe(d *db.DB, now func() time.Time) (*Metrics, func(), error) {
+	m := &Metrics{d: d, now: now}
 	meter := otel.Meter("orbit-control")
 	runs, err := meter.Int64ObservableGauge("orbit.runs.active", metric.WithUnit("{run}"))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	pending, err := meter.Int64ObservableGauge("orbit.interactions.pending", metric.WithUnit("{interaction}"))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	age, err := meter.Float64ObservableGauge("orbit.interactions.oldest_pending.age", metric.WithUnit("s"))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	registration, err := meter.RegisterCallback(func(ctx context.Context, observer metric.Observer) error {
-		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		defer cancel()
-		return d.Global(ctx, func(tx pgx.Tx) error {
-			rows, err := tx.Query(ctx, "SELECT tenant_id::text,status,n FROM ops_run_counts()")
-			if err != nil {
-				return err
-			}
-			type key struct{ tenant, status string }
-			counts := map[key]int64{}
-			for rows.Next() {
-				var tenant, status string
-				var n int64
-				if err = rows.Scan(&tenant, &status, &n); err != nil {
-					rows.Close()
-					return err
-				}
-				attrs := telemetry.Labels(ctx, "orbit.runs.active", attribute.String("orbit.tenant_id", tenant),
-					attribute.String("orbit.run.status", status))
-				mapped := attrs[0].Value.AsString()
-				counts[key{tenant: mapped, status: status}] += n
-			}
-			for group, n := range counts {
-				observer.ObserveInt64(runs, n, metric.WithAttributes(attribute.String("orbit.tenant_id", group.tenant),
-					attribute.String("orbit.run.status", group.status)))
-			}
-			err = rows.Err()
-			rows.Close()
-			if err != nil {
-				return err
-			}
-			rows, err = tx.Query(ctx, "SELECT kind,n,oldest FROM ops_interaction_counts()")
-			if err != nil {
-				return err
-			}
-			defer rows.Close()
-			for rows.Next() {
-				var kind string
-				var n int64
-				var oldest time.Time
-				if err = rows.Scan(&kind, &n, &oldest); err != nil {
-					return err
-				}
-				attrs := metric.WithAttributes(attribute.String("orbit.interaction.kind", kind))
-				observer.ObserveInt64(pending, n, attrs)
-				observer.ObserveFloat64(age, time.Since(oldest).Seconds(), attrs)
-			}
-			return rows.Err()
-		})
+	registration, err := meter.RegisterCallback(func(_ context.Context, observer metric.Observer) error {
+		m.mu.Lock()
+		snapshot := m.snapshot
+		m.mu.Unlock()
+		now := m.now()
+		if snapshot.sampledAt.IsZero() || now.Sub(snapshot.sampledAt) > 2*metricsSampleInterval {
+			return nil
+		}
+		for group, n := range snapshot.runs {
+			observer.ObserveInt64(runs, n, metric.WithAttributes(attribute.String("orbit.tenant_id", group.tenant),
+				attribute.String("orbit.run.status", group.status)))
+		}
+		for _, count := range snapshot.interactions {
+			attrs := metric.WithAttributes(attribute.String("orbit.interaction.kind", count.kind))
+			observer.ObserveInt64(pending, count.n, attrs)
+			observer.ObserveFloat64(age, now.Sub(count.oldest).Seconds(), attrs)
+		}
+		return nil
 	}, runs, pending, age)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return func() { _ = registration.Unregister() }, nil
+	return m, func() { _ = registration.Unregister() }, nil
+}
+
+// SampleOnce reads only aggregate SECURITY DEFINER APIs in one bounded global
+// transaction. Publish only complete successful samples, after the DB releases
+// its transaction. Label mapping and all self-metric recording stay off callbacks.
+func (m *Metrics) SampleOnce(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	snapshot := metricsSnapshot{sampledAt: m.now(), runs: map[runKey]int64{}}
+	err := m.d.Global(ctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, "SELECT tenant_id::text,status,n FROM ops_run_counts()")
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var tenant, status string
+			var n int64
+			if err = rows.Scan(&tenant, &status, &n); err != nil {
+				rows.Close()
+				return err
+			}
+			snapshot.runs[runKey{tenant: tenant, status: status}] += n
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		rows, err = tx.Query(ctx, "SELECT kind,n,oldest FROM ops_interaction_counts()")
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var count interactionCount
+			if err = rows.Scan(&count.kind, &count.n, &count.oldest); err != nil {
+				return err
+			}
+			snapshot.interactions = append(snapshot.interactions, count)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return err
+	}
+	counts := map[runKey]int64{}
+	for group, n := range snapshot.runs {
+		attrs := telemetry.Labels(ctx, "orbit.runs.active", attribute.String("orbit.tenant_id", group.tenant),
+			attribute.String("orbit.run.status", group.status))
+		counts[runKey{tenant: attrs[0].Value.AsString(), status: group.status}] += n
+	}
+	snapshot.runs = counts
+	m.mu.Lock()
+	m.snapshot = snapshot
+	m.mu.Unlock()
+	return nil
 }
 
 // Sample stops on the worker context and never queries a tenant business row.
-func Sample(ctx context.Context, d *db.DB, temporal client.Client, logger *slog.Logger) {
-	var lastError time.Time
+func (m *Metrics) Sample(ctx context.Context, temporal client.Client, logger *slog.Logger) {
+	var lastBacklogError, lastDBError time.Time
 	backlog := time.NewTicker(30 * time.Second)
-	quota := time.NewTicker(time.Minute)
+	quota := time.NewTicker(metricsSampleInterval)
 	defer backlog.Stop()
 	defer quota.Stop()
+	sampleDB := func() {
+		if err := m.SampleOnce(ctx); err != nil && m.now().Sub(lastDBError) >= time.Minute {
+			logger.WarnContext(ctx, "telemetry.db_sample_failed", "error_type", fmt.Sprintf("%T", err))
+			lastDBError = m.now()
+		}
+	}
+	// Sample once at start so state gauges are not absent for the first interval after a restart.
+	sampleDB()
 	for {
 		select {
 		case <-ctx.Done():
@@ -108,10 +168,10 @@ func Sample(ctx context.Context, d *db.DB, temporal client.Client, logger *slog.
 				})
 				cancel()
 				if err != nil {
-					if time.Since(lastError) >= time.Minute {
+					if m.now().Sub(lastBacklogError) >= time.Minute {
 						logger.WarnContext(ctx, "telemetry.backlog_sample_failed",
 							"task_queue", queue, "operation", "DescribeTaskQueueEnhanced", "report_stats", true, "error_type", fmt.Sprintf("%T", err))
-						lastError = time.Now()
+						lastBacklogError = m.now()
 					}
 					continue
 				}
@@ -126,8 +186,9 @@ func Sample(ctx context.Context, d *db.DB, temporal client.Client, logger *slog.
 				telemetry.Gauge("orbit.temporal.task_queue.backlog").Record(ctx, n, attribute.String("orbit.task_queue", queue))
 			}
 		case <-quota.C:
-			sampleQuota(ctx, d)
-			sampleUsageBacklog(ctx, d)
+			sampleDB()
+			sampleQuota(ctx, m.d)
+			sampleUsageBacklog(ctx, m.d)
 		}
 	}
 }

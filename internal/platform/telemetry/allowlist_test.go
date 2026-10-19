@@ -27,6 +27,7 @@ func testProviders(t *testing.T) (*sdktrace.TracerProvider, *tracetest.InMemoryE
 	oldTrace, oldMeter := otel.GetTracerProvider(), otel.GetMeterProvider()
 	otel.SetTracerProvider(provider)
 	otel.SetMeterProvider(meter)
+	InitializeMetrics()
 	t.Cleanup(func() {
 		otel.SetTracerProvider(oldTrace)
 		otel.SetMeterProvider(oldMeter)
@@ -36,6 +37,7 @@ func testProviders(t *testing.T) (*sdktrace.TracerProvider, *tracetest.InMemoryE
 	return provider, exporter, reader
 }
 func TestAllowlistExporter(t *testing.T) {
+	testProviders(t)
 	exporter := tracetest.NewInMemoryExporter()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(AllowlistExporter(exporter)), sdktrace.WithResource(
 		resource.NewSchemaless(attribute.String("service.name", "control"), attribute.String("secret", "ORBIT-CANARY"))))
@@ -81,6 +83,7 @@ func TestSpanAllowlistGolden(t *testing.T) {
 	}
 }
 func TestAllowlistClearsTraceState(t *testing.T) {
+	testProviders(t)
 	exporter := tracetest.NewInMemoryExporter()
 	state, err := trace.ParseTraceState("vendor=ORBIT-CANARY")
 	require.NoError(t, err)

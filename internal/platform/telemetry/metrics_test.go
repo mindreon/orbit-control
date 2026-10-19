@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"os"
+	"os/exec"
 	"sync"
 	"testing"
 
@@ -16,12 +17,53 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// A fresh process preserves OTel's initial delegating global provider; callbacks
+// registered on it would carry over at the first SetMeterProvider and double-count.
+func TestLabelOverflowAfterProviderSetup(t *testing.T) {
+	if os.Getenv("ORBIT_TEST_FIRST_METER_PROVIDER") != "1" {
+		cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestLabelOverflowAfterProviderSetup$", "-test.v")
+		cmd.Env = append(os.Environ(), "ORBIT_TEST_FIRST_METER_PROVIDER=1")
+		output, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s", output)
+		return
+	}
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(append(MeterOptions(), sdkmetric.WithReader(reader))...)
+	otel.SetMeterProvider(provider)
+	InitializeMetrics()
+	t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.Background())) })
+	ConfigureLimits(1, 1)
+	labelLimiters["orbit.tenant_id"].Value("one")
+	labelLimiters["orbit.tenant_id"].Value("two")
+	var data metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(t.Context(), &data))
+	var overflow int64
+	for _, scope := range data.ScopeMetrics {
+		for _, item := range scope.Metrics {
+			if item.Name == "orbit.telemetry.label_overflow" {
+				for _, point := range item.Data.(metricdata.Sum[int64]).DataPoints {
+					label, _ := point.Attributes.Value("orbit.label")
+					if label.AsString() == "tenant_id" {
+						overflow += point.Value
+					}
+				}
+			}
+		}
+	}
+	require.Equal(t, int64(1), overflow)
+}
+
 func TestMetricsGolden(t *testing.T) {
 	raw, err := os.ReadFile("testdata/metrics.golden.json")
 	require.NoError(t, err)
 	var golden []Spec
 	require.NoError(t, json.Unmarshal(raw, &golden))
-	require.Equal(t, golden, Metrics)
+	encoded, err := json.Marshal(Metrics)
+	require.NoError(t, err)
+	var exported []Spec
+	require.NoError(t, json.Unmarshal(encoded, &exported))
+	require.Equal(t, golden, exported)
+	InitializeMetrics()
 	for _, spec := range Metrics {
 		if spec.TenantAllowed {
 			require.Contains(t, []string{"orbit.runs.active", "orbit.usage.tokens"}, spec.Name)
@@ -32,6 +74,15 @@ func TestMetricsGolden(t *testing.T) {
 		}
 	}
 	require.Panics(t, func() { Counter("orbit.runs.started").Add(t.Context(), 1, attribute.String("run_id", "bad")) })
+}
+
+func TestObservableMetricsRejectSynchronousAccess(t *testing.T) {
+	InitializeMetrics()
+	for _, spec := range Metrics {
+		if spec.Observable {
+			require.PanicsWithValue(t, "observable metric requested as synchronous: "+spec.Name, func() { cached(spec) })
+		}
+	}
 }
 
 func TestExemplarsDisabled(t *testing.T) {
@@ -88,17 +139,25 @@ func TestLimiterStableAndConcurrent(t *testing.T) {
 	_, _, reader := testProviders(t)
 	for _, label := range []string{"tenant_id", "model"} {
 		limiter := NewLimiter(label, 2)
-		require.Equal(t, "a", limiter.Value(t.Context(), "a"))
-		require.Equal(t, "b", limiter.Value(t.Context(), "b"))
+		value, outcome := limiter.Value("a")
+		require.Equal(t, "a", value)
+		require.True(t, outcome.Registered)
+		value, outcome = limiter.Value("b")
+		require.Equal(t, "b", value)
+		require.True(t, outcome.Registered)
 		for range 3 {
-			require.Equal(t, "a", limiter.Value(t.Context(), "a"))
-			require.Equal(t, "_other", limiter.Value(t.Context(), "c"))
+			value, outcome = limiter.Value("a")
+			require.Equal(t, "a", value)
+			require.Equal(t, MappingOutcome{}, outcome)
+			value, outcome = limiter.Value("c")
+			require.Equal(t, "_other", value)
+			require.True(t, outcome.Overflow)
 			var data metricdata.ResourceMetrics
 			require.NoError(t, reader.Collect(t.Context(), &data))
 		}
 		var wg sync.WaitGroup
 		for range 100 {
-			wg.Go(func() { limiter.Value(t.Context(), "new") })
+			wg.Go(func() { limiter.Value("new") })
 		}
 		wg.Wait()
 		require.Len(t, limiter.seen, 2)

@@ -19,6 +19,7 @@ import (
 )
 
 func Register(reg worker.Registry, a *ctl.Activities) {
+	ctl.InitializeMetrics(a)
 	reg.RegisterWorkflowWithOptions(session.Run, workflow.RegisterOptions{Name: w.SessionWorkflow})
 	reg.RegisterWorkflowWithOptions(agentrun.Run, workflow.RegisterOptions{Name: w.AgentRunWorkflow})
 	reg.RegisterWorkflowWithOptions(sandboxlease.Run, workflow.RegisterOptions{Name: w.SandboxLeaseWorkflow})

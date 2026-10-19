@@ -15,9 +15,11 @@ import (
 
 	"github.com/mindreon/orbit-control/internal/auth"
 	"github.com/mindreon/orbit-control/internal/platform/ids"
+	"github.com/mindreon/orbit-control/internal/platform/telemetry"
 )
 
 func TestServiceCredentials(t *testing.T) {
+	telemetry.InitializeMetrics()
 	digest := sha256.Sum256([]byte("fixture-service-credential"))
 	expected := hex.EncodeToString(digest[:])
 	require.True(t, ServiceCredentialMatches("fixture-service-credential", expected))
@@ -35,6 +37,7 @@ func TestServiceCredentials(t *testing.T) {
 	}
 }
 func TestCapabilityRequestBoundaries(t *testing.T) {
+	telemetry.InitializeMetrics()
 	_, key, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
 	signer, err := auth.NewCapabilitySigner(key, "test", nil)

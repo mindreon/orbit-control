@@ -15,6 +15,7 @@ func TestOutboxFailureStagesAreExplicit(t *testing.T) {
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	t.Cleanup(func() { require.NoError(t, provider.Shutdown(t.Context())) })
 	a := &Activities{Meter: provider.Meter("ctl-test")}
+	InitializeMetrics(a)
 	for _, stage := range []string{"publish", "end_marker", "mark_published", "end_marker"} {
 		a.logOutboxFailure(t.Context(), stage, "run", "event", 1, errors.New("failure"))
 	}
@@ -34,10 +35,11 @@ func TestOutboxFailureStagesAreExplicit(t *testing.T) {
 }
 
 func TestOutboxFailureCounterConcurrentUse(t *testing.T) {
-	// Exercise fresh instances so another test or an earlier iteration cannot
-	// pre-initialize the counter and hide an unsynchronized first-use write.
+	// Initialize each instance before concurrent failure logging, as worker
+	// registration does, so the hot path cannot create instruments.
 	for range 16 {
 		a := &Activities{}
+		InitializeMetrics(a)
 		var wg sync.WaitGroup
 		start := make(chan struct{})
 		for range 8 {

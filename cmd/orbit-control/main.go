@@ -263,7 +263,7 @@ func startWorkers(
 	}
 	dispatchCtx, cancelDispatch := context.WithCancel(ctx)
 	dispatchDone := make(chan struct{})
-	unregisterTelemetry, err := runworker.Observe(d)
+	runMetrics, unregisterTelemetry, err := runworker.Observe(d)
 	if err != nil {
 		cancelDispatch()
 		worker.Stop()
@@ -272,7 +272,7 @@ func startWorkers(
 		return nil, err
 	}
 	var projections sync.WaitGroup
-	projections.Go(func() { runworker.Sample(dispatchCtx, d, tc, l) })
+	projections.Go(func() { runMetrics.Sample(dispatchCtx, tc, l) })
 	projections.Go(func() {
 		scheduleService.Sweep(dispatchCtx, func(err error) { l.Warn("schedule synchronization failed", "error_type", fmt.Sprintf("%T", err)) })
 	})

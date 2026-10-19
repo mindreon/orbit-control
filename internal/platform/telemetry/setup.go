@@ -55,6 +55,7 @@ func Setup(ctx context.Context, c Config, log *slog.Logger) (func(context.Contex
 	ConfigureLimits(c.TenantLimit, c.ModelLimit)
 	otel.SetTextMapPropagator(TraceparentOnly{})
 	if c.Endpoint == "" {
+		InitializeMetrics()
 		log.InfoContext(ctx, "telemetry.disabled")
 		return func(context.Context) error { return nil }, nil
 	}
@@ -100,6 +101,7 @@ func Setup(ctx context.Context, c Config, log *slog.Logger) (func(context.Contex
 	mp := sdkmetric.NewMeterProvider(options...)
 	otel.SetTracerProvider(tp)
 	otel.SetMeterProvider(mp)
+	InitializeMetrics()
 	var mu sync.Mutex
 	var last time.Time
 	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {

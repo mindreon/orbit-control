@@ -139,7 +139,10 @@ func (a *Activities) change(ctx context.Context, in w.RunOp, fn func(context.Con
 	return nil
 }
 
-func (a *Activities) logOutboxFailure(ctx context.Context, stage, runID, eventID string, operation int64, err error) {
+// InitializeMetrics is called before workers start; failure logging never creates
+// instruments while collection may be running. It is a function, not a method,
+// because RegisterActivity(a) registers every exported method as an activity.
+func InitializeMetrics(a *Activities) {
 	a.outboxOnce.Do(func() {
 		meter := a.Meter
 		if meter == nil {
@@ -150,6 +153,9 @@ func (a *Activities) logOutboxFailure(ctx context.Context, stage, runID, eventID
 			a.outboxFailures = counter
 		}
 	})
+}
+
+func (a *Activities) logOutboxFailure(ctx context.Context, stage, runID, eventID string, operation int64, err error) {
 	if a.outboxFailures != nil {
 		a.outboxFailures.Add(ctx, 1, metric.WithAttributes(attribute.String("stage", stage)))
 	}

@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 
@@ -40,4 +41,11 @@ func TestWorkerInterceptorsNotDuplicated(t *testing.T) {
 	options := workerOptions()
 	require.Len(t, options.Interceptors, 1)
 	require.IsType(t, &teamrun.SignalInterceptor{}, options.Interceptors[0])
+}
+
+func TestRegisterPassesSDKValidation(t *testing.T) {
+	// RegisterActivity(a) registers every exported method of ctl.Activities; the SDK
+	// panics on one with an invalid signature, which the recording registry cannot see.
+	var suite testsuite.WorkflowTestSuite
+	require.NotPanics(t, func() { Register(suite.NewTestWorkflowEnvironment(), &ctl.Activities{}) })
 }

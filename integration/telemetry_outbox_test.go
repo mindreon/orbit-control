@@ -11,6 +11,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
+	"github.com/mindreon/orbit-control/internal/activities/ctl"
 	"github.com/mindreon/orbit-control/internal/platform/db"
 	w "github.com/mindreon/orbit-control/internal/workflows"
 )
@@ -36,6 +37,7 @@ func (p failingTelemetryPublisher) Publish(ctx context.Context, subject, _ strin
 func testTelemetryOutbox(t *testing.T, d *db.DB, admin *pgx.Conn, reader *sdkmetric.ManualReader) {
 	for _, stage := range []string{"publish", "end_marker", "mark_published"} {
 		f := newRunFixture(t, d, admin)
+		ctl.InitializeMetrics(f.activities)
 		f.start(t)
 		// Previous events are already delivered; isolate one terminal event.
 		_, err := admin.Exec(t.Context(), "UPDATE control_events SET published_at=now() WHERE tenant_id=$1", f.tenant)

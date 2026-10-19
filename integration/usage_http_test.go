@@ -20,6 +20,7 @@ import (
 	"github.com/mindreon/orbit-control/internal/httpapi"
 	"github.com/mindreon/orbit-control/internal/platform/config"
 	"github.com/mindreon/orbit-control/internal/platform/ids"
+	"github.com/mindreon/orbit-control/internal/platform/telemetry"
 	"github.com/mindreon/orbit-control/internal/tenancy"
 	"github.com/mindreon/orbit-control/internal/usage"
 	w "github.com/mindreon/orbit-control/internal/workflows"
@@ -123,6 +124,7 @@ func TestUsageTokensAdmission(t *testing.T) {
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	old := otel.GetMeterProvider()
 	otel.SetMeterProvider(provider)
+	telemetry.InitializeMetrics()
 	t.Cleanup(func() {
 		otel.SetMeterProvider(old)
 		_ = provider.Shutdown(context.Background())

@@ -15,6 +15,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.temporal.io/sdk/temporal"
 
+	"github.com/mindreon/orbit-control/internal/platform/telemetry"
 	"github.com/mindreon/orbit-control/internal/usage"
 )
 
@@ -133,6 +134,7 @@ func TestRollupLockProtocol(t *testing.T) {
 		provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 		old := otel.GetMeterProvider()
 		otel.SetMeterProvider(provider)
+		telemetry.InitializeMetrics()
 		t.Cleanup(func() {
 			otel.SetMeterProvider(old)
 			_ = provider.Shutdown(context.Background())

@@ -28,6 +28,7 @@ import (
 	"github.com/mindreon/orbit-control/internal/platform/db"
 	"github.com/mindreon/orbit-control/internal/platform/httpx"
 	"github.com/mindreon/orbit-control/internal/platform/ids"
+	"github.com/mindreon/orbit-control/internal/platform/telemetry"
 	"github.com/mindreon/orbit-control/internal/tenancy"
 	"github.com/mindreon/orbit-control/migrations"
 )
@@ -36,6 +37,7 @@ import (
 // ORBIT_TEST_DATABASE_URL must be a superuser on that database so role grants can
 // be checked with actual SET ROLE transactions, without creating any roles.
 func TestPostgresSuite(t *testing.T) {
+	telemetry.InitializeMetrics()
 	raw := os.Getenv("ORBIT_TEST_DATABASE_URL")
 	if raw == "" {
 		if os.Getenv("ORBIT_REQUIRE_PG_TESTS") == "1" {

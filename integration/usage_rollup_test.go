@@ -20,6 +20,7 @@ import (
 
 	"github.com/mindreon/orbit-control/internal/platform/db"
 	"github.com/mindreon/orbit-control/internal/platform/ids"
+	"github.com/mindreon/orbit-control/internal/platform/telemetry"
 	"github.com/mindreon/orbit-control/internal/usage"
 	w "github.com/mindreon/orbit-control/internal/workflows"
 	"github.com/mindreon/orbit-control/internal/workflows/usagerollup"
@@ -28,6 +29,7 @@ import (
 
 func rollupDatabase(t *testing.T) (*db.DB, *pgx.Conn, *db.DB) {
 	t.Helper()
+	telemetry.InitializeMetrics()
 	raw := os.Getenv("ORBIT_TEST_DATABASE_URL")
 	if raw == "" {
 		if os.Getenv("ORBIT_REQUIRE_PG_TESTS") == "1" {

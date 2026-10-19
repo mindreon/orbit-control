@@ -18,6 +18,7 @@ import (
 	"github.com/mindreon/orbit-control/internal/platform/db"
 	"github.com/mindreon/orbit-control/internal/platform/ids"
 	"github.com/mindreon/orbit-control/internal/platform/telemetry"
+	"github.com/mindreon/orbit-control/internal/runworker"
 	w "github.com/mindreon/orbit-control/internal/workflows"
 )
 
@@ -51,6 +52,7 @@ func testTelemetry(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	provider := sdkmetric.NewMeterProvider(append(telemetry.MeterOptions(), sdkmetric.WithReader(reader))...)
 	old := otel.GetMeterProvider()
 	otel.SetMeterProvider(provider)
+	telemetry.InitializeMetrics()
 	t.Cleanup(func() {
 		otel.SetMeterProvider(old)
 		_ = provider.Shutdown(context.Background())
@@ -135,6 +137,37 @@ func testTelemetry(t *testing.T, d *db.DB, admin *pgx.Conn) {
 			require.NotContains(t, string(raw), saved)
 		}
 	}
+	t.Run("SamplerReleasesTransaction", func(t *testing.T) {
+		f := newRunFixture(t, d, admin)
+		f.start(t)
+		metrics, unregister, err := runworker.Observe(d)
+		require.NoError(t, err)
+		defer unregister()
+		for range 3 {
+			require.NoError(t, metrics.SampleOnce(t.Context()))
+			var data metricdata.ResourceMetrics
+			require.NoError(t, reader.Collect(t.Context(), &data))
+			found := false
+			for _, scope := range data.ScopeMetrics {
+				for _, item := range scope.Metrics {
+					if item.Name == "orbit.runs.active" {
+						for _, point := range item.Data.(metricdata.Gauge[int64]).DataPoints {
+							tenant, _ := point.Attributes.Value("orbit.tenant_id")
+							if tenant.AsString() == f.tenant {
+								require.Equal(t, int64(1), point.Value)
+								found = true
+							}
+						}
+					}
+				}
+			}
+			require.True(t, found, "new tenant must appear in sampled run gauges")
+			var idle int
+			require.NoError(t, admin.QueryRow(t.Context(), `SELECT count(*) FROM pg_stat_activity
+ WHERE datname=current_database() AND state LIKE 'idle in transaction%'`).Scan(&idle))
+			require.Zero(t, idle, "sampler and collection must not strand transactions")
+		}
+	})
 	t.Run("Rollback", func(t *testing.T) {
 		f := newRunFixture(t, d, admin)
 		_, err := admin.Exec(t.Context(), `CREATE FUNCTION telemetry_abort() RETURNS trigger LANGUAGE plpgsql AS $$
