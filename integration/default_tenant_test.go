@@ -54,6 +54,24 @@ func TestDefaultTenantLogin(t *testing.T) {
 		require.Equal(t, 200, status, raw)
 		return token, result
 	}
+	t.Run("me default tenant", func(t *testing.T) {
+		_, h := service(t, tenant)
+		token, me := login(t, h, "me-"+ids.New()+"@example.test")
+		require.Nil(t, me["current_tenant"])
+		require.Equal(t, tenant, me["default_tenant"])
+		for _, slug := range []string{"", "missing-" + ids.New()} {
+			_, h := service(t, slug)
+			status, me, raw := publicRequest(t, h, token, "", "GET", "/v1/me", "")
+			require.Equal(t, 200, status, raw)
+			require.Contains(t, me, "default_tenant")
+			require.Nil(t, me["default_tenant"])
+		}
+		_, h = service(t, usageTenant(t, admin))
+		status, me, raw := publicRequest(t, h, token, "", "GET", "/v1/me", "")
+		require.Equal(t, 200, status, raw)
+		require.Contains(t, me, "default_tenant")
+		require.Nil(t, me["default_tenant"])
+	})
 	t.Run("new dev login and repeated login", func(t *testing.T) {
 		_, h := service(t, tenant)
 		email := "default-" + ids.New() + "@example.test"

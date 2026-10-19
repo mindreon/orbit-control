@@ -3614,6 +3614,11 @@ components:
           type:
             - string
             - "null"
+        default_tenant:
+          format: uuid
+          type:
+            - string
+            - "null"
         principal:
           $ref: '#/components/schemas/Principal'
         roles:
@@ -3629,6 +3634,7 @@ components:
         - principal
         - tenants
         - current_tenant
+        - default_tenant
         - roles
       type: object
     Member:

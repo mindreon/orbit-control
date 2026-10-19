@@ -89,6 +89,15 @@ func ValidEmail(s string) bool {
 	return e == nil && v.Address == s && len(s) <= 254
 }
 
+// DefaultTenantID resolves the configured tenant, allowing it to be provisioned later.
+func (a *Service) DefaultTenantID(ctx context.Context) (string, error) {
+	id, err := a.resolveDefaultTenant(ctx)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
+}
+
 // resolveDefaultTenant looks the slug up at login, not at startup: on a fresh
 // database the tenant is created by seed-dev after control is already running.
 func (a *Service) resolveDefaultTenant(ctx context.Context) (string, error) {
@@ -105,7 +114,7 @@ func (a *Service) resolveDefaultTenant(ctx context.Context) (string, error) {
 		return tx.QueryRow(ctx, "SELECT id::text FROM tenants WHERE slug=$1", a.Config.DefaultTenant).Scan(&id)
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", fmt.Errorf("ORBIT_DEFAULT_TENANT: tenant slug %q not found", a.Config.DefaultTenant)
+		return "", fmt.Errorf("ORBIT_DEFAULT_TENANT: tenant slug %q not found: %w", a.Config.DefaultTenant, err)
 	}
 	if err != nil {
 		return "", fmt.Errorf("ORBIT_DEFAULT_TENANT lookup: %w", err)

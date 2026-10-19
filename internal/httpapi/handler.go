@@ -665,6 +665,17 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) error {
 	if e != nil {
 		return e
 	}
+	defaultID, e := h.Auth.DefaultTenantID(ctx)
+	if e != nil {
+		return e
+	}
+	var defaultTenant any
+	for _, t := range ts {
+		if t.ID == defaultID {
+			defaultTenant = t.ID
+			break
+		}
+	}
 	roles := []string{}
 	var tenant any
 	if t := auth.Tenant(ctx); t != "" {
@@ -679,7 +690,7 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) error {
 		slices.Sort(roles)
 		roles = slices.Compact(roles)
 	}
-	httpx.JSON(w, 200, map[string]any{"principal": p, "tenants": ts, "current_tenant": tenant, "roles": roles,
+	httpx.JSON(w, 200, map[string]any{"principal": p, "tenants": ts, "current_tenant": tenant, "default_tenant": defaultTenant, "roles": roles,
 		"platform_operator": p.PlatformOperator})
 	return nil
 }
