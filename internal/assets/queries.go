@@ -3,8 +3,10 @@ package assets
 import (
 	"context"
 	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 
+	"github.com/mindreon/orbit-control/internal/auth"
 	"github.com/mindreon/orbit-control/internal/platform/db"
 	"github.com/mindreon/orbit-control/internal/platform/httpx"
 	"github.com/mindreon/orbit-control/internal/policy"
@@ -14,7 +16,7 @@ type Page[T any] struct {
 	Items      []T    `json:"items"`
 	NextCursor string `json:"next_cursor"`
 }
-type Filter struct{ Kind, Visibility, Query, WorkspaceID string }
+type Filter struct{ Kind, Visibility, Query, WorkspaceID, Owner, Publisher, Name string }
 
 func (s *Service) List(ctx context.Context, page httpx.Page, f Filter) (Page[Asset], error) {
 	result := []Asset{}
@@ -28,8 +30,11 @@ func (s *Service) List(ctx context.Context, page httpx.Page, f Filter) (Page[Ass
  AND ($3='' OR visibility=$3)
  AND ($4='' OR name ILIKE '%'||$4||'%')
  AND ($5='' OR workspace_id=NULLIF($5,'')::uuid)
+ AND ($6='' OR owner_id=NULLIF($6,'')::uuid)
+ AND ($7='' OR publisher=$7)
+ AND ($8='' OR name=$8)
  ORDER BY id
- LIMIT 100`, cursor, f.Kind, f.Visibility, f.Query, f.WorkspaceID)
+ LIMIT 100`, cursor, f.Kind, f.Visibility, f.Query, f.WorkspaceID, f.Owner, f.Publisher, f.Name)
 		if e != nil {
 			return Page[Asset]{}, e
 		}
@@ -72,6 +77,84 @@ func (s *Service) List(ctx context.Context, page httpx.Page, f Filter) (Page[Ass
 	}
 	return Page[Asset]{Items: result, NextCursor: next}, nil
 }
+
+type DependentVersion struct {
+	ID      string `json:"id"`
+	Version string `json:"version"`
+	State   string `json:"state"`
+}
+type Dependent struct {
+	Asset    Asset              `json:"asset"`
+	Versions []DependentVersion `json:"versions"`
+}
+
+func (s *Service) Dependents(ctx context.Context, id, kind string, page httpx.Page) (Page[Dependent], error) {
+	target, err := s.Get(ctx, id, "asset.read")
+	result := Page[Dependent]{Items: []Dependent{}}
+	if err != nil {
+		return result, err
+	}
+	cursor := page.Cursor
+	for len(result.Items) <= page.Limit {
+		rows, err := db.Tx(ctx).Query(ctx, `SELECT v.asset_id::text,
+ jsonb_agg(jsonb_build_object('id',v.id,'version',v.version,'state',v.state) ORDER BY v.created_at,v.id)
+ FROM asset_dependencies d JOIN asset_versions v ON (v.tenant_id,v.id)=(d.tenant_id,d.version_id)
+ JOIN assets a ON (a.tenant_id,a.id)=(v.tenant_id,v.asset_id)
+ WHERE d.tenant_id=$1 AND d.dep_kind=$2 AND d.dep_ref=$3
+ AND v.state NOT IN ('rejected','yanked') AND ($4='' OR v.asset_id>NULLIF($4,'')::uuid)
+ AND ($5='' OR a.kind=$5)
+ GROUP BY v.asset_id ORDER BY v.asset_id LIMIT 50`,
+			auth.Tenant(ctx), target.Kind, target.Publisher+"/"+target.Name, cursor, kind)
+		if err != nil {
+			return result, err
+		}
+		batch := []Dependent{}
+		for rows.Next() {
+			var item Dependent
+			var raw []byte
+			if err = rows.Scan(&item.Asset.ID, &raw); err != nil {
+				break
+			}
+			if err = json.Unmarshal(raw, &item.Versions); err != nil {
+				break
+			}
+			batch = append(batch, item)
+		}
+		if err == nil {
+			err = rows.Err()
+		}
+		rows.Close()
+		if err != nil {
+			return result, err
+		}
+		if len(batch) == 0 {
+			break
+		}
+		for _, item := range batch {
+			cursor = item.Asset.ID
+			item.Asset, err = s.Get(ctx, cursor, "asset.read")
+			if status, ok := errors.AsType[*httpx.Error](err); ok && status.Status == 404 {
+				continue
+			}
+			if err != nil {
+				return result, err
+			}
+			result.Items = append(result.Items, item)
+			if len(result.Items) > page.Limit {
+				break
+			}
+		}
+		if len(batch) < 50 {
+			break
+		}
+	}
+	if len(result.Items) > page.Limit {
+		result.Items = result.Items[:page.Limit]
+		result.NextCursor = httpx.Cursor(result.Items[page.Limit-1].Asset.ID)
+	}
+	return result, nil
+}
+
 func (s *Service) Versions(ctx context.Context, p httpx.Page, value string, review bool) (Page[Version], error) {
 	filter := "asset_id=$1"
 	if review {

@@ -37,6 +37,9 @@ func (s runObjects) PutObject(ctx context.Context, tenant, key string, data []by
 func (s runObjects) GetObject(context.Context, string, string, int64) ([]byte, string, error) {
 	return []byte(`{"text":"input"}`), "application/json", nil
 }
+func (s runObjects) OpenObject(context.Context, string, string) (io.ReadCloser, int64, error) {
+	return io.NopCloser(strings.NewReader("artifact bytes")), 14, nil
+}
 func (s runObjects) PresignGet(context.Context, string, string, time.Duration) (string, error) {
 	return "http://objects.invalid/file", nil
 }

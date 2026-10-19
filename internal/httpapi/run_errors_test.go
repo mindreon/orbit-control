@@ -41,5 +41,5 @@ func TestRunRoutesDeclareTransactions(t *testing.T) {
 			require.False(t, route.TenantOptional)
 		}
 	}
-	require.Equal(t, 13, count)
+	require.Equal(t, 14, count)
 }

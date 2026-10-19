@@ -39,7 +39,7 @@ func testSessionVisibilityPagination(t *testing.T, d *db.DB, admin *pgx.Conn) {
 	f.tx(t, func(ctx context.Context, tx pgx.Tx) error {
 		cursor := ""
 		for n, id := range visible {
-			page, err := sessions.List(ctx, httpx.Page{Limit: 1, Cursor: cursor}, f.workspace, "")
+			page, err := sessions.List(ctx, httpx.Page{Limit: 1, Cursor: cursor}, f.workspace, "", "")
 			require.NoError(t, err)
 			require.Len(t, page.Items, 1, "inaccessible sessions must be filtered before LIMIT")
 			require.Equal(t, id, page.Items[0].ID)
@@ -51,14 +51,14 @@ func testSessionVisibilityPagination(t *testing.T, d *db.DB, admin *pgx.Conn) {
 			cursor = id
 		}
 		keyCtx := auth.Context(ctx, auth.Principal{ID: f.actor, Kind: "user", APIKey: true, Scopes: []string{"run.control"}}, f.tenant)
-		_, err := sessions.List(keyCtx, httpx.Page{Limit: 1}, "", "")
+		_, err := sessions.List(keyCtx, httpx.Page{Limit: 1}, "", "", "")
 		var forbidden *httpx.Error
 		require.ErrorAs(t, err, &forbidden)
 		require.Equal(t, 403, forbidden.Status)
 		_, err = tx.Exec(ctx, `DELETE FROM group_members WHERE tenant_id=$1 AND group_id=$2 AND principal_id=$3`,
 			f.tenant, group, f.actor)
 		require.NoError(t, err)
-		page, err := sessions.List(ctx, httpx.Page{Limit: 1}, "", "")
+		page, err := sessions.List(ctx, httpx.Page{Limit: 1}, "", "", "")
 		require.NoError(t, err)
 		require.Empty(t, page.Items)
 		return nil

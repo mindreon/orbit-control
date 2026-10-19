@@ -485,6 +485,244 @@ paths:
                 $ref: '#/components/schemas/AuditEntryPage'
         default:
           $ref: '#/components/responses/Error'
+  /v1/artifacts/{a}/content:
+    get:
+      operationId: getArtifactContent
+      summary: Stream artifact bytes after session.read authorization
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - name: a
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: inline
+          in: query
+          description: Inline only image/png, image/jpeg, image/gif, image/webp, image/avif, application/pdf, text/plain, text/markdown and text/csv; otherwise attachment.
+          schema:
+            type: string
+            enum: ['1']
+      responses:
+        '200':
+          description: Artifact bytes streamed without a size limit; Content-Type is parsed and formatted, falling back to application/octet-stream for malformed MIME.
+          headers:
+            Content-Security-Policy:
+              schema:
+                type: string
+                const: default-src 'none'
+              description: Present on inline responses other than PDF.
+            Content-Disposition:
+              schema:
+                type: string
+              description: Attachment by default; UTF-8 filename* is always present.
+            Content-Length:
+              schema:
+                type: integer
+                format: int64
+            X-Content-Type-Options:
+              schema:
+                type: string
+                const: nosniff
+            Cache-Control:
+              schema:
+                type: string
+                const: private, no-store
+          content:
+            '*/*':
+              schema:
+                type: string
+                format: binary
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/assets/{a}/dependents:
+    get:
+      operationId: listAssetDependents
+      summary: List visible direct dependents after asset.read authorization
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - name: a
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/Cursor'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 50
+        - name: kind
+          in: query
+          description: Optional dependent asset kind, not the target dependency kind.
+          schema:
+            type: string
+            enum: [agent, team]
+      responses:
+        '200':
+          description: Assets ordered by id with non-rejected, non-yanked referencing versions
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  next_cursor:
+                    type: string
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [asset, versions]
+                      properties:
+                        asset:
+                          $ref: '#/components/schemas/Asset'
+                        versions:
+                          type: array
+                          items:
+                            type: object
+                            required: [id, version, state]
+                            properties:
+                              id:
+                                type: string
+                                format: uuid
+                              version:
+                                type: string
+                              state:
+                                $ref: '#/components/schemas/AssetVersion/properties/state'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/admin/models:
+    get:
+      operationId: listAdminModels
+      summary: List safe models metadata with model.manage permission
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Read-only metadata; no credential values or lengths
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  next_cursor:
+                    type: string
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [id, name, provider, model, is_default, created_at]
+                      properties:
+                        id:
+                          type: string
+                          format: uuid
+                        name:
+                          type: string
+                        provider:
+                          type: string
+                        model:
+                          type: string
+                        is_default:
+                          type: boolean
+                        created_at:
+                          type: string
+                          format: date-time
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/admin/secrets:
+    get:
+      operationId: listAdminSecrets
+      summary: List safe secrets metadata with secret.manage permission
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Read-only metadata; no credential values or lengths
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  next_cursor:
+                    type: string
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [id, name, scope, created_at]
+                      properties:
+                        id:
+                          type: string
+                          format: uuid
+                        name:
+                          type: string
+                        scope:
+                          type: string
+                        created_at:
+                          type: string
+                          format: date-time
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/admin/quotas:
+    get:
+      operationId: listAdminQuotas
+      summary: List safe quotas metadata with quota.manage permission
+      parameters:
+        - $ref: '#/components/parameters/Tenant'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Read-only metadata; no credential values or lengths
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  next_cursor:
+                    type: string
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [id, scope_type, scope_id, metric, limit, period, action, created_at]
+                      properties:
+                        id:
+                          type: string
+                          format: uuid
+                        scope_type:
+                          type: string
+                        scope_id:
+                          type: string
+                          format: uuid
+                        metric:
+                          type: string
+                        limit:
+                          type: string
+                          description: Exact decimal value represented as a string.
+                        period:
+                          type: string
+                        action:
+                          type: string
+                        created_at:
+                          type: string
+                          format: date-time
+        default:
+          $ref: '#/components/responses/Error'
   /v1/assets:
     get:
       operationId: listAssets
@@ -509,6 +747,18 @@ paths:
           in: query
           schema:
             type: string
+        - name: owner
+          in: query
+          description: Only the authenticated principal's assets; only me is accepted.
+          schema:
+            type: string
+            enum: [me]
+        - name: ref
+          in: query
+          description: Exact case-sensitive publisher/name, across kinds unless kind is supplied.
+          schema:
+            type: string
+            pattern: '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
       responses:
         "200":
           description: Successful operation
@@ -1264,6 +1514,12 @@ paths:
           in: query
           schema:
             type: string
+        - name: order
+          in: query
+          description: Recent activity descending; cursor encodes last_activity_at and id. Mutable activity may repeat or omit rows between pages.
+          schema:
+            type: string
+            enum: [recent]
         - name: status
           in: query
           schema:
@@ -1468,6 +1724,13 @@ paths:
             format: uuid
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
+        - name: order
+          in: query
+          description: Sort by created_at and id; the opaque cursor contains both values.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: asc
       responses:
         "200":
           description: Successful response
@@ -1919,10 +2182,6 @@ paths:
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
         - name: status
-          in: query
-          schema:
-            type: string
-        - name: assignee
           in: query
           schema:
             type: string
@@ -2590,7 +2849,17 @@ components:
         - owner_id
         - status
         - created_at
+        - display_name
+        - description
       properties:
+        display_name:
+          type: [string, 'null']
+          readOnly: true
+          description: Agent displayName from the stable version, selecting zh, then zh-CN, then en, then the value with the lowest locale key; null when absent.
+        description:
+          type: [string, 'null']
+          readOnly: true
+          description: Agent or team description from the stable version; null when absent.
         id:
           type: string
           format: uuid
@@ -2907,6 +3176,13 @@ components:
           type: array
           items:
             type: object
+            required: [channel, version_id]
+            properties:
+              channel:
+                type: string
+              version_id:
+                type: string
+                format: uuid
         next_cursor:
           type: string
     GrantPage:
@@ -2919,6 +3195,17 @@ components:
           type: array
           items:
             type: object
+            required: [grantee_type, grantee_id, permission]
+            properties:
+              grantee_type:
+                type: string
+                enum: [user, service, group, workspace, tenant]
+              grantee_id:
+                type: string
+                format: uuid
+              permission:
+                type: string
+                enum: [use, maintain]
         next_cursor:
           type: string
     InstallPage:
@@ -2931,6 +3218,32 @@ components:
           type: array
           items:
             type: object
+            required: [id, scope_type, scope_id, asset_id, constraint, channel, pinned_version_id, enabled, created_at]
+            properties:
+              id:
+                type: string
+                format: uuid
+              scope_type:
+                type: string
+                enum: [workspace, tenant]
+              scope_id:
+                type: string
+                format: uuid
+              asset_id:
+                type: string
+                format: uuid
+              constraint:
+                type: string
+              channel:
+                type: [string, 'null']
+              pinned_version_id:
+                type: [string, 'null']
+                format: uuid
+              enabled:
+                type: boolean
+              created_at:
+                type: string
+                format: date-time
         next_cursor:
           type: string
     APIKey:
@@ -3192,6 +3505,18 @@ components:
                 - TOKEN_SUPERSEDED
                 - UNAUTHENTICATED
                 - VISIBILITY_BOUNDARY
+                - ENTRY_KIND_AMBIGUOUS
+                - IDEMPOTENCY_KEY_REQUIRED
+                - INVALID_FILTER
+                - SCHEDULED_RUN_ACTIVE
+                - SCHEDULE_INTERVAL_TOO_SHORT
+                - SCHEDULE_INVALID_CRON
+                - SCHEDULE_INVALID_TIMEZONE
+                - SCHEDULE_NOT_FOUND
+                - SCHEDULE_QUOTA_EXCEEDED
+                - STREAM_UNAVAILABLE
+                - TEAM_FINISHED
+                - TEAM_UPDATE_TIMEOUT
             details:
               additionalProperties: true
               type: object
@@ -3649,6 +3974,9 @@ components:
     Run:
       type: object
       properties:
+        created_at:
+          type: string
+          format: date-time
         ops:
           type: object
           required:
@@ -3658,17 +3986,17 @@ components:
           - trace_url
           properties:
             trace_id:
-              type: &id001
+              type: &id001_1
               - string
               - 'null'
               pattern: ^[0-9a-f]{32}$
             temporal_workflow_id:
               type: string
             temporal_url:
-              type: *id001
+              type: *id001_1
               format: uri
             trace_url:
-              type: *id001
+              type: *id001_1
               format: uri
         id:
           type: string
@@ -3712,6 +4040,7 @@ components:
           type: string
           format: uuid
       required:
+        - created_at
         - id
         - session_id
         - status
@@ -3749,11 +4078,11 @@ components:
           - completed
           - failed
           - unknown
-        checkpoint_version: &id001
+        checkpoint_version: &id001_2
           type: integer
           format: int64
-        external_ref: &id002
-          type: &id004
+        external_ref: &id002_1
+          type: &id004_1
           - string
           - 'null'
         created_at:
@@ -3774,7 +4103,7 @@ components:
         run_id:
           type: string
           format: uuid
-        total_millicredits: *id001
+        total_millicredits: *id001_2
         items:
           type: array
           items:
@@ -3786,7 +4115,7 @@ components:
             - quantity
             - millicredits
             properties:
-              member: *id002
+              member: *id002_1
               segment:
                 type:
                 - integer
@@ -3803,16 +4132,16 @@ components:
                 - tokens.output
                 - tokens.cache_read
                 - tokens.cache_write
-              model_profile_id: &id003
+              model_profile_id: &id003_1
                 type:
                 - string
                 - 'null'
                 format: uuid
-              model_profile_name: *id002
-              model: *id002
+              model_profile_name: *id002_1
+              model: *id002_1
               quantity:
                 type: string
-              millicredits: *id001
+              millicredits: *id001_2
     UsageReport:
       type: object
       required:
@@ -3843,7 +4172,7 @@ components:
         computed_through:
           type: string
           format: date-time
-        dirty_hours: *id001
+        dirty_hours: *id001_2
         items:
           type: array
           items:
@@ -3856,14 +4185,14 @@ components:
               period_start:
                 type: string
                 format: date-time
-              workspace_id: *id003
-              principal_id: *id003
-              asset_ref: *id002
-              model_profile_id: *id003
-              model_profile_name: *id002
-              member: *id002
+              workspace_id: *id003_1
+              principal_id: *id003_1
+              asset_ref: *id002_1
+              model_profile_id: *id003_1
+              model_profile_name: *id002_1
+              member: *id002_1
               source:
-                type: *id004
+                type: *id004_1
                 enum:
                 - model
                 - sandbox
@@ -3871,15 +4200,15 @@ components:
                 - storage
                 - null
               meter:
-                type: *id004
+                type: *id004_1
                 enum:
                 - tokens.input
                 - tokens.output
                 - tokens.cache_read
                 - tokens.cache_write
                 - null
-              quantity: *id002
-              millicredits: *id001
+              quantity: *id002_1
+              millicredits: *id001_2
     Segment:
       type: object
       properties:
@@ -3913,7 +4242,7 @@ components:
           type: string
           format: date-time
         end_reason:
-          type: &id001
+          type: &id001_3
           - string
           - 'null'
           enum:
@@ -3936,7 +4265,7 @@ components:
           - run_terminated
           - null
         error_code:
-          type: *id001
+          type: *id001_3
         duration_ms:
           type:
           - integer

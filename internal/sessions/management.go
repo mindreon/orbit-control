@@ -106,7 +106,23 @@ func Archive(ctx context.Context, id string) (Session, error) {
 	s.Status = "archived"
 	return s, nil
 }
-func List(ctx context.Context, page httpx.Page, workspace, status string) (Page[Session], error) {
+func List(ctx context.Context, page httpx.Page, workspace, status, order string) (Page[Session], error) {
+	recent := order == "recent"
+	if order != "" && !recent {
+		return Page[Session]{}, httpx.E(422, "INVALID_INPUT", "Invalid session order")
+	}
+	predicate, ordering := "(@cursor='' OR s.id>NULLIF(@cursor,'')::uuid)", "s.id"
+	var at any
+	var cursorID any
+	if recent {
+		stamp, id, err := httpx.TimeKey(page.Cursor)
+		if err != nil {
+			return Page[Session]{}, err
+		}
+		at, cursorID = stamp, nullID(id)
+		predicate = "(@cursor='' OR (s.last_activity_at,s.id)<(@at,@cursor_id::uuid))"
+		ordering = "s.last_activity_at DESC,s.id DESC"
+	}
 	result := Page[Session]{Items: []Session{}}
 	if workspace != "" && !ids.Valid(workspace) {
 		return result, httpx.E(422, "INVALID_INPUT", "Invalid workspace")
@@ -117,14 +133,15 @@ func List(ctx context.Context, page httpx.Page, workspace, status string) (Page[
 	}
 	args["tenant"], args["cursor"], args["workspace"], args["status"], args["limit"] =
 		auth.Tenant(ctx), page.Cursor, workspace, status, page.Limit+1
+	args["at"], args["cursor_id"] = at, cursorID
 	rows, err := db.Tx(ctx).Query(ctx, `SELECT to_jsonb(s)
  FROM sessions s
  WHERE s.tenant_id=@tenant
- AND (@cursor='' OR s.id>NULLIF(@cursor,'')::uuid)
+ AND `+predicate+`
  AND (@workspace='' OR s.workspace_id=NULLIF(@workspace,'')::uuid)
  AND (@status='' OR s.status=@status)
  AND `+policy.SessionReadPredicate+`
- ORDER BY s.id
+ ORDER BY `+ordering+`
  LIMIT @limit`, args)
 	if err != nil {
 		return result, err
@@ -144,6 +161,10 @@ func List(ctx context.Context, page httpx.Page, workspace, status string) (Page[
 	if len(result.Items) > page.Limit {
 		result.Items = result.Items[:page.Limit]
 		result.NextCursor = httpx.Cursor(result.Items[page.Limit-1].ID)
+		if recent {
+			last := result.Items[page.Limit-1]
+			result.NextCursor = httpx.TimeCursor(last.LastActivityAt, last.ID)
+		}
 	}
 	return result, rows.Err()
 }

@@ -6,7 +6,12 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"io"
+	"io/fs"
+	"mime"
 	"net/http"
+	"net/url"
+	"path"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -53,11 +58,16 @@ func (h *Handler) getSession(out http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 func (h *Handler) listSessions(out http.ResponseWriter, r *http.Request) error {
-	page, err := httpx.Pagination(r)
+	pagination := httpx.Pagination
+	if r.URL.Query().Get("order") == "recent" {
+		pagination = httpx.TimePagination
+	}
+	page, err := pagination(r)
 	if err != nil {
 		return err
 	}
-	result, err := sessions.List(r.Context(), page, r.URL.Query().Get("workspace_id"), r.URL.Query().Get("status"))
+	result, err := sessions.List(r.Context(), page, r.URL.Query().Get("workspace_id"), r.URL.Query().Get("status"),
+		r.URL.Query().Get("order"))
 	if err != nil {
 		return err
 	}
@@ -358,17 +368,21 @@ func (h *Handler) sessionChildren(out http.ResponseWriter, r *http.Request) erro
 	if err != nil {
 		return err
 	}
-	page, err := httpx.Pagination(r)
+	kind := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+	pagination := httpx.Pagination
+	if kind == "runs" {
+		pagination = httpx.TimePagination
+	}
+	page, err := pagination(r)
 	if err != nil {
 		return err
 	}
-	kind := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
 	var result any
 	switch kind {
 	case "messages":
 		result, err = sessions.Messages(ctx, s.ID, page)
 	case "runs":
-		result, err = sessions.Runs(ctx, s.ID, page)
+		result, err = sessions.Runs(ctx, s.ID, page, r.URL.Query().Get("order"))
 	case "artifacts":
 		result, err = sessions.Artifacts(ctx, s.ID, page)
 	}
@@ -394,6 +408,64 @@ func (h *Handler) getArtifact(out http.ResponseWriter, r *http.Request) error {
 	out.Header().Set("Location", url)
 	out.WriteHeader(302)
 	return nil
+}
+
+func (h *Handler) artifactContent(out http.ResponseWriter, r *http.Request) error {
+	if !ids.Valid(r.PathValue("a")) {
+		return httpx.E(404, "NOT_FOUND", "Artifact not found")
+	}
+	ctx := r.Context()
+	var a sessions.Artifact
+	var ref string
+	err := h.DB.WithTenant(ctx, auth.Tenant(ctx), func(tx pgx.Tx) error {
+		if err := tenancy.Active(ctx, tx, auth.From(ctx).ID); err != nil {
+			return err
+		}
+		var err error
+		a, ref, err = sessions.ArtifactContent(db.Context(ctx, tx), r.PathValue("a"))
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	body, size, err := h.Objects.OpenObject(ctx, auth.Tenant(ctx), ref)
+	if errors.Is(err, fs.ErrNotExist) {
+		return httpx.E(404, "NOT_FOUND", "Artifact not found")
+	}
+	if err != nil {
+		return err
+	}
+	a.SizeBytes = size
+	artifactHeaders(out.Header(), a, r.URL.Query().Get("inline") == "1")
+	if r.Method == http.MethodHead {
+		defer body.Close()
+		out.WriteHeader(http.StatusOK)
+		return nil
+	}
+	httpx.StreamResponse(out, body)
+	return nil
+}
+
+func artifactHeaders(header http.Header, a sessions.Artifact, inline bool) {
+	disposition := "attachment"
+	media, params, err := mime.ParseMediaType(a.Mime)
+	if err != nil {
+		media, params = "application/octet-stream", nil
+	} else if inline {
+		switch media {
+		case "image/png", "image/jpeg", "image/gif", "image/webp", "image/avif",
+			"application/pdf", "text/plain", "text/markdown", "text/csv":
+			disposition = "inline"
+		}
+	}
+	if disposition == "inline" && media != "application/pdf" {
+		header.Set("Content-Security-Policy", "default-src 'none'")
+	}
+	header.Set("Content-Type", mime.FormatMediaType(media, params))
+	header.Set("Content-Disposition", disposition+"; filename*=UTF-8''"+url.PathEscape(path.Base(a.Path)))
+	header.Set("Content-Length", strconv.FormatInt(a.SizeBytes, 10))
+	header.Set("X-Content-Type-Options", "nosniff")
+	header.Set("Cache-Control", "private, no-store")
 }
 
 func (h *Handler) sessionService() sessions.Service {

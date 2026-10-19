@@ -232,7 +232,7 @@ CREATE TABLE usage_rollup_dirty (
   PRIMARY KEY(tenant_id,period_start)
 );
 CREATE INDEX ON usage_rollup_dirty(period_start,tenant_id);
-CREATE INDEX runs_session_created ON runs (tenant_id, session_id, created_at);
+CREATE INDEX runs_session_created ON runs (tenant_id, session_id, created_at, id);
 CREATE INDEX runs_active ON runs (tenant_id, status) WHERE status NOT IN ('succeeded','failed','cancelled','budget_exhausted','timed_out');
 CREATE INDEX usage_ledger_run ON usage_ledger (tenant_id, run_id);
 CREATE INDEX interactions_pending ON interactions (tenant_id, status) WHERE status IN ('pending','escalated');
@@ -361,6 +361,7 @@ CREATE INDEX ON asset_versions(tenant_id,created_at DESC);
 CREATE INDEX ON asset_files(tenant_id,created_at DESC);
 CREATE INDEX ON asset_dependencies(tenant_id,resolved_version_id);
 CREATE INDEX ON asset_dependencies(tenant_id,created_at DESC);
+CREATE INDEX ON asset_dependencies(tenant_id,dep_kind,dep_ref);
 CREATE INDEX ON asset_channels(tenant_id,version_id);
 CREATE INDEX ON asset_channels(tenant_id,updated_at DESC);
 CREATE INDEX ON asset_grants(tenant_id,grantee_id);

@@ -98,8 +98,21 @@ func Messages(ctx context.Context, session string, page httpx.Page) (Page[Messag
  ORDER BY created_at,id
  LIMIT $4`, page, auth.Tenant(ctx), session, page.Cursor, page.Limit+1)
 }
-func Runs(ctx context.Context, session string, page httpx.Page) (Page[Run], error) {
-	return readPage[Run](ctx, `SELECT to_jsonb(r)||jsonb_build_object('segments_count',
+func Runs(ctx context.Context, session string, page httpx.Page, order string) (Page[Run], error) {
+	direction, comparison := "ASC", ">"
+	if order != "" {
+		if order != "asc" && order != "desc" {
+			return Page[Run]{}, httpx.E(422, "INVALID_INPUT", "Invalid run order")
+		}
+		if order == "desc" {
+			direction, comparison = "DESC", "<"
+		}
+	}
+	at, id, err := httpx.TimeKey(page.Cursor)
+	if err != nil {
+		return Page[Run]{}, err
+	}
+	result, err := readPage[Run](ctx, `SELECT to_jsonb(r)||jsonb_build_object('segments_count',
  (SELECT count(*)
    FROM run_segments g
    WHERE g.tenant_id=r.tenant_id
@@ -114,10 +127,21 @@ func Runs(ctx context.Context, session string, page httpx.Page) (Page[Run], erro
  FROM runs r
  WHERE tenant_id=$1
  AND session_id=$2
- AND ($3='' OR id>NULLIF($3,'')::uuid)
- ORDER BY id
+ AND ($3='' OR (created_at,id)`+comparison+`($5,$6::uuid))
+ ORDER BY created_at `+direction+`,id `+direction+`
  LIMIT $4`,
-		page, auth.Tenant(ctx), session, page.Cursor, page.Limit+1)
+		page, auth.Tenant(ctx), session, id, page.Limit+1, at, nullID(id))
+	if err == nil && result.NextCursor != "" {
+		last := result.Items[len(result.Items)-1]
+		result.NextCursor = httpx.TimeCursor(last.CreatedAt, last.ID)
+	}
+	return result, err
+}
+func nullID(id string) any {
+	if id == "" {
+		return nil
+	}
+	return id
 }
 func Artifacts(ctx context.Context, session string, page httpx.Page) (Page[Artifact], error) {
 	return readPage[Artifact](ctx, `SELECT to_jsonb(a)||jsonb_build_object('size_bytes',size)
@@ -140,6 +164,19 @@ func Segments(ctx context.Context, run string) (Page[Segment], error) {
  AND run_id=$2
  ORDER BY member,seq`, httpx.Page{Limit: 1001}, auth.Tenant(ctx), run)
 }
+func ArtifactContent(ctx context.Context, id string) (Artifact, string, error) {
+	var a Artifact
+	var ref string
+	err := db.Tx(ctx).QueryRow(ctx,
+		`SELECT id::text,session_id::text,path,mime,size,object_ref FROM artifacts WHERE tenant_id=$1 AND id=$2`,
+		auth.Tenant(ctx), id).Scan(&a.ID, &a.SessionID, &a.Path, &a.Mime, &a.SizeBytes, &ref)
+	if err != nil {
+		return a, "", err
+	}
+	_, err = Get(ctx, a.SessionID, "session.read")
+	return a, ref, err
+}
+
 func ArtifactRef(ctx context.Context, id string) (string, error) {
 	var session, ref string
 	if err := db.Tx(ctx).QueryRow(ctx,

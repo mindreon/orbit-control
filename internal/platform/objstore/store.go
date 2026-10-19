@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"io/fs"
 	"strings"
 	"time"
 
@@ -84,6 +85,7 @@ type ObjectStore interface {
 	Store
 	PutObject(context.Context, string, string, []byte, string) error
 	GetObject(context.Context, string, string, int64) ([]byte, string, error)
+	OpenObject(context.Context, string, string) (io.ReadCloser, int64, error)
 	PresignGet(context.Context, string, string, time.Duration) (string, error)
 	Head(context.Context, string, string) (int64, string, error)
 }
@@ -121,6 +123,32 @@ func (s *S3) GetObject(ctx context.Context, tenant, key string, limit int64) ([]
 	}
 	return b, st.ContentType, e
 }
+
+// OpenObject returns a tenant-scoped stream and its stored size. Stat forces lazy
+// GetObject errors before HTTP headers are committed; the caller closes the stream.
+func (s *S3) OpenObject(ctx context.Context, tenant, key string) (io.ReadCloser, int64, error) {
+	if err := tenantKey(tenant, key); err != nil {
+		return nil, 0, err
+	}
+	object, err := s.client.GetObject(ctx, s.bucket, key, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, 0, openError(err)
+	}
+	stat, err := object.Stat()
+	if err != nil {
+		object.Close()
+		return nil, 0, openError(err)
+	}
+	return object, stat.Size, nil
+}
+
+func openError(err error) error {
+	if minio.ToErrorResponse(err).Code == "NoSuchKey" {
+		return fs.ErrNotExist
+	}
+	return err
+}
+
 func (s *S3) PresignGet(ctx context.Context, tenant, key string, ttl time.Duration) (string, error) {
 	if e := tenantKey(tenant, key); e != nil {
 		return "", e

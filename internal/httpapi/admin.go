@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	"net/http"
 	"time"
 
@@ -12,6 +13,60 @@ import (
 	"github.com/mindreon/orbit-control/internal/policy"
 	"github.com/mindreon/orbit-control/internal/tenancy"
 )
+
+// Explicit projections are the public field allowlists. Never select whole rows
+// from these tables: model parameters and encrypted credentials are private.
+const modelMetadata = `jsonb_build_object('id',id,'name',name,'provider',provider,'model',model,
+ 'is_default',is_default,'created_at',created_at)`
+const secretMetadata = `jsonb_build_object('id',id,'name',name,'scope',scope,'created_at',created_at)`
+const quotaMetadata = `jsonb_build_object('id',id,'scope_type',scope_type,'scope_id',scope_id,'metric',metric,
+ 'limit',"limit"::text,'period',period,'action',action,'created_at',created_at)`
+
+func (h *Handler) listModels(w http.ResponseWriter, r *http.Request) error {
+	return h.adminMetadata(w, r, "model_profiles", modelMetadata, "model.manage")
+}
+func (h *Handler) listSecrets(w http.ResponseWriter, r *http.Request) error {
+	return h.adminMetadata(w, r, "secrets", secretMetadata, "secret.manage")
+}
+func (h *Handler) listQuotas(w http.ResponseWriter, r *http.Request) error {
+	return h.adminMetadata(w, r, "quota_policies", quotaMetadata, "quota.manage")
+}
+func (h *Handler) adminMetadata(w http.ResponseWriter, r *http.Request, table, projection, action string) error {
+	ctx := r.Context()
+	if err := h.Authz.Require(ctx, action, tenantResource(ctx)); err != nil {
+		return err
+	}
+	p, err := httpx.Pagination(r)
+	if err != nil {
+		return err
+	}
+	rows, err := db.Tx(ctx).Query(ctx, `SELECT id::text,`+projection+` FROM `+table+`
+ WHERE tenant_id=$1 AND ($2='' OR id>NULLIF($2,'')::uuid) ORDER BY id LIMIT $3`, auth.Tenant(ctx), p.Cursor, p.Limit+1)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	items := []jsontext.Value{}
+	next, last := "", ""
+	for rows.Next() {
+		var id string
+		var raw []byte
+		if err = rows.Scan(&id, &raw); err != nil {
+			return err
+		}
+		if len(items) == p.Limit {
+			next = httpx.Cursor(last)
+			break
+		}
+		items = append(items, jsontext.Value(raw))
+		last = id
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	httpx.JSON(w, 200, map[string]any{"items": items, "next_cursor": next})
+	return nil
+}
 
 func (h *Handler) listMembers(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()

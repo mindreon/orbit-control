@@ -41,6 +41,7 @@ type Run struct {
 	LockID               *string    `json:"lock_id,omitempty"`
 	BudgetMillicredits   int64      `json:"budget_millicredits"`
 	UsedMillicredits     int64      `json:"used_millicredits"`
+	CreatedAt            time.Time  `json:"created_at"`
 	StartedAt            *time.Time `json:"started_at,omitempty"`
 	EndedAt              *time.Time `json:"ended_at,omitempty"`
 	ErrorCode            *string    `json:"error_code,omitempty"`

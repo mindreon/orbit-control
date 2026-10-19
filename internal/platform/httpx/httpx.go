@@ -99,6 +99,7 @@ type Recorder struct {
 	H      http.Header
 	Status int
 	Body   []byte
+	Stream io.ReadCloser
 }
 
 func NewRecorder() *Recorder            { return &Recorder{H: make(http.Header)} }
@@ -119,8 +120,29 @@ func (r *Recorder) FlushTo(w http.ResponseWriter) {
 	for k, v := range r.H {
 		w.Header()[k] = v
 	}
+	if r.Stream != nil {
+		// Transfer through response buffers without reading the object into memory.
+		if buffered, ok := w.(*Recorder); ok {
+			buffered.Stream = r.Stream
+			buffered.WriteHeader(r.Status)
+			return
+		}
+		defer r.Stream.Close()
+		w.WriteHeader(r.Status)
+		if _, err := io.Copy(w, r.Stream); err != nil {
+			panic(http.ErrAbortHandler)
+		}
+		return
+	}
 	w.WriteHeader(r.Status)
 	_, _ = w.Write(r.Body)
+}
+
+// StreamResponse defers reading and closing a body until the committed response is flushed.
+func StreamResponse(w http.ResponseWriter, body io.ReadCloser) {
+	rec := w.(*Recorder)
+	rec.Stream = body
+	rec.WriteHeader(http.StatusOK)
 }
 func Middleware(logger *slog.Logger, publicOrigin string, origins []string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

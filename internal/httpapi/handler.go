@@ -64,6 +64,11 @@ type route struct {
 }
 
 var routes = []route{
+	{Pattern: "GET /v1/artifacts/{a}/content", Handle: func(h *Handler) endpoint { return h.artifactContent }, TwoPhase: true},
+	{Pattern: "GET /v1/assets/{a}/dependents", Handle: func(h *Handler) endpoint { return h.assetDependents }},
+	{Pattern: "GET /v1/admin/models", Handle: func(h *Handler) endpoint { return h.listModels }},
+	{Pattern: "GET /v1/admin/secrets", Handle: func(h *Handler) endpoint { return h.listSecrets }},
+	{Pattern: "GET /v1/admin/quotas", Handle: func(h *Handler) endpoint { return h.listQuotas }},
 	{Pattern: "GET /v1/runs/{r}/team", Handle: func(h *Handler) endpoint { return h.teamView }, TwoPhase: false},
 	{Pattern: "GET /v1/schedules", Handle: func(h *Handler) endpoint { return h.listSchedules }, TwoPhase: false},
 	{Pattern: "POST /v1/schedules", Handle: func(h *Handler) endpoint { return h.writeSchedule }, TwoPhase: true},

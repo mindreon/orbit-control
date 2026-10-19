@@ -35,6 +35,8 @@ type Asset struct {
 	Publisher   string             `json:"publisher"`
 	Kind        contract.AssetKind `json:"kind"`
 	Name        string             `json:"name"`
+	DisplayName *string            `json:"display_name"`
+	Description *string            `json:"description"`
 	Visibility  string             `json:"visibility"`
 	WorkspaceID string             `json:"workspace_id,omitempty"`
 	OwnerID     string             `json:"owner_id"`
@@ -67,11 +69,20 @@ func Log(ctx context.Context, action, typ, id string, detail any) error {
 }
 func scanAsset(row pgx.Row) (Asset, error) {
 	var a Asset
-	err := row.Scan(&a.ID, &a.Publisher, &a.Kind, &a.Name, &a.Visibility, &a.WorkspaceID, &a.OwnerID, &a.Status, &a.CreatedAt)
+	err := row.Scan(&a.ID, &a.Publisher, &a.Kind, &a.Name, &a.Visibility, &a.WorkspaceID, &a.OwnerID, &a.Status, &a.CreatedAt,
+		&a.DisplayName, &a.Description)
 	return a, err
 }
 
-const assetColumns = `id::text,publisher,kind,name,visibility,COALESCE(workspace_id::text,''),owner_id::text,status,created_at`
+const assetColumns = `a.id::text,a.publisher,a.kind,a.name,a.visibility,COALESCE(a.workspace_id::text,''),
+ a.owner_id::text,a.status,a.created_at,
+ CASE WHEN a.kind='agent' THEN (SELECT value FROM jsonb_each_text(v.manifest->'agent'->'displayName')
+ ORDER BY CASE key WHEN 'zh' THEN 0 WHEN 'zh-CN' THEN 1 WHEN 'en' THEN 2 ELSE 3 END,key COLLATE "C" LIMIT 1) END,
+ CASE WHEN a.kind='agent' THEN v.manifest->'agent'->>'description'
+ WHEN a.kind='team' THEN v.manifest->'team'->>'description' END`
+const assetFrom = ` FROM assets a
+ LEFT JOIN asset_channels c ON c.tenant_id=a.tenant_id AND c.asset_id=a.id AND c.channel='stable'
+ LEFT JOIN asset_versions v ON v.tenant_id=c.tenant_id AND v.id=c.version_id`
 
 func (s *Service) Get(ctx context.Context, id, action string) (Asset, error) {
 	if !ids.Valid(id) {
@@ -79,7 +90,7 @@ func (s *Service) Get(ctx context.Context, id, action string) (Asset, error) {
 	}
 	a, err := scanAsset(
 		db.Tx(ctx).
-			QueryRow(ctx, `SELECT `+assetColumns+` FROM assets WHERE tenant_id=$1 AND id=$2`, auth.Tenant(ctx), id),
+			QueryRow(ctx, `SELECT `+assetColumns+assetFrom+` WHERE a.tenant_id=$1 AND a.id=$2`, auth.Tenant(ctx), id),
 	)
 	if err != nil {
 		return a, err

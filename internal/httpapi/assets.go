@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/base64"
 	"net/http"
+	"strings"
 
 	"github.com/mindreon/orbit-control/internal/assets"
 	"github.com/mindreon/orbit-control/internal/auth"
@@ -60,21 +61,73 @@ func (h *Handler) listAssets(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	result, err := s.List(
-		r.Context(),
-		page,
-		assets.Filter{
-			Kind:        r.URL.Query().Get("kind"),
-			Visibility:  r.URL.Query().Get("visibility"),
-			Query:       r.URL.Query().Get("q"),
-			WorkspaceID: r.URL.Query().Get("workspace_id"),
-		},
-	)
+	filter, err := assetFilter(r)
+	if err != nil {
+		return err
+	}
+	result, err := s.List(r.Context(), page, filter)
 	if err != nil {
 		return err
 	}
 	httpx.JSON(w, 200, result)
 	return nil
+}
+
+func assetFilter(r *http.Request) (assets.Filter, error) {
+	q := r.URL.Query()
+	f := assets.Filter{Kind: q.Get("kind"), Visibility: q.Get("visibility"), Query: q.Get("q"), WorkspaceID: q.Get("workspace_id")}
+	if q.Has("owner") {
+		if q.Get("owner") != "me" {
+			return f, httpx.E(422, "INVALID_INPUT", "owner must be me")
+		}
+		f.Owner = auth.From(r.Context()).ID
+	}
+	if q.Has("ref") {
+		publisher, name, ok := strings.Cut(q.Get("ref"), "/")
+		if !ok || !referencePart(publisher) || !referencePart(name) {
+			return f, httpx.E(422, "INVALID_INPUT", "Invalid asset reference")
+		}
+		f.Publisher, f.Name = publisher, name
+	}
+	return f, nil
+}
+func referencePart(value string) bool {
+	if value == "" || len(value) > 128 {
+		return false
+	}
+	for _, c := range value {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.') {
+			return false
+		}
+	}
+	return value != "." && value != ".."
+}
+func (h *Handler) assetDependents(w http.ResponseWriter, r *http.Request) error {
+	s, err := h.assetService()
+	if err != nil {
+		return err
+	}
+	p, err := dependentPage(r)
+	if err != nil {
+		return err
+	}
+	kind := r.URL.Query().Get("kind")
+	if kind != "" && kind != "agent" && kind != "team" {
+		return httpx.E(422, "INVALID_INPUT", "Invalid dependent kind")
+	}
+	result, err := s.Dependents(r.Context(), r.PathValue("a"), kind, p)
+	if err != nil {
+		return err
+	}
+	httpx.JSON(w, 200, result)
+	return nil
+}
+func dependentPage(r *http.Request) (httpx.Page, error) {
+	p, err := httpx.Pagination(r)
+	if err == nil && p.Limit > 50 {
+		return p, httpx.E(400, "INVALID_LIMIT", "limit must be between 1 and 50")
+	}
+	return p, err
 }
 
 func (h *Handler) patchAsset(w http.ResponseWriter, r *http.Request) error {
