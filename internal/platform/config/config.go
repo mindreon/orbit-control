@@ -37,6 +37,7 @@ type Config struct {
 	CORS                                                                                                      []string
 	AllowDevNetwork                                                                                           bool
 	PersonalTenants                                                                                           bool
+	DefaultTenant                                                                                             string
 	PublicOrigin                                                                                              string
 	CapabilityKeyFile, CapabilityKeyID                                                                        string
 	CapabilityPublicKeys                                                                                      map[string][]byte
@@ -69,6 +70,10 @@ func Load() (Config, error) {
 	c.PersonalTenants = os.Getenv("ORBIT_PERSONAL_TENANTS") == "true"
 	if v := os.Getenv("ORBIT_PERSONAL_TENANTS"); v != "" && v != "true" && v != "false" {
 		return c, fmt.Errorf("ORBIT_PERSONAL_TENANTS must be true or false")
+	}
+	c.DefaultTenant = os.Getenv("ORBIT_DEFAULT_TENANT")
+	if c.DefaultTenant != "" && c.PersonalTenants {
+		return c, fmt.Errorf("ORBIT_DEFAULT_TENANT and ORBIT_PERSONAL_TENANTS=true are mutually exclusive")
 	}
 	c.PublicOrigin = os.Getenv("ORBIT_PUBLIC_ORIGIN")
 	if err := c.loadCapabilityEnvironment(); err != nil {

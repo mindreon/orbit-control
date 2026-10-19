@@ -90,6 +90,7 @@ URLs are not logged. Configuration uses environment variables only.
 | `ORBIT_SECRETS_KEY_VERSION` | Positive active KEK version, default `1`; stored with each replay response |
 | `ORBIT_SECRETS_KEK_PREVIOUS` | Decryption KEKs for rotation, comma-separated `version:base64` 32-byte keys |
 | `ORBIT_PERSONAL_TENANTS` | `false`; `true` provisions a personal tenant on first JIT login; dev example enables it |
+| `ORBIT_DEFAULT_TENANT` | Unset; existing tenant slug to auto-join as `tenant.member` on dev/OIDC JIT login; mutually exclusive with `ORBIT_PERSONAL_TENANTS=true`; missing slug fails API startup |
 | `ORBIT_PUBLIC_ORIGIN` | Exact edge public origin (scheme + host + optional port); same-origin requests are allowed |
 | `ORBIT_ALLOW_DEV_AUTH_ON_NETWORK` | `1` permits a non-loopback dev listener; default denied |
 | `ORBIT_LOG_FORMAT` | `json` or `text`, default `json` |
@@ -146,11 +147,16 @@ block reuse. Errors always have `{error:{code,message,retryable,details}}`.
 - Dev mode logs a startup warning. `POST /v1/auth/dev/token` accepts
   `{email, display_name?}` and returns `{access_token, expires_in}`. It is disabled
   in OIDC mode. It is deliberately restricted to trusted development networks.
-- Existing OIDC identities are read without JIT writes. First JIT identity creation,
-  optional personal tenant provisioning and its login audit commit atomically.
-  OIDC token refreshes do not create login audit entries or replay markers.
-- With `ORBIT_PERSONAL_TENANTS=false`, a first login authenticates without any
-  tenant. Admins create/list/revoke email invitations under `/v1/admin/invitations`.
+- Existing OIDC identities are read without JIT writes unless default-tenant
+  membership is enabled. First JIT identity creation, optional tenant provisioning
+  and its login audit commit atomically. OIDC token refreshes do not create login
+  audit entries or replay markers for existing memberships.
+- `ORBIT_DEFAULT_TENANT=<slug>` enables single-tenant onboarding for dev and OIDC
+  logins, including existing principals without membership. Provision the tenant
+  before API startup; an unknown slug fails startup. Existing memberships and
+  roles are left untouched, including suspended memberships (never reactivated).
+- With `ORBIT_PERSONAL_TENANTS=false` and `ORBIT_DEFAULT_TENANT` unset, a first
+  login authenticates without any tenant. Admins create/list/revoke email invitations under `/v1/admin/invitations`.
   `POST /v1/invitations/{token}:accept` needs a logged-in human with a verified
   email matching the invitation (case-insensitive), without a tenant header.
   Tokens are random bearer secrets stored as hashes; acceptance is single-use,

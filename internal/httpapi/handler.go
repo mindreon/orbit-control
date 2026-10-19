@@ -713,13 +713,29 @@ func (h *Handler) logWrite(ctx context.Context, action, typ, id string, detail a
 	return audit.Append(ctx, db.Tx(ctx), auth.From(ctx), auth.Tenant(ctx), action, typ, id, detail)
 }
 
-// First JIT creation, personal tenant membership and OIDC login audit share one
-// transaction. With personal tenants disabled there is no tenant audit to append.
+// JIT identity creation, tenant membership and OIDC login audit share one transaction.
+// Default-tenant provisioning also handles existing identities without changing memberships.
 func (h *Handler) provisionIdentity(ctx context.Context, tx pgx.Tx, p auth.Principal, tenant string) error {
 	if tenant == "" {
 		return nil
 	}
-	if err := tenancy.EnsurePersonal(ctx, tx, p, tenant); err != nil {
+	if h.Config.DefaultTenant != "" {
+		// Serialize concurrent logins before checking any membership, including suspended ones.
+		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1,10))", tenant+p.ID); err != nil {
+			return err
+		}
+		var exists bool
+		if err := tx.QueryRow(ctx,
+			"SELECT EXISTS(SELECT 1 FROM memberships WHERE tenant_id=$1 AND principal_id=$2)", tenant, p.ID).Scan(&exists); err != nil {
+			return err
+		}
+		if exists {
+			return nil
+		}
+		if err := tenancy.AddMember(ctx, tx, p, tenant, p.ID, "active", "jit", "tenant.member"); err != nil {
+			return err
+		}
+	} else if err := tenancy.EnsurePersonal(ctx, tx, p, tenant); err != nil {
 		return err
 	}
 	if h.Config.AuthMode == "oidc" {

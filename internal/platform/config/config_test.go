@@ -87,6 +87,32 @@ func TestKeyAndOriginConfiguration(t *testing.T) {
 	}
 }
 
+func TestDefaultTenantConfiguration(t *testing.T) {
+	for _, test := range []struct {
+		name, slug, personal string
+		invalid              bool
+	}{
+		{name: "unset"},
+		{name: "default", slug: "dev"},
+		{name: "personal", personal: "true"},
+		{name: "conflict", slug: "dev", personal: "true", invalid: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("ORBIT_DEFAULT_TENANT", test.slug)
+			t.Setenv("ORBIT_PERSONAL_TENANTS", test.personal)
+			c, err := Load()
+			if test.invalid {
+				if err == nil || !strings.Contains(err.Error(), "ORBIT_DEFAULT_TENANT") ||
+					!strings.Contains(err.Error(), "ORBIT_PERSONAL_TENANTS") {
+					t.Fatalf("expected mutually exclusive tenant configuration error, got %v", err)
+				}
+			} else if err != nil || c.DefaultTenant != test.slug {
+				t.Fatalf("default tenant = %q, want %q; error = %v", c.DefaultTenant, test.slug, err)
+			}
+		})
+	}
+}
+
 func TestAssetWorkerConfiguration(t *testing.T) {
 	c := Config{
 		DatabaseURL:       "postgres://orbit_app@localhost/orbit",

@@ -24,18 +24,20 @@ import (
 )
 
 type Service struct {
-	// OnCreate provisions tenant membership/audit in the identity creation transaction.
-	OnCreate   func(context.Context, pgx.Tx, Principal, string) error
-	DB         *db.DB
-	Signer     *Signer
-	Capability *CapabilitySigner
-	Stream     *StreamSigner
-	Replay     httpx.ReplayKeys
-	Config     config.Config
-	verifier   *oidc.IDTokenVerifier
-	Logger     *slog.Logger
-	wg         sync.WaitGroup
-	lastUsed   sync.Map
+	// OnCreate provisions tenant membership/audit in the identity transaction.
+	OnCreate      func(context.Context, pgx.Tx, Principal, string) error
+	DB            *db.DB
+	Signer        *Signer
+	Capability    *CapabilitySigner
+	Stream        *StreamSigner
+	Replay        httpx.ReplayKeys
+	Config        config.Config
+	verifier      *oidc.IDTokenVerifier
+	defaultMu     sync.Mutex
+	defaultTenant string
+	Logger        *slog.Logger
+	wg            sync.WaitGroup
+	lastUsed      sync.Map
 }
 
 func New(ctx context.Context, d *db.DB, c config.Config, l *slog.Logger) (*Service, error) {
@@ -87,8 +89,33 @@ func ValidEmail(s string) bool {
 	return e == nil && v.Address == s && len(s) <= 254
 }
 
-// JIT reads existing identities without writes. First creation and its optional
-// personal tenant/audit commit atomically; concurrent first logins converge.
+// resolveDefaultTenant looks the slug up at login, not at startup: on a fresh
+// database the tenant is created by seed-dev after control is already running.
+func (a *Service) resolveDefaultTenant(ctx context.Context) (string, error) {
+	if a.Config.DefaultTenant == "" {
+		return "", nil
+	}
+	a.defaultMu.Lock()
+	defer a.defaultMu.Unlock()
+	if a.defaultTenant != "" {
+		return a.defaultTenant, nil
+	}
+	var id string
+	err := a.DB.Global(ctx, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, "SELECT id::text FROM tenants WHERE slug=$1", a.Config.DefaultTenant).Scan(&id)
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", fmt.Errorf("ORBIT_DEFAULT_TENANT: tenant slug %q not found", a.Config.DefaultTenant)
+	}
+	if err != nil {
+		return "", fmt.Errorf("ORBIT_DEFAULT_TENANT lookup: %w", err)
+	}
+	a.defaultTenant = id
+	return id, nil
+}
+
+// JIT reads existing identities without writes unless default membership is enabled.
+// First creation and its optional tenant/audit commit atomically; concurrent logins converge.
 func (a *Service) JIT(ctx context.Context, issuer, subject, email, name string, verified bool) (Principal, error) {
 	p := Principal{ID: ids.New(), Kind: "user", Email: email, DisplayName: name}
 	if subject == "" {
@@ -104,11 +131,29 @@ func (a *Service) JIT(ctx context.Context, issuer, subject, email, name string, 
  AND status='active'`, issuer+"|"+subject).
 			Scan(&p.ID, &p.Kind, &p.Email, &p.DisplayName, &p.EmailVerified)
 	}
-	err := a.DB.Global(ctx, lookup)
-	if !errors.Is(err, pgx.ErrNoRows) {
+	provision := func(tx pgx.Tx, tenant string) error {
+		if a.OnCreate != nil {
+			return a.OnCreate(ctx, tx, p, tenant)
+		}
+		if tenant != "" {
+			return fmt.Errorf("tenant provisioner required")
+		}
+		return nil
+	}
+	defaultTenant, err := a.resolveDefaultTenant(ctx)
+	if err != nil {
 		return p, err
 	}
-	tenant := ""
+	err = a.DB.Global(ctx, lookup)
+	if !errors.Is(err, pgx.ErrNoRows) {
+		if err == nil && defaultTenant != "" {
+			err = a.DB.WithTenant(ctx, defaultTenant, func(tx pgx.Tx) error {
+				return provision(tx, defaultTenant)
+			})
+		}
+		return p, err
+	}
+	tenant := defaultTenant
 	if a.Config.PersonalTenants {
 		tenant = ids.New()
 	}
@@ -120,18 +165,18 @@ func (a *Service) JIT(ctx context.Context, issuer, subject, email, name string, 
 			verified).
 			Scan(&p.ID, &p.Kind, &p.Email, &p.DisplayName, &p.EmailVerified)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return lookup(tx)
+			if err = lookup(tx); err != nil {
+				return err
+			}
+			if defaultTenant != "" {
+				return provision(tx, tenant)
+			}
+			return nil
 		}
 		if err != nil {
 			return err
 		}
-		if a.OnCreate != nil {
-			return a.OnCreate(ctx, tx, p, tenant)
-		}
-		if tenant != "" {
-			return fmt.Errorf("personal tenant provisioner required")
-		}
-		return nil
+		return provision(tx, tenant)
 	}
 	if tenant != "" {
 		err = a.DB.WithTenant(ctx, tenant, create)
