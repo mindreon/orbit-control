@@ -3,6 +3,7 @@ package policy
 import (
 	"context"
 	"slices"
+	"strings"
 
 	"github.com/mindreon/orbit-control/internal/auth"
 	"github.com/mindreon/orbit-control/internal/platform/db"
@@ -10,8 +11,8 @@ import (
 )
 
 type Asset struct {
-	ID, WorkspaceID, OwnerID, Visibility, SubmitterID, UploaderID string
-	Reviewing                                                     bool
+	ID, WorkspaceID, OwnerID, Visibility, SubmitterID, UploaderID, Name string
+	Reviewing                                                           bool
 }
 
 // RequireAsset applies visibility before RBAC. Grants are tenant-local and can
@@ -36,9 +37,10 @@ func (a Authorizer) RequireAsset(ctx context.Context, action string, r Asset) er
 			Allows(bindings, "workspace.read", Resource{Type: "workspace", ID: r.WorkspaceID}, tenant)
 	explicit := Allows(bindings, "asset.read", Resource{Type: "asset", ID: r.ID}, "")
 	reviewer := r.Reviewing && Allows(bindings, "asset.review", resource, tenant)
+	catalogUse := action == "asset.use" && strings.HasPrefix(r.Name, "cat-")
 	visible := p.ID == r.OwnerID || explicit || granted || r.Visibility == "tenant" ||
 		r.Visibility == "workspace" && workspaceAccess ||
-		reviewer
+		reviewer || catalogUse
 	if !visible {
 		return httpx.E(404, "NOT_FOUND", "Asset not found")
 	}
@@ -49,7 +51,9 @@ func (a Authorizer) RequireAsset(ctx context.Context, action string, r Asset) er
 		return nil
 	}
 	if action == "asset.use" {
-		if r.Visibility == "tenant" || p.ID == r.OwnerID || granted || explicit {
+		// Imported catalog agents stay private on the asset list, but any tenant
+		// member can start a conversation with one.
+		if r.Visibility == "tenant" || p.ID == r.OwnerID || granted || explicit || strings.HasPrefix(r.Name, "cat-") {
 			return nil
 		}
 		return a.Require(ctx, action, resource)

@@ -110,6 +110,7 @@ func (s *Service) Get(ctx context.Context, id, action string) (Asset, error) {
 			WorkspaceID: a.WorkspaceID,
 			OwnerID:     a.OwnerID,
 			Visibility:  a.Visibility,
+			Name:        a.Name,
 			Reviewing:   reviewing,
 		},
 	)

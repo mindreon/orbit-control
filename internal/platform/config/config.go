@@ -39,6 +39,7 @@ type Config struct {
 	PersonalTenants                                                                                           bool
 	DefaultTenant                                                                                             string
 	PublicOrigin                                                                                              string
+	SkillsDir                                                                                                 string
 	CapabilityKeyFile, CapabilityKeyID                                                                        string
 	CapabilityPublicKeys                                                                                      map[string][]byte
 	SecretsKeyVersion                                                                                         int
@@ -76,6 +77,7 @@ func Load() (Config, error) {
 		return c, fmt.Errorf("ORBIT_DEFAULT_TENANT and ORBIT_PERSONAL_TENANTS=true are mutually exclusive")
 	}
 	c.PublicOrigin = os.Getenv("ORBIT_PUBLIC_ORIGIN")
+	c.SkillsDir = strings.TrimSpace(os.Getenv("ORBIT_SKILLS_DIR"))
 	if err := c.loadCapabilityEnvironment(); err != nil {
 		return c, err
 	}

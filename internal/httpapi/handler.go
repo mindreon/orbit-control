@@ -181,6 +181,49 @@ var routes = []route{
 		TwoPhase: true,
 	},
 	{
+		Pattern:  "GET /v1/market/agents",
+		Handle:   func(h *Handler) endpoint { return h.marketAgents },
+		TwoPhase: true,
+	},
+	{
+		Pattern: "GET /v1/market/agents/runnable",
+		Handle:  func(h *Handler) endpoint { return h.marketRunnableAgents },
+	},
+	{
+		Pattern: "GET /v1/market/agents/{handle}/{slug}/entry",
+		Handle:  func(h *Handler) endpoint { return h.marketAgentEntry },
+	},
+	{
+		Pattern:  "GET /v1/market/agents/{handle}/{slug}",
+		Handle:   func(h *Handler) endpoint { return h.marketAgent },
+		TwoPhase: true,
+	},
+	{
+		Pattern:  "GET /v1/market/skills",
+		Handle:   func(h *Handler) endpoint { return h.marketSkills },
+		TwoPhase: true,
+	},
+	{
+		Pattern:  "GET /v1/market/skills/{handle}/{slug}/files",
+		Handle:   func(h *Handler) endpoint { return h.marketSkillFiles },
+		TwoPhase: true,
+	},
+	{
+		Pattern:  "GET /v1/market/skills/{handle}/{slug}",
+		Handle:   func(h *Handler) endpoint { return h.marketSkill },
+		TwoPhase: true,
+	},
+	{
+		Pattern:  "GET /v1/market/mcp",
+		Handle:   func(h *Handler) endpoint { return h.marketMCP },
+		TwoPhase: true,
+	},
+	{
+		Pattern:  "GET /v1/market/mcp/{id}",
+		Handle:   func(h *Handler) endpoint { return h.marketMCPServer },
+		TwoPhase: true,
+	},
+	{
 		Pattern: "GET /v1/assets",
 		Handle:  func(h *Handler) endpoint { return h.listAssets },
 	},

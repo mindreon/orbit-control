@@ -33,11 +33,12 @@ type Result struct {
 	Unsupported int `json:"unsupported"`
 }
 type snapshot struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Slug        string `json:"slug"`
-	Description string `json:"description"`
-	Readme      string `json:"readme"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Slug        string   `json:"slug"`
+	Description string   `json:"description"`
+	Readme      string   `json:"readme"`
+	Catalogues  []string `json:"catalogues"`
 	Files       []struct {
 		Path string `json:"path"`
 		Body string `json:"body"`
@@ -52,18 +53,24 @@ var nonSlug = regexp.MustCompile(`[^a-z0-9-]+`)
 var fences = regexp.MustCompile("(?s)```(?:json)?\\s*\\n(.*?)```")
 
 func nameFor(row snapshot) string {
-	s := strings.ToLower(row.Slug)
+	return AssetName(row.ID, row.Slug, row.Name)
+}
+
+// AssetName is the agent name a catalog row was imported as.
+func AssetName(id, slug, display string) string {
+	s := strings.ToLower(slug)
 	if s == "" {
-		s = row.Name
+		s = display
 	}
 	s = strings.Trim(nonSlug.ReplaceAllString(s, "-"), "-")
-	if len(s) > 45 {
-		s = s[:45]
+	if len(s) > 40 {
+		s = strings.Trim(s[:40], "-")
 	}
 	if len(s) < 3 {
 		s = "market"
 	}
-	return fmt.Sprintf("%s-%x", s, sha256.Sum256([]byte(row.ID)))[:min(len(s)+13, 64)]
+	sum := fmt.Sprintf("%x", sha256.Sum256([]byte(id)))[:8]
+	return "cat-" + s + "-" + sum
 }
 func Convert(raw []byte) (contract.AssetKind, string, map[string][]byte, error) {
 	var row snapshot
@@ -90,7 +97,42 @@ func Convert(raw []byte) (contract.AssetKind, string, map[string][]byte, error) 
 			}
 		}
 		if len(files["AGENTS.md"]) == 0 {
-			return "", "", nil, fmt.Errorf("snapshot has no agent instructions")
+			text := strings.TrimSpace(row.Description)
+			if text == "" {
+				text = strings.TrimSpace(row.Readme)
+			}
+			if text == "" {
+				return "", "", nil, fmt.Errorf("snapshot has no agent instructions")
+			}
+			files["AGENTS.md"] = []byte(text)
+		}
+		files["AGENTS.md"] = clipBytes(files["AGENTS.md"], 19999)
+		if soul := files["SOUL.md"]; len(soul) > 0 {
+			files["SOUL.md"] = clipBytes(soul, 19999)
+		}
+		if len(files["README.md"]) == 0 && strings.TrimSpace(row.Readme) != "" {
+			files["README.md"] = clipBytes([]byte(row.Readme), (256<<10)-1)
+		}
+		for path, body := range files {
+			base := path
+			if i := strings.LastIndex(path, "/"); i >= 0 {
+				base = path[i+1:]
+			}
+			// Snapshot skill and MCP manifests are not Orbit manifests. Keeping
+			// them makes the bundle check reject the whole agent.
+			if base == "skills.json" || base == "mcp.json" || base != "agent.json" && strings.HasSuffix(base, ".json") {
+				delete(files, path)
+				continue
+			}
+			if path == "AGENTS.md" || path == "SOUL.md" || path == "README.md" || path == "agent.json" {
+				continue
+			}
+			if len(body) > (256<<10)-1 || strings.ContainsRune(string(body), 0) {
+				delete(files, path)
+			}
+		}
+		if err := ensureManifest(files, name, row.Name, strings.TrimSpace(row.Description), row.Catalogues); err != nil {
+			return "", "", nil, err
 		}
 		return "agent", name, files, nil
 	}
@@ -111,6 +153,54 @@ func Convert(raw []byte) (contract.AssetKind, string, map[string][]byte, error) 
 		return "mcp_server", name, files, nil
 	}
 	return "", "", nil, fmt.Errorf("snapshot has no embedded asset content")
+}
+
+func clipBytes(b []byte, n int) []byte {
+	if len(b) <= n {
+		return b
+	}
+	b = b[:n]
+	for len(b) > 0 && b[len(b)-1]&0xC0 == 0x80 {
+		b = b[:len(b)-1]
+	}
+	return b
+}
+
+func ensureManifest(files map[string][]byte, name, display, description string, tags []string) error {
+	manifest := map[string]any{}
+	if raw := files["agent.json"]; len(raw) > 0 {
+		if err := json.Unmarshal(raw, &manifest); err != nil {
+			manifest = map[string]any{}
+		}
+	}
+	if manifest["schema"] == nil {
+		manifest["schema"] = "orbit.agent/v2"
+	}
+	if manifest["name"] == nil || manifest["name"] == "" {
+		manifest["name"] = name
+	}
+	if description != "" && manifest["description"] == nil {
+		manifest["description"] = description
+	}
+	if display != "" {
+		names, _ := manifest["displayName"].(map[string]any)
+		if names == nil {
+			names = map[string]any{}
+		}
+		if names["zh"] == nil {
+			names["zh"] = display
+		}
+		manifest["displayName"] = names
+	}
+	if len(tags) > 0 && manifest["tags"] == nil {
+		manifest["tags"] = tags
+	}
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		return err
+	}
+	files["agent.json"] = raw
+	return nil
 }
 
 var existingPlaceholder = regexp.MustCompile(`^\$\{(?:secret:)?([A-Za-z_][A-Za-z0-9_]*)\}$`)
@@ -201,11 +291,15 @@ func Import(ctx context.Context, d *db.DB, s *assets.Service, tenant, actor, fil
 		}
 		archive, err := bundle.Pack(files)
 		if err != nil {
-			return result, err
+			fmt.Fprintf(os.Stderr, "skip %s: %v\n", name, err)
+			result.Unsupported++
+			continue
 		}
 		staged, err := s.PrepareUpload(auth.Context(ctx, auth.Principal{ID: actor, Kind: "user"}, tenant), "0.1.0", archive)
 		if err != nil {
-			return result, err
+			fmt.Fprintf(os.Stderr, "skip %s: %v\n", name, err)
+			result.Unsupported++
+			continue
 		}
 		skipped := false
 		err = d.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
@@ -229,7 +323,9 @@ func Import(ctx context.Context, d *db.DB, s *assets.Service, tenant, actor, fil
 				skipped = true
 				return nil
 			}
-			a, e := s.Create(ctx, kind, name, "tenant", "")
+			// Private releases publish after the checks, so the catalog can show
+			// the display name and description without waiting for a reviewer.
+			a, e := s.Create(ctx, kind, name, "private", "")
 			if e != nil {
 				return e
 			}
@@ -240,7 +336,9 @@ func Import(ctx context.Context, d *db.DB, s *assets.Service, tenant, actor, fil
 			return s.Submit(ctx, a, v.ID, "stable")
 		})
 		if err != nil {
-			return result, err
+			fmt.Fprintf(os.Stderr, "skip %s: %v\n", name, err)
+			result.Unsupported++
+			continue
 		}
 		if skipped {
 			result.Skipped++

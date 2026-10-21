@@ -23,6 +23,7 @@ import (
 	"github.com/mindreon/orbit-control/internal/httpapi"
 	"github.com/mindreon/orbit-control/internal/kernelapi"
 	"github.com/mindreon/orbit-control/internal/locks"
+	"github.com/mindreon/orbit-control/internal/market"
 	"github.com/mindreon/orbit-control/internal/platform/config"
 	"github.com/mindreon/orbit-control/internal/platform/db"
 	orbitlog "github.com/mindreon/orbit-control/internal/platform/log"
@@ -67,6 +68,7 @@ func run() error {
 	if e = c.ValidateRuns(os.Args[1] != "worker"); e != nil {
 		return e
 	}
+	market.SetSkillsRoot(c.SkillsDir)
 	l := orbitlog.New(os.Stdout, c.LogFormat)
 	telemetryConfig, e := telemetry.FromEnv("orbit-control", c.Environment)
 	if e != nil {
