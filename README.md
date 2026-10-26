@@ -74,10 +74,11 @@ URLs are not logged. Configuration uses environment variables only.
 | `ORBIT_DATABASE_URL` | Required app PostgreSQL URL for `api` |
 | `ORBIT_ADMIN_DATABASE_URL` | Required owner PostgreSQL URL for admin commands |
 | `ORBIT_HTTP_ADDR` | `127.0.0.1:8080` |
-| `ORBIT_AUTH_MODE` | `oidc`; explicitly use `dev` for the built-in issuer |
+| `ORBIT_AUTH_MODE` | `oidc`; explicitly use `dev` for the built-in issuer, or `iam` to validate baize bearer tokens |
 | `ORBIT_OIDC_ISSUER` | Required discovery issuer in OIDC mode |
 | `ORBIT_OIDC_CLIENT_ID` | Required browser PKCE client ID in OIDC mode |
 | `ORBIT_OIDC_AUDIENCE` | Required JWT audience in OIDC mode |
+| `ORBIT_IAM_BASE_URL` | Required in `iam` mode: baize IAM API root (`…/iam/api/v1`), HTTP(S), trailing slash stripped |
 | `ORBIT_SIGNING_KEY_FILE` | Dev JWT key; `.orbit-data/signing.key`, generated Ed25519 PKCS8, mode 0600 |
 | `ORBIT_CAPABILITY_KEY_FILE` | Independent capability key; `.orbit-data/capability.key`, Ed25519 PKCS8, mode 0600 |
 | `ORBIT_CAPABILITY_KEY_ID` | Active capability JWT `kid`, default `1` |
@@ -149,9 +150,10 @@ block reuse. Errors always have `{error:{code,message,retryable,details}}`.
   in OIDC mode. It is deliberately restricted to trusted development networks.
 - Existing OIDC identities are read without JIT writes unless default-tenant
   membership is enabled. First JIT identity creation, optional tenant provisioning
-  and its login audit commit atomically. OIDC token refreshes do not create login
+  and its login audit commit atomically; oidc and iam logins both audit with their
+  mode. OIDC token refreshes do not create login
   audit entries or replay markers for existing memberships.
-- `ORBIT_DEFAULT_TENANT=<slug>` enables single-tenant onboarding for dev and OIDC
+- `ORBIT_DEFAULT_TENANT=<slug>` enables single-tenant onboarding for dev, OIDC and iam
   logins, including existing principals without membership. Provision the tenant
   before API startup; an unknown slug fails startup. Existing memberships and
   roles are left untouched, including suspended memberships (never reactivated).

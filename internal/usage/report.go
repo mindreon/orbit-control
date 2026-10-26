@@ -94,7 +94,8 @@ func ReportSQL(o ReportOptions) string {
 	query := `SELECT ` + strings.Join(selects, ",") + ` FROM usage_rollups r
  WHERE r.tenant_id=$1 AND r.period_start >= $2 AND r.period_start < $3
  AND ($4='tenant' OR ($4='workspace' AND r.workspace_id=NULLIF($5,'')::uuid)
- OR ($4='user' AND r.principal_id=NULLIF($5,'')::uuid)) GROUP BY ` + strings.Join(groups, ",")
+ OR ($4='user' AND r.principal_id=NULLIF($5,'')::uuid))
+ AND ($6 OR r.workspace_id=$7::uuid) GROUP BY ` + strings.Join(groups, ",")
 	object := []string{"'period_start',g.period_start", "'quantity',g.quantity", "'millicredits',g.millicredits"}
 	for _, d := range dimensions {
 		if !slices.Contains(o.GroupBy, d.key) {
@@ -119,6 +120,20 @@ func ReportSQL(o ReportOptions) string {
 	}
 	return "SELECT jsonb_build_object(" + strings.Join(object, ",") + ") FROM (" + query + ") g" + join +
 		" ORDER BY " + strings.Join(order, ",")
+}
+
+// usageArgs supplies the iam project clamp for the report query: an iam user
+// token only sees its current baize project's usage, and with no current
+// project none at all (a NULL uuid matches no workspace row).
+func usageArgs(ctx context.Context) (bool, any) {
+	ws, restricted := auth.IAM(ctx)
+	if !restricted {
+		return true, nil
+	}
+	if ws != "" {
+		return false, ws
+	}
+	return false, nil
 }
 
 func Report(ctx context.Context, o ReportOptions) (UsageReport, error) {
@@ -152,7 +167,8 @@ func Report(ctx context.Context, o ReportOptions) (UsageReport, error) {
 		tenant, o.To, o.From).Scan(&out.ComputedThrough, &out.DirtyHours); err != nil {
 		return out, err
 	}
-	rows, err := tx.Query(ctx, ReportSQL(o), tenant, o.From, o.To, o.Scope, o.ID)
+	anyWorkspace, clampWorkspace := usageArgs(ctx)
+	rows, err := tx.Query(ctx, ReportSQL(o), tenant, o.From, o.To, o.Scope, o.ID, anyWorkspace, clampWorkspace)
 	if err != nil {
 		return out, err
 	}

@@ -23,6 +23,13 @@ func (a Authorizer) RequireAsset(ctx context.Context, action string, r Asset) er
 	if p.APIKey && !slices.Contains(p.Scopes, action) {
 		return httpx.E(403, "FORBIDDEN", "API key scope does not permit this action")
 	}
+	// iam user tokens are pinned to their current baize project: a
+	// workspace-visibility asset in another workspace does not exist for them.
+	// Other visibilities are not project scoped (ChangeVisibility keeps the old
+	// workspace_id on tenant assets; private assets can be granted directly).
+	if ws, restricted := auth.IAM(ctx); restricted && r.Visibility == "workspace" && r.WorkspaceID != ws {
+		return httpx.E(404, "NOT_FOUND", "Asset not found")
+	}
 	bindings, err := a.Bindings(ctx)
 	if err != nil {
 		return err
@@ -31,7 +38,14 @@ func (a Authorizer) RequireAsset(ctx context.Context, action string, r Asset) er
 	if err != nil {
 		return err
 	}
+	// The resource keeps the asset's workspace in every mode: workspace-scoped
+	// roles (ws.editor, ws.admin) authorize through it. A restricted iam user
+	// loses it only for non-workspace assets outside the current project, where
+	// project roles must not follow the asset.
 	resource := Resource{Type: "asset", ID: r.ID, WorkspaceID: r.WorkspaceID}
+	if ws, restricted := auth.IAM(ctx); restricted && r.Visibility != "workspace" && r.WorkspaceID != ws {
+		resource.WorkspaceID = ""
+	}
 	workspaceAccess := member ||
 		r.WorkspaceID != "" &&
 			Allows(bindings, "workspace.read", Resource{Type: "workspace", ID: r.WorkspaceID}, tenant)
@@ -91,6 +105,21 @@ func assetGrants(ctx context.Context, r Asset, bindings []Binding) (bool, bool, 
 			workspaces = append(workspaces, binding.ScopeID)
 		}
 	}
+	// A restricted iam user only holds grants through its current workspace:
+	// neither stale workspace_members rows nor bindings from earlier projects,
+	// and its tenant role must not resurrect them. The nil uuid matches no
+	// workspace, so a user without a current project holds no workspace grants.
+	current, restricted := auth.IAM(ctx)
+	membership := ""
+	anyWorkspace := Allows(bindings, "workspace.read", Resource{}, tenant)
+	if restricted {
+		workspaces, anyWorkspace = nil, false
+		if current != "" {
+			membership, workspaces = current, []string{current}
+		} else {
+			membership = "00000000-0000-0000-0000-000000000000"
+		}
+	}
 	var member, granted, maintain bool
 	err := db.Tx(ctx).QueryRow(ctx, `SELECT
  EXISTS(SELECT 1
@@ -114,10 +143,12 @@ func assetGrants(ctx context.Context, r Asset, bindings []Binding) (bool, bool, 
  AND (grantee_id IN
  (SELECT workspace_id
    FROM workspace_members
-   WHERE principal_id=$2)
+   WHERE principal_id=$2
+   AND (NULLIF($8,'')::uuid IS NULL OR workspace_id=NULLIF($8,'')::uuid))
  OR grantee_id=ANY($5::uuid[])
  OR $6)))`, r.WorkspaceID, p.ID, r.ID, tenant, workspaces,
-		Allows(bindings, "workspace.read", Resource{}, tenant), r.Visibility).Scan(&member, &granted, &maintain)
+		anyWorkspace, r.Visibility, membership).
+		Scan(&member, &granted, &maintain)
 	if err != nil {
 		return false, false, false, err
 	}

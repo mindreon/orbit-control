@@ -34,6 +34,55 @@ func TestDevBindGate(t *testing.T) {
 		})
 	}
 }
+func TestIAMAuthMode(t *testing.T) {
+	base := func() Config {
+		return Config{
+			DatabaseURL:       "postgres://app@localhost/orbit",
+			Addr:              "127.0.0.1:8080",
+			AuthMode:          "iam",
+			IAMBaseURL:        "https://iam.example/iam/api/v1",
+			DefaultTenant:     "orbit",
+			KeyFile:           "key",
+			CapabilityKeyFile: "capability",
+			CapabilityKeyID:   "1",
+			StreamKeyFile:     "stream.key",
+			StreamKeyID:       "1",
+			SecretsKeyVersion: 1,
+			SecretsKEKs:       map[int][]byte{1: make([]byte, 32)},
+		}
+	}
+	if e := base().ValidateAPI(); e != nil {
+		t.Fatal(e)
+	}
+	for _, bad := range []string{"", "iam.example/iam/api/v1", "ftp://iam.example/iam", "https://user:pw@iam.example/iam",
+		"https://iam.example/iam?next=1", "https://iam.example/iam#frag"} {
+		c := base()
+		c.IAMBaseURL = bad
+		if e := c.ValidateAPI(); e == nil || !strings.Contains(e.Error(), "ORBIT_IAM_BASE_URL") {
+			t.Fatalf("%q: %v", bad, e)
+		}
+	}
+	c := base()
+	c.DefaultTenant = ""
+	if e := c.ValidateAPI(); e == nil || !strings.Contains(e.Error(), "ORBIT_DEFAULT_TENANT") {
+		t.Fatalf("iam without default tenant accepted: %v", e)
+	}
+	c = base()
+	c.PersonalTenants = true
+	if e := c.ValidateAPI(); e == nil || !strings.Contains(e.Error(), "ORBIT_PERSONAL_TENANTS") {
+		t.Fatalf("iam with personal tenants accepted: %v", e)
+	}
+	c = base()
+	c.AuthMode = "saml"
+	if e := c.ValidateAPI(); e != nil {
+		t.Fatalf("ValidateAPI does not gate the mode; Load does: %v", e)
+	}
+	t.Setenv("ORBIT_AUTH_MODE", "saml")
+	if _, e := Load(); e == nil || !strings.Contains(e.Error(), "ORBIT_AUTH_MODE") {
+		t.Fatalf("unknown mode accepted: %v", e)
+	}
+}
+
 func TestMissingEnvNames(t *testing.T) {
 	c := Config{AuthMode: "oidc"}
 	if e := c.ValidateAPI(); e == nil || !strings.Contains(e.Error(), "ORBIT_DATABASE_URL") {

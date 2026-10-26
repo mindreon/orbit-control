@@ -182,6 +182,19 @@ func (a Authorizer) Require(ctx context.Context, action string, r Resource) erro
 	if p.APIKey && !slices.Contains(p.Scopes, action) {
 		return httpx.E(403, "FORBIDDEN", "API key scope does not permit this action")
 	}
+	// An iam user token is pinned to its current baize project: any resource in
+	// another workspace does not exist for it, and with no current project no
+	// workspace data is reachable at all. Resources outside a workspace (the
+	// tenant-wide catalog) stay allowed.
+	if ws, restricted := auth.IAM(ctx); restricted {
+		rw := r.WorkspaceID
+		if r.Type == "workspace" {
+			rw = r.ID
+		}
+		if rw != "" && rw != ws {
+			return httpx.E(403, "FORBIDDEN", "Action is not permitted")
+		}
+	}
 	b, e := a.Bindings(ctx)
 	if e != nil {
 		return e
@@ -197,6 +210,16 @@ func (a Authorizer) WorkspaceFilter(ctx context.Context) (bool, []string, error)
 	p := auth.From(ctx)
 	if p.APIKey && !slices.Contains(p.Scopes, "workspace.read") {
 		return false, nil, httpx.E(403, "FORBIDDEN", "API key scope does not permit this action")
+	}
+	// iam user tokens see one workspace: their current baize project's, or none.
+	// Stale bindings from earlier projects never widen this. API keys keep the
+	// normal tenant filter.
+	if ws, restricted := auth.IAM(ctx); restricted {
+		visible := []string{}
+		if ws != "" {
+			visible = append(visible, ws)
+		}
+		return false, visible, nil
 	}
 	bindings, e := a.Bindings(ctx)
 	if e != nil {
@@ -272,6 +295,8 @@ func hasAction(bindings []Binding, action, tenant string) bool {
 
 // SessionReadPredicate applies the same role matrix and scope inheritance as Require.
 // The query must expose its session as s and supply SessionReadFilter's named arguments.
+// readFilter's read_any_workspace/read_workspace pair clamps iam user tokens to
+// their current baize project's workspace.
 const SessionReadPredicate = `EXISTS (
  SELECT 1
  FROM role_bindings b
@@ -283,7 +308,8 @@ const SessionReadPredicate = `EXISTS (
        WHERE gm.tenant_id=b.tenant_id AND gm.group_id=b.principal_id AND gm.principal_id=@read_principal)))
  AND ((b.scope_type='tenant' AND b.scope_id=s.tenant_id)
       OR (b.scope_type='workspace' AND b.scope_id=s.workspace_id)
-      OR (b.scope_type='session' AND b.scope_id=s.id)))`
+      OR (b.scope_type='session' AND b.scope_id=s.id)))
+ AND (@read_any_workspace OR s.workspace_id=@read_workspace::uuid)`
 
 func (Authorizer) SessionReadFilter(ctx context.Context) (pgx.NamedArgs, error) {
 	return readFilter(ctx, "session.read")
@@ -296,7 +322,8 @@ const WorkspaceReadPredicate = `EXISTS (
  OR (b.principal_type='group' AND EXISTS (SELECT 1 FROM group_members gm
  WHERE gm.tenant_id=b.tenant_id AND gm.group_id=b.principal_id AND gm.principal_id=@read_principal)))
  AND ((b.scope_type='tenant' AND b.scope_id=s.tenant_id)
- OR (b.scope_type='workspace' AND b.scope_id=s.workspace_id)))`
+ OR (b.scope_type='workspace' AND b.scope_id=s.workspace_id)))
+ AND (@read_any_workspace OR s.workspace_id=@read_workspace::uuid)`
 
 func (Authorizer) WorkspaceReadFilter(ctx context.Context) (pgx.NamedArgs, error) {
 	return readFilter(ctx, "workspace.read")
@@ -313,5 +340,16 @@ func readFilter(ctx context.Context, action string) (pgx.NamedArgs, error) {
 		}
 	}
 	slices.Sort(roles)
-	return pgx.NamedArgs{"read_principal": p.ID, "read_roles": roles}, nil
+	// Unrestricted principals pass the workspace clause; a restricted iam user is
+	// clamped to one workspace, and with no current project a NULL workspace
+	// matches none.
+	args := pgx.NamedArgs{"read_principal": p.ID, "read_roles": roles,
+		"read_any_workspace": true, "read_workspace": nil}
+	if ws, restricted := auth.IAM(ctx); restricted {
+		args["read_any_workspace"] = false
+		if ws != "" {
+			args["read_workspace"] = ws
+		}
+	}
+	return args, nil
 }

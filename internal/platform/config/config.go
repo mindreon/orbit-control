@@ -44,6 +44,8 @@ type Config struct {
 	CapabilityPublicKeys                                                                                      map[string][]byte
 	SecretsKeyVersion                                                                                         int
 	SecretsKEKs                                                                                               map[int][]byte
+	// IAMBaseURL is the baize IAM API root (…/iam/api/v1) used when AuthMode is "iam".
+	IAMBaseURL string
 }
 
 func Load() (Config, error) {
@@ -52,6 +54,7 @@ func Load() (Config, error) {
 		AdminDatabaseURL: os.Getenv("ORBIT_ADMIN_DATABASE_URL"),
 		Addr:             env("ORBIT_HTTP_ADDR", "127.0.0.1:8080"),
 		AuthMode:         env("ORBIT_AUTH_MODE", "oidc"),
+		IAMBaseURL:       strings.TrimRight(strings.TrimSpace(os.Getenv("ORBIT_IAM_BASE_URL")), "/"),
 		Issuer:           os.Getenv("ORBIT_OIDC_ISSUER"),
 		ClientID:         os.Getenv("ORBIT_OIDC_CLIENT_ID"),
 		Audience:         os.Getenv("ORBIT_OIDC_AUDIENCE"),
@@ -112,6 +115,21 @@ func (c Config) ValidateAPI() error {
 	ip := net.ParseIP(host)
 	if c.AuthMode == "dev" && !(host == "localhost" || ip != nil && ip.IsLoopback()) && !c.AllowDevNetwork {
 		return fmt.Errorf("ORBIT_ALLOW_DEV_AUTH_ON_NETWORK=1 is required for ORBIT_AUTH_MODE=dev on non-loopback ORBIT_HTTP_ADDR")
+	}
+	if c.AuthMode == "iam" {
+		u, e := url.Parse(c.IAMBaseURL)
+		if e != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil ||
+			u.RawQuery != "" || u.Fragment != "" {
+			return fmt.Errorf("ORBIT_IAM_BASE_URL must be an HTTP(S) URL without query, fragment or user info")
+		}
+		// iam identities JIT into the default tenant and their workspaces are the
+		// baize projects synced into it; without it a login has no tenant.
+		if c.DefaultTenant == "" {
+			return fmt.Errorf("ORBIT_DEFAULT_TENANT is required when ORBIT_AUTH_MODE=iam")
+		}
+		if c.PersonalTenants {
+			return fmt.Errorf("ORBIT_PERSONAL_TENANTS is not supported when ORBIT_AUTH_MODE=iam")
+		}
 	}
 	if c.AuthMode == "oidc" {
 		u, e := url.Parse(c.Issuer)
@@ -411,8 +429,8 @@ func (c *Config) loadSecretsEnvironment() error {
 }
 
 func (c *Config) validateOrigins() error {
-	if c.AuthMode != "dev" && c.AuthMode != "oidc" {
-		return fmt.Errorf("ORBIT_AUTH_MODE must be oidc or dev")
+	if c.AuthMode != "dev" && c.AuthMode != "oidc" && c.AuthMode != "iam" {
+		return fmt.Errorf("ORBIT_AUTH_MODE must be oidc, dev or iam")
 	}
 	if c.LogFormat != "json" && c.LogFormat != "text" {
 		return fmt.Errorf("ORBIT_LOG_FORMAT must be json or text")

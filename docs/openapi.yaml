@@ -3403,6 +3403,7 @@ components:
         mode:
           enum:
             - dev
+            - iam
             - oidc
         scopes:
           items:

@@ -35,7 +35,9 @@ func Run(ctx context.Context, url, command string) error {
 		}
 		return nil
 	case "down":
-		_, e = p.Down(ctx)
+		// Provider.Down rolls back a single migration; with more than one file
+		// "down" must wipe the schema, matching the integration suite's up/down cycle.
+		_, e = p.DownTo(ctx, 0)
 		return e
 	case "status":
 		s, e := p.Status(ctx)

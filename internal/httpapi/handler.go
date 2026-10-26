@@ -463,6 +463,7 @@ func Routes() []string {
 }
 func (h *Handler) Router() http.Handler {
 	h.Auth.OnCreate = h.provisionIdentity
+	h.Auth.OnWorkspaceSync = h.auditProjectSync
 	mux := http.NewServeMux()
 	registered := map[string]bool{}
 	for _, route := range routes {
@@ -767,7 +768,24 @@ func (h *Handler) logWrite(ctx context.Context, action, typ, id string, detail a
 	return audit.Append(ctx, db.Tx(ctx), auth.From(ctx), auth.Tenant(ctx), action, typ, id, detail)
 }
 
-// JIT identity creation, tenant membership and OIDC login audit share one transaction.
+// auditProjectSync records a baize project sync, but only the rows it inserted:
+// repeat syncs converge on existing rows and must not grow the audit log.
+func (h *Handler) auditProjectSync(ctx context.Context, tx pgx.Tx, p auth.Principal,
+	tenant, externalRef, workspace string, created, granted bool) error {
+	if created {
+		if e := audit.Append(ctx, tx, p, tenant, "workspace.created", "workspace", workspace,
+			map[string]any{"external_ref": externalRef, "synced": true}); e != nil {
+			return e
+		}
+	}
+	if granted {
+		return audit.Append(ctx, tx, p, tenant, "role.granted", "workspace", workspace,
+			map[string]any{"principal_id": p.ID, "principal_type": p.Kind, "role": "ws.editor", "synced": true})
+	}
+	return nil
+}
+
+// JIT identity creation, tenant membership and login audit share one transaction.
 // Default-tenant provisioning also handles existing identities without changing memberships.
 func (h *Handler) provisionIdentity(ctx context.Context, tx pgx.Tx, p auth.Principal, tenant string) error {
 	if tenant == "" {
@@ -792,8 +810,8 @@ func (h *Handler) provisionIdentity(ctx context.Context, tx pgx.Tx, p auth.Princ
 	} else if err := tenancy.EnsurePersonal(ctx, tx, p, tenant); err != nil {
 		return err
 	}
-	if h.Config.AuthMode == "oidc" {
-		return audit.Append(ctx, tx, p, tenant, "login", "principal", p.ID, map[string]any{"mode": "oidc", "jit": true})
+	if h.Config.AuthMode != "dev" {
+		return audit.Append(ctx, tx, p, tenant, "login", "principal", p.ID, map[string]any{"mode": h.Config.AuthMode, "jit": true})
 	}
 	return nil
 }

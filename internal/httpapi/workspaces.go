@@ -82,8 +82,21 @@ func (h *Handler) listWorkspaces(w http.ResponseWriter, r *http.Request) error {
 	httpx.JSON(w, 200, map[string]any{"items": result, "next_cursor": next})
 	return nil
 }
+
+// iamManaged reports that baize owns workspace lifecycle: orbit clients may
+// neither create nor change workspaces or their members in iam mode.
+func (h *Handler) iamManaged() error {
+	if h.Config.AuthMode == "iam" {
+		return httpx.E(403, "FORBIDDEN", "Workspaces are managed by baize projects")
+	}
+	return nil
+}
+
 func (h *Handler) createWorkspace(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	if e := h.iamManaged(); e != nil {
+		return e
+	}
 	if e := h.Authz.Require(ctx, "workspace.create", tenantResource(ctx)); e != nil {
 		return e
 	}
@@ -139,6 +152,9 @@ func (h *Handler) getWorkspace(w http.ResponseWriter, r *http.Request) error {
 }
 func (h *Handler) patchWorkspace(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	if e := h.iamManaged(); e != nil {
+		return e
+	}
 	id := r.PathValue("w")
 	_, e := h.workspace(ctx, id, "workspace.update")
 	if e != nil {
@@ -225,6 +241,9 @@ func (h *Handler) listWorkspaceMembers(w http.ResponseWriter, r *http.Request) e
 }
 func (h *Handler) addWorkspaceMember(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	if e := h.iamManaged(); e != nil {
+		return e
+	}
 	id := r.PathValue("w")
 	if _, e := h.workspace(ctx, id, "workspace.members"); e != nil {
 		return e
@@ -271,6 +290,9 @@ func (h *Handler) addWorkspaceMember(w http.ResponseWriter, r *http.Request) err
 }
 func (h *Handler) deleteWorkspaceMember(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
+	if e := h.iamManaged(); e != nil {
+		return e
+	}
 	id, pid := r.PathValue("w"), r.PathValue("p")
 	if _, e := h.workspace(ctx, id, "workspace.members"); e != nil {
 		return e

@@ -31,7 +31,7 @@ func main() {
 func run(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf(
-			"usage: orbit-admin migrate up|down|status | seed | create-tenant | create-user | " +
+			"usage: orbit-admin migrate up|down|status (down rolls back all migrations) | seed | create-tenant | create-user | " +
 				"grant-role | create-group | add-group-member | maintenance prune [--usage-before RFC3339] " +
 				"| audit verify --tenant UUID",
 		)

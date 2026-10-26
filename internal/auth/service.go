@@ -25,19 +25,26 @@ import (
 
 type Service struct {
 	// OnCreate provisions tenant membership/audit in the identity transaction.
-	OnCreate      func(context.Context, pgx.Tx, Principal, string) error
-	DB            *db.DB
-	Signer        *Signer
-	Capability    *CapabilitySigner
-	Stream        *StreamSigner
-	Replay        httpx.ReplayKeys
-	Config        config.Config
-	verifier      *oidc.IDTokenVerifier
-	defaultMu     sync.Mutex
-	defaultTenant string
-	Logger        *slog.Logger
-	wg            sync.WaitGroup
-	lastUsed      sync.Map
+	OnCreate func(context.Context, pgx.Tx, Principal, string) error
+	// OnWorkspaceSync audits a baize project sync from inside its transaction;
+	// created/granted report rows actually inserted, not repeat syncs. audit
+	// imports auth, so the audit write itself must live outside this package:
+	// the hook is nil by design and wired in httpapi Router().
+	OnWorkspaceSync func(ctx context.Context, tx pgx.Tx, p Principal, tenant, externalRef, workspace string, created, granted bool) error
+	DB              *db.DB
+	Signer          *Signer
+	Capability      *CapabilitySigner
+	Stream          *StreamSigner
+	Replay          httpx.ReplayKeys
+	Config          config.Config
+	verifier        *oidc.IDTokenVerifier
+	iam             iamLookup
+	projects        *iamProjectMemo
+	defaultMu       sync.Mutex
+	defaultTenant   string
+	Logger          *slog.Logger
+	wg              sync.WaitGroup
+	lastUsed        sync.Map
 }
 
 func New(ctx context.Context, d *db.DB, c config.Config, l *slog.Logger) (*Service, error) {
@@ -72,13 +79,17 @@ func New(ctx context.Context, d *db.DB, c config.Config, l *slog.Logger) (*Servi
 		return nil, e
 	}
 	a := &Service{DB: d, Signer: s, Capability: capability, Stream: stream, Replay: replay, Config: c, Logger: l}
-	if c.AuthMode == "oidc" {
+	switch c.AuthMode {
+	case "oidc":
 		p, e := oidc.NewProvider(ctx, c.Issuer)
 		if e != nil {
 			return nil, fmt.Errorf("ORBIT_OIDC_ISSUER discovery failed")
 		}
 		a.verifier = p.Verifier(&oidc.Config{ClientID: c.Audience})
-	} else {
+	case "iam":
+		a.iam = newCachedLookup(newHTTPLookup(c.IAMBaseURL, nil))
+		a.projects = newProjectMemo()
+	default:
 		l.Warn("development authentication enabled", "auth_mode", "dev")
 	}
 	return a, nil
@@ -198,6 +209,9 @@ func (a *Service) Authenticate(ctx context.Context, token, tenant string) (Princ
 	if strings.HasPrefix(token, "orbit_") {
 		return a.apiKey(ctx, token, tenant)
 	}
+	if a.Config.AuthMode == "iam" {
+		return a.authenticateIAM(ctx, token)
+	}
 	if a.Config.AuthMode == "dev" {
 		c, e := a.Signer.VerifyDev(token)
 		if e != nil {
@@ -226,6 +240,100 @@ func (a *Service) Authenticate(ctx context.Context, token, tenant string) (Princ
 		return Principal{}, httpx.E(401, "UNAUTHENTICATED", "Invalid token claims")
 	}
 	return a.JIT(ctx, c.Issuer, c.Subject, fields.Email, fields.Name, fields.EmailVerified)
+}
+
+// authenticateIAM validates the bearer token against baize IAM and maps the user
+// onto a principal. The issuer is fixed: orbit trusts IAM's user id, not the token.
+func (a *Service) authenticateIAM(ctx context.Context, token string) (Principal, error) {
+	id, err := a.iam.Lookup(ctx, token)
+	if err != nil {
+		return Principal{}, iamError(err)
+	}
+	// principals.email is NOT NULL but unconstrained (migrations/00001_r1.sql):
+	// an empty email is stored as "" and idp_subject (baize-iam|<user id>) stays the
+	// identity key, so a missing IAM email never collides or fails the insert.
+	p, err := a.JIT(ctx, "baize-iam", id.UserID, id.Email, id.Name, id.Verified)
+	if err != nil {
+		return Principal{}, err
+	}
+	// Every iam user token is restricted to its current project's workspace; with
+	// no project at all there is no workspace data. API keys never set this.
+	p.IAMRestricted = true
+	if id.ProjectID == "" {
+		return p, nil
+	}
+	workspace, err := a.currentWorkspace(ctx, p, id.ProjectID, id.ProjectName)
+	if err != nil {
+		return Principal{}, err
+	}
+	p.IAMWorkspace = workspace
+	return p, nil
+}
+
+// baizeProjectRef prefixes the baize project id stored in workspaces.external_ref.
+func baizeProjectRef(project string) string { return "baize-project:" + project }
+
+// currentWorkspace upserts the workspace mapped from the token's current baize
+// project, with the caller as a ws.editor member. A hit in the in-process memo
+// skips the write for a minute.
+func (a *Service) currentWorkspace(ctx context.Context, p Principal, project, name string) (string, error) {
+	if workspace, ok := a.projects.get(p.ID, project); ok {
+		return workspace, nil
+	}
+	tenant, err := a.resolveDefaultTenant(ctx)
+	if err != nil || tenant == "" {
+		// Without the default tenant there is no tenant to upsert into.
+		return "", err
+	}
+	if name == "" {
+		name = project
+	}
+	var workspace string
+	err = a.DB.WithTenant(ctx, tenant, func(tx pgx.Tx) error {
+		var e error
+		workspace, e = a.upsertProjectWorkspace(ctx, tx, p, tenant, project, name)
+		return e
+	})
+	if err != nil {
+		return "", err
+	}
+	a.projects.set(p.ID, project, workspace)
+	return workspace, nil
+}
+
+// upsertProjectWorkspace creates or renames the workspace for one baize project and
+// makes sure the caller is a member with ws.editor. Every write is ON CONFLICT, so
+// concurrent first requests for the same project converge on one row. Only actual
+// inserts are reported to OnWorkspaceSync; repeat syncs audit nothing.
+func (a *Service) upsertProjectWorkspace(ctx context.Context, tx pgx.Tx, p Principal, tenant, project, name string) (string, error) {
+	var workspace string
+	var created bool
+	err := tx.QueryRow(ctx, `INSERT INTO workspaces(id,tenant_id,name,external_ref)
+ VALUES($1,$2,$3,$4)
+ ON CONFLICT(tenant_id,external_ref) WHERE external_ref IS NOT NULL DO UPDATE
+ SET name=EXCLUDED.name
+ RETURNING id::text, xmax = 0`, ids.New(), tenant, name, baizeProjectRef(project)).Scan(&workspace, &created)
+	if err != nil {
+		return "", err
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO workspace_members(tenant_id,workspace_id,principal_id)
+ VALUES($1,$2,$3)
+ ON CONFLICT(tenant_id,workspace_id,principal_id) DO NOTHING`, tenant, workspace, p.ID); err != nil {
+		return "", err
+	}
+	binding, err := tx.Exec(ctx, `INSERT INTO role_bindings(id,tenant_id,principal_type,principal_id,role,scope_type,scope_id,created_by)
+ VALUES($1,$2,$3,$4,'ws.editor','workspace',$5,$4)
+ ON CONFLICT(tenant_id,principal_type,principal_id,role,scope_type,scope_id) DO NOTHING`,
+		ids.New(), tenant, p.Kind, p.ID, workspace)
+	if err != nil {
+		return "", err
+	}
+	if a.OnWorkspaceSync != nil {
+		if err = a.OnWorkspaceSync(ctx, tx, p, tenant, baizeProjectRef(project), workspace, created, binding.RowsAffected() == 1); err != nil {
+			return "", err
+		}
+	}
+	return workspace, nil
 }
 func GenerateAPIKey() (token, prefix string, hash []byte, err error) {
 	b := make([]byte, 32)
